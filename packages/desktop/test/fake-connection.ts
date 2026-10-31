@@ -148,6 +148,39 @@ export class FakeConnection {
 }
 
 /**
+ * A page's link that connects to `first`, then to each connection the test
+ * hands it, as a page reconnects after its connection ended.
+ */
+export function reconnectingReach(first: FakeConnection): {
+  connection(): Promise<HostConnection>
+  onConnected(listener: (connection: HostConnection) => void): void
+  reconnect(next: FakeConnection): Promise<void>
+} {
+  const listeners: Array<(connection: HostConnection) => void> = []
+  let current = first
+  let attempt: Promise<HostConnection> | null = null
+  const reach = {
+    connection(): Promise<HostConnection> {
+      attempt ??= Promise.resolve().then(() => {
+        for (const listener of listeners) listener(current.asConnection())
+        return current.asConnection()
+      })
+      return attempt
+    },
+    onConnected(listener: (connection: HostConnection) => void) {
+      listeners.push(listener)
+    },
+    async reconnect(next: FakeConnection) {
+      current.close()
+      current = next
+      attempt = null
+      await reach.connection()
+    }
+  }
+  return reach
+}
+
+/**
  * A page's link already connected to `connection`, or failing with `failure`,
  * for the window's host adapters. Nothing in it reaches Node, so the window's
  * tests use it too.

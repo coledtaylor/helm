@@ -1,3 +1,4 @@
+import { hostArtifactUrl, windowArtifactUrl } from '../../shared/host/records/content'
 import type { FilesReads } from '../files-reads'
 import type { HostConnection, HostSubscription } from './client'
 import type { HostLink } from './link'
@@ -32,8 +33,7 @@ import type { Emit } from './sessions'
  * empty folder, file list or version list in its place.
  */
 
-const HOST_ARTIFACT = 'floti-artifact://'
-const WINDOW_ARTIFACT = 'helm-content://artifact/'
+export { hostArtifactUrl, windowArtifactUrl }
 
 /** What a frame's request for an artifact address is answered with. */
 export interface ArtifactAnswer {
@@ -52,18 +52,6 @@ export interface HostFiles extends FilesReads {
   /** A frame's request for `helm-content://artifact/...`, answered from the host's bytes. */
   artifactBytes(url: string): Promise<ArtifactAnswer>
   shutdown(): void
-}
-
-/** The host's address for one a frame asked the window for, or null for one that is not an artifact's. */
-export function hostArtifactUrl(windowUrl: string): string | null {
-  return windowUrl.startsWith(WINDOW_ARTIFACT) ? HOST_ARTIFACT + windowUrl.slice(WINDOW_ARTIFACT.length) : null
-}
-
-/** The window's address for one the host minted. */
-export function windowArtifactUrl(hostUrl: string): string {
-  if (!hostUrl.startsWith(HOST_ARTIFACT))
-    throw new Error(`The local host answered an artifact address Helm cannot serve: ${hostUrl}`)
-  return WINDOW_ARTIFACT + hostUrl.slice(HOST_ARTIFACT.length)
 }
 
 export function createHostFiles({ link, emit, log }: HostFilesDeps): HostFiles {

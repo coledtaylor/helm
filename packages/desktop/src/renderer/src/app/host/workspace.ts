@@ -1,4 +1,4 @@
-import type { AppSettings } from '@helm/core/types'
+import type { AppSettings, Project } from '@helm/core/types'
 import { CLAUDE_CODE_BACKEND } from '../../../../shared/host/backend'
 import type { HostConnection, HostSubscription } from '../../../../shared/host/client'
 import type * as P from '../../../../shared/host/protocol'
@@ -56,12 +56,17 @@ export interface WorkspaceAdapterDeps {
   log?: (line: string) => void
 }
 
+export interface WorkspaceAdapter extends HostAdapter {
+  /** The harnesses and projects on the sidebar: the host's last scan, or its cached one before any. */
+  scannedProjects(): Promise<readonly Project[]>
+}
+
 export function createWorkspaceAdapter({
   link,
   own,
   onFocus,
   log = () => undefined
-}: WorkspaceAdapterDeps): HostAdapter {
+}: WorkspaceAdapterDeps): WorkspaceAdapter {
   const listeners: { [K in Pushed]: Set<(payload: EventPayload<K>) => void> } = {
     'settings:changed': new Set(),
     'discovery:updated': new Set(),
@@ -70,7 +75,7 @@ export function createWorkspaceAdapter({
   }
   let hostSettings: P.HostSettings | null = null
   let mine: AppSettings | null = null
-  let scanned = false
+  let scanned: readonly Project[] | null = null
   let started = false
   let subscriptions: HostSubscription[] = []
 
@@ -98,8 +103,9 @@ export function createWorkspaceAdapter({
     for (const subscription of subscriptions) subscription.unsubscribe()
     const ended = (channel: string) => (error: Error) => log(`host: ${channel} ended (${error.message})`)
     const discovered = (result: P.DiscoveryResult): void => {
-      scanned = true
-      tell('discovery:updated', discoveryFromHost(result))
+      const discovery = discoveryFromHost(result)
+      scanned = discovery.projects
+      tell('discovery:updated', discovery)
     }
     subscriptions = [
       connection.subscribe('settings:changed', {
@@ -142,7 +148,7 @@ export function createWorkspaceAdapter({
   let gitInFlight = false
   onFocus?.(() => {
     // Only a window that has the host's scan has projects whose git to read.
-    if (gitInFlight || !scanned) return
+    if (gitInFlight || scanned === null) return
     gitInFlight = true
     void host()
       .then((connection) => connection.request('git:refresh', null))
@@ -166,6 +172,10 @@ export function createWorkspaceAdapter({
   const claude = (status: P.SetupStatus): ClaudeStatus => claudeStatusFromHost(status.backends[CLAUDE_CODE_BACKEND])
 
   return {
+    async scannedProjects() {
+      return scanned ?? cachedProjectsFromHost(await (await host()).request('discovery:cached', null))
+    },
+
     requests: {
       'app:info': async () => {
         const build = await own.invoke('ownApp:info')

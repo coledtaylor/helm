@@ -253,12 +253,13 @@ export function createDesktopHost({
   })
   const config = createHostConfig({
     link,
-    emit: send,
+    emit: toNoWindow,
     // The sidebar's harnesses and projects are the host's scan.
     scanned: () => workspace.lastScan()?.projects ?? [],
     log
   })
-  const files = createHostFiles({ link, emit: send, log })
+  // Kept for the artifact frames main answers from the host's bytes.
+  const files = createHostFiles({ link, emit: toNoWindow, log })
   const resources = createHostResources({ link, emit: send, log })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
   return {

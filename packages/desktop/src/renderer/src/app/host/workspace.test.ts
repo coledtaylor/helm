@@ -173,8 +173,10 @@ function on<K extends EventChannel>(adapter: HostAdapter, channel: K, listener: 
   return route(listener)
 }
 
-/** Lets every answer already given be heard. */
-const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+/** Lets every answer already given be heard: the fake host answers on the next turns of the microtask queue. */
+const settle = async (): Promise<void> => {
+  for (let turn = 0; turn < 20; turn++) await Promise.resolve()
+}
 
 describe('the window’s workspace over its own connection', () => {
   it('keeps the host’s settings in the host and Helm’s own with Helm, and shows both laid together', async () => {

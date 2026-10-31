@@ -161,7 +161,7 @@ test('coming back to the window shows the branch and changes made in a terminal 
         win.emit('focus')
       })
       await window.evaluate(() => {
-        window.dispatchEvent(new Event('focus'))
+        globalThis.dispatchEvent(new Event('focus'))
       })
       return row.textContent()
     })

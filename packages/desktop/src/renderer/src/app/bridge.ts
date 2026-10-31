@@ -1,5 +1,7 @@
 import { isClientOnly } from '../../../shared/host/protocol'
 import type { HelmBridge } from '../../../shared/ipc'
+import { createConfigAdapter } from './host/config'
+import { createFilesAdapter } from './host/files'
 import { createHistoryAdapter } from './host/history'
 import { WINDOW_CAPABILITIES, createPageLink } from './host/link'
 import { createProfilesAdapter } from './host/profiles'
@@ -21,16 +23,20 @@ const log = (line: string): void => console.warn(line)
  */
 const link = createPageLink({ bridge: window.helm, capabilities: WINDOW_CAPABILITIES, log })
 
+const workspace = createWorkspaceAdapter({
+  link,
+  own: window.helm,
+  onFocus: (listener) => window.addEventListener('focus', listener),
+  log
+})
+
 /** The window's areas that reach the host over its own connection. */
 export const hostAdapters: readonly HostAdapter[] = [
   createHistoryAdapter(link, log),
-  createWorkspaceAdapter({
-    link,
-    own: window.helm,
-    onFocus: (listener) => window.addEventListener('focus', listener),
-    log
-  }),
-  createProfilesAdapter({ link, own: window.helm, log })
+  workspace,
+  createProfilesAdapter({ link, own: window.helm, log }),
+  createConfigAdapter({ link, scanned: () => workspace.scannedProjects(), log }),
+  createFilesAdapter(link, log)
 ]
 
 /**
