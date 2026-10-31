@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Locator, Page } from '@playwright/test'
+import type { ElectronApplication, Locator, Page } from '@playwright/test'
 import { openStore, readArchiveStats, readHistorySessions, type AppSettings } from '@helm/core'
 import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
 import { fakeClaudeLogs, seedSettings, type FakeClaudeLog, type World } from '../test/world'
@@ -459,6 +459,159 @@ test('quitting ends every session in the host and leaves no host or bridge runni
 
   await helm.app.close()
   await expect.poll(() => [...pids, ...floti].filter(processAlive)).toEqual([])
+})
+
+/** Closes Helm's window the way its close button or Alt+F4 does. */
+const closeWindow = (app: ElectronApplication): Promise<void> =>
+  app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()
+      .find((win) => win.isVisible())
+      ?.close()
+  })
+
+/**
+ * Clicks an answer that quits Helm. The page clicks it once this call has
+ * returned: Playwright fails any action whose page closes under it. Helm's
+ * exit is then awaited on its main process, since a host it leaves running
+ * holds the stdio Playwright's own close event waits on.
+ */
+const answer = (button: Locator): Promise<void> =>
+  button.evaluate((element) => {
+    setTimeout(() => (element as HTMLElement).click(), 0)
+  })
+
+test('closing the window asks first; Cancel changes nothing, Keep running and quit leaves the sessions in the host, and the next start shows their screens and takes input', async ({
+  helm,
+  world
+}) => {
+  let { window } = helm
+  const id = await startSession(window, 'alpha')
+  await typeLine(window.getByRole('region', { name: 'First pane' }), 'draft the schema')
+  await expect.poll(() => terminalText(window, id)).toContain('You said: draft the schema')
+  await expect
+    .poll(async () => {
+      const { paneLayout } = await invoke<AppSettings>(window, 'settings:read')
+      return JSON.stringify(paneLayout ?? {}).includes(`"id":${String(id)}`)
+    })
+    .toBe(true)
+  const run = await claudeRunIn(world, world.projects.alpha)
+  await expect.poll(async () => flotiChildren(await mainPid(helm)).length).toBe(3)
+  const [host] = flotiHostsAmong(flotiChildren(await mainPid(helm)))
+  expect(host).toBeDefined()
+  await expect(window.getByRole('contentinfo').locator('[data-status-host]')).toHaveText('This PC · quit ends sessions')
+
+  const question = window.getByRole('alertdialog', { name: 'Quitting Helm ends 1 session on this PC’s host.' })
+  await closeWindow(helm.app)
+  await expect(question.getByRole('button')).toHaveText(['Cancel', 'Keep running and quit', 'End and quit'])
+  await question.getByRole('button', { name: 'Cancel' }).click()
+  await expect(question).toHaveCount(0)
+  await expect(window.getByRole('tab', { name: 'alpha, ready' })).toBeVisible()
+  expect([host!, run.pid].every(processAlive)).toBe(true)
+
+  const main = await mainPid(helm)
+  await closeWindow(helm.app)
+  await answer(question.getByRole('button', { name: 'Keep running and quit' }))
+  await expect.poll(() => processAlive(main)).toBe(false)
+  // Helm is gone; the host and the session it runs are not.
+  expect([host!, run.pid].every(processAlive)).toBe(true)
+
+  const next = await launchHelm(world)
+  Object.assign(helm, next)
+  window = next.window
+  const pane = window.getByRole('region', { name: 'First pane' })
+  await expect(pane.getByRole('tab', { name: 'alpha, ready' })).toBeVisible()
+  expect(await sessionIdOf(window, 'alpha, ready')).toBe(id)
+  await expect.poll(() => terminalText(window, id)).toContain('You said: draft the schema')
+  await typeLine(pane, 'add the indexes')
+  await expect.poll(() => terminalText(window, id)).toContain('You said: add the indexes')
+  // Reattached to the host it left running, and the answer was for that quit only.
+  expect(flotiHostsAmong(flotiChildren(await mainPid(helm)))).toEqual([])
+  const { quitSessions } = await invoke<AppSettings>(window, 'settings:read')
+  expect(quitSessions['local'] ?? 'end').toBe('end')
+  await expect(window.getByRole('contentinfo').locator('[data-status-host]')).toHaveText('This PC · quit ends sessions')
+})
+
+test('End and quit ends the sessions, and no host or bridge is left running', async ({ helm, world }) => {
+  const { window } = helm
+  await startSession(window, 'alpha')
+  await startSession(window, 'beta')
+  const pids = [
+    (await claudeRunIn(world, world.projects.alpha)).pid,
+    (await claudeRunIn(world, world.projects.beta)).pid
+  ]
+  await expect.poll(async () => flotiChildren(await mainPid(helm)).length).toBe(3)
+  const floti = flotiChildren(await mainPid(helm))
+
+  const main = await mainPid(helm)
+  await closeWindow(helm.app)
+  await answer(
+    window
+      .getByRole('alertdialog', { name: 'Quitting Helm ends 2 sessions on this PC’s host.' })
+      .getByRole('button', { name: 'End and quit' })
+  )
+  await expect.poll(() => [main, ...pids, ...floti].filter(processAlive)).toEqual([])
+})
+
+test('with the quit setting keeping them, quitting asks nothing and the sessions run on', async ({ helm, world }) => {
+  let { window } = helm
+  const id = await startSession(window, 'alpha')
+  const run = await claudeRunIn(world, world.projects.alpha)
+  await expect.poll(async () => flotiChildren(await mainPid(helm)).length).toBe(3)
+  const [host] = flotiHostsAmong(flotiChildren(await mainPid(helm)))
+
+  await window.getByRole('navigation', { name: 'Destinations' }).getByRole('button', { name: 'Settings' }).click()
+  await window.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sessions', exact: true }).click()
+  await window.getByRole('combobox', { name: 'When you quit Helm' }).selectOption('keep')
+  const status = window.getByRole('contentinfo').locator('[data-status-host]')
+  await expect(status).toHaveText('This PC · quit keeps sessions')
+  await expect.poll(async () => (await invoke<AppSettings>(window, 'settings:read')).quitSessions).toEqual({ local: 'keep' })
+
+  const main = await mainPid(helm)
+  await closeWindow(helm.app)
+  await expect.poll(() => processAlive(main)).toBe(false)
+  expect([host!, run.pid].every(processAlive)).toBe(true)
+
+  const next = await launchHelm(world)
+  Object.assign(helm, next)
+  window = next.window
+  await expect(window.getByRole('tab', { name: 'alpha, ready' })).toBeVisible()
+  expect(await sessionIdOf(window, 'alpha, ready')).toBe(id)
+  // Kept across the restart; the status bar's item opens the row that says so.
+  await expect(window.getByRole('contentinfo').locator('[data-status-host]')).toHaveText('This PC · quit keeps sessions')
+  await window.getByRole('contentinfo').locator('[data-status-host]').click()
+  const quit = window.getByRole('combobox', { name: 'When you quit Helm' })
+  await expect(quit).toHaveValue('keep')
+  // Set back, so the fixture's quit ends what this test started.
+  await quit.selectOption('end')
+  await expect(window.getByRole('contentinfo').locator('[data-status-host]')).toHaveText('This PC · quit ends sessions')
+})
+
+test('Settings’ Stop host says how many sessions end; Cancel changes nothing, and Stop host ends them and the host', async ({
+  helm,
+  world
+}) => {
+  const { window } = helm
+  await startSession(window, 'alpha')
+  await startSession(window, 'beta')
+  const pids = [
+    (await claudeRunIn(world, world.projects.alpha)).pid,
+    (await claudeRunIn(world, world.projects.beta)).pid
+  ]
+  await expect.poll(async () => flotiChildren(await mainPid(helm)).length).toBe(3)
+  const [host] = flotiHostsAmong(flotiChildren(await mainPid(helm)))
+
+  await window.getByRole('navigation', { name: 'Destinations' }).getByRole('button', { name: 'Settings' }).click()
+  await window.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sessions', exact: true }).click()
+  const ask = window.getByRole('alertdialog', { name: 'Stopping this PC’s host ends 2 sessions.' })
+
+  await window.locator('[data-settings-stop-host]').click()
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(ask).toHaveCount(0)
+  expect([host!, ...pids].every(processAlive)).toBe(true)
+
+  await window.locator('[data-settings-stop-host]').click()
+  await ask.getByRole('button', { name: 'Stop host' }).click()
+  await expect.poll(() => [host!, ...pids].filter(processAlive)).toEqual([])
 })
 
 test('after Helm is killed outright, its sessions run on in the host, and the next start reattaches to that host and shows them, offering no restore', async ({
