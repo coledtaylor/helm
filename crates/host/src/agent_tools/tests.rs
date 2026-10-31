@@ -962,6 +962,40 @@ async fn it_lets_go_of_its_port_when_no_family_is_on_and_no_session_holds_a_toke
 }
 
 #[tokio::test]
+async fn it_keeps_no_port_for_families_on_that_no_launch_can_be_given_once_no_token_is_held() {
+    let world = two_families();
+    let alpha = world.grant();
+    let address = world.address();
+
+    // On, but nothing a launch could be given now (no browser client, a
+    // plugin whose window left): the port stays while a token is held...
+    world.test.grantable_now(false);
+    world.other.grantable_now(false);
+    world.listener.let_go_if_idle();
+    assert_eq!(world.listener.address(), Some(address));
+
+    // ...and goes with the last token.
+    world.listener.revoke(alpha.id);
+    assert_eq!(world.listener.address(), None);
+    assert!(refuses_soon(address).await, "the port is let go");
+
+    // Given again: the next grant binds, and an idle check with something
+    // to give keeps the port.
+    world.test.grantable_now(true);
+    let beta = world.grant();
+    world.listener.revoke(beta.id);
+    world.listener.let_go_if_idle();
+    assert!(world.listener.address().is_some());
+
+    // Nothing to give and no token: let go when asked.
+    world.test.grantable_now(false);
+    world.listener.let_go_if_idle();
+    assert_eq!(world.listener.address(), None);
+
+    world.listener.stop().await;
+}
+
+#[tokio::test]
 async fn initialize_names_the_family_and_negotiates_the_protocol_version() {
     let world = two_families();
     let grant = world.grant();

@@ -122,6 +122,46 @@ fn an_offer_is_served_only_while_its_client_listens_and_a_new_offer_replaces_the
 }
 
 #[test]
+fn whoever_follows_the_offers_is_told_of_each_offer_and_each_client_that_stops_taking_calls_and_can_read_them()
+ {
+    let (_events, relay) = relay();
+    let told = Arc::new(Mutex::new(Vec::new()));
+    relay.on_change({
+        let told = Arc::clone(&told);
+        let reading = Arc::downgrade(&relay);
+        // Reads the offers as it is told: no lock of the relay is held.
+        move || {
+            let now = reading.upgrade().map(|relay| plugins_offered(&relay));
+            told.lock().unwrap().push(now.unwrap_or_default());
+        }
+    });
+    relay.listening(DESKTOP, true, false);
+    assert!(
+        told.lock().unwrap().is_empty(),
+        "taking calls changes no offer"
+    );
+    relay.offer(DESKTOP, offer(vec![server("notes")])).unwrap();
+    relay.offer(DESKTOP, offer(Vec::new())).unwrap();
+    relay.offer(DESKTOP, offer(vec![server("notes")])).unwrap();
+    relay.listening(DESKTOP, false, true);
+    assert_eq!(
+        *told.lock().unwrap(),
+        [
+            vec![("notes".to_owned(), true)],
+            Vec::new(),
+            vec![("notes".to_owned(), true)],
+            vec![("notes".to_owned(), false)],
+        ]
+    );
+
+    // A refused offer changes nothing, so nobody is told.
+    let mut wrong = server("notes");
+    wrong.plugin = "Not An Id".into();
+    assert!(relay.offer(DESKTOP, offer(vec![wrong])).is_err());
+    assert_eq!(told.lock().unwrap().len(), 4);
+}
+
+#[test]
 fn an_offer_with_a_name_an_id_or_a_schema_no_session_can_use_is_refused_and_changes_nothing() {
     let (_events, relay) = relay();
     relay.listening(DESKTOP, true, false);

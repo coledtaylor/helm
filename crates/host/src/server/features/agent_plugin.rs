@@ -72,10 +72,15 @@ pub(crate) struct PluginRelay {
     state: Mutex<Relay>,
     /// The caller a call from a session names, by the session's row id.
     caller: CallerOf,
+    /// Told, with no lock of the relay's held, each time what is offered may
+    /// have changed: an offer, or a client no longer taking calls.
+    changed: Mutex<Option<Changed>>,
 }
 
 /// How the relay names the session a call comes from to the plugin.
 type CallerOf = Box<dyn Fn(u64) -> Option<AgentPluginCaller> + Send + Sync>;
+
+type Changed = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Default)]
 struct Relay {
@@ -117,6 +122,26 @@ impl PluginRelay {
             events: Arc::clone(events),
             state: Mutex::new(Relay::default()),
             caller: Box::new(|_| None),
+            changed: Mutex::new(None),
+        }
+    }
+
+    /// Calls `changed` from now on each time what is offered may have
+    /// changed, replacing whatever was called before.
+    pub fn on_change(&self, changed: impl Fn() + Send + Sync + 'static) {
+        *self.changed.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(changed));
+    }
+
+    /// Tells whoever follows the offers. Never called with the relay's state
+    /// locked: what it calls reads [`Self::offered`].
+    fn tell_changed(&self) {
+        let changed = self
+            .changed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(changed) = changed {
+            changed();
         }
     }
 
@@ -219,10 +244,13 @@ impl PluginRelay {
     /// Refused, changing nothing, with the sentence saying what is wrong.
     fn offer(&self, client: ClientId, offer: AgentPluginServers) -> Result<(), String> {
         let servers = checked(offer)?;
-        let mut state = self.state();
-        state.offers.insert(client, servers);
-        // A client speaking for its plugins again: what it left out is gone.
-        state.orphans.clear();
+        {
+            let mut state = self.state();
+            state.offers.insert(client, servers);
+            // A client speaking for its plugins again: what it left out is gone.
+            state.orphans.clear();
+        }
+        self.tell_changed();
         Ok(())
     }
 
@@ -254,11 +282,16 @@ impl PluginRelay {
     /// are held for the sessions given them; when it has `left`, its offer
     /// goes too.
     fn listening(&self, client: ClientId, listening: bool, left: bool) {
-        let mut state = self.state();
         if listening {
-            state.listening.insert(client);
+            self.state().listening.insert(client);
             return;
         }
+        self.stopped_listening(client, left);
+        self.tell_changed();
+    }
+
+    fn stopped_listening(&self, client: ClientId, left: bool) {
+        let mut state = self.state();
         let was_listening = state.listening.remove(&client);
         let offered = if left {
             state.offers.remove(&client).unwrap_or_default()

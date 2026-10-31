@@ -82,17 +82,20 @@ impl HostAgentTools {
         self.sessions.answer_from(world);
     }
 
-    /// Switches each family as `settings` say. With every family off and no
-    /// token held, the socket is let go. Nothing binds here: the first grant
-    /// binds, so a host whose sessions take no agent tools holds no port.
+    /// Switches each family as `settings` say, then [`Self::settle`]s.
     pub fn follow(&self, settings: &HostSettings) {
         self.browser.switch(settings.browser_mcp);
         self.sessions.switch(settings.session_mcp);
-        if self.stopped.load(Ordering::SeqCst) || !self.listener.served_names().is_empty() {
-            return;
-        }
-        if let Err(err) = self.listener.sync() {
-            eprintln!("floti host: {err}");
+        self.settle();
+    }
+
+    /// With no token held and nothing a launch could be given, the socket is
+    /// let go. Called when the settings or the plugins' offers change.
+    /// Nothing binds here: the first grant binds, so a host whose sessions
+    /// take no agent tools holds no port.
+    pub fn settle(&self) {
+        if !self.stopped.load(Ordering::SeqCst) {
+            self.listener.let_go_if_idle();
         }
     }
 

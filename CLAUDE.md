@@ -272,7 +272,8 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   A server left out of an offer answers 404 at once; a call is withdrawn
   (`agentPlugin:cancel`) when the session cancels it, its request goes away
   or the session ends; with its client gone, a call fails at once saying
-  Helm's window is not connected.
+  Helm's window is not connected. With no session holding a token and
+  nothing a launch could be given, the host holds no port.
 
 ## Plugins
 

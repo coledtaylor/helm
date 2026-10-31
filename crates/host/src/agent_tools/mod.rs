@@ -241,6 +241,26 @@ impl AgentToolsListener {
         Ok(())
     }
 
+    /// Lets go of its socket when no session holds a token and no family on
+    /// can be given to a launch; binds nothing. A family on that no launch
+    /// can be given (helm-browser with no browser client, a plugin's server
+    /// whose client left) is reachable only through a token, so with none
+    /// held it keeps no port. Called when what is offered changes.
+    pub fn let_go_if_idle(&self) {
+        let mut socket = self.socket();
+        if self.router.tokens().is_empty() && !self.grantable_on() {
+            release(&mut socket);
+        }
+    }
+
+    /// Whether a family on can be given to a launch now.
+    fn grantable_on(&self) -> bool {
+        self.router
+            .families_on()
+            .iter()
+            .any(|family| family.grantable())
+    }
+
     /// Mints a token for a session about to launch, for every family on and
     /// grantable now, binding first when it is not bound. `None`, with no
     /// token minted and nothing bound, when there is no such family.
@@ -279,13 +299,17 @@ impl AgentToolsListener {
     }
 
     /// Revokes one grant's token: from now on it is answered 401. With no
-    /// family on and no token left, the socket is let go as well.
+    /// token left and no family on that a launch can be given, the socket is
+    /// let go as well.
     pub fn revoke(&self, grant: GrantId) {
         let mut socket = self.socket();
-        let mut tokens = self.router.tokens();
-        tokens.revoke(grant);
+        let no_token_left = {
+            let mut tokens = self.router.tokens();
+            tokens.revoke(grant);
+            tokens.is_empty()
+        };
         self.router.abandon_grant(grant);
-        if tokens.is_empty() && self.router.families_on().is_empty() {
+        if no_token_left && !self.grantable_on() {
             release(&mut socket);
         }
     }

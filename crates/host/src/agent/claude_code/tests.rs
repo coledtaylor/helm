@@ -958,6 +958,11 @@ fn a_familys_read_only_tools_are_allowed_after_the_tool_file_and_before_the_next
         args.iter().filter(|arg| *arg == "--allowedTools").count(),
         1
     );
+    // The rule rides on the argv; the file holds servers, not permissions.
+    let file = std::fs::read_to_string(folder.path().join("mcp.json")).unwrap();
+    for allowed in ["allowedTools", "find", "get", "list", "mcp__"] {
+        assert!(!file.contains(allowed), "{allowed} in {file}");
+    }
 
     // None read-only: no flag at all.
     let (launch, _folder) = world.launch(&LaunchRequest {

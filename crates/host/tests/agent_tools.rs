@@ -2056,3 +2056,361 @@ async fn s6_a_plugin_call_the_session_cancels_or_ends_while_waiting_is_withdrawn
 
     host.stop(HostStopReason::Stop).await;
 }
+
+/// The notes plugin's server with no tool marked read-only.
+fn notes_server_none_read_only() -> AgentPluginServer {
+    let mut server = notes_server();
+    for tool in &mut server.tools {
+        tool.read_only = false;
+    }
+    server
+}
+
+/// The tools a launch's argv allows without asking.
+fn allowed_in(argv: &[String]) -> Vec<String> {
+    argv.iter()
+        .skip_while(|arg| *arg != "--allowedTools")
+        .skip(1)
+        .take_while(|arg| !arg.starts_with("--"))
+        .cloned()
+        .collect()
+}
+
+/// The window answers `call` with `outcome`.
+async fn answer_plugin(
+    desktop: &mut TestClient,
+    call: &AgentPluginToolCall,
+    outcome: AgentPluginOutcome,
+) {
+    desktop
+        .request::<AgentPluginAnswer>(&AgentPluginToolAnswer {
+            call_id: call.call_id,
+            outcome,
+        })
+        .await
+        .expect("the window's answer is taken");
+}
+
+/// A tool result saying `text`.
+fn said(text: &str) -> Value {
+    json!({ "content": [{ "type": "text", "text": text }], "isError": false })
+}
+
+fn done_with(result: &Value) -> AgentPluginOutcome {
+    AgentPluginOutcome::Done {
+        value: to_payload(result).unwrap(),
+    }
+}
+
+/// Waits until nothing accepts a connection on `address`.
+async fn refuses(address: SocketAddr) {
+    eventually(&format!("{address} refusing connections"), async || {
+        TcpStream::connect(address).await.is_err().then_some(())
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s2_the_tool_file_names_no_allowed_tool_and_a_plugin_with_none_marked_is_given_with_no_allowance()
+ {
+    let world = World::new();
+    let host = world.host();
+    let mut desktop = world.plugin_client(vec![notes_server()]).await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+
+    // The rule rides on the argv; the file holds servers, not permissions.
+    assert_eq!(allowed_in(&alpha.argv), ["mcp__helm-plugin-notes__find"]);
+    let file = std::fs::read_to_string(&alpha.config).expect("read the tool file");
+    for allowed in ["allowedTools", "mcp__", "find"] {
+        assert!(!file.contains(allowed), "{allowed} in {file}");
+    }
+
+    // A plugin with no tool marked: served, and allowed nothing.
+    offer_plugins(&mut desktop, vec![notes_server_none_read_only()]).await;
+    let beta = world
+        .fake_session(&mut client, &world.folder("beta"), "beta")
+        .await;
+    assert_eq!(beta.servers(), ["helm-plugin-notes", "helm-sessions"]);
+    assert!(
+        !beta.argv.iter().any(|arg| arg == "--allowedTools"),
+        "{:?}",
+        beta.argv
+    );
+
+    close(&mut client, &alpha.record).await;
+    close(&mut client, &beta.record).await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3_every_call_from_a_session_names_one_minted_caller_another_session_another_and_never_a_token()
+ {
+    let world = World::new();
+    let host = world.host();
+    let mut desktop = world.plugin_client(vec![notes_server()]).await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+    let beta = world
+        .fake_session(&mut client, &world.folder("beta"), "beta")
+        .await;
+
+    let mut heard = Vec::new();
+    for (session, tool, arguments) in [
+        (&alpha, "write", json!({ "query": "Ship it" })),
+        (&alpha, "find", json!({})),
+        (&beta, "find", json!({ "query": "beta's" })),
+    ] {
+        let calling = session.call_notes(tool, arguments.clone());
+        let call: AgentPluginToolCall = next_on(&mut desktop, PLUGIN_CALLS).await;
+        assert_eq!(call.session, session.record.id);
+        assert_eq!(call.tool, tool);
+        assert_eq!(from_payload::<Value>(&call.arguments).unwrap(), arguments);
+        let answered = said(&format!("{tool} answered"));
+        answer_plugin(&mut desktop, &call, done_with(&answered)).await;
+        assert_eq!(calling.await.unwrap().result(), answered);
+        heard.push(call);
+    }
+
+    let callers: Vec<_> = heard
+        .iter()
+        .map(|call| call.caller.clone().expect("the call names its caller"))
+        .collect();
+    // One id per session, the same on every call; another for another.
+    assert_eq!(callers[0].id, callers[1].id);
+    assert_ne!(callers[0].id, callers[2].id);
+    assert_eq!(
+        (callers[2].label.as_str(), callers[2].folder.as_str()),
+        (beta.record.name.as_str(), beta.record.cwd.as_str())
+    );
+    // Nothing the window is sent carries a token or a row id as the caller.
+    for (call, session) in heard.iter().zip([&alpha, &alpha, &beta]) {
+        let sent = serde_json::to_string(call).unwrap();
+        assert!(!sent.contains(&alpha.token), "{sent}");
+        assert!(!sent.contains(&beta.token), "{sent}");
+        let caller = call.caller.as_ref().unwrap();
+        assert_ne!(caller.id, session.record.id.to_string());
+    }
+
+    close(&mut client, &alpha.record).await;
+    close(&mut client, &beta.record).await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3_a_plugin_that_could_not_answer_fails_the_call_with_its_sentence() {
+    let world = World::new();
+    let host = world.host();
+    let mut desktop = world.plugin_client(vec![notes_server()]).await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+
+    let calling = alpha.call_notes("write", json!({ "query": "x" }));
+    let call: AgentPluginToolCall = next_on(&mut desktop, PLUGIN_CALLS).await;
+    answer_plugin(
+        &mut desktop,
+        &call,
+        AgentPluginOutcome::Failed {
+            message: "The board is locked.".into(),
+        },
+    )
+    .await;
+    let result = calling.await.unwrap().result();
+    assert_eq!(result["isError"], true, "{result}");
+    assert_eq!(result["content"][0]["text"], "The board is locked.");
+
+    close(&mut client, &alpha.record).await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s4_an_offer_that_changes_nothing_leaves_every_sessions_token_working() {
+    let world = World::new();
+    let host = world.host();
+    let mut desktop = world.plugin_client(vec![notes_server()]).await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+    let (url, token) = alpha.notes().expect("a helm-plugin-notes entry");
+
+    offer_plugins(&mut desktop, vec![notes_server()]).await;
+    assert_eq!(
+        rpc(&url, Some(&token), "tools/list", json!({}))
+            .await
+            .status,
+        200
+    );
+    assert_eq!(alpha.tools_list().await.status, 200);
+    let calling = alpha.call_notes("find", json!({}));
+    let call: AgentPluginToolCall = next_on(&mut desktop, PLUGIN_CALLS).await;
+    answer_plugin(&mut desktop, &call, done_with(&said("still here"))).await;
+    assert_eq!(calling.await.unwrap().result(), said("still here"));
+
+    close(&mut client, &alpha.record).await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_with_helm_sessions_off_and_no_browser_a_launch_gets_only_the_plugin_and_with_nothing_offered_and_no_token_no_port()
+ {
+    let world = World::new();
+    let host = world.host();
+    let mut client = world.client().await;
+    world.session_tools(&mut client, false).await;
+    let mut desktop = world.plugin_client(vec![notes_server()]).await;
+
+    // Given only the plugin's server, and its calls are answered.
+    let folder = world.folder("alpha");
+    let alpha = start(&mut client, &folder, "alpha", None, None).await;
+    let run = world.agent_run_in(&folder);
+    let config = mcp_config_of(&run.argv);
+    let document: Value =
+        serde_json::from_slice(&std::fs::read(&config).expect("read the tool file")).unwrap();
+    let servers: Vec<&String> = document["mcpServers"].as_object().unwrap().keys().collect();
+    assert_eq!(servers, ["helm-plugin-notes"]);
+    assert_eq!(allowed_in(&run.argv), ["mcp__helm-plugin-notes__find"]);
+    let (url, token) = server_in(&document, "helm-plugin-notes").unwrap();
+    let address = split_url(&url).0;
+    let calling = {
+        let (url, token) = (url.clone(), token.clone());
+        tokio::spawn(async move {
+            rpc(
+                &url,
+                Some(&token),
+                "tools/call",
+                json!({ "name": "find", "arguments": {} }),
+            )
+            .await
+        })
+    };
+    let call: AgentPluginToolCall = next_on(&mut desktop, PLUGIN_CALLS).await;
+    answer_plugin(&mut desktop, &call, done_with(&said("one note"))).await;
+    assert_eq!(calling.await.unwrap().result(), said("one note"));
+
+    // Nothing offered: a launch gets no tool file and no allowance, and the
+    // running session keeps its port, its route 404.
+    offer_plugins(&mut desktop, Vec::new()).await;
+    let bare = world.folder("bare");
+    let beta = start(&mut client, &bare, "beta", None, None).await;
+    let run = world.agent_run_in(&bare);
+    assert!(
+        !run.argv
+            .iter()
+            .any(|arg| arg == "--mcp-config" || arg == "--allowedTools"),
+        "{:?}",
+        run.argv
+    );
+    assert_eq!(status_of(&url, "POST", Some(&token), None).await, 404);
+
+    // Its session ended, no token is held and nothing is offered: no port.
+    close(&mut client, &alpha).await;
+    refuses(address).await;
+
+    // Offered again, a session's token held, then nothing offered once the
+    // session has ended: the port goes with the offer.
+    offer_plugins(&mut desktop, vec![notes_server()]).await;
+    let again = world.folder("gamma");
+    let gamma = start(&mut client, &again, "gamma", None, None).await;
+    let run = world.agent_run_in(&again);
+    let document: Value =
+        serde_json::from_slice(&std::fs::read(mcp_config_of(&run.argv)).unwrap()).unwrap();
+    let (url, token) = server_in(&document, "helm-plugin-notes").unwrap();
+    let address = split_url(&url).0;
+    close(&mut client, &gamma).await;
+    eventually("gamma's token revoked", async || {
+        (status_of(&url, "POST", Some(&token), None).await == 401).then_some(())
+    })
+    .await;
+    offer_plugins(&mut desktop, Vec::new()).await;
+    refuses(address).await;
+
+    close(&mut client, &beta).await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s6_a_hang_up_withdraws_the_call_and_a_cancel_from_another_session_or_for_another_request_withdraws_nothing()
+ {
+    let world = World::new();
+    let host = world.host();
+    let mut desktop = world.plugin_client(vec![notes_server()]).await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+    let beta = world
+        .fake_session(&mut client, &world.folder("beta"), "beta")
+        .await;
+    let (url, alpha_token) = alpha.notes().expect("a helm-plugin-notes entry");
+    let (_, beta_token) = beta.notes().expect("a helm-plugin-notes entry");
+    let cancel = |token: String, request: u64| {
+        let url = url.clone();
+        async move {
+            post(
+                &url,
+                Some(&token),
+                &json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": { "requestId": request, "reason": "interrupted" },
+                }),
+            )
+            .await
+            .status
+        }
+    };
+
+    // Alpha's request 1 waits; beta cancels its own request 1, alpha cancels
+    // request 2. Neither withdraws it: the window's answer is still taken
+    // and reaches alpha.
+    let waiting = alpha.call_notes("write", json!({ "query": "draft" }));
+    let call: AgentPluginToolCall = next_on(&mut desktop, PLUGIN_CALLS).await;
+    assert_eq!(cancel(beta_token, 1).await, 202);
+    assert_eq!(cancel(alpha_token.clone(), 2).await, 202);
+    answer_plugin(&mut desktop, &call, done_with(&said("kept"))).await;
+    assert_eq!(waiting.await.unwrap().result(), said("kept"));
+
+    // Hung up: the connection closes with the call unanswered.
+    let (address, path) = split_url(&url);
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": "x",
+        "method": "tools/call",
+        "params": { "name": "find", "arguments": {} },
+    })
+    .to_string();
+    let mut stream = TcpStream::connect(address).await.expect("connect");
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\n\
+         Accept: application/json, text/event-stream\r\nContent-Type: application/json\r\n\
+         Authorization: Bearer {alpha_token}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await.expect("send");
+    stream.write_all(body.as_bytes()).await.expect("send");
+    let call: AgentPluginToolCall = next_on(&mut desktop, PLUGIN_CALLS).await;
+    drop(stream);
+    let withdrawn: AgentPluginCallCancel = next_on(&mut desktop, PLUGIN_CANCELS).await;
+    assert_eq!(withdrawn.call_id, call.call_id);
+    assert!(
+        desktop
+            .request::<AgentPluginAnswer>(&AgentPluginToolAnswer {
+                call_id: call.call_id,
+                outcome: done_with(&said("late")),
+            })
+            .await
+            .is_err(),
+        "a late answer is refused"
+    );
+
+    close(&mut client, &alpha.record).await;
+    close(&mut client, &beta.record).await;
+    host.stop(HostStopReason::Stop).await;
+}
