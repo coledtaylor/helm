@@ -164,6 +164,11 @@ impl Hosted {
         self.backends.iter().find(|backend| backend.id() == id)
     }
 
+    /// Whether this host runs backend `id`.
+    pub fn runs_backend(&self, id: &BackendId) -> bool {
+        self.find_backend(id).is_some()
+    }
+
     /// The backend a request names, or the host's default when it names
     /// none.
     fn backend(

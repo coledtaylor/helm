@@ -39,13 +39,6 @@ const test = base.extend<{ sample: SampleFixture; sampleRegistered: boolean }>({
   }
 })
 
-/**
- * Why a test is skipped in the `in the local host` project: its page's calls
- * are still answered by Helm's own plugin host, which has no plugins while the
- * local host keeps the registry.
- */
-const answeredOnHost = (calls: string): string => `its page's ${calls} are not answered by the local host yet`
-
 /** The page's `window.helm`, in a frame's `evaluate`. */
 type PluginWindow = Window & { helm: HelmBridge }
 /** Helm's own window and its IPC bridge, as Settings uses it. */
@@ -75,10 +68,8 @@ async function storeToken(ui: Page, url: string): Promise<void> {
 
 test('a plugin: its background page, a secret it asks for, its panel, badge, status and a tab of its own', async ({
   helm,
-  sample,
-  sessionsInHost
+  sample
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('secrets, settings, status, helm.fetch and exec'))
   const ui = helm.window
 
   // The background page runs with nothing of the plugin's on screen.
@@ -124,6 +115,30 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
   const tab = await pluginFrame(ui, 'dist/tabs/item.html')
   expect(await tab.evaluate(() => (window as unknown as PluginWindow).helm.context.params)).toEqual({ id: '2' })
 
+  // A post on a BroadcastChannel reaches the plugin's other pages and its
+  // background page, and every other channel of that name in the tab, but not
+  // the channel that posted it.
+  const sent = { from: 'the tab', at: [1, 2] }
+  await panel.evaluate(LISTEN('sample-e2e'))
+  await inBackground(helm, LISTEN('sample-e2e'))
+  await tab.evaluate(
+    `(() => {
+      window.__posterHeard = []
+      window.__siblingHeard = []
+      window.__poster = new BroadcastChannel('sample-e2e')
+      window.__poster.onmessage = (event) => window.__posterHeard.push(event.data)
+      window.__sibling = new BroadcastChannel('sample-e2e')
+      window.__sibling.onmessage = (event) => window.__siblingHeard.push(event.data)
+      window.__poster.postMessage(${JSON.stringify(sent)})
+      return true
+    })()`
+  )
+  await expect.poll(() => panel.evaluate('window.__heard')).toEqual([sent])
+  await expect.poll(() => inBackground(helm, 'window.__heard')).toEqual([sent])
+  await expect.poll(() => tab.evaluate('window.__siblingHeard')).toEqual([sent])
+  // The sibling heard the same delivery the poster would have.
+  expect(await tab.evaluate('window.__posterHeard')).toEqual([])
+
   // A program from the manifest's `exec`, with the secret in its environment.
   await tab.getByRole('button', { name: 'Run echo' }).click()
   await expect(tab.locator('[data-sample-echo-output]')).toHaveText('{"args":["2"],"token":"set"}')
@@ -131,14 +146,20 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
   // Reading it marked it read; the background page heard and the bar follows.
   await expect(statusItem(ui)).toHaveText('1 unread')
   await expect(ui.locator('[data-rail-badge]')).toHaveText('1')
+
+  // What the service printed is in the plugin's log in Settings, and no run's
+  // token (hex, from the OS) is anywhere in it.
+  await rail(ui).getByRole('button', { name: 'Settings' }).click()
+  await ui.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sample', exact: true }).click()
+  const log = ui.locator('[data-plugin-log]')
+  await expect(log).toContainText('sample service listening on')
+  expect(await log.textContent()).not.toMatch(/[0-9a-f]{32}/)
 })
 
 test('helm.fetch reaches only the origins the manifest lists, and every redirect is checked again', async ({
   helm,
-  sample,
-  sessionsInHost
+  sample
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('helm.fetch calls'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -182,10 +203,8 @@ test('helm.fetch reaches only the origins the manifest lists, and every redirect
 
 test("Helm's shortcuts work from inside a plugin page, and its commands run from Ctrl+Shift+P", async ({
   helm,
-  sample,
-  sessionsInHost
+  sample
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which list and create its items,'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -208,6 +227,15 @@ test("Helm's shortcuts work from inside a plugin page, and its commands run from
 
   await expect(ui.getByRole('tab', { name: /From the palette/ })).toBeVisible()
   expect(sample.server.items.map((item) => item.title)).toContain('From the palette')
+
+  // A command with no tab is the background page's.
+  await inBackground(helm, `(() => { window.__commands = []; helm.on('command', ({ id }) => window.__commands.push(id)); return true })()`)
+  await ui.keyboard.press('Control+Shift+P')
+  await expect(palette).toBeVisible()
+  await ui.keyboard.type('refresh')
+  await ui.keyboard.press('Enter')
+  await expect(palette).toBeHidden()
+  await expect.poll(() => inBackground(helm, 'window.__commands')).toEqual(['refresh'])
 })
 
 /**
@@ -227,6 +255,23 @@ function inHelm<T>(helm: Helm, script: string, frameUrl?: string): Promise<T> {
     { script, frameUrl }
   )
 }
+
+/** Runs `script` in the sample's background page, in Helm's hidden plugin host window. */
+function inBackground<T>(helm: Helm, script: string): Promise<T> {
+  return helm.app.evaluate(
+    async ({ BrowserWindow }, { script, url }) => {
+      const host = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('/plugin-host.html'))
+      const frame = host?.webContents.mainFrame.framesInSubtree.find((f) => f.url.startsWith(url))
+      if (frame === undefined) throw new Error('no background page')
+      return (await frame.executeJavaScript(script)) as T
+    },
+    { script, url: 'helm-plugin://sample/dist/background/index.html' }
+  )
+}
+
+/** What a page records of a BroadcastChannel it listens on, in a page or a frame's `evaluate`. */
+const LISTEN = (name: string): string =>
+  `(() => { window.__heard = []; new BroadcastChannel(${JSON.stringify(name)}).onmessage = (event) => window.__heard.push(event.data); return true })()`
 
 /**
  * Waits until Helm's window holds no user activation: Chromium ends a click's
@@ -409,10 +454,8 @@ test('a theme change reaches plugin pages without reloading them', async ({ helm
 test("a plugin panel sees Helm's sessions start, work and end, and nothing of what is said in them", async ({
   helm,
   sample,
-  world,
-  sessionsInHost
+  world
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('sessions.list calls'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   let panel = await openPanel(ui)
@@ -457,10 +500,8 @@ test("a plugin panel sees Helm's sessions start, work and end, and nothing of wh
 test("a session calls the plugin's tools, its background page answers, and turning them off in Settings takes them away", async ({
   helm,
   sample,
-  world,
-  sessionsInHost
+  world
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('tool answers, helm.fetch and secrets calls'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   await startSession(ui, 'alpha')
@@ -474,7 +515,12 @@ test("a session calls the plugin's tools, its background page answers, and turni
   expect(run.allowedTools).toEqual(['mcp__helm-plugin-sample__list_items'])
   const token = bearerOf(tools)
   expect(await toolNames(tools.url, token)).toEqual(['list_items', 'create_item'])
-  const init = await rpcResult<{ instructions: string }>(tools.url, token, 'initialize', {})
+  // Asked as `claude` asks, with a protocol version and who is asking.
+  const init = await rpcResult<{ instructions: string }>(tools.url, token, 'initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'e2e', version: '1.0.0' }
+  })
   expect(init.instructions).toContain('"Sample", a plugin the user added to Helm')
   expect(init.instructions).toContain('List them before adding one')
 
@@ -525,10 +571,8 @@ const stripTest = test.extend({
 stripTest('a plugin with a page strip opens its tabs as pages in one tab, which Ctrl+W closes page by page', async ({
   helm,
   sample,
-  relaunch,
-  sessionsInHost
+  relaunch
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which list its items,'))
   let ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -615,10 +659,8 @@ const asPreview = (locator: Locator): Locator => locator.locator('[data-tab-prev
 
 test("a plugin's tab opened as a preview is replaced by the next, and stays once double-clicked or typed in", async ({
   helm,
-  sample,
-  sessionsInHost
+  sample
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which list its items,'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -656,10 +698,8 @@ test("a plugin's tab opened as a preview is replaced by the next, and stays once
 
 stripTest("a plugin with a page strip previews its pages in the strip, apart from the pane's tabs", async ({
   helm,
-  sample,
-  sessionsInHost
+  sample
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which list its items,'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -700,10 +740,8 @@ stripTest("a plugin with a page strip previews its pages in the strip, apart fro
 test('a plugin page starts a session from a click, once the user has seen what it will run', async ({
   helm,
   sample,
-  world,
-  sessionsInHost
+  world
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('sessions.start, settings and helm.fetch calls'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -754,10 +792,8 @@ test('a plugin page starts a session from a click, once the user has seen what i
 
 test('a plugin page opens a link in the Browser tab from a click, held to the reach a typed address meets', async ({
   helm,
-  sample,
-  sessionsInHost
+  sample
 }) => {
-  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which load the item it opens from,'))
   const fixture = await startBrowserFixture()
   try {
     const ui = helm.window

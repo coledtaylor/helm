@@ -23,7 +23,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use floti_protocol::Payload;
 use floti_protocol::channel::{Later, Router};
 use floti_protocol::channels::common::SessionRecord;
 use floti_protocol::channels::plugins::{
@@ -32,6 +31,7 @@ use floti_protocol::channels::plugins::{
     PluginsCancel, PluginsSession, PluginsUi,
 };
 use floti_protocol::channels::sessions::StartSessionRequest;
+use floti_protocol::{BackendId, Payload};
 use tokio::sync::oneshot;
 
 use super::sessions::PluginSessions;
@@ -451,7 +451,12 @@ impl Pages {
             let _ = ask.settled.send(Settled::Failed(message.clone()));
             return Err(message);
         };
+        // What the dialog showed is a `claude` command line, so the session
+        // is Claude Code's wherever this host runs it; a host without it
+        // (a test's fake agent) starts its default.
+        let claude = BackendId::claude_code();
         let request = StartSessionRequest {
+            backend: hosted.runs_backend(&claude).then_some(claude),
             cwd: ask.asked.cwd,
             name: Some(ask.asked.name),
             opening_prompt: Some(ask.asked.prompt),

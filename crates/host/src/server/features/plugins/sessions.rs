@@ -27,7 +27,7 @@ use floti_protocol::channels::plugins::{PluginSession, PluginSessionActivity, Pl
 use floti_protocol::channels::sessions::{SessionActivity, SessionActivityState};
 
 use crate::agent::claude_code::parse_instant;
-use crate::agent::new_conversation_id;
+use crate::agent::{fill_random, hex};
 use crate::server::hosted::{Hosted, label_of, session_id};
 
 /// The sessions plugins may see, by the host's row id, which orders them by
@@ -52,10 +52,18 @@ struct Known {
     since: Option<u64>,
 }
 
+/// 128 random bits as 32 lowercase hex digits, the shape Helm's own plugin
+/// host gives a session's id.
+fn minted_id() -> String {
+    let mut bytes = [0u8; 16];
+    fill_random(&mut bytes);
+    hex(&bytes)
+}
+
 impl Known {
     fn met(record: &SessionRecord, now: u64) -> Self {
         Self {
-            id: new_conversation_id(),
+            id: minted_id(),
             name: label_of(record),
             cwd: record.cwd.clone(),
             started_at: parse_instant(&record.started_at).unwrap_or(now),
@@ -273,6 +281,13 @@ mod tests {
         assert_eq!(started.len(), 1);
         let id = started[0].id.clone();
         assert_ne!(id, "1", "never the row id");
+        assert!(
+            id.len() == 32
+                && id
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
+            "32 lowercase hex digits, as Helm's own plugin host mints: {id}"
+        );
         assert_eq!(started[0].name, "alpha");
         assert_eq!(started[0].cwd, "/work/alpha");
         assert_eq!(started[0].state, PluginSessionState::Running);
