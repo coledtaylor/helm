@@ -30,7 +30,7 @@ use floti_protocol::noise::{
 use floti_protocol::{FrameDecoder, Message, ProtocolError, encode_frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::keys::load_or_create_key_pair;
+use crate::keys::{load_or_create_key_pair, read_key_pair};
 use crate::platform::private_files::{Native as NativeFiles, PrivateFiles, sweep_stale_temps};
 use crate::platform::process_tree;
 use crate::platform::socket::{Endpoint, LocalSocket, LocalStream, Native as NativeSocket};
@@ -66,26 +66,27 @@ impl ClientKeys {
             &process_tree::Native,
         );
         let device = load_or_create_key_pair(&folder.join(DEVICE_KEY_FILE))?;
-        let pinned_path = folder.join(PINNED_HOST_FILE);
-        let pinned = NativeFiles
-            .read(&pinned_path)?
-            .map(|bytes| {
-                String::from_utf8_lossy(&bytes)
-                    .trim()
-                    .parse::<PublicKey>()
-                    .map_err(|_| {
-                        Error::Refused(format!(
-                            "{} does not hold a host key: it should be 64 hex digits.",
-                            pinned_path.display()
-                        ))
-                    })
-            })
-            .transpose()?;
+        let pinned = read_pinned(folder)?;
         Ok(Self {
             folder: folder.to_path_buf(),
             device,
             pinned,
         })
+    }
+
+    /// The keys in `folder` when it holds both a device key and a pinned
+    /// host key, and `None` otherwise, making and changing nothing: for a
+    /// program that must reach only a host this client already paired with,
+    /// never pair or enrol, and leave a folder it does not use as it was.
+    pub fn open_paired(folder: &Path) -> Result<Option<Self>> {
+        let Some(device) = read_key_pair(&folder.join(DEVICE_KEY_FILE))? else {
+            return Ok(None);
+        };
+        Ok(read_pinned(folder)?.map(|pinned| Self {
+            folder: folder.to_path_buf(),
+            device,
+            pinned: Some(pinned),
+        }))
     }
 
     pub fn folder(&self) -> &Path {
@@ -158,6 +159,25 @@ impl ClientKeys {
             _ => self.connect(endpoint).await,
         }
     }
+}
+
+/// The host key pinned in `folder`, or `None` when it has pinned none.
+fn read_pinned(folder: &Path) -> Result<Option<PublicKey>> {
+    let path = folder.join(PINNED_HOST_FILE);
+    NativeFiles
+        .read(&path)?
+        .map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .trim()
+                .parse::<PublicKey>()
+                .map_err(|_| {
+                    Error::Refused(format!(
+                        "{} does not hold a host key: it should be 64 hex digits.",
+                        path.display()
+                    ))
+                })
+        })
+        .transpose()
 }
 
 impl fmt::Debug for ClientKeys {
@@ -405,7 +425,7 @@ impl fmt::Debug for Connection {
 
 /// A read error that is the other end having closed: what a pipe reports on
 /// Windows where a Unix socket reads as ended.
-pub(crate) fn is_closed(err: &std::io::Error) -> bool {
+pub fn is_closed(err: &std::io::Error) -> bool {
     matches!(
         err.kind(),
         ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted

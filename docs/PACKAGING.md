@@ -135,6 +135,33 @@ untouched one; deleting the directory is what puts the originals back.
   the start-menu shortcut and the uninstall registry entry are gone and that the
   data directory is not.
 - **No desktop shortcut.** A start-menu entry is enough.
+- **It stops this PC's local host first, after saying what that ends.** With
+  "Run sessions in the local host" on, `floti.exe` outlives Helm and runs the
+  sessions, and a running `floti.exe` cannot be replaced. electron-builder's
+  own check would force-stop every process under the install folder, the host
+  included, ending its sessions without a word. So `build/installer.nsh`
+  (`nsis.include`) defines `customCheckAppRunning`, which runs the
+  **installed** `resources\floti.exe` before anything is replaced:
+  `floti update-stop "%APPDATA%\Helm\host-client" --ask` connects with Helm's
+  client folder keys, as `floti bridge` does, so the device key never leaves
+  that process, and it never pairs or enrols. When the host runs sessions it
+  prints the question ("Installing this update stops the local host on this
+  PC, ending 2 sessions. Helm offers them back when it next starts.") and the
+  installer shows it with OK and Cancel. Cancel quits the installer and every
+  session keeps running; OK runs `--stop`, which stops the host for an update
+  (`HostStopReason::Update`: the sessions end with their rows left running,
+  so Helm's next start offers them back once) and returns once the host has
+  exited. A host running no session (status 7) is stopped the same way with
+  no question. Anything else asks nothing and leaves the host to the default
+  check: no `floti.exe` installed yet, one too old to know `update-stop`
+  (status 2), no host answering (status 3) or a client folder Helm never
+  paired (status 4). Then electron-builder's own check runs, which the macro
+  still inserts, with the `getProcessInfo.nsh` include and `Var pid` that
+  defining the macro drops. A silent install (`/S`) answers OK, as that check
+  does. The uninstaller runs the default check alone. On macOS and Linux files
+  are replaced under a running host and nothing stops it. The decision is
+  tested in `crates/host` (`update_stop.rs` and `tests/update_stop.rs`);
+  nothing tests it by running an installer.
 
 ## Releasing
 
@@ -257,7 +284,9 @@ be enough:
 2. **It could only cover half the users.** The portable exe has no install
    location to replace, so electron-updater applies to the NSIS build alone.
 3. **The app hosts long-lived sessions.** A background updater that restarts
-   Helm ends somebody's `claude` session, possibly mid-turn.
+   Helm ends somebody's `claude` session, possibly mid-turn. With sessions in
+   the local host, an update stops the host only once the user has agreed to
+   the count of sessions it ends (see what the installer does, above).
 
 Code-signing the build would retire reason 1. It would not touch 2 or 3.
 

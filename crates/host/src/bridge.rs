@@ -73,7 +73,7 @@ impl BridgeExit {
     }
 
     /// The status a failure to connect ends with.
-    fn of_connect(err: &ClientError) -> Self {
+    pub fn of_connect(err: &ClientError) -> Self {
         match err {
             ClientError::Unreachable { .. } => Self::Unreachable,
             ClientError::NotPinned => Self::NotPinned,

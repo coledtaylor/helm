@@ -122,6 +122,12 @@ nsis:
   runAfterFinish: true
   createStartMenuShortcut: true
   createDesktopShortcut: false
+  # Before replacing anything, asks the installed floti.exe how many sessions
+  # this PC's local host runs and, when it runs any, says that installing ends
+  # them; OK stops the host for an update, Cancel quits. A running floti.exe
+  # cannot be replaced. Named rather than left to the `build/installer.nsh`
+  # default, so a moved file fails the build. docs/PACKAGING.md has the rest.
+  include: build/installer.nsh
 
 # Built by `pnpm dist:mac`, on a Mac or the macos-latest runner: electron-builder
 # makes a dmg only on macOS. Apple Silicon only - every Mac sold since 2023 is,

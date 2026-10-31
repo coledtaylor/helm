@@ -3,7 +3,11 @@
 //! runs it for the desktop that started it, which it outlives, exiting by
 //! itself once nothing runs and no client is attached. `floti bridge`
 //! connects a client from its folder to the host on this computer and relays
-//! the protocol over standard input and output.
+//! the protocol over standard input and output. `floti update-stop <client
+//! folder> --ask | --stop` is what an installer runs before it replaces the
+//! binary: it says what stopping the host would end, then stops it.
+
+mod update_stop;
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -12,7 +16,7 @@ use std::process::ExitCode;
 use floti_host::bridge::{BridgeExit, run_bridge};
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions};
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti update-stop <client folder> --ask | --stop";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -35,6 +39,10 @@ fn main() -> ExitCode {
         ["bridge", folder] if !folder.is_empty() => {
             ExitCode::from(run_bridge(Path::new(folder)).code())
         }
+        ["update-stop", ..] => match update_stop::parse(&args[1..]) {
+            Some((folder, step)) => ExitCode::from(update_stop::run(&folder, step)),
+            None => usage(),
+        },
         ["--version"] | ["-V"] => {
             println!("floti {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

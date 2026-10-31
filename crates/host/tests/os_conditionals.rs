@@ -7,9 +7,9 @@
 //! ending a process tree (`process_tree`), the process table and listening
 //! sockets (`process_table`), folder links (`links`), starting a program
 //! (`launcher`), files only the user can open (`private_files`), sealing
-//! plugin secrets (`secret_seal`) and the Node runtime's layout
-//! (`node_runtime`). A compile-time OS conditional
-//! (`cfg`, `cfg!` or `cfg_attr` naming `windows`, `unix`, `target_os`,
+//! plugin secrets (`secret_seal`), the Node runtime's layout
+//! (`node_runtime`) and the notification area (`tray`). A compile-time OS
+//! conditional (`cfg`, `cfg!` or `cfg_attr` naming `windows`, `unix`, `target_os`,
 //! `target_family`, `target_vendor` or `target_env`) may appear only in
 //! those folders, and in `src/platform/mod.rs`, which refuses any other OS.
 //! Anywhere else in the crate's source, its tests or its test tools, this
@@ -29,6 +29,7 @@ const CONCERNS: &[&str] = &[
     "private_files",
     "secret_seal",
     "node_runtime",
+    "tray",
 ];
 
 /// The words that make a `cfg` depend on the OS.
