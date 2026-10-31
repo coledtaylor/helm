@@ -65,7 +65,8 @@ import {
 import { createBrowserMcp, type BrowserMcpHost } from './browser-mcp'
 import { sessionToolsWorld, type SessionToolsWorld } from './session-tools'
 import { createHistoryIndex, type HistoryIndex } from './history'
-import type { HistoryReads } from './history-reads'
+import { refusedHistoryReads, type HistoryReads } from './history-reads'
+import { installIpcRecorder } from './ipc-recorder'
 import { createUsageService, type UsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
 import {
@@ -75,7 +76,7 @@ import {
   type SessionHost,
   type SessionObserver
 } from './sessions'
-import { createDesktopHost, type DesktopHost } from './host/desktop'
+import { createDesktopHost, createLocalPageLinks, type DesktopHost } from './host/desktop'
 import { createActivityService } from './activity'
 import { createRestoreService, type RestoreService } from './restore'
 import { createResourcesService } from './resources'
@@ -529,6 +530,19 @@ function startApp(options: AppOptions = {}): void {
     win.on('blur', () => desktopHost.refocus())
   }
 
+  /*
+   * Each Helm page's own connection to the local host: the window, and the
+   * hidden window plugins' background pages run in. No other page - a plugin
+   * frame, an artifact frame, a page in the Browser tab - may open one.
+   */
+  const pageLinks = createLocalPageLinks(
+    desktopHost?.link ?? null,
+    (id) =>
+      (win !== null && !win.isDestroyed() && win.webContents.id === id) ||
+      pluginBackground?.contents()?.id === id,
+    (line) => console.log(line)
+  )
+
   /**
    * Helm's settings as the window is told them: with sessions in the local
    * host, the scan roots, pins and setup stamp are the host's, laid over.
@@ -587,7 +601,8 @@ function startApp(options: AppOptions = {}): void {
    */
   const historyHome: LocalHistory | { kind: 'host'; reads: HistoryReads } =
     desktopHost !== null
-      ? { kind: 'host', reads: desktopHost.history }
+      ? // The window reads the host's over its own connection; main answers none.
+        { kind: 'host', reads: refusedHistoryReads() }
       : {
           kind: 'local',
           index: createHistoryIndex({
@@ -789,6 +804,7 @@ function startApp(options: AppOptions = {}): void {
 
   registerIpc({
     services,
+    pageLinks,
     sessions,
     profiles: profileService,
     restore,
@@ -1009,17 +1025,20 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.pluginRelay.stop()
         desktopHost.profiles.shutdown()
         desktopHost.plugins.shutdown()
-        desktopHost.history.shutdown()
         desktopHost.config.shutdown()
         desktopHost.workspace.shutdown()
         desktopHost.files.shutdown()
         desktopHost.resources.stop()
         desktopHost.sessions.shutdown()
         desktopHost.pterm.shutdown()
-        void desktopHost.link.stop().finally(() => {
-          hostStop = 'stopped'
-          app.quit()
-        })
+        // Every page's bridge ends before the host stops, so none is left running.
+        void pageLinks
+          .stop()
+          .then(() => desktopHost.link.stop())
+          .finally(() => {
+            hostStop = 'stopped'
+            app.quit()
+          })
       }
       return
     }
@@ -1229,6 +1248,9 @@ function claimDevShortcut(): void {
 }
 
 app.whenReady().then(() => {
+  // Before any window: it records what every page sends and is sent (e2e only).
+  installIpcRecorder()
+
   // None on Windows and Linux, where the default menu's Edit > Copy would
   // swallow Ctrl+C before xterm sees it; the app and Edit menus on macOS,
   // where Cmd+C, Cmd+V, Cmd+Z, Cmd+A and Cmd+Q are menu items (chrome.ts).

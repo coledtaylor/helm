@@ -3415,3 +3415,54 @@ export const CHANNELS = [
   { name: "usage:changed", kind: "event", capability: null },
   { name: "usage:read", kind: "request", capability: null },
 ] as const;
+
+/** A channel, or a family written `family:*`, that stays out of the protocol, with why. */
+export interface OutsideEntry {
+  readonly channels: string;
+  readonly reason: string;
+}
+
+/** Channels that belong to the client: they act on its window, its machine or its own diagnostics. */
+export const CLIENT_ONLY: readonly OutsideEntry[] = [
+  { channels: "browser:*", reason: "the browser pane and its sign-ins live in the client; agent browser tools reach it over agentBrowser:*" },
+  { channels: "clipboard:*", reason: "the clipboard of the client's machine" },
+  { channels: "shell:*", reason: "opens a file or a link on the client's machine" },
+  { channels: "path:*", reason: "native file and folder pickers; the channel that needs the choice takes the path" },
+  { channels: "theme:*", reason: "the theme of the client's window" },
+  { channels: "themes:*", reason: "theme files the client's window draws with" },
+  { channels: "plugins:theme", reason: "the theme plugin pages see is the theme of the window framing them" },
+  { channels: "update:check", reason: "each client checks for its own updates; the host contacts nothing" },
+  { channels: "update:checked", reason: "the client's own update check" },
+  { channels: "files:editor", reason: "names the editor installed on the client's machine" },
+  { channels: "files:openInEditor", reason: "opens a file in the editor on the client's machine" },
+  { channels: "roots:add", reason: "opens the client's folder picker; the folder it chose arrives on roots:accept" },
+  { channels: "renderer:ready", reason: "the desktop window telling its own main process it has painted" },
+  { channels: "term:*", reason: "the desktop's single-terminal spike page, never a hosted session" },
+  { channels: "pty:*", reason: "the desktop's single-terminal spike page's input" },
+  { channels: "probe:*", reason: "the desktop's terminal fidelity diagnostics" },
+  { channels: "content:artifactConsole", reason: "a line from an HTML artifact's frame, which the client renders" },
+  { channels: "hostLink:*", reason: "a Helm page's own connection to the host, whose protocol frames the desktop's main process pipes to a bridge and never reads" },
+];
+
+/** Channels between a plugin's background page and what runs it, which never cross the protocol. */
+export const HOST_INTERNAL: readonly OutsideEntry[] = [
+  { channels: "plugins:tool", reason: "a session's call to a plugin tool, handed to its background page by whatever runs it" },
+  { channels: "plugins:toolCancel", reason: "cancels a plugin tool call at whatever runs its background page" },
+  { channels: "plugins:toolResult", reason: "a background page's answer to a plugin tool call, to whatever runs it" },
+  { channels: "plugins:backgroundState", reason: "a background page reporting its state to whatever runs it" },
+];
+
+/** Whether `name` is this entry's channel or in its family. */
+export function outsideCovers(entry: OutsideEntry, name: string): boolean {
+  return entry.channels.endsWith("*") ? name.startsWith(entry.channels.slice(0, -1)) : name === entry.channels;
+}
+
+/** Whether a client-only entry covers `name`. */
+export function isClientOnly(name: string): boolean {
+  return CLIENT_ONLY.some((entry) => outsideCovers(entry, name));
+}
+
+/** Whether a host-internal entry covers `name`. */
+export function isHostInternal(name: string): boolean {
+  return HOST_INTERNAL.some((entry) => outsideCovers(entry, name));
+}

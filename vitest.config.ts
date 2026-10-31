@@ -80,7 +80,11 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'desktop',
-          include: ['packages/desktop/src/main/**/*.test.ts', 'packages/desktop/test/**/*.test.ts'],
+          include: [
+            'packages/desktop/src/main/**/*.test.ts',
+            'packages/desktop/src/shared/**/*.test.ts',
+            'packages/desktop/test/**/*.test.ts'
+          ],
           environment: 'node'
         }
       },

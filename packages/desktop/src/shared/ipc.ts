@@ -634,12 +634,30 @@ export interface BrowserOpened {
 /** How many browser tabs may be open at once. `window.open` is capped by it. */
 export const BROWSER_TABS_MAX = 10
 
+/**
+ * What opening a Helm page's own connection to the local host answered:
+ * sessions do not run in the host this run; or they do and main started a
+ * bridge for the page, whose frames travel on `hostLink:*` under this
+ * connection number; or they do and the host could not be reached, saying why.
+ */
+export type HostLinkOpened =
+  | { inHost: false }
+  | { inHost: true; connection: number; appVersion: string }
+  | { inHost: true; unreachable: string }
+
 // ---------------------------------------------------------------------------
 // Renderer -> main, with a response
 // ---------------------------------------------------------------------------
 
 export interface IpcRequests {
   'app:info': { request: void; response: AppInfo }
+
+  /**
+   * Opens the asking page's own protocol connection to the local host, ending
+   * any it had. Main takes it only from Helm's own pages, and pipes the frames
+   * to a bridge without reading them; the device key never leaves the bridge.
+   */
+  'hostLink:open': { request: void; response: HostLinkOpened }
 
   'settings:read': { request: void; response: AppSettings }
   'settings:write': { request: Partial<AppSettings>; response: AppSettings }
@@ -1615,6 +1633,11 @@ export interface IpcSends {
   'plugins:backgroundState': { plugin: string; revision: number; state: 'running' | 'crashed'; error: string | null }
   /** A tool call answered, from the background host. Main takes it from that window only. */
   'plugins:toolResult': PluginToolOutcome
+
+  /** A Helm page's protocol bytes, for its bridge to the host. One-way: frames have their own replies. */
+  'hostLink:send': { connection: number; bytes: Uint8Array }
+  /** The page closes its connection; main ends the bridge. */
+  'hostLink:close': { connection: number }
 }
 
 // ---------------------------------------------------------------------------
@@ -1798,6 +1821,11 @@ export interface IpcEvents {
    * shape settings. To both Helm pages that frame plugins, which pass it on.
    */
   'plugins:theme': HelmTheme
+
+  /** The host's protocol bytes on a page's own connection, as its bridge wrote them. */
+  'hostLink:data': { connection: number; bytes: Uint8Array }
+  /** A page's connection ended on the bridge's side: null when it closed, or the sentence saying why. */
+  'hostLink:ended': { connection: number; why: string | null }
 }
 
 // ---------------------------------------------------------------------------
@@ -1841,6 +1869,7 @@ export interface HelmBridge {
  */
 export const REQUEST_CHANNELS = Object.keys({
   'app:info': true,
+  'hostLink:open': true,
   'settings:read': true,
   'settings:write': true,
   'discovery:cached': true,
@@ -1995,7 +2024,9 @@ export const SEND_CHANNELS = Object.keys({
   'plugins:cancel': true,
   'plugins:answer': true,
   'plugins:backgroundState': true,
-  'plugins:toolResult': true
+  'plugins:toolResult': true,
+  'hostLink:send': true,
+  'hostLink:close': true
 } satisfies Record<SendChannel, true>) as SendChannel[]
 
 export const EVENT_CHANNELS = Object.keys({
@@ -2037,5 +2068,7 @@ export const EVENT_CHANNELS = Object.keys({
   'plugins:tool': true,
   'plugins:toolCancel': true,
   'secrets:changed': true,
-  'plugins:theme': true
+  'plugins:theme': true,
+  'hostLink:data': true,
+  'hostLink:ended': true
 } satisfies Record<EventChannel, true>) as EventChannel[]

@@ -17,9 +17,9 @@ import { updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { createHostConfig, type HostConfig } from './config'
 import { createHostFiles, type HostFiles } from './files'
-import { createHostHistory, type HostHistory } from './history'
-import { startLocalHost, type HostChild, type LocalHost } from './launcher'
+import { openPageBridge, startLocalHost, type HostChild, type HostPlaces, type LocalHost, type SpawnOptions } from './launcher'
 import { createHostLink, type HostLink } from './link'
+import { createPageLinks, type PageLinks } from './page-link'
 import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
 import { createHostPlugins, type HostPlugins } from './plugins'
 import { createHostProfiles, type HostProfiles } from './profiles'
@@ -48,8 +48,6 @@ export interface DesktopHost extends HostSessions {
   profiles: HostProfiles
   /** Plugin folders, switches, settings, secrets and page files, which the host keeps while sessions run there. */
   plugins: HostPlugins
-  /** Session history, the transcript archive and usage, which the host keeps while sessions run there. */
-  history: HostHistory
   /** The config console, which reads and writes the agent's configuration in the host while sessions run there. */
   config: HostConfig
   /**
@@ -79,29 +77,57 @@ export interface DesktopHostDeps {
 /** The checkout an unpackaged build runs from: `out/main` is three folders inside it. */
 const repoRoot = (): string => resolve(__dirname, '..', '..', '..', '..')
 
+/** Where this run's data is and where its `floti` is found. */
+const places = (): HostPlaces => ({
+  appMode,
+  dataDir,
+  packaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  repoRoot: repoRoot(),
+  templatesDir
+})
+
+const programs = {
+  platform: process.platform,
+  env: process.env,
+  tmpdir,
+  exists: existsSync,
+  spawn: (command: string, args: string[], options: SpawnOptions): HostChild =>
+    spawn(command, args, options)
+}
+
 /** One connection to this run's local host, through a bridge of its own; the host is started when none answers. */
 export function connectLocalHost(log: (line: string) => void): Promise<LocalHost> {
   return startLocalHost(
+    places(),
     {
-      appMode,
-      dataDir,
-      packaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      repoRoot: repoRoot(),
-      templatesDir
-    },
-    {
-      platform: process.platform,
-      env: process.env,
-      tmpdir,
-      exists: existsSync,
-      spawn: (command, args, options): HostChild => spawn(command, args, options),
+      ...programs,
       appVersion: app.getVersion(),
       log,
       setTimeout: (run, ms) => setTimeout(run, ms),
       clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
     }
   )
+}
+
+/**
+ * Each Helm page's own connection to the local host: with sessions in the
+ * host, a bridge per page once main's own `link` has connected; without, an
+ * answer saying so and nothing opened.
+ */
+export function createLocalPageLinks(
+  link: HostLink | null,
+  isHelmPage: (id: number) => boolean,
+  log: (line: string) => void
+): PageLinks {
+  return createPageLinks({
+    inHost: link !== null,
+    appVersion: app.getVersion(),
+    isHelmPage,
+    ready: () => (link === null ? Promise.reject(new Error('Sessions do not run in the local host.')) : link.connection()),
+    openBridge: (data) => openPageBridge(places(), programs, data),
+    log
+  })
 }
 
 /**
@@ -221,7 +247,6 @@ export function createDesktopHost({
     },
     log
   })
-  const history = createHostHistory({ link, emit: send, log })
   const config = createHostConfig({
     link,
     emit: send,
@@ -241,7 +266,6 @@ export function createDesktopHost({
     pluginRelay,
     profiles,
     plugins: hostPlugins,
-    history,
     config,
     workspace,
     files,

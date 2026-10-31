@@ -1,4 +1,5 @@
-import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type WebContents } from 'electron'
+import { FOREIGN_PAGE, type HelmPage, type PageLinks } from './host/page-link'
 import { homedir } from 'node:os'
 import { pluginThemeOf } from '@helm/core'
 import type { BrowserHost } from './browser'
@@ -76,6 +77,22 @@ export function pushTheme(ctx: Pick<IpcContext, 'services' | 'themes' | 'window'
   ctx.plugins.pushTheme(pluginThemeOf(state.applied, ctx.services.settings))
 }
 
+/** A web contents as the page relay sees it: its id, its two events, and when it navigates away or closes. */
+export function helmPageOf(contents: WebContents): HelmPage {
+  return {
+    id: contents.id,
+    send: (channel, payload) => {
+      if (!contents.isDestroyed()) contents.send(channel, payload)
+    },
+    onGone: (listener) => {
+      contents.on('did-start-navigation', (details) => {
+        if (details.isMainFrame && !details.isSameDocument) listener()
+      })
+      contents.once('destroyed', listener)
+    }
+  }
+}
+
 /** Typed `webContents.send`. The only way the main process pushes to a window. */
 export function emit<K extends EventChannel>(
   win: BrowserWindow | null,
@@ -102,7 +119,10 @@ type HistoryWiring =
       historyReads?: undefined
     }
   | {
-      /** The local host's history, archive and usage; see `host/history.ts`. */
+      /**
+       * With sessions in the local host, reads that refuse: the window reads
+       * the host's over its own connection (`renderer/src/app/host/history.ts`).
+       */
       historyReads: HistoryReads
       history?: undefined
       archive?: undefined
@@ -114,6 +134,8 @@ export type IpcContext = IpcContextBase & HistoryWiring
 interface IpcContextBase {
   services: Services
   window: () => BrowserWindow | null
+  /** Each Helm page's own connection to the local host; see `host/page-link.ts`. */
+  pageLinks: PageLinks
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
   /**
@@ -250,6 +272,7 @@ export function registerIpc(ctx: IpcContext): void {
     )
   const historyReads: HistoryReads =
     ctx.historyReads !== undefined ? ctx.historyReads : localHistoryReads(services.store, ctx)
+
   const configConsole: ConfigConsoleService = ctx.configConsole ?? localConfigConsole(ctx.config)
   const filesReads: FilesReads = ctx.filesReads ?? localFilesReads(ctx.content, ctx.files)
 
@@ -272,6 +295,13 @@ export function registerIpc(ctx: IpcContext): void {
   const pages = pluginPages(ctx)
 
   const requests: RequestHandlers = {
+    // Only a Helm page's own frame: never a frame inside it, which is where
+    // an artifact or a plugin page would be.
+    'hostLink:open': (_payload, event) => {
+      if (event.senderFrame !== event.sender.mainFrame) return Promise.reject(new Error(FOREIGN_PAGE))
+      return ctx.pageLinks.open(helmPageOf(event.sender))
+    },
+
     'app:info': async () => ({
       version: app.getVersion(),
       mode: appMode,
@@ -694,6 +724,10 @@ export function registerIpc(ctx: IpcContext): void {
 
   const sends: SendHandlers = {
     'renderer:ready': () => ctx.rendererReady(),
+
+    // Bytes pass unread; the relay drops any not from the page that opened the connection.
+    'hostLink:send': ({ connection, bytes }, event) => ctx.pageLinks.send(event.sender.id, connection, bytes),
+    'hostLink:close': ({ connection }, event) => ctx.pageLinks.close(event.sender.id, connection),
 
     'pty:input': (data) => {
       activePty()?.pty.write(data)

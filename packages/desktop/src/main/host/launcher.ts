@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { posix, win32 } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
+import { TURN_OFF } from '../../shared/host/sentences'
 import type { AppMode } from '../../shared/ipc'
 import { HostRefusedError, connectHost, type HostConnection } from './client'
 
@@ -48,9 +49,6 @@ export const HOST_START_DEADLINE_MS = 30_000
  * terminating NUL); Linux takes 107, so this holds on both.
  */
 export const SOCKET_PATH_MAX = 103
-
-/** The setting, as its row in Settings names it. */
-const TURN_OFF = 'turn off “Run sessions in the local host” in Settings to use Helm’s own sessions.'
 
 /** Where this Helm keeps its data and finds its programs. */
 export interface HostPlaces {
@@ -360,6 +358,63 @@ export async function startLocalHost(places: HostPlaces, deps: LauncherDeps): Pr
       })()
       return stopping
     }
+  }
+}
+
+/**
+ * A Helm page's own connection to the local host: a `floti bridge` of its
+ * own, run from Helm's client folder as main's is, whose frames main pipes to
+ * the page and never reads. The device key and the Noise session stay in the
+ * bridge; the page sees only protocol frames.
+ */
+export interface PageBridge {
+  /** The page's bytes, to the host. Ignored once ended. */
+  write(bytes: Uint8Array): void
+  /** Closes the bridge's standard input, which ends its connection. */
+  end(): void
+  /** Settles once the bridge has exited: null when it closed, or the sentence saying why it failed. */
+  readonly ended: Promise<string | null>
+}
+
+/**
+ * Starts a page's bridge to the host that is already running: main opens one
+ * only after its own link has connected, so enrolment is done and the host
+ * is listening. `data` gets the host's bytes, unread.
+ */
+export function openPageBridge(
+  places: HostPlaces,
+  deps: Pick<LauncherDeps, 'platform' | 'env' | 'tmpdir' | 'exists' | 'spawn'>,
+  data: (bytes: Uint8Array) => void
+): PageBridge {
+  const binary = flotiBinary(places, deps)
+  if (!deps.exists(binary)) {
+    const missing = failure(`Helm could not find the local host program at ${binary}`).message
+    return { write: () => undefined, end: () => undefined, ended: Promise.resolve(missing) }
+  }
+  const child = deps.spawn(binary, ['bridge', clientFolder(places, deps.platform)], {
+    env: hostEnvironment(places, deps),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true
+  })
+  const exited = exitOf(child)
+  // Its one line on standard error says why it failed; the exit status says
+  // the same, and nothing it prints is logged.
+  child.stderr?.resume()
+  child.stdout?.on('data', (chunk: Uint8Array) =>
+    data(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength))
+  )
+  const stdin = child.stdin
+  const open = (): boolean => stdin !== null && !stdin.writableEnded && !stdin.destroyed
+  // A write racing the bridge's exit fails on the pipe; the exit says why.
+  stdin?.on('error', () => undefined)
+  return {
+    write: (bytes) => {
+      if (open()) stdin?.write(bytes)
+    },
+    end: () => closeInput(child),
+    ended: exited.then((exit) =>
+      exit.error === undefined && exit.code === BRIDGE_EXIT.closed ? null : bridgeFailure(exit, binary, false).message
+    )
   }
 }
 

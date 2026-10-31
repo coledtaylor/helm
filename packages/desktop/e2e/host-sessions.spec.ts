@@ -451,9 +451,9 @@ test('quitting ends every session in the host and leaves no host or bridge runni
     (await claudeRunIn(world, world.projects.alpha)).pid,
     (await claudeRunIn(world, world.projects.beta)).pid
   ]
+  // The host Helm started, the bridge main reaches it through and the window's own.
+  await expect.poll(async () => flotiChildren(await mainPid(helm)).length).toBe(3)
   const floti = flotiChildren(await mainPid(helm))
-  // The host Helm started and the bridge it reaches it through.
-  expect(floti).toHaveLength(2)
   expect([...pids, ...floti].every(processAlive)).toBe(true)
 
   await helm.app.close()
@@ -476,8 +476,8 @@ test('after Helm is killed outright, the host went with it, and the sessions it 
     })
     .toBe(true)
   const run = await claudeRunIn(world, world.projects.alpha)
+  await expect.poll(async () => flotiChildren(await mainPid(helm)).length).toBe(3)
   const floti = flotiChildren(await mainPid(helm))
-  expect(floti).toHaveLength(2)
 
   process.kill(await mainPid(helm))
   await expect.poll(() => [run.pid, ...floti].filter(processAlive)).toEqual([])

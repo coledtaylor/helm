@@ -25,7 +25,8 @@ export async function launchHelm(world: World): Promise<Helm> {
   const app = await electron.launch({
     args: [desktop],
     cwd: desktop,
-    env: world.env
+    // Main records the channels each page uses over IPC (`ipc-recorder.ts`).
+    env: { ...world.env, HELM_RECORD_IPC: '1' }
   })
   const window = await app.firstWindow()
   await window.waitForLoadState('domcontentloaded')

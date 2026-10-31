@@ -110,6 +110,38 @@ fn the_typescript_declares_every_channel_message_and_payload_type() {
 }
 
 #[test]
+fn the_typescript_lists_every_client_only_and_host_internal_entry_with_its_reason() {
+    use floti_protocol::channels::boundary::{CLIENT_ONLY, HOST_INTERNAL};
+    let ts = typescript(&Catalogue::protocol());
+    let section = |name: &str| -> String {
+        let start = ts
+            .find(&format!("export const {name}: readonly OutsideEntry[] = ["))
+            .unwrap_or_else(|| panic!("no {name} in the TypeScript"));
+        let end = start + ts[start..].find("];").expect("the list ends");
+        ts[start..end].to_owned()
+    };
+    for (name, list) in [
+        ("CLIENT_ONLY", CLIENT_ONLY),
+        ("HOST_INTERNAL", HOST_INTERNAL),
+    ] {
+        let section = section(name);
+        for entry in list {
+            let line = format!(
+                "{{ channels: {:?}, reason: {:?} }},",
+                entry.channels, entry.reason
+            );
+            assert!(section.contains(&line), "{name} is missing `{line}`");
+        }
+        assert_eq!(section.matches("{ channels:").count(), list.len(), "{name}");
+    }
+    // The coverage check is `Outside::covers`: a `family:*` entry covers its
+    // family by prefix, any other entry only its own name.
+    assert!(ts.contains(
+        "return entry.channels.endsWith(\"*\") ? name.startsWith(entry.channels.slice(0, -1)) : name === entry.channels;"
+    ));
+}
+
+#[test]
 fn the_json_schema_defines_every_message_and_payload_type_and_lists_the_channels() {
     let schema: serde_json::Value = serde_json::from_str(&json_schema(&stub_catalogue())).unwrap();
     let defs = schema["$defs"].as_object().unwrap();

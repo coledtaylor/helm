@@ -10,6 +10,7 @@ import {
 import type { ActivityService } from '../activity'
 import type { RestoreService } from '../restore'
 import type { Confirm, SessionHost } from '../sessions'
+import { CLAUDE_CODE_BACKEND } from '../../shared/host/backend'
 import type { EventChannel, EventPayload } from '../../shared/ipc'
 import type { HostConnection, HostSubscription } from './client'
 import type { HostLink } from './link'
@@ -62,7 +63,7 @@ import type { TerminalStreams } from './streams'
  */
 
 /** The one backend Helm launches. */
-export const CLAUDE_CODE_BACKEND = 'claude-code'
+export { CLAUDE_CODE_BACKEND }
 
 /**
  * What Helm writes to the host on every connect: the `claude` its sessions

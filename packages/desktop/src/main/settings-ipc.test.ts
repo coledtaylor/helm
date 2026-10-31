@@ -136,6 +136,7 @@ describe('settings over IPC', () => {
     registerIpc({
       services,
       window: () => win as unknown as BrowserWindow,
+      pageLinks: {} as never,
       sessions: {} as never,
       restore: {} as never,
       activity: {} as never,

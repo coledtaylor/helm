@@ -85,6 +85,10 @@ pub const CLIENT_ONLY: &[Outside] = &[
         "content:artifactConsole",
         "a line from an HTML artifact's frame, which the client renders",
     ),
+    outside(
+        "hostLink:*",
+        "a Helm page's own connection to the host, whose protocol frames the desktop's main process pipes to a bridge and never reads",
+    ),
 ];
 
 /// Channels between a plugin's background page and what runs it, which never

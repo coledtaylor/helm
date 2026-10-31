@@ -20,11 +20,13 @@ import type { HistoryService } from './history'
 import type { UsageService } from './usage'
 
 /**
- * What the window reads of session history, the transcript archive and usage,
- * from wherever they are kept this run: Helm's own index, archive and usage
- * reader over `helm.db` (`localHistoryReads`), or the local host's when
- * sessions run there (`host/history.ts`). The `history:*`, `archive:*` and
- * `usage:read` handlers answer through this and nothing else.
+ * What the window reads of session history, the transcript archive and usage
+ * from Helm's own index, archive and usage reader over `helm.db`
+ * (`localHistoryReads`). The `history:*`, `archive:*` and `usage:read`
+ * handlers answer through this and nothing else. When sessions run in the
+ * local host, the window reads the host's over its own connection
+ * (`renderer/src/app/host/history.ts`), and these handlers refuse
+ * (`refusedHistoryReads`).
  *
  * Resuming is not here: it starts a session, so it is the session host's.
  */
@@ -52,6 +54,26 @@ export interface LocalHistoryServices {
   history: HistoryService
   archive: ArchiveService
   usage: UsageService
+}
+
+/** What main answers a host feature asked of it over Electron IPC while sessions run in the local host. */
+export const ASK_THE_HOST =
+  'Sessions run in the local host, so Helm’s window reaches this over its own connection to the host, not through Helm’s main process.'
+
+/** Reads that refuse, saying where the window reaches them: main builds no history of its own then. */
+export function refusedHistoryReads(): HistoryReads {
+  const refuse = (): Promise<never> => Promise.reject(new Error(ASK_THE_HOST))
+  return {
+    summary: refuse,
+    sessions: refuse,
+    prompts: refuse,
+    projects: refuse,
+    refresh: refuse,
+    rename: refuse,
+    conversation: refuse,
+    archiveStats: refuse,
+    usage: refuse
+  }
 }
 
 /**
