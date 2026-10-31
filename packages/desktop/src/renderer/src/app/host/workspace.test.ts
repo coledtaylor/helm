@@ -216,6 +216,43 @@ describe('the window’s workspace over its own connection', () => {
     expect(told.at(-1)).toMatchObject({ pinnedProjects: [ALPHA], theme: 'dark' })
   })
 
+  it('a change to Helm’s own settings before the host’s are known tells the window both halves, never Helm’s alone', async () => {
+    const connection = new FakeConnection()
+    const { adapter, own, emitted, listen, link } = world(connection)
+    connection.answer('settings:read', () => hostSettings({ scanRoots: [HUB] }))
+    listen()
+    const written = ask(adapter, 'settings:write', { windowBounds: { width: 900, height: 700, x: 1, y: 2 } })
+    own.change({ theme: 'dark' })
+    await link.connect()
+    expect((await written).scanRoots).toEqual([HUB])
+    await settle()
+    const told = emitted.filter((e) => e.channel === 'settings:changed').map((e) => e.payload as AppSettings)
+    expect(told.length).toBeGreaterThan(0)
+    for (const settings of told) expect(settings.scanRoots).toEqual([HUB])
+    expect(told.at(-1)).toMatchObject({ scanRoots: [HUB], theme: 'dark' })
+  })
+
+  it('a window that listens after the connection told its settings hears them at once, before any scan', async () => {
+    const connection = new FakeConnection()
+    const { adapter, link } = world(connection)
+    on(adapter, 'scan:status', () => undefined)
+    await link.connect()
+    connection.snapshot('settings:changed', hostSettings({ scanRoots: [HUB] }))
+    await settle()
+    const heard: AppSettings[] = []
+    on(adapter, 'settings:changed', (settings) => heard.push(settings))
+    expect(heard.map((settings) => settings.scanRoots)).toEqual([[HUB]])
+  })
+
+  it('with the host out of reach, a change to Helm’s own settings is still told', async () => {
+    const { own, emitted, listen } = world(null)
+    listen()
+    own.change({ theme: 'dark' })
+    await settle()
+    const told = emitted.filter((e) => e.channel === 'settings:changed').map((e) => e.payload as AppSettings)
+    expect(told.at(-1)).toMatchObject({ theme: 'dark' })
+  })
+
   it('a read asked before the first connect gets the host’s answer, not an empty one first', async () => {
     const { adapter } = world()
     const [cached, settings] = await Promise.all([ask(adapter, 'discovery:cached'), ask(adapter, 'settings:read')])

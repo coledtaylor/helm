@@ -154,7 +154,7 @@ interface IpcContextBase {
   /** What each of those is holding: process tree and ports. */
   resources: ResourcesService
   /** Owns the project shells; see `pterm.ts`. */
-  pterm: PtermHost
+  pterm?: PtermHost | undefined
   /** Owns the browser pane's `WebContentsView`s; see `browser.ts`. */
   browsers: BrowserHost
   /**
@@ -167,14 +167,14 @@ interface IpcContextBase {
    */
   browserMcp: BrowserMcpHost | null
   /** The one surface that writes to a `.claude` tree; see `config.ts`. */
-  config: ConfigService
+  config?: ConfigService | undefined
   /**
    * The config console as the window reaches it: the local host's when
    * sessions run there (`host/config.ts`), and `config` above otherwise.
    */
   configConsole?: ConfigConsoleService | undefined
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
-  content: ContentService
+  content?: ContentService | undefined
   /** The Files view's tree, file reads, Ctrl+P list and watches; see `files.ts`. */
   files: FilesService
   /**
@@ -184,7 +184,7 @@ interface IpcContextBase {
    */
   filesReads?: FilesReads | undefined
   /** Authors what `template:list` reads back; see `templates.ts`. */
-  templates: TemplateService
+  templates?: TemplateService | undefined
   /**
    * Discovery, scan roots, harnesses, setup, templates and the settings the
    * window reads: the local host's when sessions run there
@@ -242,6 +242,18 @@ interface IpcContextBase {
   claudeHome?: string | undefined
 }
 
+/**
+ * A service main does not run while sessions run in the local host: every
+ * call to it fails, saying where it is. Nothing reaches one, since the
+ * channels that would are not registered then.
+ */
+function hostKeeps<T extends object>(what: string): T {
+  const refuse = (): never => {
+    throw new Error(`${what} run in the local host while sessions run there; main has none.`)
+  }
+  return new Proxy({} as T, { get: (_target, key) => (key === 'then' ? undefined : refuse) })
+}
+
 /** Whether main handles a channel this run: every one with the setting off; with it on, see `IpcContext.sessionsInHost`. */
 export function mainHandles(channel: string, sessionsInHost: boolean): 'always' | 'fromPluginWindow' | 'never' {
   if (!sessionsInHost || isClientOnly(channel)) return 'always'
@@ -262,8 +274,16 @@ export function registerIpc(ctx: IpcContext): void {
   const historyReads: HistoryReads =
     ctx.historyReads !== undefined ? ctx.historyReads : localHistoryReads(services.store, ctx)
 
-  const configConsole: ConfigConsoleService = ctx.configConsole ?? localConfigConsole(ctx.config)
-  const filesReads: FilesReads = ctx.filesReads ?? localFilesReads(ctx.content, ctx.files)
+  // With sessions in the local host main builds none of these, and registers
+  // none of the channels that would reach them; asked anyway, each refuses.
+  const pterm: PtermHost = ctx.pterm ?? hostKeeps<PtermHost>('Terminals')
+  const templates: TemplateService = ctx.templates ?? hostKeeps<TemplateService>('Templates')
+  const configConsole: ConfigConsoleService =
+    ctx.configConsole ??
+    (ctx.config !== undefined ? localConfigConsole(ctx.config) : hostKeeps<ConfigConsoleService>('The config console'))
+  const filesReads: FilesReads =
+    ctx.filesReads ??
+    (ctx.content !== undefined ? localFilesReads(ctx.content, ctx.files) : hostKeeps<FilesReads>('The Files view'))
 
   /** The CLI status, always read against the same config directory. */
   const claudeStatus = (picked?: string): ReturnType<typeof readClaudeStatus> =>
@@ -278,7 +298,7 @@ export function registerIpc(ctx: IpcContext): void {
       services,
       emit: (channel, payload) => emit(ctx.window(), channel, payload),
       claudeStatus,
-      templates: ctx.templates
+      templates
     })
 
   const profileDialogs = nativeProfileDialogs(ctx.window)
@@ -577,11 +597,11 @@ export function registerIpc(ctx: IpcContext): void {
     'sessions:resources': () => ctx.resources.snapshots(),
     'session:rename': (request) => ctx.sessions.rename(request),
 
-    'pterm:open': (request) => ctx.pterm.open(request),
+    'pterm:open': (request) => pterm.open(request),
     'pterm:close': ({ id }) => {
-      ctx.pterm.close(id)
+      pterm.close(id)
     },
-    'pterm:shells': () => ctx.pterm.detected(),
+    'pterm:shells': () => pterm.detected(),
 
     // Each write tells the window itself, from wherever the profiles live.
     'profile:list': () => profileService.list(),
@@ -778,8 +798,8 @@ export function registerIpc(ctx: IpcContext): void {
     'session:focus': ({ ids }) => ctx.sessions.setFocus(ids),
     'sessions:watch': ({ watching }) => ctx.resources.watch(watching),
 
-    'pterm:input': ({ id, data }) => ctx.pterm.input(id, data),
-    'pterm:resize': ({ id, cols, rows }) => ctx.pterm.resize(id, cols, rows),
+    'pterm:input': ({ id, data }) => pterm.input(id, data),
+    'pterm:resize': ({ id, cols, rows }) => pterm.resize(id, cols, rows),
 
     'browser:bounds': (payload) => ctx.browsers.bounds(payload),
 

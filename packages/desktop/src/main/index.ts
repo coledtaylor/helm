@@ -566,12 +566,15 @@ function startApp(options: AppOptions = {}): void {
   // The setting is read through a function rather than passed by value: the
   // default shell has to be able to change while the app is running, and a
   // captured value would make it a property of when Helm started.
-  const pterm: PtermHost =
-    desktopHost?.pterm ??
-    createPtermHost({
-      window: () => win,
-      defaultShell: () => services.settings.terminalShell
-    })
+  // With sessions in the local host the window opens its terminals in the
+  // host over its own connection, and main runs none.
+  const pterm: PtermHost | undefined =
+    desktopHost === null
+      ? createPtermHost({
+          window: () => win,
+          defaultShell: () => services.settings.terminalShell
+        })
+      : undefined
 
   /*
    * Session history, the transcript archive and usage, from the one place
@@ -615,14 +618,23 @@ function startApp(options: AppOptions = {}): void {
     createLocalProfiles(services, nativeProfileDialogs(() => win), (channel, payload) => emit(win, channel, payload))
   const profileList = (): Profile[] => profileService.current()
 
-  const config = createConfigService({
-    services,
-    profiles: profileList,
-    ...(options.claudeHome !== undefined ? { userHome: options.claudeHome } : {}),
-    onExternalChange: (change) => emit(win, 'config:externalChange', change)
-  })
+  /*
+   * The config console and the Files view's notes and artifacts, Helm's own.
+   * With sessions in the local host the window reads and writes both in the
+   * host over its own connection, and main builds neither: no watch on the
+   * agent's config, no reads of a project's files.
+   */
+  const config =
+    desktopHost === null
+      ? createConfigService({
+          services,
+          profiles: profileList,
+          ...(options.claudeHome !== undefined ? { userHome: options.claudeHome } : {}),
+          onExternalChange: (change) => emit(win, 'config:externalChange', change)
+        })
+      : undefined
 
-  const content = createContentService({ services, profiles: profileList })
+  const content = desktopHost === null ? createContentService({ services, profiles: profileList }) : undefined
   attachArtifactConsole(win, (entry) => emit(win, 'content:artifactConsole', entry))
 
   /**
@@ -788,7 +800,7 @@ function startApp(options: AppOptions = {}): void {
   // Built on the config service rather than beside it: the import picker's
   // sources are the console's own scopes, and what a skill *is* is the
   // console's own answer.
-  const templates = createTemplateService(services, config)
+  const templates = config !== undefined ? createTemplateService(services, config) : undefined
 
   registerIpc({
     services,
@@ -798,25 +810,22 @@ function startApp(options: AppOptions = {}): void {
     restore,
     activity,
     resources,
-    pterm,
+    ...(pterm !== undefined ? { pterm } : {}),
     browsers,
     browserMcp,
     ...(historyHome.kind === 'local'
       ? { history: historyHome.index.history, archive: historyHome.index.archive, usage: historyHome.usage }
       : { historyReads: historyHome.reads }),
-    config,
-    // With sessions in the local host, the console reads and writes through
-    // the host; the local service above stays for the template service only.
-    ...(desktopHost !== null ? { configConsole: desktopHost.config } : {}),
+    ...(config !== undefined ? { config } : {}),
     // And discovery, the scan roots, setup, harnesses and templates are the
     // host's; Helm's own scan and templates folder are left alone.
     ...(desktopHost !== null ? { workspace: desktopHost.workspace } : {}),
     // And the Files view, notes and artifacts: Helm's own content and files
     // services then read and watch nothing; opening an editor stays Helm's.
     ...(desktopHost !== null ? { filesReads: desktopHost.files } : {}),
-    content,
+    ...(content !== undefined ? { content } : {}),
     files,
-    templates,
+    ...(templates !== undefined ? { templates } : {}),
     themes,
     plugins,
     ...(desktopHost !== null ? { hostPlugins: desktopHost.plugins } : {}),
@@ -1005,12 +1014,10 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.pluginRelay.stop()
         desktopHost.profiles.shutdown()
         desktopHost.plugins.shutdown()
-        desktopHost.config.shutdown()
         desktopHost.workspace.shutdown()
         desktopHost.files.shutdown()
         desktopHost.resources.stop()
         desktopHost.sessions.shutdown()
-        desktopHost.pterm.shutdown()
         // Every page's bridge ends before the host stops, so none is left running.
         void pageLinks
           .stop()
@@ -1030,7 +1037,7 @@ function startApp(options: AppOptions = {}): void {
     // firing after `will-quit`, would write to a closed connection.
     localHistory?.index.stop()
     localHistory?.usage.stop()
-    config.stop()
+    config?.stop()
     files.stop()
     // Plugins' services are processes like a session's, ended the same way:
     // synchronously, the whole tree, while main is still guaranteed a turn.

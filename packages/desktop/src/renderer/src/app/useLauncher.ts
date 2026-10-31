@@ -104,12 +104,13 @@ export function useLauncher(): LauncherState {
       helm.on('settings:changed', adopt)
     ]
 
+    // Apart from the settings: with sessions in the local host the app info
+    // waits on the host's reading of the CLI, and nothing that needs the
+    // settings (the scan roots a new harness is offered) should wait on it.
+    void helm.invoke('app:info').then(setInfo, () => undefined)
+
     void (async () => {
-      const [appInfo, loaded] = await Promise.all([
-        helm.invoke('app:info'),
-        helm.invoke('settings:read')
-      ])
-      setInfo(appInfo)
+      const loaded = await helm.invoke('settings:read')
       adopt(loaded)
 
       let cached: CachedProject[]

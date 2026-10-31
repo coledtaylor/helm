@@ -15,7 +15,6 @@ import type { ToolAnswer, ToolCallRequest } from '../plugins/tools'
 import { nativeProfileDialogs } from '../profiles'
 import { updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
-import { createHostConfig, type HostConfig } from './config'
 import { createHostFiles, type HostFiles } from './files'
 import { openPageBridge, startLocalHost, type HostChild, type HostPlaces, type LocalHost, type SpawnOptions } from './launcher'
 import { createHostLink, type HostLink } from './link'
@@ -25,9 +24,7 @@ import { createHostPlugins, type HostPlugins } from './plugins'
 import { createHostProfiles, type HostProfiles } from './profiles'
 import { createHostResources, type HostResources } from './resources'
 import type { HostSettingsPatch } from './protocol'
-import { createHostPtermHost } from './pterm'
 import { createHostSessions, hostSettingsFor, type Emit, type HostSessions } from './sessions'
-import { createTerminalStreams, type TerminalStreams } from './streams'
 import { createHostWorkspace, type HostWorkspace } from './workspace'
 
 /**
@@ -38,8 +35,6 @@ import { createHostWorkspace, type HostWorkspace } from './workspace'
 
 export interface DesktopHost extends HostSessions {
   link: HostLink
-  streams: TerminalStreams
-  pterm: ReturnType<typeof createHostPtermHost>
   /** Answers the browser tool calls the host relays from its sessions. */
   browserRelay: BrowserToolRelay
   /** Offers the host Helm's plugin tool servers and answers the calls it relays to them. */
@@ -48,8 +43,6 @@ export interface DesktopHost extends HostSessions {
   profiles: HostProfiles
   /** Plugin folders, switches, settings, secrets and page files, which the host keeps while sessions run there. */
   plugins: HostPlugins
-  /** The config console, which reads and writes the agent's configuration in the host while sessions run there. */
-  config: HostConfig
   /**
    * Discovery, scan roots, harnesses, setup, templates and the host's half of
    * the settings, which the host keeps while sessions run there.
@@ -176,11 +169,6 @@ export function createDesktopHost({
   // host's notifications, and asks its own questions over its own connection;
   // main keeps the running count its quit asks about, the browser tools'
   // identities and the plugins' sessions.
-  const streams = createTerminalStreams({
-    connection: () => link.current(),
-    deliver: () => undefined,
-    log
-  })
   const hosted = createHostSessions({
     link,
     emit: toNoWindow,
@@ -235,28 +223,17 @@ export function createDesktopHost({
     },
     log
   })
-  const config = createHostConfig({
-    link,
-    emit: toNoWindow,
-    // The sidebar's harnesses and projects are the host's scan.
-    scanned: () => workspace.lastScan()?.projects ?? [],
-    log
-  })
   // Kept for the artifact frames main answers from the host's bytes.
   const files = createHostFiles({ link, emit: toNoWindow, log })
   // Kept for the session tools' detail; the window reads its own.
   const resources = createHostResources({ link, emit: toNoWindow, log })
-  const pterm = createHostPtermHost({ link, streams, emit: toNoWindow, log })
   return {
     ...hosted,
     link,
-    streams,
-    pterm,
     browserRelay,
     pluginRelay,
     profiles,
     plugins: hostPlugins,
-    config,
     workspace,
     files,
     resources

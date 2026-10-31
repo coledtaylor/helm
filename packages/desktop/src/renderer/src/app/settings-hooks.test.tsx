@@ -173,6 +173,15 @@ describe('useLauncher', () => {
     expect(root.style.getPropertyValue('--helm-radius')).toBe('5px')
   })
 
+  it('takes the settings as soon as they are read, without waiting on the app info', async () => {
+    // app:info stays unanswered: with sessions in the local host it waits on
+    // the host's reading of the CLI, which the scan roots do not need.
+    bridge.answer('settings:read', () => settings({ scanRoots: ['C:\\one'] }))
+    const { result } = renderHook(() => useLauncher())
+    await vi.waitFor(() => expect(result.current.settings?.scanRoots).toEqual(['C:\\one']), { timeout: PATIENCE })
+    expect(result.current.info).toBeNull()
+  })
+
   it('adds and removes scan roots through main, and rescans after each', async () => {
     bridge.answer('app:info', () => APP_INFO)
     bridge.answer('settings:read', () => settings({ scanRoots: ['C:\\one'] }))

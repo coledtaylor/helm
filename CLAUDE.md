@@ -108,6 +108,8 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   from the hidden plugin window: `registerIpc` registers nothing else, and a
   page's router (`app/host/router.ts`) refuses any other channel rather than
   asking main. `e2e/boundary.spec.ts` fails naming any channel that crossed.
+  Main then builds no terminal, config console, content or template service
+  and runs no scan of its own; those are the host's.
 - A host channel added to `shared/ipc.ts` is also declared in
   `crates/floti-protocol`, or listed there as client-only or host-internal
   with a reason (`channels/boundary.rs`), and the generated files are

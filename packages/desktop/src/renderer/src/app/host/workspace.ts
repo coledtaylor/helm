@@ -80,17 +80,52 @@ export function createWorkspaceAdapter({
   let subscriptions: HostSubscription[] = []
 
   const host = (): Promise<HostConnection> => link.connection()
+  /** The settings last told, which a listener that comes later hears at once. */
+  let toldSettings: AppSettings | null = null
   const tell = <K extends Pushed>(channel: K, payload: EventPayload<K>): void => {
+    if (channel === 'settings:changed') toldSettings = payload as AppSettings
     for (const listener of listeners[channel]) listener(payload)
   }
 
   const ownSettings = async (): Promise<AppSettings> => (mine ??= await own.invoke('ownSettings:read'))
+  /**
+   * Tells every listener Helm's settings with the host's laid over once the
+   * host's are known: read first when they are not yet, and Helm's alone only
+   * when the host cannot be reached. Told before then, the window would take
+   * the host's half (its scan roots among them) for empty.
+   */
+  let hostAsked: Promise<void> | null = null
+  /** Resolves once the host's settings are known, or the host could not be reached for them. */
+  const hostKnown = (): Promise<void> => {
+    if (hostSettings !== null) return Promise.resolve()
+    hostAsked ??= host()
+      .then((connection) => connection.request('settings:read', null))
+      .then(
+        (read) => {
+          hostSettings ??= read
+        },
+        () => undefined
+      )
+      .finally(() => {
+        hostAsked = null
+      })
+    return hostAsked
+  }
+  const tellSettled = (): void => {
+    // Told at once when the host's are known: a scan waits on this telling.
+    if (hostSettings !== null && mine !== null) {
+      tell('settings:changed', settingsWithHost(mine, hostSettings))
+      return
+    }
+    void hostKnown().then(() => {
+      if (mine !== null) tell('settings:changed', settingsWithHost(mine, hostSettings))
+    })
+  }
   /** Helm's settings with the host's laid over, told to every listener. */
   const settled = (settings: AppSettings): AppSettings => {
     mine = settings
-    const next = settingsWithHost(settings, hostSettings)
-    tell('settings:changed', next)
-    return next
+    tellSettled()
+    return settingsWithHost(settings, hostSettings)
   }
   const adoptHost = async (next: P.HostSettings): Promise<AppSettings> => {
     hostSettings = next
@@ -167,6 +202,9 @@ export function createWorkspaceAdapter({
     <K extends Pushed>(channel: K) =>
     (listener: (payload: EventPayload<K>) => void): (() => void) => {
       listeners[channel].add(listener)
+      // The connection may have told its settings before the window listened,
+      // and a scan told after them must not land on a window without them.
+      if (channel === 'settings:changed' && toldSettings !== null) listener(toldSettings as EventPayload<K>)
       start()
       return () => {
         listeners[channel].delete(listener)
@@ -207,6 +245,9 @@ export function createWorkspaceAdapter({
 
       'settings:write': async (patch) => {
         const split = splitSettingsPatch(patch)
+        // A write of Helm's half alone answers with the host's laid over, so
+        // the host's are read first when they are not known yet.
+        if (Object.keys(split.host).length === 0) await hostKnown()
         const settings =
           Object.keys(split.own).length > 0 ? await own.invoke('ownSettings:write', split.own) : await ownSettings()
         if (Object.keys(split.host).length === 0) return settled(settings)
