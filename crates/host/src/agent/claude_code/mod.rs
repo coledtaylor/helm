@@ -161,14 +161,15 @@ impl ClaudeCodeBackend {
             .chain(["--version".into()])
             .collect();
         let program = launcher::Native.resolve(program, &args);
-        let output = Command::new(&program.program)
+        let mut command = Command::new(&program.program);
+        command
             .args(&program.args)
             .envs(self.session_env())
             .envs(program.env)
             .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
+            .stderr(Stdio::null());
+        launcher::Native.windowless(&mut command);
+        let output = command.output().ok()?;
         output
             .status
             .success()

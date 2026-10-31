@@ -997,12 +997,15 @@ function startApp(options: AppOptions = {}): void {
   })
 
   /*
-   * Sessions in the local host end with the host Helm started, and that takes
-   * a round trip: the first `before-quit` is held while the host stops - every
-   * session ended and recorded as ended, then both programs exited, bounded by
-   * `HOST_STOP_DEADLINE_MS` - and the quit then goes on as it always has. A
-   * Helm that ends any other way takes the host with it: its standard input
-   * closes.
+   * With sessions in the local host, the host owns their lifetime and outlives
+   * Helm. A deliberate quit tells it what becomes of what this device started,
+   * which takes a round trip: the first `before-quit` is held while every
+   * page's connection closes, the host is told the sessions end
+   * (`host:quit`, each recorded as ended) and main's own connection closes,
+   * bounded by `HOST_STOP_DEADLINE_MS`; the quit then goes on as it always
+   * has. The host, left with no session and no client, exits by itself. A
+   * Helm that ends any other way tells it nothing, so nothing ends and the
+   * next start reattaches.
    */
   let hostStop: 'running' | 'stopping' | 'stopped' = desktopHost === null ? 'stopped' : 'running'
   app.on('before-quit', (event) => {
@@ -1018,10 +1021,10 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.files.shutdown()
         desktopHost.resources.stop()
         desktopHost.sessions.shutdown()
-        // Every page's bridge ends before the host stops, so none is left running.
+        // Every page's bridge ends first, so none is left running.
         void pageLinks
           .stop()
-          .then(() => desktopHost.link.stop())
+          .then(() => desktopHost.link.quit({ end: true }))
           .finally(() => {
             hostStop = 'stopped'
             app.quit()

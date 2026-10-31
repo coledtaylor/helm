@@ -77,7 +77,9 @@ const places = (): HostPlaces => ({
   packaged: app.isPackaged,
   resourcesPath: process.resourcesPath,
   repoRoot: repoRoot(),
-  templatesDir
+  templatesDir,
+  execPath: process.execPath,
+  appPath: app.getAppPath()
 })
 
 const programs = {

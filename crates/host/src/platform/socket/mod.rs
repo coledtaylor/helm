@@ -83,7 +83,7 @@ pub trait LocalSocket {
     fn endpoint(&self, runtime_dir: &Path, name: &str) -> Endpoint;
 
     /// Starts listening at `endpoint`, open to this user only. It refuses,
-    /// with [`Error::Refused`], an endpoint a live host is listening on, and
+    /// with [`Error::AlreadyRunning`], an endpoint a live host is listening on, and
     /// replaces one that a host which was killed left behind.
     ///
     /// Call it from inside a Tokio runtime.
@@ -101,7 +101,7 @@ pub trait LocalListener: Send {
 
 /// The refusal when another host already holds `endpoint`.
 fn already_running(endpoint: &Endpoint) -> Error {
-    Error::Refused(format!(
+    Error::AlreadyRunning(format!(
         "A Floti host is already running for this user: it is listening at {endpoint}."
     ))
 }

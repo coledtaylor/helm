@@ -728,6 +728,19 @@ label: string,
 args: Array<string>, };
 
 /**
+ * A running session a device started.
+ */
+export type DeviceSession = { 
+/**
+ * The session's row id.
+ */
+id: number, 
+/**
+ * What its tab says: its label, or its name when it has none.
+ */
+name: string, };
+
+/**
  * A root that could not be read, and why.
  */
 export type DiscoveryError = { path: string, message: string, };
@@ -1247,6 +1260,12 @@ indexedBytes: number,
  * Set when the record could not be read at all.
  */
 error: string | null, };
+
+export type HostQuitRequest = { 
+/**
+ * Whether the sessions the caller's device started end with the quit.
+ */
+end: boolean, };
 
 /**
  * The host's settings.
@@ -3172,6 +3191,8 @@ export interface RequestChannels {
   "history:resume": { request: ResumeSessionRequest; response: ResumedSession; capability: null };
   "history:sessions": { request: HistoryQuery; response: HistoryPage; capability: null };
   "history:summary": { request: null; response: HistorySummary; capability: null };
+  "host:deviceSessions": { request: null; response: Array<DeviceSession>; capability: null };
+  "host:quit": { request: HostQuitRequest; response: null; capability: null };
   "host:stop": { request: HostStopRequest; response: null; capability: null };
   "plugins:add": { request: PluginAddRequest; response: PluginAddResult; capability: null };
   "plugins:answer": { request: PluginAnswerRequest; response: null; capability: "pluginPages" };
@@ -3334,6 +3355,8 @@ export const CHANNELS = [
   { name: "history:resume", kind: "request", capability: null },
   { name: "history:sessions", kind: "request", capability: null },
   { name: "history:summary", kind: "request", capability: null },
+  { name: "host:deviceSessions", kind: "request", capability: null },
+  { name: "host:quit", kind: "request", capability: null },
   { name: "host:stop", kind: "request", capability: null },
   { name: "plugins:add", kind: "request", capability: null },
   { name: "plugins:answer", kind: "request", capability: "pluginPages" },

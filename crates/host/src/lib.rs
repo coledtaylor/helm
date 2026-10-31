@@ -6,7 +6,10 @@
 //! `floti-protocol` inside that session. Sessions run in ptys, each screen kept off-screen so a
 //! client that attaches late draws it as it is, and they outlive their
 //! clients: closing every client ends nothing. They never outlive the host:
-//! stopping it ends them, and so does killing it.
+//! stopping it ends them, and so does killing it. The host owns their
+//! lifetime: a client quitting ends the sessions it started only when it
+//! asks to, a client crashing ends nothing, and a host a desktop started
+//! exits by itself once nothing runs and nobody is attached.
 //!
 //! The modules, one concern each:
 //!
@@ -65,38 +68,52 @@ pub mod testkit;
 
 pub use error::{Error, Result};
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::ffi::OsString;
 
 use floti_protocol::channels::host::HostStopReason;
 
 use platform::folders::UserEnv;
 use platform::startup::{self, StopSignals};
+use server::idle::{FIRST_CLIENT_WAIT, until_idle};
 use server::{Host, HostConfig};
 
+/// The exit status of a `floti host` that would not start because another
+/// host has its data folder or socket: one that is still ending its sessions
+/// holds them until it has, so the program that started it may try again.
+pub const ALREADY_RUNNING_EXIT: u8 = 3;
+
 /// How `floti host` was asked to run.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostOptions {
-    /// Stop as well when standard input reaches end of file: for a host
-    /// started by a program that holds its standard input open, such as the
-    /// desktop, so the host ends with that program however it ends.
-    pub until_stdin_closes: bool,
+    /// The desktop that started this host, as the command that opens it
+    /// again: `floti host --desktop <program> [--desktop-arg <arg>]...`.
+    /// Such a host outlives that desktop and exits by itself once it runs
+    /// nothing and no client is attached ([`server::idle`]). `None` is a host
+    /// started on its own, which runs until it is stopped.
+    pub desktop: Option<DesktopCommand>,
+}
+
+/// The program that started a host, and the arguments that open it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DesktopCommand {
+    pub program: OsString,
+    pub args: Vec<OsString>,
 }
 
 /// Runs the host until it is stopped: by a client, or by Ctrl+C, SIGTERM,
 /// signing out or the other stop requests the OS makes, each of which is a
 /// plain stop.
 ///
-/// With [`HostOptions::until_stdin_closes`], standard input reaching end of
-/// file stops it too, unless a stop was asked for first, which stays what it
-/// was. That stop ends every session's process tree and leaves their rows,
-/// as a stop for an update does, for the next start to find lost and offer
-/// back once: the program that started the host has gone, and whoever starts
-/// it next decides what to reopen.
+/// A host a desktop started ([`HostOptions::desktop`]) also stops by itself,
+/// as a plain stop, once it runs no session or plain terminal and no client
+/// is attached. Nothing else about the desktop ends it: a desktop that quits
+/// on purpose says first what becomes of its sessions (`host:quit`), and one
+/// that crashes or is killed ends nothing, so its next start finds its
+/// sessions still running.
 ///
 /// It refuses to start from an SSH session or as root or a Windows service
 /// account before it opens anything, and refuses when another host already
-/// has its data folder or socket.
+/// has its data folder or socket ([`Error::AlreadyRunning`]).
 pub fn run_host(options: HostOptions) -> Result<()> {
     let env = UserEnv::from_process();
     if let Some(refusal) = startup::launch_refusal(&env, startup::account()) {
@@ -107,20 +124,18 @@ pub fn run_host(options: HostOptions) -> Result<()> {
         .enable_all()
         .build()
         .map_err(|err| Error::io("start the host's runtime", err))?;
-    let starter_gone = Arc::new(AtomicBool::new(false));
-    let stopped = runtime.block_on(async {
+    let reason = runtime.block_on(async {
         let mut signals = StopSignals::register()?;
         let host = Host::start(config)?;
         say(&format!("Floti host is listening at {}.", host.endpoint()));
         let stopper = host.stopper();
-        if options.until_stdin_closes {
-            let stdin_closed = stdin_closed();
+        if options.desktop.is_some() {
+            let occupancy = host.occupancy();
             let stopper = stopper.clone();
-            let gone = Arc::clone(&starter_gone);
             tokio::spawn(async move {
-                if stdin_closed.await.is_ok() && stopper.stop(HostStopReason::Update) {
-                    gone.store(true, Ordering::SeqCst);
-                    say("Floti host is stopping: the program that started it has gone.");
+                until_idle(occupancy, FIRST_CLIENT_WAIT).await;
+                if stopper.stop(HostStopReason::Stop) {
+                    say("Floti host is stopping: nothing is running and no client is attached.");
                 }
             });
         }
@@ -131,44 +146,18 @@ pub fn run_host(options: HostOptions) -> Result<()> {
         });
         host.run_until_stopped().await
     });
-    // The thread waiting on standard input is not the runtime's, so dropping
-    // the runtime does not wait for it; it goes with the process.
     drop(runtime);
-    let reason = stopped?;
+    let reason = reason?;
     say(match reason {
-        _ if starter_gone.load(Ordering::SeqCst) => {
-            "Floti host stopped: the program that started it has gone, so its sessions are offered back at the next start."
-        }
         HostStopReason::Stop => "Floti host stopped.",
         HostStopReason::Update => "Floti host stopped for an update.",
     });
     Ok(())
 }
 
-/// Resolves once standard input reaches end of file, or cannot be read,
-/// which says the same: nothing holds it open. Read on a thread of its own,
-/// and anything read is ignored.
-fn stdin_closed() -> tokio::sync::oneshot::Receiver<()> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        use std::io::Read;
-        let mut stdin = std::io::stdin().lock();
-        let mut buf = [0; 4096];
-        loop {
-            match stdin.read(&mut buf) {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(_) => break,
-            }
-        }
-        let _ = tx.send(());
-    });
-    rx
-}
-
 /// A line on the console, where there is one. A host started at sign-in may
-/// have nowhere to print, which is not a reason to fail.
+/// have nowhere to print, and the desktop that started one stops reading once
+/// it is listening and may have gone since; neither is a reason to fail.
 fn say(line: &str) {
     use std::io::Write;
     let mut out = std::io::stdout().lock();

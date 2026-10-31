@@ -27,14 +27,17 @@ use floti_host::testkit::{
 use floti_host::{Error, fake_agent};
 use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
-use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
+use floti_protocol::channels::host::{
+    DeviceSession, HostDeviceSessions, HostQuit, HostQuitRequest, HostStop, HostStopReason,
+    HostStopRequest,
+};
 use floti_protocol::channels::plugins::{
     PluginAddRequest, PluginServiceState, PluginsAdd, PluginsList,
 };
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, HistoryRefresh, LaunchSessionRequest, ProfileDelete, ProfileExport,
-    ProfileImport, ProfileList, ProfilePin, ProfileSave, ProfilesChanged, PtermOpen,
-    PtermOpenRequest, PtermStreamOpen, ReadUsage, RestoreSessionsRequest, SessionClose,
+    ProfileImport, ProfileList, ProfilePin, ProfileSave, ProfilesChanged, PtermExit, PtermExited,
+    PtermOpen, PtermOpenRequest, PtermStreamOpen, ReadUsage, RestoreSessionsRequest, SessionClose,
     SessionExit, SessionLaunch, SessionList, SessionRestorable, SessionRestore, SessionStart,
     SessionToRestore, StartSessionRequest, UsageSnapshot,
 };
@@ -768,7 +771,7 @@ async fn s8_a_second_host_on_the_same_data_folder_is_refused_without_taking_its_
         .err()
         .expect("a second host on the same data folder is refused");
     assert!(
-        matches!(&refused, Error::Refused(why) if why.contains("already running")),
+        matches!(&refused, Error::AlreadyRunning(why) if why.contains("already running")),
         "{refused}"
     );
     // It did not take its socket: the endpoint is still free.
@@ -798,7 +801,7 @@ async fn s8_a_second_host_on_the_same_socket_is_refused_without_opening_floti_db
         .err()
         .expect("a second host on the same socket is refused");
     assert!(
-        matches!(&refused, Error::Refused(why) if why.contains("already running")),
+        matches!(&refused, Error::AlreadyRunning(why) if why.contains("already running")),
         "{refused}"
     );
     assert!(
@@ -1002,16 +1005,19 @@ async fn s11_sigterm_ends_every_tree_and_records_rows_exited() {
 }
 
 // ---------------------------------------------------------------------------
-// A host that ends with the program that started it
+// A host a desktop started: it outlives the desktop and exits once idle
 // ---------------------------------------------------------------------------
 
-/// `floti host --until-stdin-closes` with every folder in `dirs`, its
-/// standard input a pipe the test holds.
-fn host_until_stdin_closes(dirs: &TestDirs) -> HostProcess {
+/// `floti host --desktop <program> --desktop-arg <arg>` with every folder in
+/// `dirs`: a host started by a desktop, here one that is never run.
+fn host_a_desktop_started(dirs: &TestDirs) -> HostProcess {
+    let app = dirs.folder("Helm app");
     HostProcess::spawn(
         floti_host_command(dirs)
-            .arg("--until-stdin-closes")
-            .stdin(Stdio::piped()),
+            .arg("--desktop")
+            .arg(app.join("Helm.exe"))
+            .arg("--desktop-arg")
+            .arg(app.join("resources app")),
     )
 }
 
@@ -1041,100 +1047,236 @@ async fn a_session_and_its_processes(
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn s16_a_host_asked_to_stop_before_its_stdin_closes_stops_as_a_plain_stop() {
-    let dirs = TestDirs::new();
-    let mut host = host_until_stdin_closes(&dirs);
-    let mut client = TestClient::connect(&binary_endpoint(&dirs), TERMINAL).await;
-    let (_, pids) = a_session_and_its_processes(&dirs, &mut client, &host).await;
-
-    client
-        .request::<HostStop>(&HostStopRequest {
-            reason: HostStopReason::Stop,
-        })
-        .await
-        .expect("the stop is answered");
-    drop(host.stdin.take());
+/// Waits for the host to exit by itself, and checks it said why.
+fn assert_exits_idle(host: HostProcess) {
+    let mut host = host;
     let status = wait_exit(&mut host);
     let (stdout, stderr) = output_of(host);
     assert!(status.success(), "{status}: {stdout}{stderr}");
     assert!(
-        stdout
-            .lines()
-            .next()
-            .is_some_and(|line| line.starts_with("Floti host is listening at ")),
+        stdout.contains("Floti host is stopping: nothing is running and no client is attached."),
         "{stdout}{stderr}"
     );
     assert!(stdout.contains("Floti host stopped."), "{stdout}{stderr}");
-    assert!(
-        !stdout.contains("the program that started it"),
-        "{stdout}{stderr}"
-    );
-    assert_all_end(&pids).await;
-    let after = rows(&dirs.data);
-    assert_eq!(after.len(), 1);
-    assert_eq!(after[0].status, "exited", "{after:?}");
-    assert!(after[0].ended_at.is_some(), "{after:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s16_a_host_whose_stdin_closes_ends_every_tree_and_its_next_start_offers_the_sessions_once()
-{
+async fn s15_a_host_a_desktop_started_keeps_running_while_a_session_runs_and_exits_when_it_ends_with_no_client()
+ {
     let dirs = TestDirs::new();
-    let agent = fake_agent!(&dirs);
-    let mut host = host_until_stdin_closes(&dirs);
+    let host = host_a_desktop_started(&dirs);
     let endpoint = binary_endpoint(&dirs);
-    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
-    let (session, pids) = a_session_and_its_processes(&dirs, &mut client, &host).await;
-
-    drop(host.stdin.take());
-    assert!(client.wait_closed(PATIENCE).await, "the connection closes");
-    let status = wait_exit(&mut host);
-    let (stdout, stderr) = output_of(host);
-    assert!(status.success(), "{status}: {stdout}{stderr}");
-    assert!(
-        stdout
-            .lines()
-            .next()
-            .is_some_and(|line| line.starts_with("Floti host is listening at ")),
-        "{stdout}{stderr}"
-    );
-    assert!(
-        stdout.contains("Floti host is stopping: the program that started it has gone."),
-        "{stdout}{stderr}"
-    );
-    assert!(!stdout.contains("Floti host stopped."), "{stdout}{stderr}");
-    assert_all_end(&pids).await;
-    assert_eq!(rows(&dirs.data)[0].status, "running");
-
-    let again = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut first = TestClient::connect(&endpoint, TERMINAL).await;
-    let offer = first
-        .request::<SessionRestorable>(&())
-        .await
-        .unwrap()
-        .expect("the sessions are offered back");
+    let (session, pids) = a_session_and_its_processes(&dirs, &mut first, &host).await;
+    drop(first);
+
+    // Its client left with a session running: the host stays, and the next
+    // client finds the session there, as Helm's next start does.
+    let mut later = TestClient::connect(&endpoint, TERMINAL).await;
     assert_eq!(
-        offer
-            .sessions
+        later
+            .request::<SessionList>(&())
+            .await
+            .unwrap()
             .iter()
-            .map(|lost| lost.id)
+            .map(id_of)
             .collect::<Vec<_>>(),
         [session.id]
     );
-    assert_eq!(rows(&dirs.data)[0].status, "lost");
-    assert_eq!(first.request::<SessionList>(&()).await.unwrap(), vec![]);
-    first
-        .request::<SessionRestore>(&RestoreSessionsRequest { sessions: vec![] })
+    drop(later);
+
+    // The session ends with nobody attached: nothing is left, so it goes.
+    end_all(&pids);
+    assert_exits_idle(host);
+    assert_all_end(&pids).await;
+    assert_eq!(rows(&dirs.data)[0].status, "exited");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s15_a_host_a_desktop_started_keeps_running_while_a_client_is_attached_and_exits_when_it_leaves()
+ {
+    let dirs = TestDirs::new();
+    let host = host_a_desktop_started(&dirs);
+    let endpoint = binary_endpoint(&dirs);
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let (session, pids) = a_session_and_its_processes(&dirs, &mut client, &host).await;
+    client.subscribe_quietly(1, SessionExit::NAME).await;
+    client
+        .request::<SessionClose>(&CloseSessionRequest {
+            id: session.id,
+            force: true,
+        })
         .await
         .unwrap();
-    let mut second = TestClient::connect(&endpoint, TERMINAL).await;
+    client
+        .event_on::<SessionRecord>(1, "the session's exit", |row| row.id == session.id)
+        .await;
+    assert_all_end(&pids).await;
+
+    // Nothing runs, but a client is attached: the host still answers it.
+    assert_eq!(client.request::<SessionList>(&()).await.unwrap(), vec![]);
+
+    drop(client);
+    assert_exits_idle(host);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_plain_floti_host_keeps_running_with_nothing_running_and_no_client() {
+    let dirs = TestDirs::new();
+    let host = HostProcess::spawn(&mut floti_host_command(&dirs));
+    let endpoint = binary_endpoint(&dirs);
+    let client = TestClient::connect(&endpoint, TERMINAL).await;
+    drop(client);
+
+    // Its last client left with nothing running, and a later one still finds
+    // it: only a host a desktop started exits by itself.
+    let mut later = TestClient::connect(&endpoint, TERMINAL).await;
+    assert_eq!(later.request::<SessionList>(&()).await.unwrap(), vec![]);
+    stop_executable(&mut later, host).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deliberate_quit_ends_only_what_the_quitting_device_started() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let mine = dirs.folder("my project");
+    let theirs = dirs.folder("their project");
+
+    let mut other = TestClient::connect(&endpoint, TERMINAL).await;
+    let kept = other
+        .request::<SessionStart>(&start_request(&theirs))
+        .await
+        .unwrap();
+    let mut quitting = TestClient::connect_as(
+        &endpoint,
+        "a laptop",
+        floti_host::devices::Role::Admin,
+        TERMINAL,
+    )
+    .await;
+    let ended = quitting
+        .request::<SessionStart>(&start_request(&mine))
+        .await
+        .unwrap();
+    let terminal = quitting
+        .request::<PtermOpen>(&PtermOpenRequest {
+            path: mine.to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            shell: Some(agent.exe().to_string_lossy().into_owned()),
+            separate: false,
+        })
+        .await
+        .unwrap();
+    let ended_pid = run_of(&agent, &mine);
+
+    // Each device is told only what it started.
+    let names = |sessions: Vec<DeviceSession>| -> Vec<(u64, String)> {
+        sessions.into_iter().map(|s| (s.id, s.name)).collect()
+    };
     assert_eq!(
-        second.request::<SessionRestorable>(&()).await.unwrap(),
-        None,
-        "offered once"
+        names(quitting.request::<HostDeviceSessions>(&()).await.unwrap()),
+        [(ended.id, ended.name.clone())]
     );
-    again.stop(HostStopReason::Stop).await;
+    assert_eq!(
+        names(other.request::<HostDeviceSessions>(&()).await.unwrap()),
+        [(kept.id, kept.name.clone())]
+    );
+
+    other.subscribe_quietly(1, SessionExit::NAME).await;
+    other.subscribe_quietly(2, PtermExit::NAME).await;
+    // A barrier: the subscriptions are in place once this is answered.
+    other.request::<SessionList>(&()).await.unwrap();
+    quitting
+        .request::<HostQuit>(&HostQuitRequest { end: true })
+        .await
+        .unwrap();
+
+    let exit = other
+        .event_on::<SessionRecord>(1, "the quitting device's session ending", |_| true)
+        .await;
+    assert_eq!(exit.id, ended.id);
+    other
+        .event_on::<PtermExited>(2, "the quitting device's terminal ending", |exited| {
+            exited.id == terminal.id
+        })
+        .await;
+    assert_all_end(&ended_pid).await;
+    let after = rows(&dirs.data);
+    let status_of = |id: u64| {
+        after
+            .iter()
+            .find(|row| u64::try_from(row.id).ok() == Some(id))
+            .map(|row| row.status.clone())
+    };
+    assert_eq!(status_of(ended.id).as_deref(), Some("exited"));
+    assert_eq!(status_of(kept.id).as_deref(), Some("running"));
+    assert_eq!(
+        other
+            .request::<SessionList>(&())
+            .await
+            .unwrap()
+            .iter()
+            .map(id_of)
+            .collect::<Vec<_>>(),
+        [kept.id]
+    );
+    assert_eq!(
+        quitting.request::<HostDeviceSessions>(&()).await.unwrap(),
+        vec![]
+    );
+
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deliberate_quit_that_keeps_its_sessions_ends_only_its_terminals() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let folder = dirs.folder("a project");
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let session = client
+        .request::<SessionStart>(&start_request(&folder))
+        .await
+        .unwrap();
+    let terminal = client
+        .request::<PtermOpen>(&PtermOpenRequest {
+            path: folder.to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            shell: Some(agent.exe().to_string_lossy().into_owned()),
+            separate: false,
+        })
+        .await
+        .unwrap();
+    client.subscribe_quietly(1, PtermExit::NAME).await;
+    client
+        .request::<HostQuit>(&HostQuitRequest { end: false })
+        .await
+        .unwrap();
+    client
+        .event_on::<PtermExited>(1, "the terminal ending", |exited| exited.id == terminal.id)
+        .await;
+
+    let listed = client.request::<SessionList>(&()).await.unwrap();
+    assert_eq!(listed.iter().map(id_of).collect::<Vec<_>>(), [session.id]);
+    assert_eq!(listed[0].status, SessionStatus::Running);
+    assert_eq!(
+        client
+            .request::<HostDeviceSessions>(&())
+            .await
+            .unwrap()
+            .iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>(),
+        [session.id]
+    );
+
+    host.stop(HostStopReason::Stop).await;
 }
 
 /// A host that goes away without a stop, as one whose run a panic dropped

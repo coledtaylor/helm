@@ -118,6 +118,12 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 - The main process owns process lifetime. Session rows are written on spawn,
   `before-quit` ends sessions, `will-quit` releases the database, and nothing
   else closes the store.
+- With "Run sessions in the local host" on, the host owns process lifetime.
+  Quitting a client ends the sessions it started only where its setting for
+  that host says so; a crash ends nothing; stopping the host ends every
+  session. Helm never stops the host: its deliberate quit sends `host:quit`
+  and lets go, and a host Helm started (`floti host --desktop`) exits by
+  itself once it runs nothing and no client is attached.
 - Do not use `@anthropic-ai/claude-agent-sdk`.
 - Helm renders nothing for a live session: it parses no session output,
   answers no permission prompt and puts nothing between the user and the TUI.

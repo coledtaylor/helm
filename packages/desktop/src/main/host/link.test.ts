@@ -69,7 +69,7 @@ describe('the link to the local host', () => {
     expect(attempts).toBe(2)
   })
 
-  it('stops the host it started as a plain stop, then lets go of both programs, and connects no more', async () => {
+  it('tells the host a deliberate quit ends what this device started, never stops it, lets go and connects no more', async () => {
     const connection = new FakeConnection()
     const local = fakeLocalHost(connection, true)
     const link = createHostLink({
@@ -79,14 +79,15 @@ describe('the link to the local host', () => {
       ...steppedTimers()
     })
     await link.connection()
-    await link.stop()
+    await link.quit({ end: true })
 
-    expect(connection.payloads('host:stop')).toEqual([{ reason: 'stop' }])
-    expect(local.stopped).toBe(true)
+    expect(connection.payloads('host:quit')).toEqual([{ end: true }])
+    expect(connection.payloads('host:stop')).toEqual([])
+    expect(local.closed).toBe(true)
     await expect(link.connection()).rejects.toThrow('Helm is quitting.')
   })
 
-  it('leaves a host it did not start running, and only lets go of the connection', async () => {
+  it('says the same to a host it did not start, and only lets go of the connection', async () => {
     const connection = new FakeConnection()
     const local = fakeLocalHost(connection, false)
     const link = createHostLink({
@@ -96,16 +97,17 @@ describe('the link to the local host', () => {
       ...steppedTimers()
     })
     await link.connection()
-    await link.stop()
+    await link.quit({ end: false })
 
+    expect(connection.payloads('host:quit')).toEqual([{ end: false }])
     expect(connection.payloads('host:stop')).toEqual([])
-    expect(local.stopped).toBe(true)
+    expect(local.closed).toBe(true)
   })
 
-  it('gives up waiting on a host that does not answer its stop once the deadline passes', async () => {
+  it('lets go of a host that does not answer its quit once the deadline passes', async () => {
     const connection = new FakeConnection()
     // Never answered.
-    connection.answer('host:stop', () => new Promise<null>(() => undefined) as unknown as null)
+    connection.answer('host:quit', () => new Promise<null>(() => undefined) as unknown as null)
     const local = fakeLocalHost(connection, true)
     const timers = steppedTimers()
     const link = createHostLink({
@@ -116,14 +118,14 @@ describe('the link to the local host', () => {
     })
     await link.connection()
 
-    const stopping = link.stop()
-    // The stop is waiting on the host's answer, bounded by the deadline.
+    const quitting = link.quit({ end: true })
+    // The quit is waiting on the host's answer, bounded by the deadline.
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(timers.pending()).toEqual([HOST_STOP_DEADLINE_MS])
     timers.fireAll()
-    await stopping
+    await quitting
 
-    expect(local.stopped).toBe(true)
+    expect(local.closed).toBe(true)
   })
 
   it('sends the claude chosen in Settings, or the one Helm finds, and the terminal shell', () => {

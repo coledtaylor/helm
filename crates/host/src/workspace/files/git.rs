@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::platform::launcher::{self, ProgramLauncher};
+
 /// How long a status, diff or listing may take.
 pub const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -77,6 +79,7 @@ pub fn run_git(
     for name in REDIRECTING {
         command.env_remove(name);
     }
+    launcher::Native.windowless(&mut command);
     let mut child = command.spawn().map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => GitFailure::Missing,
         _ => GitFailure::Failed {

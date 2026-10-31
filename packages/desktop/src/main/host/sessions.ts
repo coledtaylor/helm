@@ -152,6 +152,29 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   let subscriptions: HostSubscription[] = []
   /** Each running session's key at the browser tools, minted when first asked for. */
   const openerKeys = new Map<number, string>()
+  /**
+   * The listed sessions another device started, which quitting Helm leaves
+   * running and so does not ask about. Empty while the host has not said:
+   * then every running session counts, as asking too much is the safe side.
+   */
+  let startedElsewhere = new Set<number>()
+
+  /** Which of `rows` another device started, by the host's word on this device's own. */
+  async function learnStartedElsewhere(connection: HostConnection, rows: readonly P.SessionRecord[]): Promise<void> {
+    let own: readonly P.DeviceSession[] | null
+    try {
+      own = await connection.request('host:deviceSessions', null)
+    } catch (error) {
+      deps.log(`host: host:deviceSessions failed (${(error as Error).message})`)
+      own = null
+    }
+    if (own === null) {
+      startedElsewhere = new Set()
+      return
+    }
+    const ownIds = new Set(own.map((session) => session.id))
+    startedElsewhere = new Set(rows.map((row) => row.id).filter((id) => !ownIds.has(id)))
+  }
 
   /** Ends a session's identity at the browser tools, if it had one. */
   const dropOpener = (id: number): void => {
@@ -230,7 +253,9 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
         error: failed('sessions:overview')
       })
     ]
-    for (const row of await connection.request('session:list', null)) adopt(sessionFromHost(row))
+    const listed = await connection.request('session:list', null)
+    for (const row of listed) adopt(sessionFromHost(row))
+    await learnStartedElsewhere(connection, listed)
     announce()
     sendFocus()
   })
@@ -251,6 +276,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
         if (connection === null) return
         const rows = await connection.request('session:list', null)
         for (const row of rows) adopt(sessionFromHost(row))
+        await learnStartedElsewhere(connection, rows)
       } while (relistAgain)
     } catch (error) {
       deps.log(`host: session:list failed (${(error as Error).message})`)
@@ -274,6 +300,8 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   }
 
   const running = (): SessionRecord[] => [...records.values()].filter(isRunning)
+  /** The running sessions this device started: what quitting Helm ends. */
+  const runningHere = (): SessionRecord[] => running().filter((record) => !startedElsewhere.has(record.id))
 
   /** A session with no profile and nothing composed: a folder, a name, and maybe a first message. */
   async function startPlain(req: {
@@ -482,10 +510,10 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
       sendFocus()
     },
 
-    runningCount: () => running().length,
+    runningCount: () => runningHere().length,
 
     confirmCloseAll() {
-      const live = running()
+      const live = runningHere()
       if (live.length === 0) return Promise.resolve(true)
       return deps.confirm({
         kind: 'quit',

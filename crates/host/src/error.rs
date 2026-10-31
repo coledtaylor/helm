@@ -47,6 +47,12 @@ pub enum Error {
     #[error("{0}")]
     Refused(String),
 
+    /// Another host already has this host's data folder or socket. One that
+    /// is still ending its sessions holds them until it has, so a program
+    /// that starts hosts may wait it out and try again.
+    #[error("{0}")]
+    AlreadyRunning(String),
+
     /// A part of the host that is not in this build.
     #[error("{what} is not in this build of floti")]
     NotBuilt { what: &'static str },

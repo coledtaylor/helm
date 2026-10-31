@@ -11,6 +11,7 @@ import {
   claudeRunIn,
   expect,
   flotiChildren,
+  flotiHostsAmong,
   launchHelm,
   mainPid,
   processAlive,
@@ -460,7 +461,7 @@ test('quitting ends every session in the host and leaves no host or bridge runni
   await expect.poll(() => [...pids, ...floti].filter(processAlive)).toEqual([])
 })
 
-test('after Helm is killed outright, the host went with it, and the sessions it had come back through the host', async ({
+test('after Helm is killed outright, its sessions run on in the host, and the next start reattaches to that host and shows them, offering no restore', async ({
   helm,
   world
 }) => {
@@ -478,24 +479,31 @@ test('after Helm is killed outright, the host went with it, and the sessions it 
   const run = await claudeRunIn(world, world.projects.alpha)
   await expect.poll(async () => flotiChildren(await mainPid(helm)).length).toBe(3)
   const floti = flotiChildren(await mainPid(helm))
+  const hosts = flotiHostsAmong(floti)
+  expect(hosts).toHaveLength(1)
+  const host = hosts[0]!
+  const bridges = floti.filter((pid) => pid !== host)
 
   process.kill(await mainPid(helm))
-  await expect.poll(() => [run.pid, ...floti].filter(processAlive)).toEqual([])
+  // The bridges end with the Helm whose pipes they were; the host and the
+  // session it runs do not.
+  await expect.poll(() => bridges.filter(processAlive)).toEqual([])
+  expect([host, run.pid].every(processAlive)).toBe(true)
 
   const next = await launchHelm(world)
   Object.assign(helm, next)
   window = next.window
-  const offer = window.getByRole('region', { name: '1 session was running when Helm closed' })
-  await expect(offer).toBeVisible()
-  await offer.getByRole('button', { name: 'Resume 1 session' }).click()
   await expect(window.getByRole('tab', { name: 'alpha, ready' })).toBeVisible()
+  expect(await sessionIdOf(window, 'alpha, ready')).toBe(id)
+  await expect.poll(() => terminalText(window, id)).toContain('You said: draft the schema')
 
-  await expect.poll(() => fakeClaudeLogs(world).filter((log) => log.resumed).length).toBe(1)
-  const resumed = fakeClaudeLogs(world).find((log) => log.resumed)
-  expect(resumed?.cwd.toLowerCase()).toBe(world.projects.alpha.toLowerCase())
-  expect(resumed?.argv[(resumed?.argv.indexOf('--resume') ?? 0) + 1]).toBe(run.sessionId)
-  const back = await sessionIdOf(window, 'alpha, ready')
-  await expect.poll(() => terminalText(window, back)).toContain(`Resumed ${run.sessionId}`)
+  // Reached through the host already running: this Helm started only its bridges.
+  await expect.poll(async () => flotiChildren(await mainPid(helm)).length).toBe(2)
+  expect(flotiHostsAmong(flotiChildren(await mainPid(helm)))).toEqual([])
+  expect([host, run.pid].every(processAlive)).toBe(true)
+  // Nothing ended, so there is nothing to offer back and nothing was resumed.
+  await expect(window.getByRole('region', { name: /when Helm closed/ })).toHaveCount(0)
+  expect(fakeClaudeLogs(world).filter((log) => log.resumed)).toEqual([])
 })
 
 test('a session ended in the host is in the history without a refresh, its archive opens, and it resumes in its folder through the host', async ({

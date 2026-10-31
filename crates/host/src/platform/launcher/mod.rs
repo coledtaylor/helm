@@ -58,6 +58,15 @@ pub trait ProgramLauncher {
         vec![home.join(".local").join("bin")]
     }
 
+    /// Makes `command`, a program about to be started outside a terminal
+    /// with its output read, open no window: on Windows a console program
+    /// started by a process with no console (a host a desktop started runs
+    /// detached, with none) would otherwise open one of its own. Nothing
+    /// else about how it starts changes.
+    fn windowless(&self, command: &mut std::process::Command) {
+        let _ = command;
+    }
+
     /// For a test: writes in `folder` the script this OS's users write to
     /// run another program, which runs `program` with every argument it is
     /// given: a batch file on Windows, a shell script with its execute bit

@@ -454,6 +454,47 @@ describe('sessions through the local host', () => {
     expect(w.emitted.filter(({ channel }) => channel === 'session:data')).toEqual([])
   })
 
+  it('asks about quitting only for the sessions this device started, which are the ones quitting ends', async () => {
+    const w = world({ listed: [row(), row({ id: 8, name: 'api' }), row({ id: 9, name: 'docs' })] })
+    // Session 8 was started from another device; quitting Helm leaves it running.
+    w.connection.answer('host:deviceSessions', () => [
+      { id: 7, name: 'alpha' },
+      { id: 9, name: 'docs' }
+    ])
+    await w.connect()
+
+    expect(w.host.sessions.list().map((session) => session.id)).toEqual([7, 8, 9])
+    expect(w.host.sessions.runningCount()).toBe(2)
+    await expect(w.host.sessions.confirmCloseAll()).resolves.toBe(true)
+    expect(w.asked).toEqual([
+      expect.objectContaining({
+        kind: 'quit',
+        confirmLabel: 'End 2 sessions',
+        sessions: [expect.objectContaining({ id: 7 }), expect.objectContaining({ id: 9 })]
+      })
+    ])
+  })
+
+  it('asks about nothing when every running session was started from another device', async () => {
+    const w = world({ listed: [row()] })
+    w.connection.answer('host:deviceSessions', () => [])
+    await w.connect()
+
+    expect(w.host.sessions.runningCount()).toBe(0)
+    await expect(w.host.sessions.confirmCloseAll()).resolves.toBe(true)
+    expect(w.asked).toEqual([])
+  })
+
+  it('counts a session it starts after connecting as its own', async () => {
+    const w = world()
+    w.connection.answer('host:deviceSessions', () => [])
+    w.connection.answer('session:start', () => row())
+    await w.connect()
+    await w.host.sessions.start({ cwd: '/work/app', cols: 80, rows: 24 })
+
+    expect(w.host.sessions.runningCount()).toBe(1)
+  })
+
   it('passes the host’s activity and overview to the window in its own words', async () => {
     const w = world({ listed: [row()] })
     await w.connect()

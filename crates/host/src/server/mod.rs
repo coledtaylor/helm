@@ -44,6 +44,7 @@ mod enrolment;
 mod events;
 mod features;
 mod hosted;
+pub mod idle;
 mod plugin_tools;
 pub(crate) mod records;
 mod session_tools;
@@ -88,6 +89,7 @@ use enrolment::Enrolment;
 pub use enrolment::{FIRST_ADMIN_NAME, LocalEnrolment, read_enrolment};
 use features::Features;
 use hosted::Hosted;
+pub use hosted::Occupancy;
 use session_tools::HostWorld;
 
 /// The socket's name in the runtime folder.
@@ -347,9 +349,15 @@ impl Host {
 
         let (stopper, stop_requested) = Stopper::new();
         let (shutdown, shutdown_rx) = watch::channel(false);
+        tokio::spawn(hosted::settle_on_exits(
+            hosted.ledger().exits(),
+            hosted.terminals().exits(),
+            Arc::downgrade(&hosted),
+        ));
         let accepting = tokio::spawn(accept(
             listener,
             Arc::clone(&features),
+            Arc::clone(&hosted),
             Admission {
                 host_key,
                 devices,
@@ -390,6 +398,13 @@ impl Host {
     /// Where clients connect.
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    /// How many sessions and plain terminals it runs and clients it has
+    /// attached, now and as that changes: what a host that exits once it is
+    /// idle follows.
+    pub fn occupancy(&self) -> watch::Receiver<Occupancy> {
+        self.hosted.occupancy()
     }
 
     /// A handle that asks this host to stop, for the OS's stop signals.
@@ -504,7 +519,7 @@ fn lock_data_folder(folders: &Folders) -> Result<File> {
         .map_err(|source| Error::path("open", &path, source))?;
     match file.try_lock() {
         Ok(()) => Ok(file),
-        Err(TryLockError::WouldBlock) => Err(Error::Refused(format!(
+        Err(TryLockError::WouldBlock) => Err(Error::AlreadyRunning(format!(
             "A Floti host is already running for this user: it is using {}.",
             folders.data.display()
         ))),
@@ -515,6 +530,7 @@ fn lock_data_folder(folders: &Folders) -> Result<File> {
 async fn accept(
     mut listener: socket::Listener,
     features: Arc<Features>,
+    hosted: Arc<Hosted>,
     admission: Admission,
     identity: Arc<HostIdentity>,
     stopper: Stopper,
@@ -530,6 +546,7 @@ async fn accept(
                     client,
                     ConnectionContext {
                         features: Arc::clone(&features),
+                        hosted: Arc::clone(&hosted),
                         admission: admission.clone(),
                         identity: Arc::clone(&identity),
                         stopper: stopper.clone(),

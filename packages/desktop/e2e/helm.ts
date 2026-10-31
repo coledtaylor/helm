@@ -169,6 +169,29 @@ export function flotiChildren(parent: number): number[] {
     .map(([pid]) => Number(pid))
 }
 
+/** Which of the `floti` processes `pids` is a host (`floti host`), told from a bridge by its command line. */
+export function flotiHostsAmong(pids: readonly number[]): number[] {
+  if (pids.length === 0) return []
+  const listing =
+    process.platform === 'win32'
+      ? execFileSync(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-Command',
+            `Get-CimInstance Win32_Process -Filter "Name='floti.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`
+          ],
+          { encoding: 'utf8' }
+        )
+      : execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8' })
+  const hosts = new Set<number>()
+  for (const line of listing.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line)
+    if (match !== null && /floti(\.exe)?"?\s+host(\s|$)/.test(match[2] ?? '')) hosts.add(Number(match[1]))
+  }
+  return pids.filter((pid) => hosts.has(pid))
+}
+
 /** Whether a process is still running. `EPERM` means it exists and is not ours to signal. */
 export function processAlive(pid: number): boolean {
   try {

@@ -5,14 +5,14 @@ import type { FakeConnection } from './fake-connection'
 
 export { FakeConnection, FakeStream, fakeReach, type SentRequest } from './fake-connection'
 
-/** A `LocalHost` over `connection`, recording whether it was stopped. */
-export function fakeLocalHost(connection: FakeConnection, startedHost = true): LocalHost & { stopped: boolean } {
+/** A `LocalHost` over `connection`, recording whether it was closed. */
+export function fakeLocalHost(connection: FakeConnection, startedHost = true): LocalHost & { closed: boolean } {
   const local = {
     connection: connection.asConnection(),
     startedHost,
-    stopped: false,
-    stop: () => {
-      local.stopped = true
+    closed: false,
+    close: () => {
+      local.closed = true
       connection.close()
       return Promise.resolve()
     }
@@ -47,7 +47,7 @@ export function fakeLink(
       listeners.push(listener)
     },
     writeSettings: () => undefined,
-    stop: () => Promise.resolve(),
+    quit: () => Promise.resolve(),
     async connect() {
       await link.connection()
     }
@@ -72,7 +72,7 @@ export function reconnectingLink(first: FakeConnection): HostLink & { reconnect(
       listeners.push(listener)
     },
     writeSettings: () => undefined,
-    stop: () => Promise.resolve(),
+    quit: () => Promise.resolve(),
     async reconnect(next) {
       current = next
       attempt = connect()

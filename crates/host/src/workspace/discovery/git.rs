@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use floti_protocol::channels::workspace::GitState;
 
+use crate::platform::launcher::{self, ProgramLauncher};
+
 /// How long one `git` run may take before it is stopped.
 pub const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -42,6 +44,7 @@ pub(crate) fn run_git(cwd: &Path, args: &[&str], limit: Duration) -> Result<Stri
     for name in REDIRECTING {
         command.env_remove(name);
     }
+    launcher::Native.windowless(&mut command);
     let mut child = command
         .spawn()
         .map_err(|err| format!("Floti could not run git: {err}"))?;

@@ -24,6 +24,8 @@
 //! the first admin enrolling), goes with each of its requests to the
 //! features, which say what it may change.
 //!
+//! A welcomed client is attached to the host with the device its key
+//! proved, which is who the sessions it starts are recorded as started by.
 //! A client leaving detaches it from every session it was attached to and
 //! ends nothing: the sessions run on for the next client.
 //!
@@ -65,6 +67,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use super::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME};
 use super::events::{Publication, Start};
 use super::features::{Caller, Features};
+use super::hosted::Hosted;
 use super::stopper::ReservedStop;
 use super::{CATALOGUE, Stopper, unserved};
 use crate::devices::{DeviceRegistry, Role, Standing};
@@ -130,6 +133,8 @@ pub(crate) struct Admitted {
     pub enrolling: Option<Claim>,
     /// The role it is paired with, or will be once it enrols.
     pub role: Role,
+    /// The key it proved.
+    pub device: PublicKey,
 }
 
 /// Why a connection was closed before `hello`, as the host's log says it.
@@ -166,6 +171,8 @@ impl fmt::Display for Refusal {
 /// What the connection needs from the host.
 pub(crate) struct ConnectionContext {
     pub features: Arc<Features>,
+    /// Where the client is counted as attached, with its device.
+    pub hosted: Arc<Hosted>,
     pub admission: Admission,
     pub identity: Arc<HostIdentity>,
     pub stopper: Stopper,
@@ -189,6 +196,7 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
         rest,
         enrolling,
         role,
+        device,
     } = match admitted {
         Ok(admitted) => admitted,
         Err(refusal) => {
@@ -227,10 +235,14 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
     else {
         return;
     };
+    context.hosted.attach_client(client, device);
     connection.run(channels, shutdown).await;
     connection.detach_all();
     connection.features.events().leave(client);
     connection.features.client_left(client);
+    // Last: a host that exits once nobody is attached hears it only when
+    // everything the client held has been let go.
+    context.hosted.detach_client(client);
 }
 
 /// [`admit`], cut off at the admission's deadline.
@@ -300,6 +312,7 @@ async fn admit(
                     rest: buf[used..n].to_vec(),
                     enrolling,
                     role,
+                    device: key,
                 });
             }
             Err(err) => return Err(Some(Refusal::Failed(err))),

@@ -2138,6 +2138,26 @@
       ],
       "type": "object"
     },
+    "DeviceSession": {
+      "description": "A running session a device started.",
+      "properties": {
+        "id": {
+          "description": "The session's row id.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "What its tab says: its label, or its name when it has none.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
     "DiscoveryError": {
       "description": "A root that could not be read, and why.",
       "properties": {
@@ -3726,6 +3746,18 @@
         "resumable",
         "historyFile",
         "indexedBytes"
+      ],
+      "type": "object"
+    },
+    "HostQuitRequest": {
+      "properties": {
+        "end": {
+          "description": "Whether the sessions the caller's device started end with the quit.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "end"
       ],
       "type": "object"
     },
@@ -10246,6 +10278,31 @@
       },
       "response": {
         "$ref": "#/$defs/HistorySummary"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "host:deviceSessions",
+      "request": {
+        "type": "null"
+      },
+      "response": {
+        "items": {
+          "$ref": "#/$defs/DeviceSession"
+        },
+        "type": "array"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "host:quit",
+      "request": {
+        "$ref": "#/$defs/HostQuitRequest"
+      },
+      "response": {
+        "type": "null"
       }
     },
     {

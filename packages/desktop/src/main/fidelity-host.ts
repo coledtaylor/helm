@@ -145,7 +145,7 @@ async function redrawnScreen(ctx: Ctx, id: number, cols: number, rows: number): 
     return await probe<ScreenProbe>(ctx.win, { op: 'mirrorScreen' })
   } finally {
     stream.close()
-    await other.stop()
+    await other.close()
     await probe(ctx.win, { op: 'mirrorClose' })
   }
 }
@@ -264,7 +264,7 @@ export async function checkHostRedraw(
     if (connection !== null && sessionId !== null) {
       await connection.request('session:close', { id: sessionId, force: true }).catch(() => undefined)
     }
-    await link.stop()
+    await link.quit({ end: true })
   }
 
   const names = ['main screen', 'alternate screen', 'alternate screen after a resize']

@@ -4,10 +4,13 @@ import { describe, expect, it } from 'vitest'
 import { PATIENCE } from '../../../../../test/patience'
 import { FrameDecoder, encodeFrame } from './frame'
 import {
+  HOST_ALREADY_RUNNING_EXIT,
+  HOST_RETRY_MS,
   HOST_START_DEADLINE_MS,
   LocalHostError,
   SOCKET_PATH_MAX,
   clientFolder,
+  desktopArgs,
   flotiBinary,
   hostEnvironment,
   startLocalHost,
@@ -26,8 +29,13 @@ const WIN_PLACES: HostPlaces = {
   packaged: false,
   resourcesPath: 'C:\\Program Files\\Helm\\resources',
   repoRoot: 'C:\\src\\my helm',
-  templatesDir: 'C:\\Users\\me\\AppData\\Local\\Helm\\dev\\helm-data\\templates'
+  templatesDir: 'C:\\Users\\me\\AppData\\Local\\Helm\\dev\\helm-data\\templates',
+  execPath: 'C:\\src\\my helm\\node_modules\\electron\\dist\\electron.exe',
+  appPath: 'C:\\src\\my helm\\packages\\desktop'
 }
+
+/** How the host Helm starts is run: told which Helm started it. */
+const HOST_PROGRAM = `host --desktop ${WIN_PLACES.execPath} --desktop-arg ${WIN_PLACES.appPath}`
 
 /** A child process with in-memory pipes, whose program the test plays. */
 class FakeChild extends EventEmitter implements HostChild {
@@ -35,6 +43,9 @@ class FakeChild extends EventEmitter implements HostChild {
   readonly stdout = new PassThrough()
   readonly stderr = new PassThrough()
   exitCode: number | null = null
+  signalCode: NodeJS.Signals | null = null
+  killed = false
+  unrefed = false
 
   constructor(
     readonly command: string,
@@ -50,6 +61,25 @@ class FakeChild extends EventEmitter implements HostChild {
     this.stdout.end()
     this.stderr.end()
     this.emit('exit', code, null)
+  }
+
+  kill(): boolean {
+    if (!this.running) return false
+    this.killed = true
+    this.signalCode = 'SIGTERM'
+    this.stdout.end()
+    this.stderr.end()
+    queueMicrotask(() => this.emit('exit', null, 'SIGTERM'))
+    return true
+  }
+
+  unref(): void {
+    this.unrefed = true
+  }
+
+  /** Whether the program is still running: neither exited nor killed. */
+  get running(): boolean {
+    return this.exitCode === null && this.signalCode === null
   }
 
   /** Resolves once Helm has closed this program's standard input. */
@@ -96,12 +126,14 @@ const exits =
     queueMicrotask(() => child.exit(code))
   }
 
-/** A host that says it is listening, and stops when its input closes. */
+/** A host that says it is listening, and runs until it is killed. */
 const listens: Program = (child) => {
   child.stdout.write('Floti host is listening at \\\\.\\pipe\\floti-1f2e.\r\n')
   child.stdout.write('Floti host said something after, with key 0123abcd.\n')
-  child.stdin.once('end', () => child.exit(0)).resume()
 }
+
+/** A host that finds another still holding its folders, and exits saying so. */
+const foldersHeld: Program = (child) => queueMicrotask(() => child.exit(HOST_ALREADY_RUNNING_EXIT))
 
 class World {
   readonly spawned: FakeChild[] = []
@@ -315,12 +347,12 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     expect(local.startedHost).toBe(false)
     expect(local.connection.welcome.hostVersion).toBe('0.4.1')
 
-    await local.stop()
+    await local.close()
     await bridge!.inputClosed()
     expect(bridge!.exitCode).toBe(0)
   })
 
-  it('starts the host when none answers, waits until it is listening, connects, and stops it by closing its input', async () => {
+  it('starts the host when none answers, waits until it is listening, connects, and lets go of it without stopping it', async () => {
     let announce: () => void = () => {}
     const waits: Program = (child) => {
       announce = () => listens(child)
@@ -330,25 +362,88 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
 
     await expect
       .poll(() => world.programs(), { timeout: PATIENCE })
-      .toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, 'host --until-stdin-closes'])
+      .toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, HOST_PROGRAM])
     const host = world.spawned[1]!
-    expect(host.options).toMatchObject({
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true
+    // Apart from Helm, with no input to close: the host's exit is its own.
+    // Its standard output carries only the listening line Helm waits for.
+    expect(host.options).toEqual({
+      env: world.spawned[0]!.options.env,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+      detached: true
     })
-    expect(host.options.env).toEqual(world.spawned[0]!.options.env)
-    expect(host.stdin.writableEnded).toBe(false)
+    expect(host.unrefed).toBe(false)
     announce()
 
     const local = await starting
     expect(world.programs()).toHaveLength(3)
     expect(local.startedHost).toBe(true)
-    expect(host.stdin.writableEnded).toBe(false)
+    // Connected: Helm reads nothing more from it and does not wait for it to exit.
+    expect(host.unrefed).toBe(true)
+    expect(host.stdout.destroyed).toBe(true)
 
-    await local.stop()
+    await local.close()
     expect(world.spawned[2]!.exitCode).toBe(0)
-    expect(host.stdin.writableEnded).toBe(true)
-    expect(host.exitCode).toBe(0)
+    expect(host.running).toBe(true)
+    expect(host.killed).toBe(false)
+  })
+
+  it('starts the host apart from Helm on macOS and Linux too', async () => {
+    const world = new World({ bridges: [exits(3), connects] })
+    const local = await startLocalHost(
+      { ...WIN_PLACES, dataDir: '/home/me/.config/Helm', repoRoot: '/src/my helm' },
+      world.deps({ platform: 'linux', env: {}, tmpdir: () => '/tmp' })
+    )
+    expect(world.spawned[1]!.options.detached).toBe(true)
+    await local.close()
+    expect(world.spawned[1]!.running).toBe(true)
+  })
+
+  it('tells the host the command that opens this Helm again: its program, and the app an unpackaged one runs', () => {
+    expect(desktopArgs(WIN_PLACES)).toEqual(['--desktop', WIN_PLACES.execPath, '--desktop-arg', WIN_PLACES.appPath])
+    expect(desktopArgs({ ...WIN_PLACES, packaged: true, execPath: 'C:\\Program Files\\Helm\\Helm.exe' })).toEqual([
+      '--desktop',
+      'C:\\Program Files\\Helm\\Helm.exe'
+    ])
+  })
+
+  it('waits out a host that is still exiting with the folders, then starts one and connects', async () => {
+    const world = new World({ bridges: [exits(3), connects], hosts: [foldersHeld, foldersHeld, listens] })
+    const starting = startLocalHost(WIN_PLACES, world.deps())
+
+    // Each try sets its listening deadline, then the wait before the next try.
+    await expect.poll(() => world.timers.length, { timeout: PATIENCE }).toBe(2)
+    expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, HOST_PROGRAM])
+    world.timers[1]!()
+    await expect.poll(() => world.timers.length, { timeout: PATIENCE }).toBe(4)
+    world.timers[3]!()
+
+    const local = await starting
+    expect(local.startedHost).toBe(true)
+    expect(world.programs()).toEqual([
+      `bridge ${WIN_PLACES.dataDir}\\host-client`,
+      HOST_PROGRAM,
+      HOST_PROGRAM,
+      HOST_PROGRAM,
+      `bridge ${WIN_PLACES.dataDir}\\host-client`
+    ])
+    expect(world.log.filter((line) => line.includes('waiting for it to exit'))).toHaveLength(1)
+    await local.close()
+  })
+
+  it('stops waiting for the folders once the start deadline has passed, and says so', async () => {
+    const tries = Math.ceil(HOST_START_DEADLINE_MS / HOST_RETRY_MS) + 1
+    const world = new World({ bridges: [exits(3)], hosts: Array.from({ length: tries }, () => foldersHeld) })
+    const starting = refusal(startLocalHost(WIN_PLACES, world.deps()))
+
+    for (let waited = 1; waited < tries; waited += 1) {
+      await expect.poll(() => world.timers.length, { timeout: PATIENCE }).toBe(waited * 2)
+      world.timers[waited * 2 - 1]!()
+    }
+    expect(await starting).toBe(
+      `Another local host still had Helm's host folders after ${HOST_START_DEADLINE_MS / 1000} seconds${TURN_OFF}`
+    )
+    expect(world.programs()).toHaveLength(1 + tries)
   })
 
   it('starts the host when Helm has paired with none and no code waits, then enrols through the one it started', async () => {
@@ -357,32 +452,32 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
 
     expect(world.programs()).toEqual([
       `bridge ${WIN_PLACES.dataDir}\\host-client`,
-      'host --until-stdin-closes',
+      HOST_PROGRAM,
       `bridge ${WIN_PLACES.dataDir}\\host-client`
     ])
     expect(local.startedHost).toBe(true)
-    await local.stop()
-    expect(world.spawned[1]!.exitCode).toBe(0)
+    await local.close()
+    expect(world.spawned[1]!.running).toBe(true)
   })
 
-  it('says Helm is not paired when the host it would start is already running, with no code for Helm', async () => {
+  it('says Helm is not paired when the host it would start is already running, with no code for Helm, and does not wait for it', async () => {
     const world = new World({
       bridges: [exits(4)],
       // A second host on the same folders refuses to start.
-      hosts: [(child) => queueMicrotask(() => child.exit(1))]
+      hosts: [foldersHeld]
     })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
       `Helm is not paired with the local host, and the host offered no one-time code for it to enrol with${TURN_OFF}`
     )
-    expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, 'host --until-stdin-closes'])
+    expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, HOST_PROGRAM])
   })
 
-  it('says Helm is not paired when the host it started still offers no code', async () => {
+  it('says Helm is not paired when the host it started still offers no code, and ends that host', async () => {
     const world = new World({ bridges: [exits(4), exits(4)] })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
       `Helm is not paired with the local host, and the host offered no one-time code for it to enrol with${TURN_OFF}`
     )
-    expect(world.spawned[1]!.stdin.writableEnded).toBe(true)
+    expect(world.spawned[1]!.killed).toBe(true)
   })
 
   it.each([
@@ -427,8 +522,8 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
       `The local host Helm started did not answer on its socket${TURN_OFF}`
     )
-    expect(world.spawned[1]!.stdin.writableEnded).toBe(true)
-    expect(world.spawned[1]!.exitCode).toBe(0)
+    expect(world.spawned[1]!.killed).toBe(true)
+    expect(world.spawned[1]!.running).toBe(false)
   })
 
   it('says the host stopped before it was ready when it exits without listening', async () => {
@@ -442,18 +537,15 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     expect(world.programs()).toHaveLength(2)
   })
 
-  it('stops a host that does not say it is listening by its deadline, and says so', async () => {
-    const world = new World({
-      bridges: [exits(3)],
-      hosts: [(child) => child.stdin.once('end', () => child.exit(0)).resume()]
-    })
+  it('ends a host that does not say it is listening by its deadline, and says so', async () => {
+    const world = new World({ bridges: [exits(3)], hosts: [() => undefined] })
     const starting = refusal(startLocalHost(WIN_PLACES, world.deps()))
     await expect.poll(() => world.timers.length, { timeout: PATIENCE }).toBe(1)
     world.timers[0]!()
     expect(await starting).toBe(
       `The local host did not say it was listening within ${HOST_START_DEADLINE_MS / 1000} seconds${TURN_OFF}`
     )
-    expect(world.spawned[1]!.exitCode).toBe(0)
+    expect(world.spawned[1]!.killed).toBe(true)
   })
 
   it('passes on the host’s refusal of the hello as its sentence', async () => {
@@ -480,7 +572,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
   it('logs nothing either program prints', async () => {
     const world = new World({ bridges: [exits(3), connects] })
     const local = await startLocalHost(WIN_PLACES, world.deps())
-    await local.stop()
+    await local.close()
     expect(world.log.length).toBeGreaterThan(0)
     for (const line of world.log) {
       expect(line).not.toContain('7Q2K')

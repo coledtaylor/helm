@@ -14,10 +14,15 @@ import { HostRefusedError, connectHost, type HostConnection } from './client'
  *   admin with the one-time code the host wrote when it has pinned no host,
  *   then carries protocol frames on its standard input and output. Its exit
  *   status says why it ended (`BRIDGE_EXIT`).
- * - `floti host --until-stdin-closes` is the host, started by Helm when no
- *   host answered, and stopped by Helm closing its standard input, which it
- *   holds open for as long as it wants the host: if Helm's main process dies
- *   outright, the pipe closes and the host goes with it.
+ * - `floti host --desktop <Helm> [--desktop-arg <app>]` is the host, started
+ *   by Helm when no host answered, and told which Helm started it (the
+ *   command that opens that Helm again). It outlives Helm: Helm reads only
+ *   its listening line, then lets go of it, and the host decides its own
+ *   exit - once it runs nothing and no client is attached, or when it is
+ *   stopped. Helm crashing or being killed ends nothing, and Helm's next start
+ *   connects to the same host through its bridge before it would start one.
+ *   A host still ending its sessions holds its folders until it has, so a
+ *   start that finds them held waits it out, up to the start deadline.
  *
  * Helm never opens the enrolment file or a key: the bridge reads them, and
  * says what went wrong as an exit status. Nothing either program prints is
@@ -41,8 +46,17 @@ export const BRIDGE_EXIT = {
 /** The line `floti host` prints once it listens, the first on its standard output. */
 const LISTENING = /^Floti host is listening at (.+)\.$/
 
-/** How long a host Helm started has to say it is listening. */
+/** How long a host Helm started has to say it is listening, and how long a start waits out a host still exiting. */
 export const HOST_START_DEADLINE_MS = 30_000
+
+/**
+ * `floti host`'s exit status when another host still has its folders
+ * (`ALREADY_RUNNING_EXIT` in `crates/host/src/lib.rs`).
+ */
+export const HOST_ALREADY_RUNNING_EXIT = 3
+
+/** How long a start waits before trying again while another host still has the folders. */
+export const HOST_RETRY_MS = 250
 
 /**
  * The longest socket path macOS takes, in bytes (`sun_path` is 104 with its
@@ -68,6 +82,10 @@ export interface HostPlaces {
    * the two serves it.
    */
   templatesDir: string
+  /** `process.execPath`: the program that is this Helm. */
+  execPath: string
+  /** `app.getAppPath()`: what an unpackaged Helm's program is given to run this app. */
+  appPath: string
 }
 
 /** A child process, as much of one as this needs; `child_process.spawn` returns one. */
@@ -77,12 +95,27 @@ export interface HostChild {
   readonly stderr: Readable | null
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this
   once(event: 'error', listener: (error: Error) => void): this
+  /** Ends the program: only ever a host Helm started that never served it. */
+  kill(): boolean
+  /** Lets Helm exit without waiting for the program. */
+  unref(): void
 }
 
 export interface SpawnOptions {
   env: NodeJS.ProcessEnv
-  stdio: ['pipe', 'pipe', 'pipe']
+  /** A bridge's three pipes; a host's standard output only, for its listening line. */
+  stdio: ['pipe', 'pipe', 'pipe'] | ['ignore', 'pipe', 'ignore']
   windowsHide: true
+  /**
+   * A host apart from Helm, so it outlives Helm however Helm ends. On macOS
+   * and Linux it leads a session of its own, so nothing sent to Helm's
+   * process group (a terminal's Ctrl+C or hang-up) reaches it. On Windows it
+   * is left out of the job Node puts every other child in, which ends them
+   * all when Helm's process ends; it then has no console, so the host starts
+   * every console program it runs outside a terminal with no window
+   * (`windowless` in the host's platform launcher).
+   */
+  detached?: boolean
 }
 
 export interface LauncherDeps {
@@ -98,13 +131,16 @@ export interface LauncherDeps {
   clearTimeout: (timer: unknown) => void
 }
 
-/** A connection to the local host, and the host itself when Helm started it. */
+/** A connection to the local host. */
 export interface LocalHost {
   readonly connection: HostConnection
   /** Whether Helm started the host, rather than finding one running. */
   readonly startedHost: boolean
-  /** Closes the connection, then stops the host if Helm started it; resolves once both have exited. */
-  stop(): Promise<void>
+  /**
+   * Closes the connection and lets go of the bridge; resolves once the bridge
+   * has exited. The host is never stopped here: it decides its own exit.
+   */
+  close(): Promise<void>
 }
 
 /** Why the desktop could not reach the local host, as one sentence that says the setting can be turned off. */
@@ -114,6 +150,15 @@ export class LocalHostError extends Error {
 
 function pathsFor(platform: NodeJS.Platform): typeof posix {
   return platform === 'win32' ? win32 : posix
+}
+
+/**
+ * What `floti host` is told about the Helm starting it: the command that
+ * opens this Helm again, which is its program and, unpackaged, the app it
+ * runs.
+ */
+export function desktopArgs(places: HostPlaces): string[] {
+  return ['--desktop', places.execPath, ...(places.packaged ? [] : ['--desktop-arg', places.appPath])]
 }
 
 /** Where `floti` is looked for: beside a packaged build's resources, or in the checkout's debug build. */
@@ -255,7 +300,7 @@ function clause(sentence: string): string {
   return sentence.trim().replace(/\.$/, '')
 }
 
-/** Closes a child's standard input, which ends the bridge's connection or stops the host. */
+/** Closes a child's standard input, which ends the bridge's connection. */
 function closeInput(child: HostChild): void {
   if (child.stdin !== null && !child.stdin.writableEnded && !child.stdin.destroyed) child.stdin.end()
 }
@@ -278,6 +323,13 @@ export async function startLocalHost(places: HostPlaces, deps: LauncherDeps): Pr
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
   }
+  const hostOptions: SpawnOptions = {
+    env,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+    detached: true
+  }
+  const hostArgs = ['host', ...desktopArgs(places)]
 
   const bridge = async (): Promise<BridgeAttempt> => {
     const child = deps.spawn(binary, ['bridge', folder], options)
@@ -321,7 +373,9 @@ export async function startLocalHost(places: HostPlaces, deps: LauncherDeps): Pr
     )
     const unpaired = attempt
     try {
-      host = await startHost(binary, options, deps)
+      // A host still ending its sessions does not answer but holds the
+      // folders; one that answers and only refuses Helm is not waited for.
+      host = await startHost(binary, hostArgs, hostOptions, deps, first === BRIDGE_EXIT.unreachable)
     } catch (error) {
       if (first === BRIDGE_EXIT.notPinned && error instanceof HostEndedEarly && 'exit' in unpaired) {
         throw bridgeFailure(unpaired.exit, binary, false)
@@ -331,32 +385,32 @@ export async function startLocalHost(places: HostPlaces, deps: LauncherDeps): Pr
     try {
       attempt = await bridge()
     } catch (error) {
-      await host.stop()
+      await host.abandon()
       throw error
     }
   }
   if ('exit' in attempt) {
     const why = bridgeFailure(attempt.exit, binary, host !== null)
     deps.log(`host: could not connect (${describeExit(attempt.exit)})`)
-    await host?.stop()
+    await host?.abandon()
     throw why
   }
 
   const { connection, exited, child } = attempt
   void exited.then((exit) => deps.log(`host: floti bridge ended (${describeExit(exit)})`))
-  const started = host
-  let stopping: Promise<void> | null = null
+  // Connected: the host Helm started is the host's own from here on.
+  host?.release()
+  let closing: Promise<void> | null = null
   return {
     connection,
-    startedHost: started !== null,
-    stop: () => {
-      stopping ??= (async () => {
+    startedHost: host !== null,
+    close: () => {
+      closing ??= (async () => {
         connection.close()
         closeInput(child)
         await exited
-        await started?.stop()
       })()
-      return stopping
+      return closing
     }
   }
 }
@@ -424,20 +478,69 @@ function describeExit(exit: Exit): string {
   return exit.code === null ? `stopped by ${exit.signal ?? 'a signal'}` : `status ${exit.code}`
 }
 
+/** A host Helm started and has not yet connected through. */
 interface StartedHost {
-  stop(): Promise<void>
+  /** Helm is through with it: it stops reading it and exits without waiting for it. */
+  release(): void
+  /** Ends it, for a host Helm could not connect through: it never served anyone. */
+  abandon(): Promise<void>
+}
+
+/** Waits `ms` on the launcher's clock. */
+function delay(deps: Pick<LauncherDeps, 'setTimeout'>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    deps.setTimeout(resolve, ms)
+  })
 }
 
 /**
- * Starts `floti host --until-stdin-closes` and resolves once it says it is
- * listening. Its standard input stays open, held by Helm, until `stop`.
+ * Starts the host and resolves once it says it is listening. With
+ * `waitOut`, a host that finds another still holding its folders is tried
+ * again until the start deadline: one that is ending its sessions lets them
+ * go once it has.
  */
-async function startHost(binary: string, options: SpawnOptions, deps: LauncherDeps): Promise<StartedHost> {
-  const child = deps.spawn(binary, ['host', '--until-stdin-closes'], options)
+async function startHost(
+  binary: string,
+  args: string[],
+  options: SpawnOptions,
+  deps: LauncherDeps,
+  waitOut: boolean
+): Promise<StartedHost> {
+  for (let tries = Math.ceil(HOST_START_DEADLINE_MS / HOST_RETRY_MS); ; tries -= 1) {
+    try {
+      return await startHostOnce(binary, args, options, deps)
+    } catch (error) {
+      if (!(error instanceof HostFoldersHeld) || !waitOut) throw error
+      if (tries <= 0) {
+        throw failure(
+          `Another local host still had Helm's host folders after ${HOST_START_DEADLINE_MS / 1000} seconds`
+        )
+      }
+      if (tries === Math.ceil(HOST_START_DEADLINE_MS / HOST_RETRY_MS)) {
+        deps.log('host: another host still has the folders; waiting for it to exit')
+      }
+      await delay(deps, HOST_RETRY_MS)
+    }
+  }
+}
+
+/** Starts `floti host` once, and resolves once it says it is listening. */
+async function startHostOnce(
+  binary: string,
+  args: string[],
+  options: SpawnOptions,
+  deps: LauncherDeps
+): Promise<StartedHost> {
+  const child = deps.spawn(binary, args, options)
   const exited = exitOf(child)
-  child.stderr?.resume()
-  const stop = async (): Promise<void> => {
-    closeInput(child)
+  const release = (): void => {
+    // What it says after its listening line is not read: a host whose
+    // console has gone writes on regardless.
+    child.stdout?.destroy()
+    child.unref()
+  }
+  const abandon = async (): Promise<void> => {
+    child.kill()
     await exited
   }
 
@@ -452,7 +555,7 @@ async function startHost(binary: string, options: SpawnOptions, deps: LauncherDe
         const line = pending.slice(0, newline).replace(/\r$/, '')
         pending = pending.slice(newline + 1)
         if (LISTENING.test(line)) {
-          // What it says after that is not read, only drained.
+          // What it says after that is only drained until Helm lets go.
           stdout.off('data', onData)
           stdout.resume()
           resolve('listening')
@@ -472,13 +575,14 @@ async function startHost(binary: string, options: SpawnOptions, deps: LauncherDe
   deps.clearTimeout(timer)
   if (outcome === 'listening') {
     deps.log('host: the local host Helm started is listening')
-    return { stop }
+    return { release, abandon }
   }
   if (outcome === 'late') {
-    await stop()
+    await abandon()
     throw failure(`The local host did not say it was listening within ${HOST_START_DEADLINE_MS / 1000} seconds`)
   }
   if (outcome.error !== undefined) throw couldNotRun(binary, outcome.error)
+  if (outcome.code === HOST_ALREADY_RUNNING_EXIT) throw new HostFoldersHeld()
   deps.log(`host: the local host Helm started stopped before it was ready (${describeExit(outcome)})`)
   throw new HostEndedEarly(
     `${
@@ -489,5 +593,12 @@ async function startHost(binary: string, options: SpawnOptions, deps: LauncherDe
   )
 }
 
-/** A host Helm started that exited before it said it was listening, as one already running on its folders does. */
+/** A host Helm started that exited before it said it was listening. */
 class HostEndedEarly extends LocalHostError {}
+
+/** A host Helm started that found another host still holding its folders or socket. */
+class HostFoldersHeld extends HostEndedEarly {
+  constructor() {
+    super(`Another local host is running on Helm's host folders; ${TURN_OFF}`)
+  }
+}

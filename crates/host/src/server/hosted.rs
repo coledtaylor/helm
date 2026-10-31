@@ -3,12 +3,20 @@
 //! list, rename, close and resize, the restore offer, the plain terminals,
 //! and the stop that ends them all.
 //!
+//! Which paired device started each running session, and opened each plain
+//! terminal, is kept here in memory, from the device each attached client's
+//! connection proved: sessions never outlive the host, so nothing about them
+//! needs to outlive it either. A device's deliberate quit ends what it started
+//! (`host:quit`), and how many sessions, terminals and clients there are is
+//! one watch ([`Occupancy`]) that the host's own exit follows.
+//!
 //! Every launch is one path ([`Plan`] through `Hosted::run`): a backend, a
 //! folder, a name made unique against the running sessions, and a
 //! composition the backend turns into its own flags. A start, a launch, a
 //! profile's launch, a resume and a restore differ only in where each of
 //! those comes from.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,15 +24,17 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use floti_protocol::channels::common::SessionRecord;
-use floti_protocol::channels::host::HostStopReason;
+use floti_protocol::channels::host::{DeviceSession, HostStopReason};
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, HistorySession, LaunchProfileRequest, LaunchSessionRequest,
-    LaunchedProfile, LaunchedSession, Profile, RenameSessionRequest, RestorableSession,
-    RestoreOffer, RestoreSessionsRequest, RestoreSessionsResult, RestoredSession,
-    ResumeSessionRequest, ResumedSession, SessionResizeRequest, StartSessionRequest,
-    UnrestoredSession,
+    LaunchedProfile, LaunchedSession, Profile, PtermOpenRequest, PtermOpened, RenameSessionRequest,
+    RestorableSession, RestoreOffer, RestoreSessionsRequest, RestoreSessionsResult,
+    RestoredSession, ResumeSessionRequest, ResumedSession, SessionResizeRequest,
+    StartSessionRequest, UnrestoredSession,
 };
+use floti_protocol::noise::PublicKey;
 use floti_protocol::{BackendId, Knowable};
+use tokio::sync::watch;
 
 use super::agent_tools::HostAgentTools;
 use super::records::{self, HostLedger, LostRow};
@@ -79,6 +89,37 @@ pub(crate) struct Hosted {
     /// The host's agent tools, once it has built them. A launch before then,
     /// or on a host without them, is given none.
     agent_tools: OnceLock<Arc<HostAgentTools>>,
+    /// Who is here: each attached client's device, and the device that
+    /// started each running session and opened each plain terminal.
+    presence: Mutex<Presence>,
+    occupancy: watch::Sender<Occupancy>,
+}
+
+/// How much is keeping the host busy: its running sessions and plain
+/// terminals, and the clients attached to it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Occupancy {
+    pub sessions: usize,
+    pub terminals: usize,
+    pub clients: usize,
+}
+
+impl Occupancy {
+    /// Nothing runs and nobody is attached.
+    pub fn is_idle(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The devices behind what the host is running, in memory only.
+#[derive(Default)]
+struct Presence {
+    /// Each attached client's device: the key its connection proved.
+    clients: HashMap<ClientId, PublicKey>,
+    /// The device that started each running session.
+    sessions: HashMap<SessionId, PublicKey>,
+    /// The device that opened each running plain terminal.
+    terminals: HashMap<SessionId, PublicKey>,
 }
 
 impl Hosted {
@@ -110,7 +151,134 @@ impl Hosted {
             offer: Mutex::new(Some(lost)),
             stopped: AtomicBool::new(false),
             agent_tools: OnceLock::new(),
+            presence: Mutex::new(Presence::default()),
+            occupancy: watch::Sender::new(Occupancy::default()),
         })
+    }
+
+    /// `client` has been welcomed, on a connection that proved `device`.
+    pub fn attach_client(&self, client: ClientId, device: PublicKey) {
+        lock(&self.presence).clients.insert(client, device);
+        self.settle();
+    }
+
+    /// `client`'s connection has ended.
+    pub fn detach_client(&self, client: ClientId) {
+        lock(&self.presence).clients.remove(&client);
+        self.settle();
+    }
+
+    /// The device `client`'s connection proved, while it is attached.
+    pub fn device_of(&self, client: ClientId) -> Option<PublicKey> {
+        lock(&self.presence).clients.get(&client).copied()
+    }
+
+    /// How busy the host is, now and as it changes.
+    pub fn occupancy(&self) -> watch::Receiver<Occupancy> {
+        self.occupancy.subscribe()
+    }
+
+    /// Counts again what runs and who is attached, forgetting the devices of
+    /// sessions and terminals that have ended, and tells the watchers when
+    /// the count moved. Called on every start, attach, exit and leave.
+    pub fn settle(&self) {
+        let sessions = self.sessions.list();
+        let terminals = self.terminals.list();
+        let clients = {
+            let mut presence = lock(&self.presence);
+            presence
+                .sessions
+                .retain(|id, _| sessions.iter().any(|session| session.id() == *id));
+            presence
+                .terminals
+                .retain(|id, _| terminals.iter().any(|terminal| terminal.id() == *id));
+            presence.clients.len()
+        };
+        let now = Occupancy {
+            sessions: sessions.len(),
+            terminals: terminals.len(),
+            clients,
+        };
+        self.occupancy.send_if_modified(|occupancy| {
+            let moved = *occupancy != now;
+            *occupancy = now;
+            moved
+        });
+    }
+
+    /// The running sessions `device` started, oldest first.
+    pub fn started_by(&self, device: &PublicKey) -> Vec<DeviceSession> {
+        let mine = opened_by(&lock(&self.presence).sessions, device);
+        self.sessions
+            .list()
+            .iter()
+            .filter(|session| mine.contains(&session.id()))
+            .filter_map(|session| {
+                let record = self.record(session.id()).ok()?;
+                Some(DeviceSession {
+                    id: record.id,
+                    name: label_of(&record),
+                })
+            })
+            .collect()
+    }
+
+    /// `device` is quitting on purpose: the plain terminals it opened end,
+    /// and with `end` so do the running sessions it started, each recorded
+    /// as exited and its whole tree ended, as a plain stop ends them. What
+    /// other devices started is left running. The ids of the sessions ended.
+    pub fn quit(&self, device: &PublicKey, end: bool) -> Vec<u64> {
+        let (sessions, terminals) = {
+            let presence = lock(&self.presence);
+            (
+                opened_by(&presence.sessions, device),
+                opened_by(&presence.terminals, device),
+            )
+        };
+        for terminal in terminals.iter().filter_map(|id| self.terminals.find(*id)) {
+            if let Err(err) = terminal.end_now() {
+                eprintln!("floti host: {err}");
+            }
+        }
+        if !end {
+            return Vec::new();
+        }
+        let running: Vec<Arc<Session>> = sessions
+            .iter()
+            .filter_map(|id| self.sessions.get(*id))
+            .collect();
+        let ids: Vec<SessionId> = running.iter().map(|session| session.id()).collect();
+        if let Err(err) = records::record_stopped(&self.ledger.store(), &ids) {
+            eprintln!("floti host: {err}");
+        }
+        for session in &running {
+            if let Err(err) = session.end_now() {
+                eprintln!("floti host: {err}");
+            }
+        }
+        ids.iter()
+            .filter_map(|id| u64::try_from(id.0).ok())
+            .collect()
+    }
+
+    /// Opens a plain terminal for `client`, or reattaches to its folder's
+    /// own; a new one is counted as opened by `client`'s device.
+    pub fn open_terminal(
+        &self,
+        client: ClientId,
+        request: PtermOpenRequest,
+    ) -> std::result::Result<PtermOpened, String> {
+        let opened = self.terminals.open(client, request)?;
+        if let Some(device) = self.device_of(client)
+            && let Ok(id) = i64::try_from(opened.id)
+        {
+            lock(&self.presence)
+                .terminals
+                .entry(SessionId(id))
+                .or_insert(device);
+        }
+        self.settle();
+        Ok(opened)
     }
 
     /// Gives every launch from now on the host's agent tools. Only the first
@@ -554,6 +722,10 @@ impl Hosted {
                 backend: backend.id().clone(),
                 origin,
             })?;
+            if let Some(device) = self.device_of(client) {
+                lock(&self.presence).sessions.insert(session.id(), device);
+            }
+            self.settle();
             Ok((
                 session,
                 overlays,
@@ -952,6 +1124,35 @@ fn folder_name(folder: &Path) -> String {
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "session".to_owned())
+}
+
+/// Settles the host's occupancy as each session and plain terminal ends,
+/// until the host has gone and its exits close.
+pub(crate) async fn settle_on_exits(
+    mut sessions: tokio::sync::broadcast::Receiver<records::ExitNotice>,
+    mut terminals: tokio::sync::broadcast::Receiver<crate::session::TerminalExit>,
+    hosted: std::sync::Weak<Hosted>,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+    loop {
+        // A missed exit is still an exit: settling counts afresh.
+        let ended = tokio::select! {
+            exit = sessions.recv() => !matches!(exit, Err(RecvError::Closed)),
+            exit = terminals.recv() => !matches!(exit, Err(RecvError::Closed)),
+        };
+        let Some(hosted) = hosted.upgrade().filter(|_| ended) else {
+            return;
+        };
+        hosted.settle();
+    }
+}
+
+/// The ids in `map` that `device` started or opened.
+fn opened_by(map: &HashMap<SessionId, PublicKey>, device: &PublicKey) -> Vec<SessionId> {
+    map.iter()
+        .filter(|(_, by)| *by == device)
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

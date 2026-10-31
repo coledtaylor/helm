@@ -2,8 +2,10 @@
 //!
 //! Requests: the session list; start, the launcher's launch, a profile's
 //! launch and a resume from history; rename, resize, focus and close with its
-//! confirmation; the restore offer and restore; and the plain terminals'
-//! open, close, resize and shell list.
+//! confirmation; the restore offer and restore; the plain terminals' open,
+//! close, resize and shell list; and what a device's deliberate quit asks:
+//! the sessions it started (`host:deviceSessions`) and the quit itself
+//! (`host:quit`).
 //!
 //! Events: `session:exit` with each finished row, `session:notify`,
 //! `session:confirm` when a close has to be agreed to first,
@@ -37,6 +39,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use floti_protocol::channel::Router;
+use floti_protocol::channels::host::{HostDeviceSessions, HostQuit};
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, CloseSessionResult, HistoryResume, LiveSession, ProfileLaunch, PtermClose,
     PtermExit, PtermExited, PtermOpen, PtermResize, PtermShells, PtermStreamOpen, PtermTerminal,
@@ -243,6 +246,25 @@ impl Sessions {
         Ok(())
     }
 
+    /// `client`'s device is quitting on purpose: what it opened ends, as
+    /// [`Hosted::quit`] says. A session ended this way was meant to end, so
+    /// its exit is worth a notification for nobody.
+    fn quit(&self, client: ClientId, end: bool) -> Result<(), String> {
+        let device = self
+            .hosted
+            .device_of(client)
+            .ok_or_else(|| "This connection has no paired device to quit.".to_owned())?;
+        if end {
+            let mut focus = lock(&self.focus);
+            for session in self.hosted.started_by(&device) {
+                focus.closing(session.id);
+            }
+        }
+        self.hosted.quit(&device, end);
+        self.moved();
+        Ok(())
+    }
+
     fn end(&self, id: u64) {
         // Before the session is ended, so its exit is judged as closed.
         lock(&self.focus).closing(id);
@@ -330,13 +352,20 @@ impl Feature for Sessions {
                 Ok(())
             })
             .handle::<SessionRestorable>(|()| Ok(hosted.restorable()))
+            .handle::<HostDeviceSessions>(move |()| {
+                Ok(hosted
+                    .device_of(client)
+                    .map(|device| hosted.started_by(&device))
+                    .unwrap_or_default())
+            })
+            .handle::<HostQuit>(move |request| self.quit(client, request.end))
             .handle::<SessionRestore>(move |request| {
                 let restored = hosted.restore(client, request);
                 self.moved();
                 Ok(restored)
             })
             .handle::<PtermShells>(|()| Ok(terminals.shells()))
-            .handle::<PtermOpen>(move |request| terminals.open(client, request))
+            .handle::<PtermOpen>(move |request| hosted.open_terminal(client, request))
             .handle::<PtermClose>(|request| {
                 terminals.close(request.id);
                 Ok(())

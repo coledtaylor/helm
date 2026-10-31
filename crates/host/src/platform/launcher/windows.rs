@@ -26,6 +26,12 @@ impl ProgramLauncher for Native {
         find_program(program)
     }
 
+    fn windowless(&self, command: &mut std::process::Command) {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
     #[cfg(any(test, feature = "testkit"))]
     fn write_wrapper_script(&self, folder: &Path, name: &str, program: &Path) -> String {
         let file = format!("{name}.cmd");

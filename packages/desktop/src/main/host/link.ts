@@ -11,11 +11,13 @@ import type { HostSettingsPatch } from './protocol'
  * the shell a terminal opens - and reads nothing else back: everything else in
  * the host's settings is the host's.
  *
- * Stopping is bounded: a host that does not answer in time is left to its
- * standard input closing, which stops it as Helm exits.
+ * Helm never stops the host. A deliberate quit tells it what becomes of what
+ * this device started (`host:quit`) and lets go; the host decides its own
+ * exit. Quitting is bounded: a host that does not answer in time is let go
+ * of all the same, and a Helm that crashes or is killed tells it nothing.
  */
 
-/** How long a quit waits for the host to stop, and then for both programs to exit. */
+/** How long a quit waits for the host's answer, and then for the bridge to exit. */
 export const HOST_STOP_DEADLINE_MS = 10_000
 
 export interface HostLink {
@@ -34,11 +36,13 @@ export interface HostLink {
   /** Writes Helm's settings for the host's sessions to the host connected now. */
   writeSettings(): void
   /**
-   * Ends the sessions and stops the host when Helm started it, then lets go
-   * of both programs; resolves once both have exited, or the deadline passed.
-   * Nothing connects after it.
+   * Helm is quitting on purpose: tells the host that the plain terminals this
+   * device opened end, and with `end` the sessions it started too, then lets
+   * go of the connection and its bridge; resolves once the bridge has exited,
+   * or the deadline passed. The host is never stopped here. Nothing connects
+   * after it.
    */
-  stop(): Promise<void>
+  quit(options: { end: boolean }): Promise<void>
 }
 
 export interface HostLinkDeps {
@@ -83,7 +87,7 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
   const connect = async (): Promise<HostConnection> => {
     const started = await deps.start()
     if (stopping !== null) {
-      await started.stop()
+      await started.close()
       throw new Error('Helm is quitting.')
     }
     local = started
@@ -133,18 +137,14 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
       if (connection !== undefined) void writeSettings(connection)
     },
 
-    stop() {
+    quit({ end }) {
       stopping ??= (async () => {
         if (attempt !== null) await bounded(attempt)
         const host = local
         if (host === null) return
         local = null
-        if (host.startedHost) {
-          // A plain stop: every session ends and is recorded as ended. Its
-          // answer may not arrive - the host closes the connection as it goes.
-          await bounded(host.connection.request('host:stop', { reason: 'stop' }))
-        }
-        await bounded(host.stop())
+        await bounded(host.connection.request('host:quit', { end }))
+        await bounded(host.close())
       })()
       return stopping
     }

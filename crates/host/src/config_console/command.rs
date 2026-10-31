@@ -102,6 +102,7 @@ pub fn run(
     if let Some(cwd) = cwd {
         process.current_dir(cwd);
     }
+    launcher::Native.windowless(&mut process);
     let mut child = match process.spawn() {
         Ok(child) => child,
         Err(err) => {

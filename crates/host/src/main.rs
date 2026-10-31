@@ -1,29 +1,37 @@
 //! `floti`: the one binary. `floti host` runs the daemon that starts at the
-//! user's sign-in; `floti host --until-stdin-closes` runs it for a program
-//! that started it, ending with that program. `floti bridge` connects a
-//! client from its folder to the host on this computer and relays the
-//! protocol over standard input and output.
+//! user's sign-in; `floti host --desktop <program> [--desktop-arg <arg>]...`
+//! runs it for the desktop that started it, which it outlives, exiting by
+//! itself once nothing runs and no client is attached. `floti bridge`
+//! connects a client from its folder to the host on this computer and relays
+//! the protocol over standard input and output.
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 
-use floti_host::HostOptions;
 use floti_host::bridge::{BridgeExit, run_bridge};
+use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions};
 
-const USAGE: &str = "usage: floti host [--until-stdin-closes]\n       floti bridge <client folder>";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>";
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|first| first == "host") {
+        return match host_options(&args[1..]) {
+            Some(options) => host(options),
+            None => usage(),
+        };
+    }
+    let args: Vec<String> = args
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
     match args
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["host"] => host(HostOptions::default()),
-        ["host", "--until-stdin-closes"] => host(HostOptions {
-            until_stdin_closes: true,
-        }),
         ["bridge", folder] if !folder.is_empty() => {
             ExitCode::from(run_bridge(Path::new(folder)).code())
         }
@@ -35,16 +43,43 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        _ => {
-            eprintln!("{USAGE}");
-            ExitCode::from(BridgeExit::Usage.code())
+        _ => usage(),
+    }
+}
+
+fn usage() -> ExitCode {
+    eprintln!("{USAGE}");
+    ExitCode::from(BridgeExit::Usage.code())
+}
+
+/// What follows `host`: nothing, or `--desktop <program>` and any number of
+/// `--desktop-arg <arg>`, each a path or argument kept as the OS gave it.
+fn host_options(args: &[OsString]) -> Option<HostOptions> {
+    let mut args = args.iter();
+    let mut desktop: Option<DesktopCommand> = None;
+    while let Some(flag) = args.next() {
+        let value = args.next().filter(|value| !value.is_empty())?.clone();
+        if flag == "--desktop" && desktop.is_none() {
+            desktop = Some(DesktopCommand {
+                program: value,
+                args: Vec::new(),
+            });
+        } else if flag == "--desktop-arg" {
+            desktop.as_mut()?.args.push(value);
+        } else {
+            return None;
         }
     }
+    Some(HostOptions { desktop })
 }
 
 fn host(options: HostOptions) -> ExitCode {
     match floti_host::run_host(options) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(err @ Error::AlreadyRunning(_)) => {
+            eprintln!("floti host: {err}");
+            ExitCode::from(ALREADY_RUNNING_EXIT)
+        }
         Err(err) => {
             eprintln!("floti host: {err}");
             ExitCode::FAILURE

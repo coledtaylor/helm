@@ -99,6 +99,11 @@ impl Terminals {
             .and_then(|id| self.host.get(SessionId(id)))
     }
 
+    /// Terminal `id`, by the number its ledger gave it, while its shell runs.
+    pub fn find(&self, id: SessionId) -> Option<Arc<Session>> {
+        self.host.get(id)
+    }
+
     /// Every terminal still running.
     pub fn list(&self) -> Vec<Arc<Session>> {
         self.host.list()
