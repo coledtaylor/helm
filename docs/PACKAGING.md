@@ -140,8 +140,12 @@ untouched one; deleting the directory is what puts the originals back.
   sessions, and a running `floti.exe` cannot be replaced. electron-builder's
   own check would force-stop every process under the install folder, the host
   included, ending its sessions without a word. So `build/installer.nsh`
-  (`nsis.include`) defines `customCheckAppRunning`, which runs the
-  **installed** `resources\floti.exe` before anything is replaced:
+  (`nsis.include`) defines `customCheckAppRunning`, which, when a Helm with a
+  `resources\floti.exe` is installed, runs the floti.exe **this installer
+  carries** before anything is replaced. The installer embeds
+  `dist-host\floti.exe`, the same file it installs, and writes it to its own
+  temporary folder, so the first update over a Helm whose floti.exe predates
+  `update-stop` asks too.
   `floti update-stop "%APPDATA%\Helm\host-client" --ask` connects with Helm's
   client folder keys, as `floti bridge` does, so the device key never leaves
   that process, and it never pairs or enrols. When the host runs sessions it
@@ -153,15 +157,14 @@ untouched one; deleting the directory is what puts the originals back.
   so Helm's next start offers them back once) and returns once the host has
   exited. A host running no session (status 7) is stopped the same way with
   no question. Anything else asks nothing and leaves the host to the default
-  check: no `floti.exe` installed yet, one too old to know `update-stop`
-  (status 2), no host answering (status 3) or a client folder Helm never
-  paired (status 4). Then electron-builder's own check runs, which the macro
+  check: no `floti.exe` installed yet, no host answering (status 3), a client
+  folder Helm never paired (status 4) or a host it cannot talk to. Then electron-builder's own check runs, which the macro
   still inserts, with the `getProcessInfo.nsh` include and `Var pid` that
   defining the macro drops. A silent install (`/S`) answers OK, as that check
   does. The uninstaller runs the default check alone. On macOS and Linux files
   are replaced under a running host and nothing stops it. The decision is
   tested in `crates/host` (`update_stop.rs` and `tests/update_stop.rs`);
-  nothing tests it by running an installer.
+  nothing in the suite runs an installer.
 
 ## Releasing
 

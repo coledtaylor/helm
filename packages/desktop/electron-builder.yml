@@ -122,9 +122,10 @@ nsis:
   runAfterFinish: true
   createStartMenuShortcut: true
   createDesktopShortcut: false
-  # Before replacing anything, asks the installed floti.exe how many sessions
-  # this PC's local host runs and, when it runs any, says that installing ends
-  # them; OK stops the host for an update, Cancel quits. A running floti.exe
+  # Before replacing anything, asks this PC's local host, through the floti.exe
+  # the installer carries (dist-host/floti.exe), how many sessions it runs and,
+  # when it runs any, says that installing ends them; OK stops the host for an
+  # update, Cancel quits. A running floti.exe
   # cannot be replaced. Named rather than left to the `build/installer.nsh`
   # default, so a moved file fails the build. docs/PACKAGING.md has the rest.
   include: build/installer.nsh
