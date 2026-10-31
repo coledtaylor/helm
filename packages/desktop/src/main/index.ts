@@ -421,11 +421,6 @@ function startApp(options: AppOptions = {}): void {
    */
   let browserMcp: BrowserMcpHost | null = null
   /**
-   * What tells the local host a plugin's tools came or went, while sessions
-   * run there: set once the desktop host below exists.
-   */
-  let hostPluginToolsChanged = (): void => undefined
-  /**
    * Helm's sessions as plugins see them, which needs the session host and the
    * activity service made below. Until then there are none, which was true a
    * moment ago; the first `sessions` event corrects a page that asked early.
@@ -451,11 +446,10 @@ function startApp(options: AppOptions = {}): void {
     bridge: pluginBridge,
     stylesheet: pluginStylesheet,
     // A plugin's tools coming or going can be the difference between a
-    // listener and none; with sessions in the local host, the host serves
-    // them and is offered them again.
+    // listener and none. With sessions in the local host, the host's list
+    // says which plugins offer tools (`host/plugins.ts`).
     onToolsChanged: () => {
       void browserMcp?.sync()
-      hostPluginToolsChanged()
     },
     // Called only once the user has agreed in the window, which is long after
     // the session host below exists.
@@ -508,16 +502,12 @@ function startApp(options: AppOptions = {}): void {
         confirm: options.confirm ?? sessionConfirm(() => win),
         onActivityChange: () => plugins.sessionsChanged(),
         browserTools: () => browserMcp,
-        plugins: {
-          servers: () => plugins.toolServers(),
-          call: (request, signal) => plugins.callTool(request, signal)
-        },
+        runPluginTool: (request, signal) => plugins.runTool(request, signal),
         pluginBackground
       })
     : null
   if (desktopHost !== null) {
     pluginBackgroundGone = (reason) => desktopHost.plugins.backgroundGone(reason)
-    hostPluginToolsChanged = () => desktopHost.pluginRelay.offer()
     // An artifact frame keeps the window's scheme, answered from the host's bytes.
     serveArtifactsFrom((url) => desktopHost.files.artifactBytes(url))
     void desktopHost.link.connection().catch((err: unknown) => {

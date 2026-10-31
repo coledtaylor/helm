@@ -56,7 +56,8 @@ export const TOOL_HANDLER_WAIT_MS = 5000
 
 export function installBridge(win: Window, bootText: string | null): HelmBridge {
   const doc = win.document
-  let theme = readBoot(bootText) ?? fallbackTheme()
+  const boot = readBoot(bootText)
+  let theme = boot.theme ?? fallbackTheme()
   let context = readContext(win)
   let visible = false
   // Off macOS until CONNECT says otherwise.
@@ -180,6 +181,9 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       return
     }
     switch (message.name) {
+      case 'channel':
+        deliverChannel?.(message.data)
+        return
       case 'theme':
         theme = message.data as HelmTheme
         applyTheme(doc, theme)
@@ -201,6 +205,21 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
         return
     }
   }
+
+  /*
+   * A page drawn from the local host's files has its `BroadcastChannel`s
+   * relayed through the host, so a message reaches the plugin's pages on
+   * every client and its background page. Every other page keeps the
+   * browser's own.
+   */
+  const deliverChannel =
+    boot.channels === 'host'
+      ? installChannelRelay(win, (name, message, token) => {
+          // Nothing to answer: a post that could not be sent is lost, as one
+          // to a page that has gone is.
+          call<null>(CHANNEL_POST, [name, message, token]).catch(() => undefined)
+        })
+      : null
 
   win.addEventListener('message', (event: MessageEvent) => {
     // Only the frame's own parent hands out the port, and only once: a second
@@ -433,13 +452,159 @@ function abortError(message = 'The operation was aborted.'): DOMException {
   return new DOMException(message, 'AbortError')
 }
 
-function readBoot(text: string | null): HelmTheme | null {
-  if (text === null) return null
+/** What the page's script tag carries: its first theme, and whether its channels are relayed through the local host. */
+interface Boot {
+  theme: HelmTheme | null
+  channels: 'host' | null
+}
+
+function readBoot(text: string | null): Boot {
+  if (text === null) return { theme: null, channels: null }
   try {
-    const boot = JSON.parse(text) as { theme?: HelmTheme }
-    return boot.theme ?? null
+    const boot = JSON.parse(text) as { theme?: HelmTheme; channels?: unknown }
+    return { theme: boot.theme ?? null, channels: boot.channels === 'host' ? 'host' : null }
   } catch {
-    return null
+    return { theme: null, channels: null }
+  }
+}
+
+/** The bridge's own method a channel post goes through; not part of `window.helm`. */
+export const CHANNEL_POST = 'channel.post'
+
+/**
+ * `BroadcastChannel`, relayed: a post goes to the local host, which hands it to
+ * every page of the plugin on every client, this one included, and the
+ * channel object that posted it is skipped by its token. A message is limited
+ * to what the protocol carries - null, booleans, numbers, strings, bytes,
+ * arrays and plain objects - and anything else throws a `DataCloneError`, as
+ * structured clone does, with nothing sent.
+ *
+ * Returns what hands a delivered message to the page's open channels.
+ */
+function installChannelRelay(win: Window, send: (name: string, message: unknown, token: string) => void): (data: unknown) => void {
+  const realm = win as unknown as typeof globalThis
+  const open = new Map<string, Set<RelayedChannel>>()
+  const deliver = Symbol('deliver')
+
+  class RelayedChannel extends realm.EventTarget {
+    readonly #name: string
+    readonly #token = realm.crypto.randomUUID()
+    #closed = false
+    #onmessage: ((event: MessageEvent) => unknown) | null = null
+    #onmessageerror: ((event: MessageEvent) => unknown) | null = null
+
+    constructor(...args: unknown[]) {
+      super()
+      if (args.length === 0) throw new realm.TypeError('BroadcastChannel needs a name')
+      this.#name = String(args[0])
+      const set = open.get(this.#name) ?? new Set<RelayedChannel>()
+      set.add(this)
+      open.set(this.#name, set)
+      this.addEventListener('message', (event) => this.#onmessage?.call(this, event as MessageEvent))
+      this.addEventListener('messageerror', (event) => this.#onmessageerror?.call(this, event as MessageEvent))
+    }
+
+    get name(): string {
+      return this.#name
+    }
+
+    get onmessage(): ((event: MessageEvent) => unknown) | null {
+      return this.#onmessage
+    }
+    set onmessage(handler: unknown) {
+      this.#onmessage = typeof handler === 'function' ? (handler as (event: MessageEvent) => unknown) : null
+    }
+
+    get onmessageerror(): ((event: MessageEvent) => unknown) | null {
+      return this.#onmessageerror
+    }
+    set onmessageerror(handler: unknown) {
+      this.#onmessageerror = typeof handler === 'function' ? (handler as (event: MessageEvent) => unknown) : null
+    }
+
+    postMessage(...args: unknown[]): void {
+      if (args.length === 0) throw new realm.TypeError('postMessage needs a message')
+      if (this.#closed) throw new realm.DOMException('The BroadcastChannel is closed', 'InvalidStateError')
+      send(this.#name, toWire(realm, args[0], new Set()), this.#token)
+    }
+
+    close(): void {
+      if (this.#closed) return
+      this.#closed = true
+      const set = open.get(this.#name)
+      set?.delete(this)
+      if (set?.size === 0) open.delete(this.#name)
+    }
+
+    [deliver](message: unknown, token: string): void {
+      if (this.#closed || token === this.#token) return
+      let data: unknown
+      try {
+        // A copy of its own for each channel, as structured clone gives every listener.
+        data = toWire(realm, message, new Set())
+      } catch {
+        this.dispatchEvent(new realm.MessageEvent('messageerror'))
+        return
+      }
+      this.dispatchEvent(new realm.MessageEvent('message', { data }))
+    }
+  }
+
+  Object.defineProperty(realm, 'BroadcastChannel', { value: RelayedChannel, configurable: true, writable: true, enumerable: false })
+
+  return (data) => {
+    if (data === null || typeof data !== 'object') return
+    const { name, message, token } = data as Record<string, unknown>
+    if (typeof name !== 'string' || typeof token !== 'string') return
+    for (const channel of [...(open.get(name) ?? [])]) channel[deliver](message, token)
+  }
+}
+
+/**
+ * `value` as the protocol carries it: null, booleans, numbers, strings, bytes,
+ * arrays and plain objects. undefined is sent as null, and an object's
+ * undefined members are left out; anything else is a `DataCloneError`.
+ */
+function toWire(realm: typeof globalThis, value: unknown, path: Set<object>): unknown {
+  const cannot = (what: string): DOMException =>
+    new realm.DOMException(`${what} cannot be sent: a message is limited to what the protocol carries`, 'DataCloneError')
+  switch (typeof value) {
+    case 'undefined':
+      return null
+    case 'boolean':
+    case 'number':
+    case 'string':
+      return value
+    case 'bigint':
+      throw cannot('A BigInt')
+    case 'symbol':
+      throw cannot('A symbol')
+    case 'function':
+      throw cannot('A function')
+  }
+  if (value === null) return null
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice()
+  if (Object.prototype.toString.call(value) === '[object ArrayBuffer]') return new Uint8Array((value as ArrayBuffer).slice(0))
+  const object = value as object
+  if (path.has(object)) throw cannot('A cyclic object')
+  path.add(object)
+  try {
+    if (Array.isArray(object)) return object.map((item: unknown) => toWire(realm, item, path))
+    const prototype: unknown = Object.getPrototypeOf(object)
+    // A plain object from this page's realm or any other: its prototype is an Object.prototype, or none.
+    const plain = prototype === null || Object.getPrototypeOf(prototype) === null
+    if (!plain) {
+      const named = (object as { constructor?: { name?: unknown } }).constructor?.name
+      throw cannot(`A ${typeof named === 'string' && named !== '' ? named : 'non-plain'} object`)
+    }
+    const out: Record<string, unknown> = {}
+    for (const key of Object.keys(object)) {
+      const item = (object as Record<string, unknown>)[key]
+      if (item !== undefined) out[key] = toWire(realm, item, path)
+    }
+    return out
+  } finally {
+    path.delete(object)
   }
 }
 

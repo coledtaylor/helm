@@ -178,6 +178,17 @@ describe('servePluginRequestFrom: pages from the local host’s files', () => {
     expect(await js.text()).toBe('console.log(1)')
   })
 
+  it('tells a page drawn from the host’s files that its channels are relayed through the host, and one Helm serves itself nothing of it', async () => {
+    const bootOf = (html: string): unknown => {
+      const attribute = /data-helm-boot='([^']*)'/.exec(html)?.[1] ?? ''
+      return JSON.parse(attribute.replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&amp;/g, '&'))
+    }
+    const hosted = await servePluginRequestFrom('helm-plugin://sample/dist/main%20page.html', host(), runtime)
+    expect(bootOf(await hosted.text())).toEqual({ theme: { kind: 'dark' }, plugin: 'sample', quote: "it's <b>&", channels: 'host' })
+    const own = serve('helm-plugin://sample/dist/main%20page.html')
+    expect(bootOf(await own.text())).toEqual({ theme: { kind: 'dark' }, plugin: 'sample', quote: "it's <b>&" })
+  })
+
   it('serves the runtime only on the origin of a plugin the host has on', async () => {
     const source = host()
     const bridge = await servePluginRequestFrom('helm-plugin://sample/__helm/bridge.js', source, runtime)

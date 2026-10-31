@@ -206,6 +206,41 @@ interface IpcContextBase {
   claudeHome?: string | undefined
 }
 
+/** Where a plugin page's calls and the window's answers for them go. */
+export interface PluginPageRoutes {
+  call: PluginHost['call']
+  cancel: PluginHost['cancel']
+  command: (plugin: string, id: string) => void | Promise<void>
+  answer: PluginHost['answer']
+  session: PluginHost['session']
+}
+
+/**
+ * A plugin page's calls go to whatever keeps the plugins: the local host's
+ * plugins while sessions run there (`host/plugins.ts`), Helm's own registry
+ * otherwise, which answers every one itself and asks the host nothing.
+ */
+export function pluginPages(ctx: Pick<IpcContext, 'plugins' | 'hostPlugins'>): PluginPageRoutes {
+  const host = ctx.hostPlugins
+  if (host !== undefined) {
+    return {
+      call: (request, sender) => host.call(request, sender),
+      cancel: (callId, sender) => host.cancel(callId, sender),
+      command: (plugin, id) => host.command(plugin, id),
+      answer: (requestId) => host.answer(requestId),
+      session: (answer, sender) => host.session(answer, sender)
+    }
+  }
+  const own = ctx.plugins
+  return {
+    call: (request, sender) => own.call(request, sender),
+    cancel: (callId, sender) => own.cancel(callId, sender),
+    command: (plugin, id) => own.command(plugin, id),
+    answer: (requestId) => own.answer(requestId),
+    session: (answer, sender) => own.session(answer, sender)
+  }
+}
+
 export function registerIpc(ctx: IpcContext): void {
   const { services } = ctx
   const profileService =
@@ -233,6 +268,8 @@ export function registerIpc(ctx: IpcContext): void {
       claudeStatus,
       templates: ctx.templates
     })
+
+  const pages = pluginPages(ctx)
 
   const requests: RequestHandlers = {
     'app:info': async () => ({
@@ -620,9 +657,9 @@ export function registerIpc(ctx: IpcContext): void {
       ctx.hostPlugins?.setSetting(plugin, key, value) ?? ctx.plugins.setSetting(plugin, key, value),
     // The sender is part of the call's name, so two Helm pages relaying calls
     // cannot cancel each other's.
-    'plugins:call': (request, event) => ctx.plugins.call(request, event.sender.id),
-    'plugins:session': (answer, event) => ctx.plugins.session(answer, event.sender.id),
-    'plugins:command': ({ plugin, id }) => ctx.plugins.command(plugin, id),
+    'plugins:call': (request, event) => pages.call(request, event.sender.id),
+    'plugins:session': (answer, event) => pages.session(answer, event.sender.id),
+    'plugins:command': ({ plugin, id }) => pages.command(plugin, id),
     'plugins:metrics': () => ctx.hostPlugins?.metrics() ?? ctx.plugins.metrics(),
     'plugins:log': ({ path }) => ctx.hostPlugins?.log(path) ?? ctx.plugins.log(path),
     'plugins:ownSecrets': ({ path }) => ctx.hostPlugins?.ownSecrets(path) ?? ctx.plugins.ownSecrets(path),
@@ -680,8 +717,8 @@ export function registerIpc(ctx: IpcContext): void {
 
     'browser:bounds': (payload) => ctx.browsers.bounds(payload),
 
-    'plugins:cancel': ({ callId }, event) => ctx.plugins.cancel(callId, event.sender.id),
-    'plugins:answer': ({ requestId }) => ctx.plugins.answer(requestId),
+    'plugins:cancel': ({ callId }, event) => pages.cancel(callId, event.sender.id),
+    'plugins:answer': ({ requestId }) => pages.answer(requestId),
     'plugins:backgroundState': ({ plugin, revision, state, error }) =>
       ctx.hostPlugins !== undefined
         ? ctx.hostPlugins.backgroundState(plugin, revision, state, error)

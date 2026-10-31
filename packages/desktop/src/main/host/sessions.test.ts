@@ -578,39 +578,19 @@ describe('sessions through the local host', () => {
     })
   })
 
-  describe('the plugins’ tools', () => {
-    it('gives each running session an id of its own for plugins, apart from its browser key, with its label and folder', async () => {
-      const w = world({ listed: [row(), row({ id: 8, name: 'api', cwd: '/work/api' }), row({ id: 9, status: 'exited' })] })
+  describe('a session a plugin asked for', () => {
+    it('is adopted from the host’s answer, so the window opens it as a tab and its terminal is carried', async () => {
+      const w = world({ listed: [] })
       await w.connect()
+      let changes = 0
+      w.host.sessions.onChanged(() => (changes += 1))
 
-      const app = w.host.pluginCaller(7)
-      const api = w.host.pluginCaller(8)
-      expect(app).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/) as string, name: 'app', cwd: '/work/app' })
-      expect(api).toMatchObject({ name: 'api', cwd: '/work/api' })
-      expect(api?.id).not.toBe(app?.id)
-      // Not the host's row id, and not the session's browser identity.
-      expect(app?.id).not.toBe('7')
-      expect(app?.id).not.toBe(w.host.sessions.browserOpener(7)?.key)
-      // Asked again, the same id: a plugin can tell its calls apart by session.
-      expect(w.host.pluginCaller(7)).toEqual(app)
-      // An ended session, and one the window does not know, are nobody.
-      expect(w.host.pluginCaller(9)).toBeNull()
-      expect(w.host.pluginCaller(10)).toBeNull()
-    })
+      const record = w.host.adoptSession(row({ id: 21, name: 'triage', cwd: '/work/app' }))
 
-    it('drops a session’s id when it exits, when its tab is closed and when Helm quits', async () => {
-      const w = world({ listed: [row(), row({ id: 8, name: 'api' }), row({ id: 9, name: 'docs' })] })
-      await w.connect()
-      const before = [7, 8, 9].map((id) => w.host.pluginCaller(id)?.id)
-
-      w.connection.push('session:exit', row({ status: 'exited', exitCode: 0 }))
-      expect(w.host.pluginCaller(7)).toBeNull()
-      await w.host.sessions.close({ id: 8 })
-      expect(w.host.pluginCaller(8)).toBeNull()
-      // A session still running keeps its id until Helm quits.
-      expect(w.host.pluginCaller(9)?.id).toBe(before[2])
-      w.host.sessions.shutdown()
-      expect(w.host.pluginCaller(9)).toBeNull()
+      expect(record).toMatchObject({ id: 21, name: 'triage', cwd: '/work/app', status: 'running' })
+      expect(w.host.sessions.list().map((session) => session.id)).toContain(21)
+      expect(w.connection.streamsFor('session:data', 21)).toHaveLength(1)
+      expect(changes).toBe(1)
     })
   })
 

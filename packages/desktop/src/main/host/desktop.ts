@@ -11,7 +11,7 @@ import { appMode, dataDir, templatesDir } from '../paths'
 import { showExitNotification, type Confirm } from '../sessions'
 import type { BrowserMcpHost } from '../browser-mcp'
 import type { BackgroundHost } from '../plugins/background'
-import type { PluginToolProvider } from '../plugins/tools'
+import type { ToolAnswer, ToolCallRequest } from '../plugins/tools'
 import { nativeProfileDialogs } from '../profiles'
 import { updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
@@ -70,8 +70,8 @@ export interface DesktopHostDeps {
   onActivityChange: () => void
   /** Helm's browser tools, which answer the calls; null until they exist. */
   browserTools: () => BrowserMcpHost | null
-  /** Helm's plugins offering tools, and a way to call one. */
-  plugins: PluginToolProvider
+  /** Hands a session's call to a plugin's tool to its background page, in the background host. */
+  runPluginTool: (request: ToolCallRequest, signal: AbortSignal) => Promise<ToolAnswer>
   /** The hidden window plugins' background pages run in, which the host's list opens and closes. */
   pluginBackground: BackgroundHost
 }
@@ -125,7 +125,7 @@ export function createDesktopHost({
   confirm,
   onActivityChange,
   browserTools,
-  plugins,
+  runPluginTool,
   pluginBackground
 }: DesktopHostDeps): DesktopHost {
   const log = (line: string): void => console.log(line)
@@ -172,11 +172,11 @@ export function createDesktopHost({
     run: (opener, tool, args) => browserTools()?.runBrowserTool(opener, tool, args) ?? null,
     log
   })
-  const pluginRelay = createPluginToolRelay({
+  // The host's list says which plugins offer tools; their background pages answer.
+  const pluginRelay: PluginToolRelay = createPluginToolRelay({
     link,
-    servers: () => plugins.servers(),
-    call: (request, signal) => plugins.call(request, signal),
-    caller: (session) => hosted.pluginCaller(session),
+    servers: () => hostPlugins.toolServers(),
+    call: (request, signal) => hostPlugins.callTool(request, signal),
     log
   })
   const profiles = createHostProfiles({
@@ -192,14 +192,26 @@ export function createDesktopHost({
     writeFile: (path, text) => writeFile(path, text, 'utf8'),
     log
   })
-  const hostPlugins = createHostPlugins({
+  const sendBackground: Emit = (channel, payload) => {
+    const contents = pluginBackground.contents()
+    if (contents !== null && !contents.isDestroyed()) contents.send(channel, payload)
+  }
+  const hostPlugins: HostPlugins = createHostPlugins({
     link,
     // Every Helm page that frames plugins: the window, and the background host.
     emit: (channel, payload) => {
       send(channel, payload)
-      const contents = pluginBackground.contents()
-      if (contents !== null && !contents.isDestroyed()) contents.send(channel, payload)
+      sendBackground(channel, payload)
     },
+    emitWindow: send,
+    emitBackground: sendBackground,
+    isWindow: (sender) => {
+      const win = window()
+      return win !== null && !win.isDestroyed() && win.webContents.id === sender
+    },
+    adoptSession: (row) => hosted.adoptSession(row),
+    runTool: runPluginTool,
+    onToolsChanged: () => pluginRelay.offer(),
     background: pluginBackground,
     ownFolders: () => readPluginFolders(services.store),
     ownSettings: (plugin) => readPluginSettings(services.store, plugin),

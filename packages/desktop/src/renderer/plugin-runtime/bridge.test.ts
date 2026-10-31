@@ -613,3 +613,81 @@ describe('tools', () => {
     expect(() => helm.tools.handle('pick', 'x' as never)).toThrow('helm.tools.handle needs a function to answer the tool')
   })
 })
+
+describe('BroadcastChannel, relayed through the local host', () => {
+  /** A page drawn from the host's files: its boot says its channels are relayed. */
+  const hosted = (context: HelmContext = PANEL): Page => page(context, JSON.stringify({ theme: THEME, channels: 'host' }))
+  type Channel = { postMessage(message: unknown): void; close(): void; onmessage: ((event: MessageEvent) => void) | null }
+  const open = (win: Window, name: string): Channel =>
+    new (win as unknown as { BroadcastChannel: new (name: string) => Channel }).BroadcastChannel(name)
+  const posts = (port: FakePort): Array<Extract<FrameMessage, { t: 'call' }>> =>
+    sent(port).filter((entry): entry is Extract<FrameMessage, { t: 'call' }> => entry.t === 'call' && entry.method === 'channel.post')
+
+  it('keeps the browser’s own on a page Helm serves from its own folders', () => {
+    const { win } = page()
+    const own = (win as unknown as { BroadcastChannel: unknown }).BroadcastChannel
+    expect(own === undefined || String(own).includes('[native code]')).toBe(true)
+  })
+
+  it('posts a message as the bridge’s channel call, with the channel’s name and its own token', () => {
+    const { win } = hosted()
+    const port = connect(win)
+    open(win, 'sample-items').postMessage({ changed: [3], at: undefined, bytes: new Uint8Array([1, 2]) })
+    const [post] = posts(port)
+    expect(post?.args).toEqual(['sample-items', { changed: [3], bytes: new Uint8Array([1, 2]) }, expect.any(String)])
+  })
+
+  it('hands a delivered message to the page’s other channels of that name, never the one that posted it or another name', () => {
+    const { win } = hosted()
+    const port = connect(win)
+    const poster = open(win, 'sample-items')
+    const heard: string[] = []
+    poster.onmessage = () => heard.push('poster')
+    open(win, 'sample-items').onmessage = (event) => heard.push(`same name: ${JSON.stringify(event.data)}`)
+    open(win, 'other').onmessage = () => heard.push('other name')
+    poster.postMessage({ changed: 3 })
+    const token = posts(port)[0]?.args[2]
+
+    port.postMessage({ t: 'event', name: 'channel', data: { name: 'sample-items', message: { changed: 3 }, token } })
+    // From a page elsewhere: every channel of the name hears it.
+    port.postMessage({ t: 'event', name: 'channel', data: { name: 'sample-items', message: 'from the tab', token: 'elsewhere' } })
+    expect(heard).toEqual(['same name: {"changed":3}', 'poster', 'same name: "from the tab"'])
+  })
+
+  it.each([
+    ['a function', () => () => 1],
+    ['a symbol', () => Symbol('x')],
+    ['a BigInt', () => 10n],
+    ['an object holding a function', () => ({ save: () => undefined })],
+    ['a Map', () => new Map([[1, 2]])],
+    ['a cyclic object', () => {
+      const cyclic: Record<string, unknown> = {}
+      cyclic['self'] = cyclic
+      return cyclic
+    }]
+  ])('throws a DataCloneError for %s, and sends nothing', (_, make) => {
+    const { win } = hosted()
+    const port = connect(win)
+    const channel = open(win, 'sample-items')
+    let thrown: unknown = null
+    try {
+      channel.postMessage(make())
+    } catch (error) {
+      thrown = error
+    }
+    expect((thrown as DOMException | null)?.name).toBe('DataCloneError')
+    expect(posts(port)).toEqual([])
+  })
+
+  it('refuses a post on a closed channel and delivers nothing to it', () => {
+    const { win } = hosted()
+    const port = connect(win)
+    const channel = open(win, 'sample-items')
+    const heard = vi.fn()
+    channel.onmessage = heard
+    channel.close()
+    expect(() => channel.postMessage('late')).toThrow(expect.objectContaining({ name: 'InvalidStateError' }) as Error)
+    port.postMessage({ t: 'event', name: 'channel', data: { name: 'sample-items', message: 'x', token: 'elsewhere' } })
+    expect(heard).not.toHaveBeenCalled()
+  })
+})

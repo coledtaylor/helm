@@ -31,6 +31,8 @@ const NOTES: ToolServer = {
 
 /** Host session 7 is running, as `alpha` in /work/alpha; nothing else is. */
 const ALPHA: ToolSession = { id: 'minted-for-alpha', name: 'alpha', cwd: '/work/alpha' }
+/** And as the host names it on a call: the id it minted at launch, its label and its folder. */
+const ALPHA_CALLER: P.AgentPluginCaller = { id: 'minted-for-alpha', label: 'alpha', folder: '/work/alpha' }
 
 interface Call {
   request: ToolCallRequest
@@ -58,7 +60,6 @@ function world() {
         calls.push(call)
         callMade.shift()?.(call)
       }),
-    caller: (session) => (session === 7 ? ALPHA : null),
     log: () => undefined
   })
   return {
@@ -123,12 +124,12 @@ describe('the plugins’ tools through the local host', () => {
     ])
   })
 
-  it('runs a call as the plugins answer one from Helm’s own listener, naming the session by the id minted for it', async () => {
+  it('runs a call as the plugins answer one from Helm’s own listener, naming the session by the id the host minted for it', async () => {
     const w = world()
     await w.link.connect()
 
     const made = w.nextCall()
-    const answered = w.relayCall({ callId: 1, session: 7, caller: null, plugin: 'notes', tool: 'find', arguments: { query: 'release' } })
+    const answered = w.relayCall({ callId: 1, session: 7, caller: ALPHA_CALLER, plugin: 'notes', tool: 'find', arguments: { query: 'release' } })
     const call = await made
     expect(call.request).toEqual({ plugin: 'notes', tool: 'find', args: { query: 'release' }, session: ALPHA })
     call.answer({ ok: true, text: 'Found 2 notes.' })
@@ -142,7 +143,7 @@ describe('the plugins’ tools through the local host', () => {
 
     // A plugin's refusal is the agent's to read, as an error result.
     const refusing = w.nextCall()
-    const refused = w.relayCall({ callId: 2, session: 7, caller: null, plugin: 'notes', tool: 'write', arguments: {} })
+    const refused = w.relayCall({ callId: 2, session: 7, caller: ALPHA_CALLER, plugin: 'notes', tool: 'write', arguments: {} })
     ;(await refusing).answer({ ok: false, message: 'Notes is read-only today.' })
     expect((await refused).outcome).toEqual({
       status: 'done',
@@ -150,7 +151,7 @@ describe('the plugins’ tools through the local host', () => {
     })
   })
 
-  it('answers a call for a session not running in the host with a sentence, and never calls a plugin for it', async () => {
+  it('answers a call the host names no session for with a sentence, and never calls a plugin for it', async () => {
     const w = world()
     await w.link.connect()
     const answered = await w.relayCall({ callId: 3, session: 99, caller: null, plugin: 'notes', tool: 'find', arguments: {} })
@@ -162,7 +163,7 @@ describe('the plugins’ tools through the local host', () => {
     const w = world()
     await w.link.connect()
     const made = w.nextCall()
-    void w.relayCall({ callId: 4, session: 7, caller: null, plugin: 'notes', tool: 'write', arguments: {} })
+    void w.relayCall({ callId: 4, session: 7, caller: ALPHA_CALLER, plugin: 'notes', tool: 'write', arguments: {} })
     const call = await made
     const aborted = new Promise<void>((resolve) => call.signal.addEventListener('abort', () => resolve()))
 
@@ -179,7 +180,7 @@ describe('the plugins’ tools through the local host', () => {
     const w = world()
     await w.link.connect()
     const made = w.nextCall()
-    void w.relayCall({ callId: 5, session: 7, caller: null, plugin: 'notes', tool: 'write', arguments: {} })
+    void w.relayCall({ callId: 5, session: 7, caller: ALPHA_CALLER, plugin: 'notes', tool: 'write', arguments: {} })
     const call = await made
     w.relay.stop()
     expect(call.signal.aborted).toBe(true)
@@ -190,7 +191,7 @@ describe('the plugins’ tools through the local host', () => {
     const w = world()
     await w.link.connect()
     const made = w.nextCall()
-    const answered = w.relayCall({ callId: 6, session: 7, caller: null, plugin: 'notes', tool: 'find', arguments: {} })
+    const answered = w.relayCall({ callId: 6, session: 7, caller: ALPHA_CALLER, plugin: 'notes', tool: 'find', arguments: {} })
     ;(await made).answer({ ok: true, text: 'x'.repeat(MAX_FRAME_LEN) })
     expect((await answered).outcome).toEqual({ status: 'failed', message: PLUGIN_ANSWER_TOO_LARGE })
   })

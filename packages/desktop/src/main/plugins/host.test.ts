@@ -246,6 +246,15 @@ describe('reading folders', () => {
     expect(host.runtime.bridge()).toBe('bridge')
   })
 
+  it('repaints every plugin page in a new theme when the local host keeps the registry, without asking it', async () => {
+    start([sampleDir], { registry: false })
+    await tick()
+    const light: HelmTheme = { ...THEME, kind: 'light' }
+    host.pushTheme(light)
+    expect(events('plugins:theme', 'window')).toEqual([light])
+    expect(events('plugins:theme', 'background')).toEqual([light])
+  })
+
   it('gives a second plugin with an id already loaded an error naming the first', () => {
     start([sampleDir, join(root, 'same id')])
     expect(info(join(root, 'same id')).error).toBe(`a plugin with the id "sample" is already loaded from ${sampleDir}`)

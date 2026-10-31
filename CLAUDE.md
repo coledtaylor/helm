@@ -244,12 +244,14 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   a token or writes a `--mcp-config` (`listen: false`); the host serves its
   sessions' tools. Main tells the host `browserMcp`, `browserMcpLocalOnly`
   and `sessionMcp` (`hostSettingsFor`), answers its browser calls through
-  `runBrowserTool` (`host/browser-tools.ts`), and offers it every plugin tool
-  server on each connect and each change (`host/plugin-tools.ts`). A relayed
-  plugin call names the host session; main turns it into an id it minted for
-  that running session (`pluginCaller`, never the browser key or the host's
-  row id), its name and folder, runs it through `plugins.callTool`, and
-  answers with the same tool result as this listener's route.
+  `runBrowserTool` (`host/browser-tools.ts`), and offers it the tool servers
+  of the plugins the host lists as offering tools, on each connect and each
+  change (`host/plugin-tools.ts`). A relayed plugin call carries its caller:
+  an id the host minted when the session launched (random, never the browser
+  key or the host's row id, and the id the plugin's `sessions.list` shows),
+  its name and folder. Main hands it to the plugin's background page in the
+  hidden plugin host window (`host/plugins.ts` `callTool`) and answers with
+  the same tool result as this listener's route.
 - The Floti host serves its own sessions' agent tools on its own listener
   (`crates/host/src/agent_tools`), with the same rules and today's names.
   `helm-browser` and `helm-sessions` take name, route, instructions and

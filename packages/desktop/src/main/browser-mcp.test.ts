@@ -1346,7 +1346,6 @@ describe('the tool endpoint', () => {
           calls.push({ request, signal })
           return answerWith(request, signal)
         },
-        caller: (session) => (session === 3 ? { id: 'minted-in-main', name: 'alpha', cwd: 'C:/work/alpha' } : null),
         log: () => undefined
       })
       await link.connect()
@@ -1362,11 +1361,18 @@ describe('the tool endpoint', () => {
           arguments: {}
         })
         const relayed = new Promise<P.AgentPluginToolAnswer>((resolve) => answers.set(callId, resolve))
-        connection.push('agentPlugin:call', { callId, session: 3, caller: null, plugin: 'tracker', tool: 'list_cards', arguments: {} })
+        connection.push('agentPlugin:call', {
+          callId,
+          session: 3,
+          caller: { id: 'minted-in-host', label: 'alpha', folder: 'C:/work/alpha' },
+          plugin: 'tracker',
+          tool: 'list_cards',
+          arguments: {}
+        })
         expect((await relayed).outcome).toEqual({ status: 'done', value: routed })
       }
-      // The relay names the session as main knows it, never by a token.
-      expect(calls.at(-1)?.request.session).toEqual({ id: 'minted-in-main', name: 'alpha', cwd: 'C:/work/alpha' })
+      // The relay names the session as the host named it, never by a token.
+      expect(calls.at(-1)?.request.session).toEqual({ id: 'minted-in-host', name: 'alpha', cwd: 'C:/work/alpha' })
     })
   })
 

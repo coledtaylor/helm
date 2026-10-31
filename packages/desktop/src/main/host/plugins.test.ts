@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { SettingValue } from '@coledtaylor/helm-plugin-sdk'
-import type { PluginFolder } from '@helm/core'
-import type { PluginInfo } from '../../shared/ipc'
+import type { PluginFolder, SessionRecord } from '@helm/core'
+import type { PluginCallRequest, PluginInfo } from '../../shared/ipc'
+import type { ToolAnswer, ToolCallRequest } from '../plugins/tools'
 import { FakeConnection, fakeLink } from '../../../test/host-connection'
 import { HostRequestError } from './client'
 import type * as P from './protocol'
-import { createHostPlugins } from './plugins'
+import { createHostPlugins, NOT_OFFERING, type HostPluginsDeps } from './plugins'
+import { sessionFromHost } from './records'
 
 const DIR = 'C:\\plugins\\my sample'
 
@@ -87,13 +89,35 @@ function world(options: Options = {}) {
   })
   const link = fakeLink(connection)
   const emitted: Array<{ channel: string; payload: unknown }> = []
+  const toWindow: Array<{ channel: string; payload: unknown }> = []
+  const toBackground: Array<{ channel: string; payload: unknown }> = []
   const logged: string[] = []
   const synced: boolean[] = []
   const marks: number[] = []
+  const adopted: SessionRecord[] = []
+  const toolRuns: Array<{ request: ToolCallRequest; signal: AbortSignal; answer: (answer: ToolAnswer) => void }> = []
+  const toolRunMade: Array<() => void> = []
+  let toolsChanged = 0
   let copied = options.copied ?? true
   const plugins = createHostPlugins({
-    link,
+    ...quietDeps(link),
     emit: (channel, payload) => emitted.push({ channel, payload }),
+    emitWindow: (channel, payload) => toWindow.push({ channel, payload }),
+    emitBackground: (channel, payload) => toBackground.push({ channel, payload }),
+    isWindow: (sender) => sender === WINDOW,
+    adoptSession: (row) => {
+      const record = sessionFromHost(row)
+      adopted.push(record)
+      return record
+    },
+    runTool: (request, signal) =>
+      new Promise<ToolAnswer>((resolve) => {
+        toolRuns.push({ request, signal, answer: resolve })
+        toolRunMade.shift()?.()
+      }),
+    onToolsChanged: () => {
+      toolsChanged += 1
+    },
     background: { sync: (needed) => synced.push(needed) },
     ownFolders: () => options.own ?? [],
     ownSettings: (id) => options.ownSettings?.[id] ?? {},
@@ -106,8 +130,58 @@ function world(options: Options = {}) {
   })
   const lists = (): PluginInfo[][] =>
     emitted.filter((each) => each.channel === 'plugins:changed').map((each) => each.payload as PluginInfo[])
-  return { connection, hosted, link, plugins, emitted, lists, logged, synced, marks }
+  return {
+    connection,
+    hosted,
+    link,
+    plugins,
+    emitted,
+    toWindow,
+    toBackground,
+    lists,
+    logged,
+    synced,
+    marks,
+    adopted,
+    toolRuns,
+    /** Resolves once the next tool call reaches the background page. */
+    nextToolRun: () => new Promise<void>((resolve) => toolRunMade.push(resolve)),
+    toolsChanged: () => toolsChanged
+  }
 }
+
+/** The window's web contents id, and the background host's. */
+const WINDOW = 1
+const BACKGROUND = 2
+
+/** Deps that do nothing, for a test that looks at one thing. */
+function quietDeps(link: HostPluginsDeps['link']): HostPluginsDeps {
+  return {
+    link,
+    emit: () => undefined,
+    emitWindow: () => undefined,
+    emitBackground: () => undefined,
+    isWindow: () => true,
+    adoptSession: (row) => sessionFromHost(row),
+    runTool: () => Promise.resolve({ ok: true, text: 'Done.' }),
+    onToolsChanged: () => undefined,
+    background: { sync: () => undefined },
+    ownFolders: () => [],
+    ownSettings: () => ({}),
+    copied: () => true,
+    markCopied: () => undefined,
+    log: () => undefined
+  }
+}
+
+const pageCall = (method: string, args: unknown[] = [], patch: Partial<PluginCallRequest> = {}): PluginCallRequest => ({
+  plugin: 'sample',
+  surface: 'panel',
+  method,
+  args,
+  callId: '1.1.7',
+  ...patch
+})
 
 describe('plugins in the local host', () => {
   it('answers a list asked for before the first connect has finished with the host’s plugins, never an empty one', async () => {
@@ -121,16 +195,7 @@ describe('plugins in the local host', () => {
 
   it('says why when the host cannot be reached, for the list, Settings’ reads and a page’s files alike', async () => {
     const sentence = 'Helm could not find the local host program at /nowhere/floti; turn it off.'
-    const plugins = createHostPlugins({
-      link: fakeLink(null, sentence),
-      emit: () => undefined,
-      background: { sync: () => undefined },
-      ownFolders: () => [],
-      ownSettings: () => ({}),
-      copied: () => true,
-      markCopied: () => undefined,
-      log: () => undefined
-    })
+    const plugins = createHostPlugins(quietDeps(fakeLink(null, sentence)))
     await expect(plugins.list()).rejects.toThrow(sentence)
     await expect(plugins.secrets.list()).rejects.toThrow(sentence)
     await expect(plugins.serves('sample')).rejects.toThrow(sentence)
@@ -197,6 +262,211 @@ describe('plugins in the local host', () => {
       throw new HostRequestError('plugins:remove', 'failed', 'Removing a plugin takes an admin device.')
     })
     await expect(w.plugins.remove(DIR, [])).rejects.toThrow('Removing a plugin takes an admin device.')
+  })
+
+  describe('a page’s calls', () => {
+    const TOOLS: P.PluginAgentInfo = {
+      enabled: true,
+      server: 'helm-plugin-sample',
+      instructions: 'Find before you write.',
+      tools: [
+        { name: 'find', description: 'Finds things.', inputSchema: { type: 'object', properties: { q: { type: 'string' } } }, readOnly: true },
+        { name: 'write', description: 'Writes a thing.', inputSchema: { type: 'object', properties: {} }, readOnly: false }
+      ]
+    }
+
+    it('sends fetch, exec, settings, secrets, sessions, status and a channel post to the host, named by the page that made it', async () => {
+      const w = world({ hosted: [hostPlugin()] })
+      w.connection.answer('plugins:call', ({ method }) => ({ ok: true, value: method === 'settings.get' ? { greeting: 'hi' } : null }))
+      const methods = ['fetch', 'exec', 'settings.get', 'secrets.state', 'secrets.request', 'sessions.list', 'sessions.start', 'status.set', 'badge.set', 'channel.post']
+      for (const method of methods) await w.plugins.call(pageCall(method, ['x']), WINDOW)
+      expect(await w.plugins.call(pageCall('settings.get'), BACKGROUND)).toEqual({ ok: true, value: { greeting: 'hi' } })
+
+      const sent = w.connection.payloads('plugins:call') as P.PluginCallRequest[]
+      expect(sent.map((each) => each.method)).toEqual([...methods, 'settings.get'])
+      expect(sent[0]).toEqual({ plugin: 'sample', surface: 'panel', method: 'fetch', args: ['x'], callId: '1/1.1.7' })
+      // Two Helm pages relaying calls under the same id are told apart.
+      expect(sent.at(-1)?.callId).toBe('2/1.1.7')
+    })
+
+    it('passes on what the host answered, a refusal included', async () => {
+      const w = world({ hosted: [hostPlugin()] })
+      w.connection.answer('plugins:call', () => ({ ok: false, code: 'not-declared', message: '"rm" is not one of the programs the manifest\'s exec lists' }))
+      expect(await w.plugins.call(pageCall('exec', ['rm', []]), WINDOW)).toEqual({
+        ok: false,
+        code: 'not-declared',
+        message: '"rm" is not one of the programs the manifest\'s exec lists'
+      })
+    })
+
+    it('opens one of the plugin’s tabs, and a link from a click, here without asking the host, with today’s checks', async () => {
+      const w = world({ hosted: [hostPlugin({ tabs: { item: { title: 'Item', url: 'helm-plugin://sample/dist/item.html' } } })] })
+      await w.link.connect()
+      w.connection.snapshot('plugins:changed', [...w.hosted])
+      const before = w.connection.sent.length
+
+      expect(await w.plugins.call(pageCall('tabs.open', ['item', { id: 7 }, { title: 'Seven', preview: true }]), WINDOW)).toEqual({
+        ok: true,
+        value: undefined
+      })
+      expect(await w.plugins.call(pageCall('tabs.open', ['nope']), WINDOW)).toMatchObject({ ok: false, code: 'not-declared' })
+      expect(await w.plugins.call(pageCall('open', ['https://example.com/a']), WINDOW)).toEqual({ ok: true, value: undefined })
+      expect(await w.plugins.call(pageCall('open', ['http://example.com/']), WINDOW)).toMatchObject({ ok: false, code: 'invalid' })
+      expect(await w.plugins.call(pageCall('open', ['https://example.com/b'], { surface: 'background' }), BACKGROUND)).toMatchObject({
+        ok: false,
+        code: 'not-allowed'
+      })
+      // One link a second, as today: a double click is one page.
+      expect(await w.plugins.call(pageCall('open', ['https://example.com/c']), WINDOW)).toMatchObject({ ok: false, code: 'busy' })
+
+      expect(w.toWindow).toEqual([
+        { channel: 'plugins:ui', payload: { kind: 'openTab', plugin: 'sample', tab: 'item', params: { id: 7 }, title: 'Seven', preview: true } },
+        { channel: 'plugins:ui', payload: { kind: 'link', plugin: 'sample', url: 'https://example.com/a' } }
+      ])
+      expect(w.connection.sent.slice(before)).toEqual([])
+    })
+
+    it('fails a call in the page with the sentence when the local host cannot be reached, and says nothing in Helm’s chrome', async () => {
+      const sentence = 'Helm could not reach the local host: it stopped answering.'
+      const emitted: string[] = []
+      const plugins = createHostPlugins({
+        ...quietDeps(fakeLink(null, sentence)),
+        emit: (channel) => emitted.push(channel),
+        emitWindow: (channel) => emitted.push(channel),
+        emitBackground: (channel) => emitted.push(channel)
+      })
+      for (const method of ['fetch', 'exec', 'settings.get', 'secrets.request', 'sessions.start', 'status.set']) {
+        expect(await plugins.call(pageCall(method), WINDOW)).toEqual({ ok: false, code: 'unavailable', message: sentence })
+      }
+      // A tab or a link needs the host's list to know the plugin; it cannot be had either.
+      expect(await plugins.call(pageCall('tabs.open', ['item']), WINDOW)).toEqual({ ok: false, code: 'unavailable', message: sentence })
+      expect(emitted).toEqual([])
+    })
+
+    it('forwards a cancel, a command, a closed secret dialog and the user’s answer to a session', async () => {
+      const w = world({ hosted: [hostPlugin()] })
+      const row: P.SessionRecord = {
+        id: 31,
+        name: 'triage',
+        label: null,
+        cwd: 'C:\\work\\my app',
+        branch: null,
+        projectPath: null,
+        profileId: null,
+        argv: ['claude', '-n', 'triage', 'Look at the failing build'],
+        conversationId: null,
+        backend: 'claude-code',
+        status: 'running',
+        startedAt: '2026-10-30T09:00:00.000Z',
+        endedAt: null,
+        durationMs: null,
+        exitCode: null
+      }
+      w.connection.answer('plugins:session', ({ start }) => (start ? row : null))
+      await w.link.connect()
+
+      w.plugins.cancel('1.1.7', WINDOW)
+      await w.plugins.command('sample', 'refresh')
+      w.plugins.answer('secret-1')
+      const started = await w.plugins.session({ requestId: 'ask-1', start: true, cols: 120, rows: 30 }, WINDOW)
+      expect(await w.plugins.session({ requestId: 'ask-2', start: false, cols: 120, rows: 30 }, WINDOW)).toBeNull()
+      await expect(w.plugins.session({ requestId: 'ask-3', start: true, cols: 1, rows: 1 }, BACKGROUND)).rejects.toThrow(
+        'Only the window that asked can answer for a session.'
+      )
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      expect(w.connection.payloads('plugins:cancel')).toEqual([{ callId: '1/1.1.7' }])
+      expect(w.connection.payloads('plugins:command')).toEqual([{ plugin: 'sample', id: 'refresh' }])
+      expect(w.connection.payloads('plugins:answer')).toEqual([{ requestId: 'secret-1' }])
+      expect(w.connection.payloads('plugins:session')).toEqual([
+        { requestId: 'ask-1', start: true, cols: 120, rows: 30 },
+        { requestId: 'ask-2', start: false, cols: 120, rows: 30 }
+      ])
+      // The session the host started is adopted, so the window opens its tab.
+      expect(w.adopted.map((record) => record.id)).toEqual([31])
+      expect(started?.id).toBe(31)
+    })
+
+    it('hands the window what the host asks of it, and each delivery to the pages it is for', async () => {
+      const w = world({ hosted: [hostPlugin()] })
+      await w.link.connect()
+      w.connection.push('plugins:ui', { kind: 'secret', requestId: 'r1', plugin: 'sample', key: 'token', hosts: ['https://api.example.com'] })
+      w.connection.push('plugins:deliver', { event: 'settings', plugin: 'sample', data: { greeting: 'hey' }, to: 'all' })
+      w.connection.push('plugins:deliver', { event: 'command', plugin: 'sample', data: { id: 'refresh' }, to: 'background' })
+      w.connection.push('plugins:deliver', {
+        event: 'channel',
+        plugin: 'sample',
+        data: { name: 'sample-items', message: { changed: 3 }, token: 'tab-1' },
+        to: 'all'
+      })
+
+      expect(w.toWindow).toEqual([
+        { channel: 'plugins:ui', payload: { kind: 'secret', requestId: 'r1', plugin: 'sample', key: 'token', hosts: ['https://api.example.com'] } }
+      ])
+      expect(w.emitted.filter((each) => each.channel === 'plugins:deliver').map((each) => each.payload)).toEqual([
+        { plugin: 'sample', event: 'settings', data: { greeting: 'hey' }, to: 'all' },
+        { plugin: 'sample', event: 'channel', data: { name: 'sample-items', message: { changed: 3 }, token: 'tab-1' }, to: 'all' }
+      ])
+      expect(w.toBackground).toEqual([
+        { channel: 'plugins:deliver', payload: { plugin: 'sample', event: 'command', data: { id: 'refresh' }, to: 'background' } }
+      ])
+    })
+
+    it('offers the tools the host lists, and offers again only when they move', async () => {
+      const w = world({ hosted: [hostPlugin({ agent: TOOLS })] })
+      await w.link.connect()
+      w.connection.snapshot('plugins:changed', [hostPlugin({ agent: TOOLS })])
+      expect(w.plugins.toolServers()).toEqual([
+        {
+          plugin: 'sample',
+          name: 'Sample',
+          server: 'helm-plugin-sample',
+          instructions: 'Find before you write.',
+          tools: [
+            { name: 'find', description: 'Finds things.', inputSchema: { type: 'object', properties: { q: { type: 'string' } } }, readOnly: true },
+            { name: 'write', description: 'Writes a thing.', inputSchema: { type: 'object', properties: {} }, readOnly: false }
+          ]
+        }
+      ])
+      const offers = w.toolsChanged()
+      w.connection.push('plugins:changed', [hostPlugin({ agent: TOOLS })])
+      expect(w.toolsChanged()).toBe(offers)
+      w.connection.push('plugins:changed', [hostPlugin({ agent: { ...TOOLS, enabled: false } })])
+      expect(w.plugins.toolServers()).toEqual([])
+      expect(w.toolsChanged()).toBe(offers + 1)
+    })
+
+    it('answers a tool call with the background page once it runs, and ends it when the plugin’s tools are switched off', async () => {
+      const w = world({ hosted: [hostPlugin({ agent: TOOLS })] })
+      await w.link.connect()
+      w.connection.snapshot('plugins:changed', [hostPlugin({ agent: TOOLS })])
+      const session = { id: 'minted', name: 'alpha', cwd: 'C:\\work' }
+      const request = { plugin: 'sample', tool: 'find', args: { q: 'x' }, session }
+
+      // Starting: the call waits for the page.
+      const ran = w.nextToolRun()
+      const answered = w.plugins.callTool(request, new AbortController().signal)
+      w.plugins.backgroundState('sample', 1, 'running', null)
+      await ran
+      expect(w.toolRuns[0]?.request).toEqual(request)
+      w.toolRuns[0]?.answer({ ok: true, text: 'found 1' })
+      expect(await answered).toEqual({ ok: true, text: 'found 1' })
+
+      expect(await w.plugins.callTool({ ...request, tool: 'nope' }, new AbortController().signal)).toEqual({
+        ok: false,
+        message: 'Sample has no tool called "nope". It has: find, write.'
+      })
+
+      const second = w.nextToolRun()
+      const pending = w.plugins.callTool(request, new AbortController().signal)
+      await second
+      const run = w.toolRuns[1]!
+      w.connection.push('plugins:changed', [hostPlugin({ agent: { ...TOOLS, enabled: false } })])
+      expect(run.signal.aborted).toBe(true)
+      run.answer({ ok: false, message: 'The call was cancelled.' })
+      expect(await pending).toEqual({ ok: false, message: NOT_OFFERING })
+      expect(await w.plugins.callTool(request, new AbortController().signal)).toEqual({ ok: false, message: NOT_OFFERING })
+    })
   })
 
   describe('page files', () => {

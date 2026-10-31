@@ -112,11 +112,11 @@ function runtimeAsset(name: string, runtime: PluginRuntime): Response {
 }
 
 /** A page file's bytes as served: an HTML page with the runtime injected, and every file with the headers. */
-function page(id: string, path: string, bytes: Uint8Array, runtime: PluginRuntime, fallbackType: string): Response {
+function page(path: string, bytes: Uint8Array, boot: () => string, fallbackType: string): Response {
   const extension = extname(path).toLowerCase()
   const type = MIME[extension] ?? fallbackType
   if (extension === '.html' || extension === '.htm') {
-    return asset(injectRuntime(Buffer.from(bytes).toString('utf8'), runtime.boot(id)), type)
+    return asset(injectRuntime(Buffer.from(bytes).toString('utf8'), boot()), type)
   }
   return new Response(new Uint8Array(bytes), { status: 200, headers: { ...HEADERS, 'content-type': type } })
 }
@@ -146,7 +146,7 @@ export function servePluginRequest(
   } catch {
     return new Response('Not found', { status: 404 })
   }
-  return page(id, target, bytes, runtime, 'application/octet-stream')
+  return page(target, bytes, () => runtime.boot(id), 'application/octet-stream')
 }
 
 /**
@@ -174,13 +174,23 @@ export async function servePluginRequestFrom(
     if (file.status !== 200) {
       return new Response(new Uint8Array(file.body), { status: file.status, headers: { 'content-type': file.contentType } })
     }
-    return page(id, path, file.body, runtime, file.contentType)
+    return page(path, file.body, () => hostBoot(runtime.boot(id)), file.contentType)
   } catch (error) {
     return new Response(error instanceof Error ? error.message : String(error), {
       status: 503,
       headers: { 'content-type': 'text/plain; charset=utf-8' }
     })
   }
+}
+
+/**
+ * The boot facts of a page drawn from the local host's files: the runtime's,
+ * and that the page's `BroadcastChannel`s are relayed through the host, so a
+ * message reaches the plugin's pages on every client and its background page.
+ * A page Helm serves from its own folders keeps the browser's own.
+ */
+export function hostBoot(boot: string): string {
+  return JSON.stringify({ ...(JSON.parse(boot) as Record<string, unknown>), channels: 'host' })
 }
 
 function asset(body: string, type: string): Response {

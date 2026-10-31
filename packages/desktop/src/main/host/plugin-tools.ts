@@ -19,9 +19,11 @@ import type * as P from './protocol'
  * own listener does (`plugins.callTool`), and goes back on
  * `agentPlugin:answer` as the same tool result that listener answers with.
  *
- * Who a plugin is told the session is comes from main (`caller`): an id minted
- * there for the running session, its label and its folder. The host's session
- * id, its token and anything of its conversation never reach a plugin. A call
+ * Who a plugin is told the session is comes from the host, on the call: an id
+ * it minted when the session launched - the same id the plugin's
+ * `sessions.list` shows it under - its label and its folder. The host's
+ * session id, its token and anything of its conversation never reach a
+ * plugin. A call
  * the host withdraws (`agentPlugin:cancel`: the session interrupted it, its
  * request went away, or the session ended) aborts the plugin's handler.
  */
@@ -33,8 +35,6 @@ export interface PluginToolRelayDeps {
   servers: () => ToolServer[]
   /** Runs one call in the plugin host; aborting `signal` withdraws it from the plugin. */
   call: (request: ToolCallRequest, signal: AbortSignal) => Promise<ToolAnswer>
-  /** Who a running host session is to a plugin, or null for one that is not running in the host. */
-  caller: (session: number) => ToolSession | null
   log: (line: string) => void
 }
 
@@ -81,6 +81,10 @@ export function pluginOutcomeFor(callId: number, answer: ToolAnswer): P.AgentPlu
   return fitsOneFrame('agentPlugin:answer', { callId, outcome }) ? outcome : failed(PLUGIN_ANSWER_TOO_LARGE)
 }
 
+/** The session as the host named it to the plugin; null when it named none. */
+const callerOf = (call: P.AgentPluginToolCall): ToolSession | null =>
+  call.caller === null ? null : { id: call.caller.id, name: call.caller.label, cwd: call.caller.folder }
+
 const argumentsOf = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 
@@ -107,7 +111,7 @@ export function createPluginToolRelay(deps: PluginToolRelayDeps): PluginToolRela
     const controller = new AbortController()
     calls.set(call.callId, controller)
     let outcome: P.AgentPluginOutcome
-    const session = deps.caller(call.session)
+    const session = callerOf(call)
     if (session === null) {
       outcome = failed(NOT_A_PLUGIN_SESSION)
     } else {

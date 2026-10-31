@@ -1517,7 +1517,8 @@ export type PluginUiRequest =
  */
 export interface PluginDelivery {
   plugin: string
-  event: 'settings' | 'secrets' | 'command' | 'sessions'
+  /** `channel` is a `BroadcastChannel` message, relayed by the local host to every page of the plugin. */
+  event: 'settings' | 'secrets' | 'command' | 'sessions' | 'channel'
   data: unknown
   to: 'all' | 'background'
 }
