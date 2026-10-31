@@ -89,6 +89,18 @@ pub const CLIENT_ONLY: &[Outside] = &[
         "hostLink:*",
         "a Helm page's own connection to the host, whose protocol frames the desktop's main process pipes to a bridge and never reads",
     ),
+    outside(
+        "ownSettings:*",
+        "the settings the client keeps for itself: its window, theme, terminal and browser preferences, and the programs it picked, which its main process tells the host",
+    ),
+    outside(
+        "ownApp:info",
+        "the client's own build, data folder and runtime versions",
+    ),
+    outside(
+        "profileDialog:*",
+        "the client's own dialogs for deleting, exporting and importing a profile, and the file it writes or reads on its machine; the profile itself is the host's",
+    ),
 ];
 
 /// Channels between a plugin's background page and what runs it, which never

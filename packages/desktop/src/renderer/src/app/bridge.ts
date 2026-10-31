@@ -2,7 +2,9 @@ import { isClientOnly } from '../../../shared/host/protocol'
 import type { HelmBridge } from '../../../shared/ipc'
 import { createHistoryAdapter } from './host/history'
 import { WINDOW_CAPABILITIES, createPageLink } from './host/link'
+import { createProfilesAdapter } from './host/profiles'
 import { createRouter, type HostAdapter } from './host/router'
+import { createWorkspaceAdapter } from './host/workspace'
 
 declare global {
   interface Window {
@@ -20,7 +22,16 @@ const log = (line: string): void => console.warn(line)
 const link = createPageLink({ bridge: window.helm, capabilities: WINDOW_CAPABILITIES, log })
 
 /** The window's areas that reach the host over its own connection. */
-export const hostAdapters: readonly HostAdapter[] = [createHistoryAdapter(link, log)]
+export const hostAdapters: readonly HostAdapter[] = [
+  createHistoryAdapter(link, log),
+  createWorkspaceAdapter({
+    link,
+    own: window.helm,
+    onFocus: (listener) => window.addEventListener('focus', listener),
+    log
+  }),
+  createProfilesAdapter({ link, own: window.helm, log })
+]
 
 /**
  * The typed bridge, as a value the app can import.

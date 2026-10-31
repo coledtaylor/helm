@@ -543,12 +543,6 @@ function startApp(options: AppOptions = {}): void {
     (line) => console.log(line)
   )
 
-  /**
-   * Helm's settings as the window is told them: with sessions in the local
-   * host, the scan roots, pins and setup stamp are the host's, laid over.
-   */
-  const windowSettings = (own: AppSettings): AppSettings => desktopHost?.workspace.overlay(own) ?? own
-
   const sessions: SessionHost =
     desktopHost?.sessions ??
     createSessionHost({
@@ -677,7 +671,10 @@ function startApp(options: AppOptions = {}): void {
     settings: () => services.settings,
     writeSettings: (patch) => {
       const next = updateSettings(services, patch)
-      emit(win, 'settings:changed', windowSettings(next))
+      // With sessions in the local host the window lays the host's half over
+      // Helm's own itself, which it hears on its own channel.
+      if (desktopHost !== null) emit(win, 'ownSettings:changed', next)
+      else emit(win, 'settings:changed', next)
     },
     onChanged: (state) => emit(win, 'browser:changed', state),
     onOpened: (opened) => emit(win, 'browser:opened', opened),
@@ -841,14 +838,9 @@ function startApp(options: AppOptions = {}): void {
       // Every terminal drawn afresh into the page that has just loaded.
       desktopHost?.streams.resume()
       pushTheme({ services, themes, plugins, window: () => win })
-      if (desktopHost !== null) {
-        // The host scans, and says so on `scan:status` and `discovery:updated`
-        // itself; a host that cannot be reached says why where the scan shows.
-        void desktopHost.workspace.settings().then((settings) => emit(win, 'settings:changed', settings))
-        void desktopHost.workspace.scan(true).catch((err: unknown) => {
-          emit(win, 'scan:status', { running: false, error: err instanceof Error ? err.message : String(err) })
-        })
-      } else {
+      // With sessions in the local host the window reads its settings and
+      // starts its first scan over its own connection (`renderer/src/app/host/workspace.ts`).
+      if (desktopHost === null) {
         emit(win, 'settings:changed', services.settings)
         // The first scan is kicked off by the main process rather than waited on
         // by the renderer: the launcher paints from the cache immediately and
@@ -960,15 +952,12 @@ function startApp(options: AppOptions = {}): void {
    */
   let gitRefreshInFlight = false
   win.on('focus', () => {
-    if (gitRefreshInFlight) return
-    if ((desktopHost?.workspace.lastScan() ?? services.lastScan) === null) return
+    // With sessions in the local host the window asks the host itself, which
+    // reads git on its own machine and pushes it on `git:updated`.
+    if (desktopHost !== null || gitRefreshInFlight || services.lastScan === null) return
     gitRefreshInFlight = true
-    // The host reads git on its own machine and pushes it on `git:updated`.
-    const refreshed =
-      desktopHost !== null
-        ? desktopHost.workspace.refreshGit()
-        : refreshGit(services).then((states) => emit(win, 'git:updated', states))
-    void refreshed
+    void refreshGit(services)
+      .then((states) => emit(win, 'git:updated', states))
       .catch(() => undefined)
       .finally(() => {
         gitRefreshInFlight = false

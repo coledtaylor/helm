@@ -157,9 +157,13 @@ export function createDesktopHost({
   const log = (line: string): void => console.log(line)
   const link = createLocalHostLink(() => hostSettingsFor(services.settings, findClaudeExecutable()), log)
   const send: Emit = (channel, payload) => emit(window(), channel, payload)
+  // The window hears discovery, the settings and profiles over its own
+  // connection (`renderer/src/app/host`); main keeps the host's scan and
+  // profiles for its own readers and copies Helm's into a new host.
+  const toNoWindow: Emit = () => undefined
   const workspace = createHostWorkspace({
     link,
-    emit: send,
+    emit: toNoWindow,
     own: () => services.settings,
     writeOwn: (patch) => updateSettings(services, patch),
     claudePicked: (path) => {
@@ -208,7 +212,7 @@ export function createDesktopHost({
   const profiles = createHostProfiles({
     link,
     dialogs: nativeProfileDialogs(window),
-    emit: send,
+    emit: toNoWindow,
     ownProfiles: () => listProfiles(services.store),
     copied: () => services.settings.profilesCopiedToHostAt !== null,
     markCopied: () => {

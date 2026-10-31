@@ -645,6 +645,15 @@ export type HostLinkOpened =
   | { inHost: true; connection: number; appVersion: string }
   | { inHost: true; unreachable: string }
 
+/** What Helm's own build says of itself; `app:info` adds the `claude` version wherever sessions run. */
+export type OwnAppInfo = Omit<AppInfo, 'claudeVersion'>
+
+/** The profile file the user chose to import, read on their own machine. */
+export type ProfileFileChosen =
+  | { cancelled: true }
+  | { cancelled: false; fileName: string; yaml: string }
+  | { cancelled: false; error: string }
+
 // ---------------------------------------------------------------------------
 // Renderer -> main, with a response
 // ---------------------------------------------------------------------------
@@ -661,6 +670,24 @@ export interface IpcRequests {
 
   'settings:read': { request: void; response: AppSettings }
   'settings:write': { request: Partial<AppSettings>; response: AppSettings }
+
+  /**
+   * With sessions in the local host, the settings Helm keeps for itself:
+   * everything but the host's scan roots, pins and setup stamp. A write does
+   * what `settings:write` does with them (the theme, the picked `claude`, what
+   * the host is told) and answers Helm's own settings after.
+   */
+  'ownSettings:read': { request: void; response: AppSettings }
+  'ownSettings:write': { request: Partial<AppSettings>; response: AppSettings }
+  /** Helm's own build, data folder and runtime versions. */
+  'ownApp:info': { request: void; response: OwnAppInfo }
+
+  /** Helm's own question before a profile is deleted. */
+  'profileDialog:confirmDelete': { request: { name: string }; response: { confirmed: boolean } }
+  /** Helm's save dialog, then the profile's YAML written where it says. */
+  'profileDialog:export': { request: { fileName: string; yaml: string }; response: ExportProfileResult }
+  /** Helm's open dialog, then the chosen file read. */
+  'profileDialog:import': { request: void; response: ProfileFileChosen }
 
   /** Rows from the last scan, for painting before a fresh one finishes. */
   'discovery:cached': { request: void; response: CachedProject[] }
@@ -1655,6 +1682,8 @@ export interface IpcEvents {
   'git:updated': Record<string, GitState | null>
   'scan:status': ScanStatus
   'settings:changed': AppSettings
+  /** With sessions in the local host, Helm's own settings after any change to them. */
+  'ownSettings:changed': AppSettings
   /** The whole list after any write, so every surface showing profiles agrees
    * without each of them refetching. */
   'profiles:changed': Profile[]
@@ -1872,6 +1901,12 @@ export const REQUEST_CHANNELS = Object.keys({
   'hostLink:open': true,
   'settings:read': true,
   'settings:write': true,
+  'ownSettings:read': true,
+  'ownSettings:write': true,
+  'ownApp:info': true,
+  'profileDialog:confirmDelete': true,
+  'profileDialog:export': true,
+  'profileDialog:import': true,
   'discovery:cached': true,
   'discovery:scan': true,
   'roots:suggest': true,
@@ -2034,6 +2069,7 @@ export const EVENT_CHANNELS = Object.keys({
   'git:updated': true,
   'scan:status': true,
   'settings:changed': true,
+  'ownSettings:changed': true,
   'profiles:changed': true,
   'theme:changed': true,
   'themes:changed': true,

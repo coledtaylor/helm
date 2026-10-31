@@ -1,7 +1,9 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type WebContents } from 'electron'
 import { FOREIGN_PAGE, type HelmPage, type PageLinks } from './host/page-link'
+import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { pluginThemeOf } from '@helm/core'
+import { basename } from 'node:path'
+import { pluginThemeOf, type AppSettings } from '@helm/core'
 import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
@@ -26,7 +28,7 @@ import type { PluginHost } from './plugins/host'
 import type { HostPlugins } from './host/plugins'
 import { activePty, windowsBuildNumber } from './pty'
 import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
-import type { Services } from './services'
+import { updateSettings, type Services } from './services'
 import { localWorkspace, type WorkspaceService } from './workspace'
 import type { SessionHost } from './sessions'
 import type { ActivityService } from './activity'
@@ -35,6 +37,7 @@ import type {
   EventChannel,
   EventPayload,
   IpcRequests,
+  OwnAppInfo,
   RequestChannel,
   SendChannel,
   SendPayload
@@ -292,6 +295,90 @@ export function registerIpc(ctx: IpcContext): void {
       templates: ctx.templates
     })
 
+  const profileDialogs = nativeProfileDialogs(ctx.window)
+
+  /** What this build says of itself, wherever sessions run. */
+  const ownAppInfo = (): OwnAppInfo => ({
+    version: app.getVersion(),
+    mode: appMode,
+    dataDir,
+    dbFile,
+    migrations: [...services.store.migrations.applied, ...services.store.migrations.alreadyApplied],
+    versions: {
+      electron: process.versions['electron'] ?? 'unknown',
+      chrome: process.versions['chrome'] ?? 'unknown',
+      node: process.versions['node'] ?? 'unknown'
+    },
+    windowsBuild: windowsBuildNumber() ?? null,
+    home: homedir(),
+    releasesUrl: RELEASES_PAGE
+  })
+
+  /**
+   * What follows any write to Helm's settings, from either half: the session
+   * host reads the override, not the settings, so a picked CLI written here has
+   * to reach it too - otherwise sessions launch from one path and
+   * `claude mcp add` from another.
+   */
+  const settingsWritten = (patch: Partial<AppSettings>, next: AppSettings): void => {
+    if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
+    // Sessions in the local host run the `claude` and open the shell the
+    // host was told, and get the browser and session tools and the browser's
+    // reach as it was told, and the host holds its archive to the ceiling it
+    // was told, so it is told again at once when any of those changes.
+    if (
+      patch.claudePath !== undefined ||
+      patch.terminalShell !== undefined ||
+      patch.transcriptArchiveMaxBytes !== undefined ||
+      patch.browserMcp !== undefined ||
+      patch.browserMcpLocalOnly !== undefined ||
+      patch.sessionMcp !== undefined
+    ) {
+      ctx.hostSettingsChanged?.()
+    }
+    /*
+     * The endpoint follows its own tick, immediately.
+     *
+     * `browserMcpLocalOnly` is deliberately **not** here: it is read through
+     * a function at every tool call, so it takes effect on the next one
+     * without anything being told. This one is different because it owns a
+     * socket - and an off switch for a listener that only takes effect at the
+     * next restart is an off switch somebody would reasonably believe had
+     * already worked.
+     *
+     * Sessions already running keep their tokens until it stops, and stopping
+     * revokes them: a session that had the tools loses them mid-task, which
+     * is the honest consequence of turning them off and is what the sentence
+     * in the pane says.
+     *
+     * **Several families, one socket**, so the question is whether *anything*
+     * is still on rather than whether this one is - a plugin offering tools
+     * counts too, which is why the endpoint decides (`sync`). Unticking one
+     * family with another still on takes that family's route away - the
+     * endpoint reads the settings per request - and leaves the listener up
+     * for the rest, which is what makes them independent capabilities rather
+     * than one with several switches.
+     */
+    if (
+      (patch.browserMcp !== undefined || patch.sessionMcp !== undefined) &&
+      ctx.browserMcp !== null
+    ) {
+      void ctx.browserMcp.sync()
+    }
+    if (patch.theme !== undefined) nativeTheme.themeSource = patch.theme
+    if (
+      patch.theme !== undefined ||
+      patch.themeDark !== undefined ||
+      patch.themeLight !== undefined ||
+      patch.accentColor !== undefined
+    ) {
+      pushTheme(ctx)
+    } else if (patch.cornerRadius !== undefined || patch.density !== undefined) {
+      // Shape is not part of the window's theme, but it is part of a plugin's.
+      ctx.plugins.pushTheme(pluginThemeOf(ctx.themes.state(next).applied, next))
+    }
+  }
+
   const pages = pluginPages(ctx)
 
   const requests: RequestHandlers = {
@@ -302,88 +389,47 @@ export function registerIpc(ctx: IpcContext): void {
       return ctx.pageLinks.open(helmPageOf(event.sender))
     },
 
-    'app:info': async () => ({
-      version: app.getVersion(),
-      mode: appMode,
-      dataDir,
-      dbFile,
-      migrations: [...services.store.migrations.applied, ...services.store.migrations.alreadyApplied],
-      versions: {
-        electron: process.versions['electron'] ?? 'unknown',
-        chrome: process.versions['chrome'] ?? 'unknown',
-        node: process.versions['node'] ?? 'unknown'
-      },
-      claudeVersion: await readClaudeVersion(),
-      windowsBuild: windowsBuildNumber() ?? null,
-      home: homedir(),
-      releasesUrl: RELEASES_PAGE
-    }),
+    'app:info': async () => ({ ...ownAppInfo(), claudeVersion: await readClaudeVersion() }),
+
+    'ownApp:info': () => ownAppInfo(),
 
     'settings:read': () => workspace.settings(),
 
     'settings:write': async (patch) => {
       const next = await workspace.writeSettings(patch)
       emit(ctx.window(), 'settings:changed', next)
-      // The session host reads the override, not the settings, so a picked CLI
-      // written through this channel has to reach it too - otherwise sessions
-      // launch from one path and `claude mcp add` from another.
-      if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
-      // Sessions in the local host run the `claude` and open the shell the
-      // host was told, and get the browser and session tools and the browser's
-      // reach as it was told, and the host holds its archive to the ceiling it
-      // was told, so it is told again at once when any of those changes.
-      if (
-        patch.claudePath !== undefined ||
-        patch.terminalShell !== undefined ||
-        patch.transcriptArchiveMaxBytes !== undefined ||
-        patch.browserMcp !== undefined ||
-        patch.browserMcpLocalOnly !== undefined ||
-        patch.sessionMcp !== undefined
-      ) {
-        ctx.hostSettingsChanged?.()
-      }
-      /*
-       * The endpoint follows its own tick, immediately.
-       *
-       * `browserMcpLocalOnly` is deliberately **not** here: it is read through
-       * a function at every tool call, so it takes effect on the next one
-       * without anything being told. This one is different because it owns a
-       * socket - and an off switch for a listener that only takes effect at the
-       * next restart is an off switch somebody would reasonably believe had
-       * already worked.
-       *
-       * Sessions already running keep their tokens until it stops, and stopping
-       * revokes them: a session that had the tools loses them mid-task, which
-       * is the honest consequence of turning them off and is what the sentence
-       * in the pane says.
-       *
-       * **Several families, one socket**, so the question is whether *anything*
-       * is still on rather than whether this one is - a plugin offering tools
-       * counts too, which is why the endpoint decides (`sync`). Unticking one
-       * family with another still on takes that family's route away - the
-       * endpoint reads the settings per request - and leaves the listener up
-       * for the rest, which is what makes them independent capabilities rather
-       * than one with several switches.
-       */
-      if (
-        (patch.browserMcp !== undefined || patch.sessionMcp !== undefined) &&
-        ctx.browserMcp !== null
-      ) {
-        void ctx.browserMcp.sync()
-      }
-      if (patch.theme !== undefined) nativeTheme.themeSource = patch.theme
-      if (
-        patch.theme !== undefined ||
-        patch.themeDark !== undefined ||
-        patch.themeLight !== undefined ||
-        patch.accentColor !== undefined
-      ) {
-        pushTheme(ctx)
-      } else if (patch.cornerRadius !== undefined || patch.density !== undefined) {
-        // Shape is not part of the window's theme, but it is part of a plugin's.
-        ctx.plugins.pushTheme(pluginThemeOf(ctx.themes.state(next).applied, next))
-      }
+      settingsWritten(patch, next)
       return next
+    },
+
+    // With sessions in the local host, the window keeps the host's half of
+    // the settings over its own connection and Helm's half here.
+    'ownSettings:read': () => services.settings,
+
+    'ownSettings:write': (patch) => {
+      const next = updateSettings(services, patch)
+      emit(ctx.window(), 'ownSettings:changed', next)
+      settingsWritten(patch, next)
+      return next
+    },
+
+    'profileDialog:confirmDelete': async ({ name }) => ({ confirmed: await profileDialogs.confirmDelete(name) }),
+
+    'profileDialog:export': async ({ fileName, yaml }) => {
+      const file = await profileDialogs.chooseExportFile(fileName)
+      if (file === null) return { file: null }
+      await writeFile(file, yaml, 'utf8')
+      return { file }
+    },
+
+    'profileDialog:import': async () => {
+      const file = await profileDialogs.chooseImportFile()
+      if (file === null) return { cancelled: true }
+      try {
+        return { cancelled: false, fileName: basename(file), yaml: await readFile(file, 'utf8') }
+      } catch (error) {
+        return { cancelled: false, error: `${basename(file)}: ${(error as Error).message}` }
+      }
     },
 
     'discovery:cached': () => workspace.cached(),

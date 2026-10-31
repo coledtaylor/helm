@@ -3442,6 +3442,9 @@ export const CLIENT_ONLY: readonly OutsideEntry[] = [
   { channels: "probe:*", reason: "the desktop's terminal fidelity diagnostics" },
   { channels: "content:artifactConsole", reason: "a line from an HTML artifact's frame, which the client renders" },
   { channels: "hostLink:*", reason: "a Helm page's own connection to the host, whose protocol frames the desktop's main process pipes to a bridge and never reads" },
+  { channels: "ownSettings:*", reason: "the settings the client keeps for itself: its window, theme, terminal and browser preferences, and the programs it picked, which its main process tells the host" },
+  { channels: "ownApp:info", reason: "the client's own build, data folder and runtime versions" },
+  { channels: "profileDialog:*", reason: "the client's own dialogs for deleting, exporting and importing a profile, and the file it writes or reads on its machine; the profile itself is the host's" },
 ];
 
 /** Channels between a plugin's background page and what runs it, which never cross the protocol. */

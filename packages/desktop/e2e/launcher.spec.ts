@@ -150,7 +150,8 @@ test('coming back to the window shows the branch and changes made in a terminal 
   git('switch', '-q', '-c', 'work/terminal')
   writeFileSync(join(world.projects.alpha, 'notes from the terminal.md'), '# scratch\n')
 
-  // Coming back to the front is the window's `focus`. A focus the launch
+  // Coming back to the front is the window's `focus`, which main hears and,
+  // with sessions in the local host, the page itself does. A focus the launch
   // itself caused may still be reading git, and a focus during that one is
   // dropped, so it is given again until the fresh reading arrives.
   const browserWindow = await app.browserWindow(window)
@@ -158,6 +159,9 @@ test('coming back to the window shows the branch and changes made in a terminal 
     .poll(async () => {
       await browserWindow.evaluate((win) => {
         win.emit('focus')
+      })
+      await window.evaluate(() => {
+        window.dispatchEvent(new Event('focus'))
       })
       return row.textContent()
     })
