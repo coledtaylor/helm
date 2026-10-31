@@ -1659,6 +1659,18 @@ export interface AppSettings {
    */
   sessionsInHost: boolean
   /**
+   * What quitting Helm does to the sessions it started on a host, by host:
+   * `end` them or `keep` them running there. This PC's host is keyed
+   * `LOCAL_HOST_KEY`, and a host with no entry ends them (`quitEndsSessions`).
+   *
+   * Kept on this device, never in the host: each client decides for itself
+   * what its quitting does. Read only with `sessionsInHost` on; with it off,
+   * sessions live in Helm's own process and end with it whatever this says.
+   * The quit question's "Keep running and quit" applies to that one quit and
+   * never writes here; only Settings does.
+   */
+  quitSessions: Readonly<Record<string, QuitSessions>>
+  /**
    * When Helm's saved profiles were copied into the local host, ISO 8601, or
    * null while they never have been.
    *
@@ -1681,6 +1693,19 @@ export interface AppSettings {
    * the next start. Helm's own plugin records are never changed by the copy.
    */
   pluginsCopiedToHostAt: string | null
+}
+
+/** What quitting Helm does to the sessions it started on a host. */
+export type QuitSessions = 'end' | 'keep'
+
+export const QUIT_SESSIONS: readonly QuitSessions[] = ['end', 'keep']
+
+/** The key `quitSessions` holds this PC's own host under. */
+export const LOCAL_HOST_KEY = 'local'
+
+/** Whether quitting Helm ends the sessions it started on `host`: yes unless the setting keeps them. */
+export function quitEndsSessions(settings: Pick<AppSettings, 'quitSessions'>, host: string = LOCAL_HOST_KEY): boolean {
+  return (settings.quitSessions[host] ?? 'end') === 'end'
 }
 
 /** How many addresses the dropdown offers. Ten, and no manager behind it. */
@@ -1752,6 +1777,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // it. See the field for what is not in it, which is what makes that true.
   sessionMcp: true,
   sessionsInHost: false,
+  // Empty: this PC's host then ends the sessions Helm started when it quits,
+  // which is what a session on your own computer usually wants.
+  quitSessions: {},
   profilesCopiedToHostAt: null,
   pluginsCopiedToHostAt: null
 }

@@ -476,9 +476,17 @@ export interface SessionConfirmRequest {
   detail: string
   /** What the agreeing button says. Plural when quitting ends several. */
   confirmLabel: string
+  /**
+   * With sessions in the local host, the quit question's third answer: quit
+   * and leave the sessions running in the host. Absent where there is none.
+   */
+  keepLabel?: string
   /** Names of the sessions this ends, for the dialog to list. */
   sessionNames: string[]
 }
+
+/** The answer to the quit question: end the sessions and quit, keep them running and quit, or stay. */
+export type QuitAnswer = 'end' | 'keep' | 'cancel'
 
 // ---------------------------------------------------------------------------
 // The browser pane
@@ -695,6 +703,19 @@ export interface IpcRequests {
    * the host's restore offer is placed by. Main keeps it; the window asks.
    */
   'windowSessions:lostLayout': { request: void; response: SavedPaneLayout | null }
+  /**
+   * With sessions in the local host, how many sessions are running in this
+   * PC's host, whichever device started them: what stopping it ends. Rejects
+   * with the link's sentence when the host cannot be reached.
+   */
+  'windowSessions:hostSessionCount': { request: void; response: number }
+  /**
+   * With sessions in the local host, stops this PC's host once the user has
+   * agreed: every session in it ends and is recorded as ended, and none is
+   * offered back. Helm connects again on its next request, which starts a
+   * fresh host. Main holds the host link, so main sends the stop.
+   */
+  'windowSessions:stopHost': { request: void; response: void }
   /**
    * With sessions in the local host, what the hidden plugin host window has
    * reported of the background pages it runs, which Settings lays over the
@@ -1661,7 +1682,12 @@ export interface IpcSends {
    * the question travelled the other way: main is the side waiting, and it
    * matches the reply to the question by `id`.
    */
-  'session:confirmed': { id: number; agreed: boolean }
+  'session:confirmed': {
+    id: number
+    agreed: boolean
+    /** The quit question's "Keep running and quit": not agreed to end, but quit all the same. */
+    keep?: boolean
+  }
 
   /**
    * With sessions in the local host: a session ended that the host judged
@@ -1670,7 +1696,7 @@ export interface IpcSends {
    */
   'windowSessions:notify': SessionRecord
   /** With sessions in the local host, the window's answer to main's `windowSessions:quitConfirm`. */
-  'windowSessions:quitConfirmed': { id: number; agreed: boolean }
+  'windowSessions:quitConfirmed': { id: number; answer: QuitAnswer }
 
   /** Spike harness: the renderer's answer to a `probe:req`. */
   'probe:res': { id: number; value: unknown }
@@ -1962,6 +1988,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'profileDialog:export': true,
   'profileDialog:import': true,
   'windowSessions:lostLayout': true,
+  'windowSessions:hostSessionCount': true,
+  'windowSessions:stopHost': true,
   'pluginBackground:states': true,
   'discovery:cached': true,
   'discovery:scan': true,

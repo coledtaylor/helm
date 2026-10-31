@@ -40,6 +40,21 @@ export interface StatusBarProps {
   onOpenUpdate: (url: string) => void
   /** Each plugin's item, in the order the plugins were added. Pressing one opens its panel. */
   plugins?: readonly StatusPluginItem[] | undefined
+  /**
+   * The host sessions run in and what quitting Helm does there, while
+   * sessions run in the local host; absent otherwise, when there is no host
+   * to name. Pressing it opens the setting that decides.
+   */
+  host?: StatusHostItem | null | undefined
+}
+
+export interface StatusHostItem {
+  /** What the bar calls the host: "This PC" for this PC's own. */
+  name: string
+  /** Whether quitting Helm ends the sessions it started there. */
+  quitEnds: boolean
+  /** Opens Settings > Sessions, where what quitting does is set. */
+  onOpen: () => void
 }
 
 export interface StatusPluginItem {
@@ -83,7 +98,8 @@ export function StatusBar({
   onUsageDisplayChange,
   update,
   onOpenUpdate,
-  plugins = []
+  plugins = [],
+  host = null
 }: StatusBarProps): JSX.Element {
   const total = sessions.working + sessions.waiting + sessions.idle
   return (
@@ -178,6 +194,23 @@ export function StatusBar({
               {sessions.idle} idle
             </span>
           )}
+        </>
+      )}
+
+      {/* Where the sessions live and what a quit does to them, said before
+          anybody quits: a quit should never do what you did not expect. */}
+      {host !== null && (
+        <>
+          <Divider />
+          <button
+            type="button"
+            data-status-host={host.quitEnds ? 'ends' : 'keeps'}
+            onClick={host.onOpen}
+            title={`Sessions run in the host on ${host.name}, and quitting Helm ${host.quitEnds ? 'ends' : 'keeps running'} the ones it started there. Opens Settings.`}
+            className="-mx-1 shrink-0 rounded px-1 transition-colors hover:bg-hover hover:text-fg"
+          >
+            {host.name} · quit {host.quitEnds ? 'ends' : 'keeps'} sessions
+          </button>
         </>
       )}
 

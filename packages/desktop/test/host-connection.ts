@@ -48,6 +48,7 @@ export function fakeLink(
     },
     writeSettings: () => undefined,
     quit: () => Promise.resolve(),
+    stopHost: () => Promise.resolve(),
     async connect() {
       await link.connection()
     }
@@ -73,6 +74,7 @@ export function reconnectingLink(first: FakeConnection): HostLink & { reconnect(
     },
     writeSettings: () => undefined,
     quit: () => Promise.resolve(),
+    stopHost: () => Promise.resolve(),
     async reconnect(next) {
       current = next
       attempt = connect()

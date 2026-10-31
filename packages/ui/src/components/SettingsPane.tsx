@@ -20,6 +20,7 @@ import {
   type BrowserReach,
   type BrowserSearch,
   type DetectedShell,
+  type QuitSessions,
   type TerminalCursorStyle,
   type Density,
   type ThemeDefinition,
@@ -236,6 +237,16 @@ export interface SettingsPaneProps {
   /** Run sessions and terminals in the local host. Read when Helm starts, so a change waits for the next start. */
   sessionsInHost: boolean
   onSessionsInHostChange: (next: boolean) => void
+  /**
+   * What quitting Helm does to the sessions it started on this PC's host,
+   * kept on this device. Shown while `sessionsInHost` is on.
+   */
+  quitSessions: QuitSessions
+  onQuitSessionsChange: (next: QuitSessions) => void
+  /** Whether sessions run in this PC's host this run, so there is a host to stop. */
+  hostRunning: boolean
+  /** Asks how many sessions stopping ends, and stops this PC's host on a yes. */
+  onStopHost: () => void
 }
 
 /**
@@ -343,7 +354,11 @@ export function SettingsPane({
   restoreWithoutAsking,
   onRestoreWithoutAskingChange,
   sessionsInHost,
-  onSessionsInHostChange
+  onSessionsInHostChange,
+  quitSessions,
+  onQuitSessionsChange,
+  hostRunning,
+  onStopHost
 }: SettingsPaneProps): JSX.Element {
   const found = status !== null && status.path !== null && status.version !== null
   const overridden = status?.source === 'setting'
@@ -621,6 +636,10 @@ export function SettingsPane({
               onRestoreChange={onRestoreWithoutAskingChange}
               inHost={sessionsInHost}
               onInHostChange={onSessionsInHostChange}
+              quit={quitSessions}
+              onQuitChange={onQuitSessionsChange}
+              hostRunning={hostRunning}
+              onStopHost={onStopHost}
             />
           )}
 
@@ -1483,7 +1502,11 @@ function SessionsGroup({
   restore,
   onRestoreChange,
   inHost,
-  onInHostChange
+  onInHostChange,
+  quit,
+  onQuitChange,
+  hostRunning,
+  onStopHost
 }: {
   mcp: boolean
   onMcpChange: (next: boolean) => void
@@ -1491,6 +1514,10 @@ function SessionsGroup({
   onRestoreChange: (next: boolean) => void
   inHost: boolean
   onInHostChange: (next: boolean) => void
+  quit: QuitSessions
+  onQuitChange: (next: QuitSessions) => void
+  hostRunning: boolean
+  onStopHost: () => void
 }): JSX.Element {
   return (
     <Group
@@ -1534,7 +1561,7 @@ function SessionsGroup({
         label="Run sessions in the local host"
         hint={
           inHost
-            ? 'Sessions and terminals run in the local host program, which Helm starts and stops. Takes effect the next time Helm starts.'
+            ? 'Sessions and terminals run in the local host program, which Helm starts and which can outlive it. Takes effect the next time Helm starts.'
             : 'Sessions and terminals run in Helm itself. Takes effect the next time Helm starts.'
         }
       >
@@ -1546,6 +1573,41 @@ function SessionsGroup({
           />
         </span>
       </Row>
+      {/* Only this PC's host: the one a desktop runs its sessions in. */}
+      {inHost && (
+        <>
+          <Row
+            label="When you quit Helm"
+            hint={
+              quit === 'end'
+                ? 'For this PC’s host. Quitting ends the sessions Helm started there, after asking when any are running. Kept on this device.'
+                : 'For this PC’s host. Quitting leaves the sessions Helm started running there, and they are back in their tabs when Helm opens again. Kept on this device.'
+            }
+          >
+            <Select
+              value={quit}
+              label="When you quit Helm"
+              data-settings-quit-sessions={quit}
+              onChange={(value) => onQuitChange(value === 'keep' ? 'keep' : 'end')}
+            >
+              <option value="end">End the sessions it started</option>
+              <option value="keep">Keep them running</option>
+            </Select>
+          </Row>
+          <Row
+            label="This PC’s host"
+            hint={
+              hostRunning
+                ? 'Stopping it ends every session running in it, whichever device started it, after asking. Helm starts it again when it next needs it.'
+                : 'Sessions run in Helm itself until it starts again, so there is no host to stop.'
+            }
+          >
+            <Action data-settings-stop-host onClick={onStopHost} disabled={!hostRunning}>
+              Stop host
+            </Action>
+          </Row>
+        </>
+      )}
     </Group>
   )
 }

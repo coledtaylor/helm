@@ -128,6 +128,33 @@ describe('the link to the local host', () => {
     expect(local.closed).toBe(true)
   })
 
+  it('stops the host the user asked to stop with the plain-stop reason, and the next request starts a fresh one', async () => {
+    const first = new FakeConnection()
+    // The host ends the connection once it has stopped.
+    first.answer('host:stop', () => {
+      first.close()
+      return null
+    })
+    const second = new FakeConnection()
+    const started = [fakeLocalHost(first, true), fakeLocalHost(second, true)]
+    let starts = 0
+    const link = createHostLink({
+      start: () => Promise.resolve(started[starts++] as ReturnType<typeof fakeLocalHost>),
+      settings: () => ({}),
+      log: () => undefined,
+      ...steppedTimers()
+    })
+    await link.connection()
+
+    await link.stopHost()
+
+    expect(first.payloads('host:stop')).toEqual([{ reason: 'stop' }])
+    expect(first.payloads('host:quit')).toEqual([])
+    expect(link.current()).toBeNull()
+    await expect(link.connection()).resolves.toBe(second.asConnection())
+    expect(starts).toBe(2)
+  })
+
   it('sends the claude chosen in Settings, or the one Helm finds, and the terminal shell', () => {
     const base = { claudePath: null, terminalShell: null } as Parameters<typeof hostSettingsFor>[0]
     expect(hostSettingsFor({ ...base, claudePath: '/chosen/claude' }, '/found/claude')).toEqual({

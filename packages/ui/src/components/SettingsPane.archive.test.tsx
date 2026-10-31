@@ -104,6 +104,10 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onRestoreWithoutAskingChange: vi.fn(),
     sessionsInHost: s.sessionsInHost,
     onSessionsInHostChange: vi.fn(),
+    quitSessions: 'end',
+    onQuitSessionsChange: vi.fn(),
+    hostRunning: false,
+    onStopHost: vi.fn(),
     ...overrides
   }
   render(<SettingsPane {...props} />)

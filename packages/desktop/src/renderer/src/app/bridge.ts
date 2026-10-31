@@ -50,6 +50,9 @@ const sessions = createSessionsAdapters({
   log
 })
 
+/** Whether sessions run in the local host this run: main says once, when the window first asks. */
+export const sessionsInHost = (): Promise<boolean> => link.inHost()
+
 /** The window's areas that reach the host over its own connection. */
 export const hostAdapters: readonly HostAdapter[] = [
   createHistoryAdapter(link, log),

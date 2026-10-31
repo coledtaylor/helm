@@ -60,5 +60,39 @@ describe('ConfirmSessionDialog', () => {
       'and 2 more sessions'
     ])
     expect(within(dialog).getByRole('button', { name: 'End 8 sessions' })).toBeDefined()
+    // Without a keep answer there are two buttons, as with the setting off.
+    expect(within(dialog).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Cancel',
+      'End 8 sessions'
+    ])
+  })
+
+  it('asks a quit with sessions in the host with End and quit, Keep running and quit, and Cancel, Cancel in focus', async () => {
+    const props = renderDialog({
+      kind: 'quit',
+      message: 'Quitting Helm ends 1 session on this PC’s host.',
+      detail: 'End and quit stops it.',
+      confirmLabel: 'End and quit',
+      keepLabel: 'Keep running and quit',
+      sessionNames: ['review'],
+      onKeep: vi.fn()
+    })
+    const dialog = screen.getByRole('alertdialog', { name: 'Quitting Helm ends 1 session on this PC’s host.' })
+    expect(within(dialog).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Cancel',
+      'Keep running and quit',
+      'End and quit'
+    ])
+    // The message counts it without naming it, so the one session is listed.
+    expect(within(dialog).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['review'])
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Keep running and quit' }))
+    expect(props.onKeep).toHaveBeenCalledTimes(1)
+    expect(props.onConfirm).not.toHaveBeenCalled()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'End and quit' }))
+    expect(props.onConfirm).toHaveBeenCalledTimes(1)
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(props.onCancel).toHaveBeenCalledTimes(1)
   })
 })

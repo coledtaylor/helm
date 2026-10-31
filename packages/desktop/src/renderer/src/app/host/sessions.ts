@@ -133,21 +133,23 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
   }
   deps.front.onChange(sendFocus)
 
-  // Questions asked in the window, each answered once, by the id it was asked with.
-  const questions = new Map<number, (agreed: boolean) => void>()
+  // Questions asked in the window, each answered once, by the id it was asked
+  // with. `keep` is the quit question's Keep running and quit.
+  const questions = new Map<number, (agreed: boolean, keep: boolean) => void>()
   let nextQuestion = 1
-  const ask = (question: Question, answered: (agreed: boolean) => void): void => {
+  const ask = (question: Question, answered: (agreed: boolean, keep: boolean) => void): void => {
     if (events.count('session:confirm') === 0) {
       // Nobody to ask: what is running stays running.
       log(`host: nothing in the window could ask “${question.message}”`)
-      answered(false)
+      answered(false, false)
       return
     }
     const id = nextQuestion++
     questions.set(id, answered)
     events.tell('session:confirm', { id, ...question })
   }
-  const asking = (question: Question): Promise<boolean> => new Promise((resolve) => ask(question, resolve))
+  const asking = (question: Question): Promise<boolean> =>
+    new Promise((resolve) => ask(question, (agreed) => resolve(agreed)))
 
   let relisting = false
   let relistAgain = false
@@ -397,10 +399,10 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         focused = [...ids]
         sendFocus()
       },
-      'session:confirmed': ({ id, agreed }) => {
+      'session:confirmed': ({ id, agreed, keep }) => {
         const answered = questions.get(id)
         questions.delete(id)
-        answered?.(agreed)
+        answered?.(agreed, keep === true)
       },
       'sessions:watch': ({ watching }) => resources.watch(watching)
     },
@@ -414,7 +416,9 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         if (!quitHeard) {
           quitHeard = true
           own.on('windowSessions:quitConfirm', ({ id, ...question }) =>
-            ask(question, (agreed) => own.send('windowSessions:quitConfirmed', { id, agreed }))
+            ask(question, (agreed, keep) =>
+              own.send('windowSessions:quitConfirmed', { id, answer: agreed ? 'end' : keep ? 'keep' : 'cancel' })
+            )
           )
         }
         return confirmRoute(listener)

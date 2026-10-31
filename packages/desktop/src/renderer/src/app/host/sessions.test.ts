@@ -210,17 +210,32 @@ describe('sessions over the window’s own connection', () => {
   it('asks main’s question before quitting in the window, and gives main the answer', async () => {
     const { adapters, bridge } = world()
     const questions = hear(adapters, 'session:confirm')
-    bridge.push('windowSessions:quitConfirm', {
-      id: 41,
+    const quitQuestion = (id: number): SessionConfirmRequest => ({
+      id,
       kind: 'quit',
-      message: '2 Claude Code sessions are still running.',
-      detail: 'Quitting Helm ends them.',
-      confirmLabel: 'End 2 sessions',
+      message: 'Quitting Helm ends 2 sessions on this PC’s host.',
+      detail: 'End and quit stops them.',
+      confirmLabel: 'End and quit',
+      keepLabel: 'Keep running and quit',
       sessionNames: ['app', 'api']
     })
-    expect(questions).toEqual([expect.objectContaining({ kind: 'quit', confirmLabel: 'End 2 sessions' })])
-    send(adapters, 'session:confirmed', { id: (questions[0] as SessionConfirmRequest).id, agreed: true })
-    expect(bridge.sent).toEqual([{ channel: 'windowSessions:quitConfirmed', payload: { id: 41, agreed: true } }])
+    bridge.push('windowSessions:quitConfirm', quitQuestion(41))
+    bridge.push('windowSessions:quitConfirm', quitQuestion(42))
+    bridge.push('windowSessions:quitConfirm', quitQuestion(43))
+    expect(questions).toEqual([
+      expect.objectContaining({ kind: 'quit', confirmLabel: 'End and quit', keepLabel: 'Keep running and quit' }),
+      expect.anything(),
+      expect.anything()
+    ])
+    const [end, keep, cancel] = questions as SessionConfirmRequest[]
+    send(adapters, 'session:confirmed', { id: (end as SessionConfirmRequest).id, agreed: true })
+    send(adapters, 'session:confirmed', { id: (keep as SessionConfirmRequest).id, agreed: false, keep: true })
+    send(adapters, 'session:confirmed', { id: (cancel as SessionConfirmRequest).id, agreed: false })
+    expect(bridge.sent).toEqual([
+      { channel: 'windowSessions:quitConfirmed', payload: { id: 41, answer: 'end' } },
+      { channel: 'windowSessions:quitConfirmed', payload: { id: 42, answer: 'keep' } },
+      { channel: 'windowSessions:quitConfirmed', payload: { id: 43, answer: 'cancel' } }
+    ])
   })
 
   it('adopts and carries a session started outside this window once the host’s activity moves', async () => {

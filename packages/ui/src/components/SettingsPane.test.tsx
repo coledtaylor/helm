@@ -127,6 +127,10 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onRestoreWithoutAskingChange: vi.fn(),
     sessionsInHost: false,
     onSessionsInHostChange: vi.fn(),
+    quitSessions: 'end',
+    onQuitSessionsChange: vi.fn(),
+    hostRunning: false,
+    onStopHost: vi.fn(),
     ...overrides
   }
   const view = render(<SettingsPane {...props} />)
@@ -555,11 +559,44 @@ describe('SettingsPane', () => {
     rerender({ section: 'sessions', sessionsInHost: true })
     expect(tick()).toHaveProperty('checked', true)
     expect(sessions()).toContain(
-      'Sessions and terminals run in the local host program, which Helm starts and stops. Takes effect the next time Helm starts.'
+      'Sessions and terminals run in the local host program, which Helm starts and which can outlive it. Takes effect the next time Helm starts.'
     )
 
     await userEvent.click(tick())
     expect(props.onSessionsInHostChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it('offers what quitting does on this PC’s host while sessions run in the local host, End by default', async () => {
+    const { props, rerender } = renderPane({ section: 'sessions', sessionsInHost: false })
+    expect(within(group('Sessions')).queryByRole('combobox', { name: 'When you quit Helm' })).toBeNull()
+    expect(within(group('Sessions')).queryByRole('button', { name: 'Stop host' })).toBeNull()
+
+    rerender({ section: 'sessions', sessionsInHost: true, hostRunning: true })
+    const quit = within(group('Sessions')).getByRole<HTMLSelectElement>('combobox', { name: 'When you quit Helm' })
+    expect(quit.value).toBe('end')
+    expect([...quit.options].map((option) => option.textContent)).toEqual([
+      'End the sessions it started',
+      'Keep them running'
+    ])
+    expect(group('Sessions').textContent).toContain('For this PC’s host. Quitting ends the sessions Helm started there')
+
+    await userEvent.selectOptions(quit, 'keep')
+    expect(props.onQuitSessionsChange).toHaveBeenLastCalledWith('keep')
+    rerender({ section: 'sessions', sessionsInHost: true, hostRunning: true, quitSessions: 'keep' })
+    expect(within(group('Sessions')).getByRole<HTMLSelectElement>('combobox', { name: 'When you quit Helm' }).value).toBe(
+      'keep'
+    )
+    expect(group('Sessions').textContent).toContain('Quitting leaves the sessions Helm started running there')
+  })
+
+  it('stops this PC’s host from Settings through the question, and only while there is one', async () => {
+    const { props, rerender } = renderPane({ section: 'sessions', sessionsInHost: true, hostRunning: true })
+    await userEvent.click(within(group('Sessions')).getByRole('button', { name: 'Stop host' }))
+    expect(props.onStopHost).toHaveBeenCalledTimes(1)
+
+    // Turned on, but sessions run in Helm itself until it starts again.
+    rerender({ section: 'sessions', sessionsInHost: true, hostRunning: false })
+    expect(within(group('Sessions')).getByRole('button', { name: 'Stop host' })).toHaveProperty('disabled', true)
   })
 })
 

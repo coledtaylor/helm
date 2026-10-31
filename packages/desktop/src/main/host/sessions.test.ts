@@ -4,7 +4,7 @@ import { FakeConnection, fakeLink } from '../../../test/host-connection'
 import type { ConfirmRequest } from '../sessions'
 import type * as P from './protocol'
 import { HostRequestError } from './client'
-import { CLAUDE_CODE_BACKEND, createHostSessions, hostSettingsFor } from './sessions'
+import { CLAUDE_CODE_BACKEND, createHostSessions, hostSettingsFor, quitQuestion } from './sessions'
 import { createTerminalStreams } from './streams'
 
 const ROW: P.SessionRecord = {
@@ -446,7 +446,7 @@ describe('sessions through the local host', () => {
     w.connection.push('session:activity', [])
     await expect.poll(() => w.host.sessions.runningCount()).toBe(2)
     await expect(w.host.sessions.confirmCloseAll()).resolves.toBe(true)
-    expect(w.asked).toEqual([expect.objectContaining({ kind: 'quit', confirmLabel: 'End 2 sessions' })])
+    expect(w.asked).toEqual([expect.objectContaining({ kind: 'quit', confirmLabel: 'End and quit' })])
     expect(w.connection.streamsFor('session:data', 7)).toHaveLength(0)
 
     w.connection.push('session:notify', row({ status: 'exited', exitCode: 0 }))
@@ -469,10 +469,37 @@ describe('sessions through the local host', () => {
     expect(w.asked).toEqual([
       expect.objectContaining({
         kind: 'quit',
-        confirmLabel: 'End 2 sessions',
+        confirmLabel: 'End and quit',
         sessions: [expect.objectContaining({ id: 7 }), expect.objectContaining({ id: 9 })]
       })
     ])
+  })
+
+  it('asks how many sessions quitting ends and on which host, offering to keep them, and gives back the answer', async () => {
+    const w = world({ listed: [row(), row({ id: 9, name: 'api' })] })
+    await w.connect()
+
+    expect(quitQuestion(w.host.sessions.list())).toEqual(
+      expect.objectContaining({
+        kind: 'quit',
+        message: 'Quitting Helm ends 2 sessions on this PC’s host.',
+        confirmLabel: 'End and quit',
+        keepLabel: 'Keep running and quit'
+      })
+    )
+    expect(quitQuestion(w.host.sessions.list().slice(0, 1)).message).toBe(
+      'Quitting Helm ends 1 session on this PC’s host.'
+    )
+    // Without a three-way question, a yes is End and a no is Cancel.
+    await expect(w.host.askQuit()).resolves.toBe('end')
+    expect(w.asked).toEqual([expect.objectContaining({ kind: 'quit', keepLabel: 'Keep running and quit' })])
+  })
+
+  it('answers End at once when nothing this device started is running', async () => {
+    const w = world()
+    await w.connect()
+    await expect(w.host.askQuit()).resolves.toBe('end')
+    expect(w.asked).toEqual([])
   })
 
   it('asks about nothing when every running session was started from another device', async () => {

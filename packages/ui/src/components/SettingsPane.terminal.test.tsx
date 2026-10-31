@@ -101,6 +101,10 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     onRestoreWithoutAskingChange: vi.fn(),
     sessionsInHost: DEFAULT_SETTINGS.sessionsInHost,
     onSessionsInHostChange: vi.fn(),
+    quitSessions: 'end',
+    onQuitSessionsChange: vi.fn(),
+    hostRunning: false,
+    onStopHost: vi.fn(),
     ...overrides
   }
 }

@@ -83,3 +83,33 @@ describe('StatusBar: plugin items', () => {
     expect(segments().filter((segment) => segment === '|')).toHaveLength(2)
   })
 })
+
+describe('StatusBar: the host sessions run in', () => {
+  it('names this PC’s host and that quitting ends its sessions, and a press opens Settings', () => {
+    const onOpen = vi.fn()
+    renderBar({ host: { name: 'This PC', quitEnds: true, onOpen } })
+    const item = screen.getByRole('button', { name: 'This PC · quit ends sessions' })
+    expect(item.getAttribute('data-status-host')).toBe('ends')
+    const all = segments()
+    // After the sessions, behind a rule of its own.
+    expect(all.slice(all.indexOf('No sessions running') + 1, all.indexOf('No sessions running') + 3)).toEqual([
+      '|',
+      'This PC · quit ends sessions'
+    ])
+    item.click()
+    expect(onOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('says quitting keeps them when the setting does', () => {
+    renderBar({ host: { name: 'This PC', quitEnds: false, onOpen: vi.fn() } })
+    expect(screen.getByRole('button', { name: 'This PC · quit keeps sessions' }).getAttribute('data-status-host')).toBe(
+      'keeps'
+    )
+  })
+
+  it('shows no host item while sessions run in Helm itself', () => {
+    renderBar({ host: null })
+    expect(document.querySelectorAll('[data-status-host]')).toHaveLength(0)
+    expect(segments().filter((segment) => segment === '|')).toHaveLength(2)
+  })
+})

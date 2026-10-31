@@ -9,9 +9,9 @@ import {
 } from '@helm/core'
 import type { ActivityService } from '../activity'
 import type { RestoreService } from '../restore'
-import type { Confirm, SessionHost } from '../sessions'
+import type { Confirm, ConfirmRequest, QuitConfirm, SessionHost } from '../sessions'
 import { CLAUDE_CODE_BACKEND } from '../../shared/host/backend'
-import type { EventChannel, EventPayload } from '../../shared/ipc'
+import type { EventChannel, EventPayload, QuitAnswer } from '../../shared/ipc'
 import type { HostConnection, HostSubscription } from './client'
 import type { HostLink } from './link'
 import type * as P from './protocol'
@@ -99,6 +99,11 @@ export interface HostSessionsDeps {
   emit: Emit
   confirm: Confirm
   /**
+   * The quit question, with Keep running and quit beside End and quit. Absent,
+   * it is `confirm`'s yes or no, which never keeps them.
+   */
+  confirmQuit?: QuitConfirm
+  /**
    * Shows the OS notification for a session that ended where nobody saw it.
    * Absent when the window hears the host's word itself and hands it to main.
    */
@@ -136,6 +141,32 @@ export interface HostSessions {
    * terminal carried, and returned as the window shows it.
    */
   adoptSession: (row: P.SessionRecord) => SessionRecord
+  /**
+   * Asks what quitting does to the running sessions this device started in
+   * this PC's host - End and quit, Keep running and quit, or Cancel - saying
+   * how many and on which host. Answers End at once when there are none.
+   */
+  askQuit: () => Promise<QuitAnswer>
+}
+
+/** The quit question for `live`, the running sessions this device started in this PC's host. */
+export function quitQuestion(live: readonly SessionRecord[]): ConfirmRequest {
+  const count = live.length
+  return {
+    kind: 'quit',
+    message: `Quitting Helm ends ${String(count)} session${count === 1 ? '' : 's'} on this PC’s host.`,
+    detail:
+      'End and quit stops ' +
+      (count === 1 ? 'it' : 'them') +
+      '. Keep running and quit leaves ' +
+      (count === 1 ? 'it' : 'them') +
+      ' running in the host, back in ' +
+      (count === 1 ? 'its tab' : 'their tabs') +
+      ' when Helm opens again. Settings › Sessions sets what quitting does.',
+    confirmLabel: 'End and quit',
+    keepLabel: 'Keep running and quit',
+    sessions: [...live]
+  }
 }
 
 const isRunning = (record: SessionRecord): boolean => record.status === 'running'
@@ -302,6 +333,14 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   const running = (): SessionRecord[] => [...records.values()].filter(isRunning)
   /** The running sessions this device started: what quitting Helm ends. */
   const runningHere = (): SessionRecord[] => running().filter((record) => !startedElsewhere.has(record.id))
+
+  const confirmQuit: QuitConfirm =
+    deps.confirmQuit ?? (async (request) => ((await deps.confirm(request)) ? 'end' : 'cancel'))
+
+  const askQuit = (): Promise<QuitAnswer> => {
+    const live = runningHere()
+    return live.length === 0 ? Promise.resolve('end') : confirmQuit(quitQuestion(live))
+  }
 
   /** A session with no profile and nothing composed: a folder, a name, and maybe a first message. */
   async function startPlain(req: {
@@ -512,20 +551,8 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
 
     runningCount: () => runningHere().length,
 
-    confirmCloseAll() {
-      const live = runningHere()
-      if (live.length === 0) return Promise.resolve(true)
-      return deps.confirm({
-        kind: 'quit',
-        message:
-          live.length === 1
-            ? `“${live[0] ? sessionLabel(live[0]) : ''}” is still running.`
-            : `${String(live.length)} Claude Code sessions are still running.`,
-        detail: 'Quitting Helm ends them.',
-        confirmLabel: live.length > 1 ? `End ${String(live.length)} sessions` : 'End session',
-        sessions: live
-      })
-    },
+    // Yes only to End and quit: the answer that ends what this device started.
+    confirmCloseAll: async () => (await askQuit()) === 'end',
 
     shutdown() {
       for (const subscription of subscriptions) subscription.unsubscribe()
@@ -580,5 +607,5 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
     return record
   }
 
-  return { sessions, restore, activity, refocus: sendFocus, adoptSession }
+  return { sessions, restore, activity, refocus: sendFocus, adoptSession, askQuit }
 }

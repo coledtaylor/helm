@@ -49,6 +49,8 @@ import {
   pluginPagesId,
   retitlePluginSurface,
   RAIL_DESTINATIONS,
+  LOCAL_HOST_KEY,
+  quitEndsSessions,
   type PluginParams,
   type PluginPagesRef,
   type EditorHighlight,
@@ -177,7 +179,7 @@ import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
-import { helm } from './bridge'
+import { helm, sessionsInHost } from './bridge'
 import { ProjectColumn } from './ProjectColumn'
 import { disposeShell, terminalShellKey } from './pterms'
 import { estimateGrid } from './terminals'
@@ -2197,13 +2199,49 @@ export function App(): JSX.Element {
   const [confirmRequest, setConfirmRequest] = useState<SessionConfirmRequest | null>(null)
   useEffect(() => helm.on('session:confirm', setConfirmRequest), [])
   const answerConfirm = useCallback(
-    (agreed: boolean) => {
+    (agreed: boolean, keep = false) => {
       if (confirmRequest === null) return
-      helm.send('session:confirmed', { id: confirmRequest.id, agreed })
+      helm.send('session:confirmed', keep ? { id: confirmRequest.id, agreed, keep } : { id: confirmRequest.id, agreed })
       setConfirmRequest(null)
     },
     [confirmRequest]
   )
+
+  /**
+   * Whether sessions run in this PC's host this run, which the switch alone
+   * does not say: it takes effect the next time Helm starts. Null until known.
+   */
+  const [hostRunning, setHostRunning] = useState<boolean | null>(null)
+  useEffect(() => {
+    let live = true
+    void sessionsInHost().then(
+      (inHost) => live && setHostRunning(inHost),
+      () => live && setHostRunning(false)
+    )
+    return () => {
+      live = false
+    }
+  }, [])
+
+  /**
+   * Settings' Stop host: how many sessions it ends, asked here, then the stop.
+   * The count is every session running in the host, whichever device started
+   * it, read when the button is pressed.
+   */
+  const [stopHostAsk, setStopHostAsk] = useState<number | null>(null)
+  const [stopHostError, setStopHostError] = useState<string | null>(null)
+  const askStopHost = useCallback(() => {
+    setStopHostError(null)
+    helm.invoke('windowSessions:hostSessionCount').then(setStopHostAsk, (error: unknown) =>
+      setStopHostError(error instanceof Error ? error.message : String(error))
+    )
+  }, [])
+  const stopHost = useCallback(() => {
+    setStopHostAsk(null)
+    helm.invoke('windowSessions:stopHost').catch((error: unknown) =>
+      setStopHostError(error instanceof Error ? error.message : String(error))
+    )
+  }, [])
 
   /**
    * Rendered by both branches below: main holds the window's `close` open on
@@ -2211,15 +2249,31 @@ export function App(): JSX.Element {
    * Helm could not quit from until the fallback timer ran out.
    */
   const confirmDialog =
-    confirmRequest === null ? null : (
+    confirmRequest !== null ? (
       <ConfirmSessionDialog
         kind={confirmRequest.kind}
         message={confirmRequest.message}
         detail={confirmRequest.detail}
         confirmLabel={confirmRequest.confirmLabel}
+        keepLabel={confirmRequest.keepLabel}
         sessionNames={confirmRequest.sessionNames}
         onConfirm={() => answerConfirm(true)}
+        onKeep={() => answerConfirm(false, true)}
         onCancel={() => answerConfirm(false)}
+      />
+    ) : stopHostAsk === null ? null : (
+      <ConfirmSessionDialog
+        kind="stop-host"
+        message={
+          stopHostAsk === 0
+            ? 'No session is running in this PC’s host.'
+            : `Stopping this PC’s host ends ${String(stopHostAsk)} session${stopHostAsk === 1 ? '' : 's'}.`
+        }
+        detail="Every session running in it ends, whichever device started it, and none is offered back. Helm starts the host again when it next needs it."
+        confirmLabel="Stop host"
+        sessionNames={[]}
+        onConfirm={stopHost}
+        onCancel={() => setStopHostAsk(null)}
       />
     )
 
@@ -2567,6 +2621,15 @@ export function App(): JSX.Element {
       onRestoreWithoutAskingChange={(restoreWithoutAsking) => writeSettings({ restoreWithoutAsking })}
       sessionsInHost={settings?.sessionsInHost ?? DEFAULT_SETTINGS.sessionsInHost}
       onSessionsInHostChange={(sessionsInHost) => writeSettings({ sessionsInHost })}
+      quitSessions={quitEndsSessions(settings ?? DEFAULT_SETTINGS) ? 'end' : 'keep'}
+      // Only this PC's entry: a later host's is its own, and Settings keeps it.
+      onQuitSessionsChange={(choice) =>
+        writeSettings({
+          quitSessions: { ...(settings ?? DEFAULT_SETTINGS).quitSessions, [LOCAL_HOST_KEY]: choice }
+        })
+      }
+      hostRunning={hostRunning === true}
+      onStopHost={askStopHost}
       filesWrap={filesWrap}
       onFilesWrapChange={setFilesWrap}
       onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>
@@ -3550,6 +3613,8 @@ export function App(): JSX.Element {
   const toast: { text: string; failed: boolean; dismiss: () => void } | null =
     browsers.error !== null
       ? { text: browsers.error, failed: true, dismiss: browsers.dismissError }
+      : stopHostError !== null
+      ? { text: stopHostError, failed: true, dismiss: () => setStopHostError(null) }
       : !newSession.open && newTab === null && newSession.error !== null
         ? { text: newSession.error, failed: true, dismiss: newSession.dismissError }
         : restoreState.report !== null
@@ -3597,6 +3662,17 @@ export function App(): JSX.Element {
           update={update}
           onOpenUpdate={(url) => void helmOpenExternal(url)}
           plugins={statusPlugins}
+          // With sessions in this PC's host: where they run and what quitting
+          // does there, which opens the setting that decides.
+          host={
+            hostRunning === true
+              ? {
+                  name: 'This PC',
+                  quitEnds: quitEndsSessions(settings ?? DEFAULT_SETTINGS),
+                  onOpen: () => openSettings('sessions')
+                }
+              : null
+          }
         />
       }
     >

@@ -211,6 +211,11 @@ interface IpcContextBase {
    * handler and is refused.
    */
   sessionsInHost?: boolean | undefined
+  /**
+   * This PC's host, while sessions run in it: how many sessions it runs, and
+   * stopping it once the user has agreed. Absent otherwise.
+   */
+  localHost?: LocalHostControl | undefined
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
@@ -241,6 +246,17 @@ interface IpcContextBase {
    */
   claudeHome?: string | undefined
 }
+
+/** What Settings' Stop host reaches: main holds the link to this PC's host. */
+export interface LocalHostControl {
+  /** How many sessions are running in the host, whichever device started them. */
+  sessionCount(): Promise<number>
+  /** Stops it with the plain-stop reason: every session ends, and none is offered back. */
+  stop(): Promise<void>
+}
+
+/** Refuses a host control asked for while sessions run in Helm itself. */
+const noLocalHost = (): Promise<never> => Promise.reject(new Error('Sessions do not run in the local host.'))
 
 /**
  * A service main does not run while sessions run in the local host: every
@@ -397,6 +413,8 @@ export function registerIpc(ctx: IpcContext): void {
 
     'ownApp:info': () => ownAppInfo(),
     'windowSessions:lostLayout': () => services.lost.layout,
+    'windowSessions:hostSessionCount': () => ctx.localHost?.sessionCount() ?? noLocalHost(),
+    'windowSessions:stopHost': () => ctx.localHost?.stop() ?? noLocalHost(),
     'pluginBackground:states': () => ctx.hostPlugins?.reports() ?? [],
 
     'settings:read': () => workspace.settings(),

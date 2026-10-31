@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_SETTINGS,
   EMPTY_INVENTORY,
+  LOCAL_HOST_KEY,
   PINNED_PROJECTS_MAX,
   isProjectPinned,
+  quitEndsSessions,
   sessionLabel,
   withProjectPinned,
   type AppSettings,
@@ -202,6 +204,7 @@ describe('settings', () => {
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false,
       sessionsInHost: true,
+      quitSessions: { local: 'keep' },
       profilesCopiedToHostAt: '2026-10-29T08:00:00.000Z',
       pluginsCopiedToHostAt: '2026-10-30T08:00:00.000Z'
     } satisfies AppSettings
@@ -248,6 +251,24 @@ describe('settings', () => {
         expect(readSettings(turnedOff).sessionsInHost).toBe(false)
       } finally {
         turnedOff.close()
+      }
+    })
+  })
+
+  it('has quitting end the sessions on this PC’s host until Settings keeps them, and keeps that choice across a restart', async () => {
+    expect(quitEndsSessions(readSettings(store))).toBe(true)
+    await withFile((file, onFile) => {
+      writeSettings(onFile, { quitSessions: { [LOCAL_HOST_KEY]: 'keep' } })
+      onFile.close()
+
+      const reopened = openStore({ file })
+      try {
+        expect(readSettings(reopened).quitSessions).toEqual({ local: 'keep' })
+        expect(quitEndsSessions(readSettings(reopened))).toBe(false)
+        // A host with no entry of its own still ends them.
+        expect(quitEndsSessions(readSettings(reopened), 'another host')).toBe(true)
+      } finally {
+        reopened.close()
       }
     })
   })
@@ -778,6 +799,13 @@ describe('settings validation', () => {
       bad: ['false', 'true', 0, 1, null, [], {}]
     },
     {
+      // A choice that is neither would read as "end" and end sessions the user
+      // meant to keep.
+      key: 'quitSessions',
+      good: [{}, { local: 'end' }, { local: 'keep' }, { local: 'end', 'SHA256:abc': 'keep' }],
+      bad: [null, [], 'keep', { local: 'stop' }, { local: true }, { local: null }, { '': 'end' }, { ' ': 'keep' }]
+    },
+    {
       // A value that is not an instant would read as "copied" and never copy.
       key: 'profilesCopiedToHostAt',
       good: [null, '2026-10-29T08:00:00.000Z'],
@@ -952,6 +980,7 @@ describe('settings validation', () => {
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false,
       sessionsInHost: true,
+      quitSessions: { local: 'keep' },
       profilesCopiedToHostAt: null,
       pluginsCopiedToHostAt: null
     })
@@ -1001,6 +1030,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
   sessionMcp: false,
   sessionsInHost: true,
+  quitSessions: { local: 'keep' },
   profilesCopiedToHostAt: null,
   pluginsCopiedToHostAt: null
 })

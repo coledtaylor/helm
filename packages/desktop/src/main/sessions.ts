@@ -47,6 +47,7 @@ import type {
   LaunchedSession,
   LaunchProfileRequest,
   LaunchSessionRequest,
+  QuitAnswer,
   RenameSessionRequest,
   ResumedSession,
   ResumeSessionRequest,
@@ -123,9 +124,14 @@ export interface ConfirmRequest {
    * word the same decision two different ways.
    */
   confirmLabel: string
+  /** The quit question's Keep running and quit, with sessions in the local host; absent elsewhere. */
+  keepLabel?: string
   /** The sessions the answer decides the fate of. */
   sessions: SessionRecord[]
 }
+
+/** How the user is asked before Helm quits with sessions in the local host it would end. */
+export type QuitConfirm = (request: ConfirmRequest) => Promise<QuitAnswer>
 
 /**
  * How the user is asked. Injected rather than called directly so the driver can
@@ -148,12 +154,17 @@ export type Confirm = (request: ConfirmRequest) => Promise<boolean>
 const CONFIRM_TIMEOUT_MS = 120_000
 
 let nextConfirmId = 1
-const pendingConfirms = new Map<number, (agreed: boolean) => void>()
+const pendingConfirms = new Map<number, (answer: QuitAnswer) => void>()
 
-const takeAnswer = (_e: unknown, { id, agreed }: { id: number; agreed: boolean }): void => {
-  pendingConfirms.get(id)?.(agreed)
+const settleAnswer = (id: number, answer: QuitAnswer): void => {
+  pendingConfirms.get(id)?.(answer)
   pendingConfirms.delete(id)
 }
+const takeAnswer = (_e: unknown, { id, agreed, keep }: { id: number; agreed: boolean; keep?: boolean }): void =>
+  settleAnswer(id, agreed ? 'end' : keep === true ? 'keep' : 'cancel')
+// Anything but the three answers is a cancel: nothing ends on a word main does not know.
+const takeQuitAnswer = (_e: unknown, { id, answer }: { id: number; answer: QuitAnswer }): void =>
+  settleAnswer(id, answer === 'end' || answer === 'keep' ? answer : 'cancel')
 let answersRegistered = false
 
 /**
@@ -168,7 +179,7 @@ export function registerConfirmAnswers(sessionsInHost: boolean): void {
   if (answersRegistered) return
   answersRegistered = true
   if (!sessionsInHost) ipcMain.on('session:confirmed', takeAnswer)
-  ipcMain.on('windowSessions:quitConfirmed', takeAnswer)
+  ipcMain.on('windowSessions:quitConfirmed', takeQuitAnswer)
 }
 
 /**
@@ -176,6 +187,8 @@ export function registerConfirmAnswers(sessionsInHost: boolean): void {
  * host `windowSessions:quitConfirm`.
  */
 export type ConfirmChannel = 'session:confirm' | 'windowSessions:quitConfirm'
+
+type Ask = (request: ConfirmRequest) => Promise<QuitAnswer>
 
 /**
  * Ask the renderer, so the question is a Helm island rather than a Win32 box.
@@ -185,20 +198,20 @@ export type ConfirmChannel = 'session:confirm' | 'windowSessions:quitConfirm'
  * the reason this indirection is allowed to exist at all: main owns process
  * lifetime, and it must never be unable to ask its question.
  */
-function rendererConfirm(window: () => BrowserWindow | null, native: Confirm, channel: ConfirmChannel): Confirm {
+function rendererAsk(window: () => BrowserWindow | null, native: Ask, channel: ConfirmChannel): Ask {
   return async (request) => {
     const win = window()
     if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return native(request)
 
     const id = nextConfirmId++
-    const answered = await new Promise<boolean | null>((resolve) => {
+    const answered = await new Promise<QuitAnswer | null>((resolve) => {
       const timer = setTimeout(() => {
         pendingConfirms.delete(id)
         resolve(null)
       }, CONFIRM_TIMEOUT_MS)
-      pendingConfirms.set(id, (agreed) => {
+      pendingConfirms.set(id, (answer) => {
         clearTimeout(timer)
-        resolve(agreed)
+        resolve(answer)
       })
       emit(win, channel, {
         id,
@@ -206,6 +219,7 @@ function rendererConfirm(window: () => BrowserWindow | null, native: Confirm, ch
         message: request.message,
         detail: request.detail,
         confirmLabel: request.confirmLabel,
+        ...(request.keepLabel === undefined ? {} : { keepLabel: request.keepLabel }),
         // What the tab says, not the `-n` name: this dialog is asking about the
         // sessions on screen, and a list naming them something else is a list
         // the user has to translate before answering.
@@ -217,14 +231,15 @@ function rendererConfirm(window: () => BrowserWindow | null, native: Confirm, ch
   }
 }
 
-function nativeConfirm(window: () => BrowserWindow | null): Confirm {
-  return async ({ message, detail, confirmLabel }) => {
+function nativeAsk(window: () => BrowserWindow | null): Ask {
+  return async ({ message, detail, confirmLabel, keepLabel }) => {
     const win = window()
+    const answers: QuitAnswer[] = keepLabel === undefined ? ['end', 'cancel'] : ['end', 'keep', 'cancel']
     const options: Electron.MessageBoxOptions = {
       type: 'question',
-      buttons: [confirmLabel, 'Cancel'],
+      buttons: keepLabel === undefined ? [confirmLabel, 'Cancel'] : [confirmLabel, keepLabel, 'Cancel'],
       defaultId: 0,
-      cancelId: 1,
+      cancelId: answers.length - 1,
       message,
       detail
     }
@@ -232,16 +247,23 @@ function nativeConfirm(window: () => BrowserWindow | null): Confirm {
       win && !win.isDestroyed()
         ? await dialog.showMessageBox(win, options)
         : await dialog.showMessageBox(options)
-    return response === 0
+    return answers[response] ?? 'cancel'
   }
 }
 
 /** How Helm asks before a running session ends: in the window, with the native box behind it. */
-export function sessionConfirm(
-  window: () => BrowserWindow | null,
-  channel: ConfirmChannel = 'session:confirm'
-): Confirm {
-  return rendererConfirm(window, nativeConfirm(window), channel)
+export function sessionConfirm(window: () => BrowserWindow | null): Confirm {
+  const ask = rendererAsk(window, nativeAsk(window), 'session:confirm')
+  return async (request) => (await ask(request)) === 'end'
+}
+
+/**
+ * How Helm asks before it quits with sessions in the local host it would end:
+ * in the window on `windowSessions:quitConfirm`, with the native box behind it,
+ * and answered End and quit, Keep running and quit, or Cancel.
+ */
+export function quitConfirm(window: () => BrowserWindow | null): QuitConfirm {
+  return rendererAsk(window, nativeAsk(window), 'windowSessions:quitConfirm')
 }
 
 /**

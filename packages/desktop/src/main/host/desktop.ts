@@ -8,7 +8,7 @@ import { listProfiles, readPluginFolders, readPluginSettings } from '@helm/core'
 import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
 import { emit } from '../ipc'
 import { appMode, dataDir, templatesDir } from '../paths'
-import type { Confirm } from '../sessions'
+import type { Confirm, QuitConfirm } from '../sessions'
 import type { BrowserMcpHost } from '../browser-mcp'
 import type { BackgroundHost } from '../plugins/background'
 import type { ToolAnswer, ToolCallRequest } from '../plugins/tools'
@@ -58,6 +58,8 @@ export interface DesktopHostDeps {
   services: Services
   window: () => BrowserWindow | null
   confirm: Confirm
+  /** The quit question, with Keep running and quit beside End and quit. */
+  confirmQuit: QuitConfirm
   onActivityChange: () => void
   /** Helm's browser tools, which answer the calls; null until they exist. */
   browserTools: () => BrowserMcpHost | null
@@ -144,6 +146,7 @@ export function createDesktopHost({
   services,
   window,
   confirm,
+  confirmQuit,
   onActivityChange,
   browserTools,
   runPluginTool,
@@ -175,6 +178,7 @@ export function createDesktopHost({
     link,
     emit: toNoWindow,
     confirm,
+    confirmQuit,
     windowFocused: () => false,
     relist: true,
     layout: services.lost.layout,

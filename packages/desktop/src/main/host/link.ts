@@ -11,10 +11,12 @@ import type { HostSettingsPatch } from './protocol'
  * the shell a terminal opens - and reads nothing else back: everything else in
  * the host's settings is the host's.
  *
- * Helm never stops the host. A deliberate quit tells it what becomes of what
- * this device started (`host:quit`) and lets go; the host decides its own
- * exit. Quitting is bounded: a host that does not answer in time is let go
- * of all the same, and a Helm that crashes or is killed tells it nothing.
+ * Helm never stops the host on its own. A deliberate quit tells it what
+ * becomes of what this device started (`host:quit`) and lets go; the host
+ * decides its own exit. Quitting is bounded: a host that does not answer in
+ * time is let go of all the same, and a Helm that crashes or is killed tells
+ * it nothing. The user can stop it from Settings (`stopHost`), which ends
+ * every session; the next request then starts a fresh one.
  */
 
 /** How long a quit waits for the host's answer, and then for the bridge to exit. */
@@ -43,6 +45,14 @@ export interface HostLink {
    * after it.
    */
   quit(options: { end: boolean }): Promise<void>
+  /**
+   * The user asked, and agreed to the count: stops the host (`host:stop`
+   * with the plain-stop reason), so every session in it ends and is recorded
+   * as ended, then lets go of the connection and its bridge. Resolves once
+   * the connection has ended, or the deadline passed. The next `connection()`
+   * connects again as after any ended connection, which starts a fresh host.
+   */
+  stopHost(): Promise<void>
 }
 
 export interface HostLinkDeps {
@@ -108,7 +118,7 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
     return connection
   }
 
-  return {
+  const link: HostLink = {
     connection() {
       if (stopping !== null) return Promise.reject(new Error('Helm is quitting.'))
       attempt ??= connect().catch((error: unknown) => {
@@ -137,6 +147,15 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
       if (connection !== undefined) void writeSettings(connection)
     },
 
+    async stopHost() {
+      const connection = await link.connection()
+      const host = local
+      await connection.request('host:stop', { reason: 'stop' })
+      await bounded(connection.ended)
+      // The bridge goes with the host it reached; this makes sure of it.
+      if (host !== null && host.connection === connection) await bounded(host.close())
+    },
+
     quit({ end }) {
       stopping ??= (async () => {
         if (attempt !== null) await bounded(attempt)
@@ -149,4 +168,5 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
       return stopping
     }
   }
+  return link
 }

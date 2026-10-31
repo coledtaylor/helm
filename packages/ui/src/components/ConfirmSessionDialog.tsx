@@ -5,15 +5,24 @@ import { TerminalIcon } from './icons'
 import { Overlay } from './Overlay'
 
 export interface ConfirmSessionDialogProps {
-  /** Ending one tab's session, or ending every session because Helm is quitting. */
-  kind: 'close-session' | 'quit'
+  /**
+   * Ending one tab's session, ending sessions because Helm is quitting, or
+   * stopping this PC's host, which ends every session in it.
+   */
+  kind: 'close-session' | 'quit' | 'stop-host'
   message: string
   detail: string
   /** What the agreeing button says; main decides, because it counts them. */
   confirmLabel: string
-  /** The sessions this ends. Listed when there is more than one. */
+  /**
+   * The quit question's third answer, with sessions in the local host: quit
+   * and leave them running there. No button without it.
+   */
+  keepLabel?: string | undefined
+  /** The sessions this ends. Listed unless the message already names the only one. */
   sessionNames: readonly string[]
   onConfirm: () => void
+  onKeep?: (() => void) | undefined
   onCancel: () => void
 }
 
@@ -39,8 +48,10 @@ export function ConfirmSessionDialog({
   message,
   detail,
   confirmLabel,
+  keepLabel,
   sessionNames,
   onConfirm,
+  onKeep,
   onCancel
 }: ConfirmSessionDialogProps): JSX.Element {
   const cancelRef = useRef<HTMLButtonElement>(null)
@@ -53,6 +64,10 @@ export function ConfirmSessionDialog({
 
   const listed = sessionNames.slice(0, LIST_LIMIT)
   const rest = sessionNames.length - listed.length
+  // One session the message already names is not listed again: that would be
+  // the same string twice. One it only counts is.
+  const only = sessionNames.length === 1 ? sessionNames[0] : undefined
+  const list = sessionNames.length > 1 || (only !== undefined && !message.includes(only))
 
   return (
     // Escape and the backdrop both mean "no", and both are `Overlay`'s - see
@@ -74,9 +89,7 @@ export function ConfirmSessionDialog({
 
         <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">{detail}</p>
 
-        {/* One session is already named in the message; listing it again
-            would be the same string twice. */}
-        {sessionNames.length > 1 && (
+        {list && (
           <ul className="mt-3 space-y-0.5 rounded-raised border border-border bg-surface-raised px-3 py-2">
             {listed.map((name) => (
               <li key={name} className="truncate font-mono text-[11px] text-fg-muted" title={name}>
@@ -113,6 +126,18 @@ export function ConfirmSessionDialog({
         >
           Cancel
         </button>
+        {keepLabel !== undefined && onKeep !== undefined && (
+          // Not destructive: the sessions go on running. A plain bordered
+          // button beside Cancel, and never the default.
+          <button
+            type="button"
+            data-confirm-keep
+            onClick={onKeep}
+            className="rounded-well border border-border-strong px-3.5 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+          >
+            {keepLabel}
+          </button>
+        )}
         <button
           type="button"
           data-confirm-accept

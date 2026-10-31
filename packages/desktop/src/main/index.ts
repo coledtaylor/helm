@@ -13,6 +13,7 @@ import {
   claudeHome,
   describePluginSessions,
   pluginThemeOf,
+  quitEndsSessions,
   readSessionRegistry,
   sessionRegistryDir,
   writeSetting,
@@ -71,6 +72,7 @@ import { createUsageService, type UsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
 import {
   createSessionHost,
+  quitConfirm,
   sessionConfirm,
   type Confirm,
   type SessionHost,
@@ -82,7 +84,7 @@ import { createRestoreService, type RestoreService } from './restore'
 import { createResourcesService } from './resources'
 import { createCollector, type CheckContext } from './checkkit'
 import { applicationMenuTemplate, windowChromeFor } from './chrome'
-import { createQuitGate } from './quit'
+import { createQuitGate, quitEnds } from './quit'
 import { requestSmallCorners } from './corners'
 import { createPtermHost, type PtermHost } from './pterm'
 import { runSelftest } from './selftest'
@@ -497,13 +499,19 @@ function startApp(options: AppOptions = {}): void {
    * which Helm connects to now and starts when none answers. A change to the
    * setting takes effect the next time Helm starts.
    */
+  const checkConfirm = options.confirm
   // `pluginBackground` exists exactly when the setting is on.
   const desktopHost: DesktopHost | null = pluginBackground !== undefined
     ? createDesktopHost({
         services,
         window: () => win,
         // The window's own `session:confirm` is the host's; main's quit question has its own channel.
-        confirm: options.confirm ?? sessionConfirm(() => win, 'windowSessions:quitConfirm'),
+        confirm: options.confirm ?? sessionConfirm(() => win),
+        // A check's collector answers yes or no, which never keeps the sessions.
+        confirmQuit:
+          checkConfirm !== undefined
+            ? async (request) => ((await checkConfirm(request)) ? 'end' : 'cancel')
+            : quitConfirm(() => win),
         onActivityChange: () => plugins.sessionsChanged(),
         browserTools: () => browserMcp,
         runPluginTool: (request, signal) => plugins.runTool(request, signal),
@@ -544,10 +552,19 @@ function startApp(options: AppOptions = {}): void {
       confirm: options.confirm
     })
 
+  /*
+   * Whether quitting ends what this device started: always with the setting
+   * off, where sessions live in Helm's own process; with it on, as the quit
+   * setting for this PC's host says, read at the quit so a change in Settings
+   * counts at once.
+   */
+  const settingEnds = (): boolean => desktopHost === null || quitEndsSessions(services.settings)
+
   // One question about running sessions, shared by the menu's Quit Helm and
-  // the window's close, asked before anything ends (quit.ts).
+  // the window's close, asked before anything ends (quit.ts). With the setting
+  // keeping them, nothing would end, so nothing is asked.
   const quitGate = createQuitGate({
-    running: () => sessions.runningCount(),
+    running: () => (settingEnds() ? sessions.runningCount() : 0),
     confirm: () => {
       // The question is drawn in the window, so the window is brought on
       // screen first: Cmd+Q works with it minimized to the Dock, and a quit
@@ -557,7 +574,8 @@ function startApp(options: AppOptions = {}): void {
         win.show()
         win.focus()
       }
-      return sessions.confirmCloseAll()
+      if (desktopHost !== null) return desktopHost.askQuit()
+      return sessions.confirmCloseAll().then((agreed) => (agreed ? 'end' : 'cancel'))
     },
     quit: () => app.quit()
   })
@@ -831,6 +849,17 @@ function startApp(options: AppOptions = {}): void {
     ...(desktopHost !== null ? { hostPlugins: desktopHost.plugins } : {}),
     ...(pluginBackground !== undefined ? { pluginBackground: () => pluginBackground.contents() } : {}),
     sessionsInHost: desktopHost !== null,
+    ...(desktopHost !== null
+      ? {
+          localHost: {
+            sessionCount: async () => {
+              const rows = await (await desktopHost.link.connection()).request('session:list', null)
+              return rows.filter((row) => row.status === 'running').length
+            },
+            stop: () => desktopHost.link.stopHost()
+          }
+        }
+      : {}),
     window: () => win,
     ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
@@ -1000,12 +1029,14 @@ function startApp(options: AppOptions = {}): void {
    * With sessions in the local host, the host owns their lifetime and outlives
    * Helm. A deliberate quit tells it what becomes of what this device started,
    * which takes a round trip: the first `before-quit` is held while every
-   * page's connection closes, the host is told the sessions end
-   * (`host:quit`, each recorded as ended) and main's own connection closes,
-   * bounded by `HOST_STOP_DEADLINE_MS`; the quit then goes on as it always
-   * has. The host, left with no session and no client, exits by itself. A
-   * Helm that ends any other way tells it nothing, so nothing ends and the
-   * next start reattaches.
+   * page's connection closes, the host is told whether the sessions end
+   * (`host:quit`: as the quit question was answered, or as the quit setting
+   * for this PC's host says when nothing was asked; ended ones are recorded
+   * as ended) and main's own connection closes, bounded by
+   * `HOST_STOP_DEADLINE_MS`; the quit then goes on as it always has. The
+   * host, left with no session and no client, exits by itself. A Helm that
+   * ends any other way tells it nothing, so nothing ends and the next start
+   * reattaches.
    */
   let hostStop: 'running' | 'stopping' | 'stopped' = desktopHost === null ? 'stopped' : 'running'
   app.on('before-quit', (event) => {
@@ -1024,7 +1055,7 @@ function startApp(options: AppOptions = {}): void {
         // Every page's bridge ends first, so none is left running.
         void pageLinks
           .stop()
-          .then(() => desktopHost.link.quit({ end: true }))
+          .then(() => desktopHost.link.quit({ end: quitEnds(quitGate.answer(), settingEnds()) }))
           .finally(() => {
             hostStop = 'stopped'
             app.quit()

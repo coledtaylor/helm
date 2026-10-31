@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createQuitGate, nextQuitStep } from './quit'
+import type { QuitAnswer } from '../shared/ipc'
+import { createQuitGate, nextQuitStep, quitEnds } from './quit'
 
 /** Lets the question's answer reach the gate. */
 const settle = (): Promise<void> => new Promise((done) => setImmediate(done))
@@ -11,7 +12,7 @@ const settle = (): Promise<void> => new Promise((done) => setImmediate(done))
  * close cancels the quit; a window that does close ends the app through
  * `window-all-closed`. `events` is what happened, in order.
  */
-function helmWith(running: number, confirm: () => Promise<boolean> = () => new Promise(() => undefined)) {
+function helmWith(running: number, confirm: () => Promise<QuitAnswer> = () => new Promise(() => undefined)) {
   const events: string[] = []
   let sessions = running
   let windowOpen = true
@@ -53,14 +54,14 @@ function helmWith(running: number, confirm: () => Promise<boolean> = () => new P
 }
 
 /** A question the test answers. */
-function question(): { confirm: () => Promise<boolean>; answer: (yes: boolean) => void } {
-  let answer: (yes: boolean) => void = () => undefined
+function question(): { confirm: () => Promise<QuitAnswer>; answer: (choice: QuitAnswer) => void } {
+  let answer: (choice: QuitAnswer) => void = () => undefined
   return {
     confirm: () =>
-      new Promise<boolean>((resolve) => {
+      new Promise<QuitAnswer>((resolve) => {
         answer = resolve
       }),
-    answer: (yes) => answer(yes)
+    answer: (choice) => answer(choice)
   }
 }
 
@@ -73,6 +74,18 @@ describe('nextQuitStep', () => {
   })
 })
 
+describe('quitEnds', () => {
+  it('ends the sessions as the user answered, whatever the setting says', () => {
+    expect(quitEnds('end', false)).toBe(true)
+    expect(quitEnds('keep', true)).toBe(false)
+  })
+
+  it('does what the setting says when nobody was asked', () => {
+    expect(quitEnds(null, true)).toBe(true)
+    expect(quitEnds(null, false)).toBe(false)
+  })
+})
+
 describe('the quit gate', () => {
   it('Quit with sessions running asks first, and a cancel ends nothing and leaves Helm open', async () => {
     const { confirm, answer } = question()
@@ -82,7 +95,7 @@ describe('the quit gate', () => {
     expect(helm.asked).toHaveBeenCalledTimes(1)
     expect(helm.events).toEqual([])
 
-    answer(false)
+    answer('cancel')
     await settle()
     expect(helm.events).toEqual([])
     expect(helm.sessions()).toBe(2)
@@ -94,7 +107,7 @@ describe('the quit gate', () => {
     const helm = helmWith(2, confirm)
 
     helm.gate.requestQuit()
-    answer(true)
+    answer('end')
     await settle()
 
     expect(helm.events).toEqual(['before-quit', 'closed'])
@@ -119,7 +132,7 @@ describe('the quit gate', () => {
     helm.gate.requestQuit()
     expect(helm.asked).toHaveBeenCalledTimes(1)
 
-    answer(true)
+    answer('end')
     await settle()
     expect(helm.events).toEqual(['before-quit', 'closed'])
   })
@@ -132,7 +145,7 @@ describe('the quit gate', () => {
     expect(helm.events).toEqual(['close held'])
     expect(helm.sessions()).toBe(1)
 
-    answer(true)
+    answer('end')
     await settle()
     expect(helm.events).toEqual(['close held', 'closed', 'before-quit'])
     expect(helm.asked).toHaveBeenCalledTimes(1)
@@ -143,7 +156,7 @@ describe('the quit gate', () => {
     const helm = helmWith(1, confirm)
 
     helm.closeWindow()
-    answer(false)
+    answer('cancel')
     await settle()
 
     expect(helm.events).toEqual(['close held'])
@@ -160,7 +173,7 @@ describe('the quit gate', () => {
     expect(helm.asked).toHaveBeenCalledTimes(1)
     expect(helm.events).toEqual(['close held'])
 
-    answer(true)
+    answer('end')
     await settle()
     expect(helm.events).toEqual(['close held', 'before-quit', 'closed'])
     expect(helm.asked).toHaveBeenCalledTimes(1)
@@ -182,12 +195,51 @@ describe('the quit gate', () => {
     // Electron's `autoUpdater.quitAndInstall` closes every window first and
     // calls `app.quit()` once they have closed.
     helm.closeWindow()
-    answer(true)
+    answer('end')
     await settle()
     helm.appQuit()
 
     expect(helm.events).toEqual(['close held', 'closed', 'before-quit'])
     expect(helm.asked).toHaveBeenCalledTimes(1)
+  })
+
+  it('Keep running and quit quits once, and the window closes without asking again', async () => {
+    const { confirm, answer } = question()
+    const helm = helmWith(2, confirm)
+
+    helm.gate.requestQuit()
+    answer('keep')
+    await settle()
+
+    expect(helm.events).toEqual(['before-quit', 'closed'])
+    expect(helm.asked).toHaveBeenCalledTimes(1)
+    expect(helm.gate.answer()).toBe('keep')
+  })
+
+  it('remembers End and quit for before-quit, and nothing while nobody was asked', async () => {
+    const { confirm, answer } = question()
+    const helm = helmWith(1, confirm)
+    expect(helm.gate.answer()).toBeNull()
+
+    helm.gate.requestQuit()
+    expect(helm.gate.answer()).toBeNull()
+    answer('end')
+    await settle()
+
+    expect(helm.gate.answer()).toBe('end')
+  })
+
+  it('Cancel leaves no answer behind, so the next Quit asks again', async () => {
+    const { confirm, answer } = question()
+    const helm = helmWith(1, confirm)
+
+    helm.gate.requestQuit()
+    answer('cancel')
+    await settle()
+    expect(helm.gate.answer()).toBeNull()
+
+    helm.gate.requestQuit()
+    expect(helm.asked).toHaveBeenCalledTimes(2)
   })
 
   it('a question that cannot be asked is a no, and the next Quit asks again', async () => {

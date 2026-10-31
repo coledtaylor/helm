@@ -20,6 +20,7 @@ import {
   PANE_GAP,
   PINNED_PROJECTS_MAX,
   PROJECT_SHELL_HEIGHT_PCT,
+  QUIT_SESSIONS,
   RAIL_DESTINATIONS,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
@@ -216,6 +217,11 @@ function pluginSurfaceProblem(plugin: unknown, tab: unknown, params: unknown, ti
 
 /** Deeper than this is not a tree a person arranged; see `paneTreeProblem`. */
 const PANE_TREE_DEPTH_MAX = 32
+
+/** More hosts than anybody connects to, and a ceiling on a value rewritten whole. */
+const QUIT_SESSIONS_HOSTS_MAX = 64
+/** Room for a key's fingerprint or address; not a statement about what keys look like. */
+const QUIT_SESSIONS_HOST_KEY_MAX = 200
 
 /**
  * Why a saved pane tree is not one, or null when it is, counting its groups
@@ -544,6 +550,30 @@ export const SETTING_VALIDATORS: SettingValidators = {
 
   /** Strict for the same reason: `'false'` would start the host. */
   sessionsInHost: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+
+  /**
+   * What quitting does, by host: a plain object of host keys to `end` or
+   * `keep`. A value that is neither would read as `end` and end sessions the
+   * user meant to keep, so it is refused rather than read as the default.
+   */
+  quitSessions: (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return `expected an object of hosts to ${QUIT_SESSIONS.join(' or ')}, got ${describe(value)}`
+    }
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length > QUIT_SESSIONS_HOSTS_MAX) {
+      return `expected at most ${String(QUIT_SESSIONS_HOSTS_MAX)} hosts, got ${String(entries.length)}`
+    }
+    for (const [host, choice] of entries) {
+      if (host.trim() === '' || host.length > QUIT_SESSIONS_HOST_KEY_MAX) {
+        return `expected a host key, got ${JSON.stringify(host)}`
+      }
+      if (!(QUIT_SESSIONS as readonly unknown[]).includes(choice)) {
+        return `expected ${QUIT_SESSIONS.join(' or ')} for ${host}, got ${describe(choice)}`
+      }
+    }
+    return null
+  },
 
   /** An instant Helm wrote, checked as `lastUpdateCheckAt` is. */
   profilesCopiedToHostAt: (value) => {
