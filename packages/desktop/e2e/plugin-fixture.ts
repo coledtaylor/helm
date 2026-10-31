@@ -24,8 +24,11 @@ export interface SampleFixture {
   server: SampleServer
 }
 
-/** Writes a copy of the sample plugin into `world` that reads from `server`, and registers it. */
-export function installSample(world: World, server: SampleServer, folder = 'sample plugin'): string {
+/**
+ * Writes a copy of the sample plugin into `world` that reads from `server`, and
+ * registers it unless `register` is false, which leaves it for a test to add.
+ */
+export function installSample(world: World, server: SampleServer, folder = 'sample plugin', register = true): string {
   const source = join(repoRoot(), 'examples', 'sample-plugin')
   if (!existsSync(join(source, 'dist', 'panels', 'main.html'))) {
     throw new Error('examples/sample-plugin is not built: run `pnpm --filter @helm/sample-plugin build`')
@@ -42,7 +45,7 @@ export function installSample(world: World, server: SampleServer, folder = 'samp
   manifest.network = [server.url]
   for (const setting of manifest.settings) if (setting.key === 'server') setting.default = server.url
   writeFileSync(join(dir, 'helm-plugin.json'), JSON.stringify(manifest, null, 2))
-  registerPlugin(world, dir)
+  if (register) registerPlugin(world, dir)
   return dir
 }
 

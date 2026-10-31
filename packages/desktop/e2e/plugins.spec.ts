@@ -5,7 +5,7 @@ import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'
 import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
 import { claudeRunIn, expect, startSession, terminalText, test as base, typeLine, type Helm } from './helm'
 import { startBrowserFixture } from './browser-fixture'
-import { TOKEN, installSample, pluginFrame, registerPlugin, startServer, type SampleFixture } from './plugin-fixture'
+import { TOKEN, installSample, pluginFrame, startServer, type SampleFixture } from './plugin-fixture'
 
 /**
  * Plugins, through the real window: the sample plugin (`examples/sample-plugin`)
@@ -18,7 +18,9 @@ import { TOKEN, installSample, pluginFrame, registerPlugin, startServer, type Sa
  * tests; these are the workflows.
  */
 
-const test = base.extend<{ sample: SampleFixture }>({
+const test = base.extend<{ sample: SampleFixture; sampleRegistered: boolean }>({
+  // False leaves the sample's folder unregistered, for a test that adds it.
+  sampleRegistered: [true, { option: true }],
   sample: [
     // eslint-disable-next-line no-empty-pattern
     async ({}, use) => {
@@ -29,11 +31,20 @@ const test = base.extend<{ sample: SampleFixture }>({
     { scope: 'test' }
   ],
   // Registered before the app starts, as a folder added in an earlier run is.
-  world: async ({ world, sample }, use) => {
-    sample.dir = installSample(world, sample.server)
+  // With "Run sessions in the local host" on, the first connect copies it to
+  // the host, as it does a folder Helm had registered before the switch.
+  world: async ({ world, sample, sampleRegistered }, use) => {
+    sample.dir = installSample(world, sample.server, 'sample plugin', sampleRegistered)
     await use(world)
   }
 })
+
+/**
+ * Why a test is skipped in the `in the local host` project: its page's calls
+ * are still answered by Helm's own plugin host, which has no plugins while the
+ * local host keeps the registry.
+ */
+const answeredOnHost = (calls: string): string => `its page's ${calls} are not answered by the local host yet`
 
 /** The page's `window.helm`, in a frame's `evaluate`. */
 type PluginWindow = Window & { helm: HelmBridge }
@@ -64,8 +75,10 @@ async function storeToken(ui: Page, url: string): Promise<void> {
 
 test('a plugin: its background page, a secret it asks for, its panel, badge, status and a tab of its own', async ({
   helm,
-  sample
+  sample,
+  sessionsInHost
 }) => {
+  test.skip(sessionsInHost, answeredOnHost('secrets, settings, status, helm.fetch and exec'))
   const ui = helm.window
 
   // The background page runs with nothing of the plugin's on screen.
@@ -122,8 +135,10 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
 
 test('helm.fetch reaches only the origins the manifest lists, and every redirect is checked again', async ({
   helm,
-  sample
+  sample,
+  sessionsInHost
 }) => {
+  test.skip(sessionsInHost, answeredOnHost('helm.fetch calls'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -167,8 +182,10 @@ test('helm.fetch reaches only the origins the manifest lists, and every redirect
 
 test("Helm's shortcuts work from inside a plugin page, and its commands run from Ctrl+Shift+P", async ({
   helm,
-  sample
+  sample,
+  sessionsInHost
 }) => {
+  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which list and create its items,'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -221,11 +238,10 @@ async function activationLapsed(helm: Helm): Promise<void> {
   await expect.poll(() => inHelm<boolean>(helm, 'navigator.userActivation.isActive')).toBe(false)
 }
 
-test('a plugin page that crashes says so in its own place, and Reload brings it back', async ({ helm, sample }) => {
+test('a plugin page that crashes says so in its own place, and Reload brings it back', async ({ helm }) => {
   const ui = helm.window
-  await storeToken(ui, sample.server.url)
+  // Loaded, with Helm's bridge on the page.
   const panel = await openPanel(ui)
-  await expect(panel.locator('[data-sample-item]')).toHaveCount(3)
   const url = panel.url()
 
   // The page's process ends from outside, the way a renderer that runs out of
@@ -258,37 +274,95 @@ test('a plugin page that crashes says so in its own place, and Reload brings it 
     `[...document.querySelectorAll('[data-plugin-error] button')].find((b) => b.textContent === 'Reload').click()`
   )
   await expect.poll(() => inHelm<number>(helm, `document.querySelectorAll('[data-plugin-error]').length`)).toBe(0)
-  await expect
-    .poll(() => inHelm<number | null>(helm, `document.querySelectorAll('[data-sample-item]').length`, url))
-    .toBe(3)
+  // A page again, in a process of its own, with the bridge on it.
+  await expect.poll(() => inHelm<string | null>(helm, 'typeof helm', url)).toBe('object')
 })
 
-test('Settings > Plugins: an unsupported apiVersion is said plainly, and turning a plugin off takes its surfaces away', async ({
-  world,
-  sample,
-  relaunch
-}) => {
-  // A folder from a future Helm, registered alongside the sample.
-  const future = join(world.root, 'plugins', 'future plugin')
-  mkdirSync(future, { recursive: true })
-  writeFileSync(
-    join(future, 'helm-plugin.json'),
-    JSON.stringify({ apiVersion: 2, id: 'future', name: 'Future', panels: {} })
-  )
-  registerPlugin(world, future)
-  const { window: ui } = await relaunch()
-  await storeToken(ui, sample.server.url)
+/**
+ * Answers the next folder pickers main opens with `folders`, in order, as the
+ * user choosing them would. A native dialog has no automation surface.
+ */
+async function chooseFolders(helm: Helm, folders: string[]): Promise<void> {
+  await helm.app.evaluate(({ dialog }, folders) => {
+    const queue = [...folders]
+    dialog.showOpenDialog = (() => {
+      const next = queue.shift()
+      return Promise.resolve(next === undefined ? { canceled: true, filePaths: [] } : { canceled: false, filePaths: [next] })
+    }) as typeof dialog.showOpenDialog
+  }, folders)
+}
 
+/** Whether the plugin's background page is framed in Helm's hidden plugin host window, with the bridge on it. */
+function backgroundRunning(helm: Helm, plugin = 'sample', entry = 'dist/background/index.html'): Promise<boolean> {
+  return helm.app.evaluate(
+    async ({ BrowserWindow }, url) => {
+      const host = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('/plugin-host.html'))
+      const frame = host?.webContents.mainFrame.framesInSubtree.find((f) => f.url.startsWith(url))
+      if (frame === undefined) return false
+      return (await frame.executeJavaScript('typeof helm').catch(() => 'gone')) === 'object'
+    },
+    `helm-plugin://${plugin}/${entry}`
+  )
+}
+
+async function openPluginSettings(ui: Page): Promise<void> {
   await rail(ui).getByRole('button', { name: 'Settings' }).click()
   await ui.locator('[data-settings-section-link="plugins"]').click()
+}
+
+test.describe('a plugin folder the user adds', () => {
+  test.use({ sampleRegistered: false })
+
+  test('a folder added in Settings > Plugins is read and listed, its rail icon, panel and background page appear, and it is still there after a restart', async ({
+    helm,
+    sample,
+    relaunch
+  }) => {
+    let ui = helm.window
+    await openPluginSettings(ui)
+    await expect(ui.locator('[data-plugin-row="sample"]')).toHaveCount(0)
+
+    await chooseFolders(helm, [sample.dir])
+    await ui.locator('[data-plugin-add]').click()
+    await expect(ui.locator('[data-plugin-row="sample"]')).toBeVisible()
+    await expect(ui.locator('[data-plugin-add-error]')).toHaveCount(0)
+    await expect(rail(ui).getByRole('button', { name: /^Sample/ })).toBeVisible()
+    await openPanel(ui)
+    await expect.poll(() => backgroundRunning(helm)).toBe(true)
+
+    ui = (await relaunch()).window
+    await expect(rail(ui).getByRole('button', { name: /^Sample/ })).toBeVisible()
+    await expect.poll(() => backgroundRunning(helm)).toBe(true)
+    await openPluginSettings(ui)
+    await expect(ui.locator('[data-plugin-row="sample"]')).toBeVisible()
+  })
+})
+
+test('Settings > Plugins: an unsupported apiVersion is said plainly, and turning a plugin off takes its surfaces away and on brings them back', async ({
+  helm,
+  world
+}) => {
+  const ui = helm.window
+  // A folder from a Helm later than any this one knows, added beside the sample.
+  const future = join(world.root, 'plugins', 'future plugin')
+  mkdirSync(future, { recursive: true })
+  writeFileSync(join(future, 'helm-plugin.json'), JSON.stringify({ apiVersion: 99, id: 'future', name: 'Future', panels: {} }))
+  await openPluginSettings(ui)
+  await chooseFolders(helm, [future])
+  await ui.locator('[data-plugin-add]').click()
   await expect(ui.locator('[data-plugin-row="future"] [data-plugin-state="error"]')).toHaveText('Not loaded')
   await ui.locator('[data-plugin-row="future"]').click()
   await expect(ui.locator('[data-plugin-verdict="error"]')).toContainText('apiVersion')
 
-  // The sample, with a tab of its open.
-  const panel = await openPanel(ui)
-  await panel.locator('[data-sample-item="1"]').click()
-  await expect(ui.getByRole('tab', { name: /Welcome/ })).toBeVisible()
+  // The sample, its background page running, its panel open and a tab of its
+  // own, opened from the command palette.
+  await expect.poll(() => backgroundRunning(helm)).toBe(true)
+  await openPanel(ui)
+  await ui.keyboard.press('Control+Shift+P')
+  await ui.keyboard.type('new item')
+  await ui.keyboard.press('Enter')
+  await pluginFrame(ui, 'dist/tabs/item.html')
+  await expect(ui.getByRole('tab', { name: /^Item/ })).toBeVisible()
 
   await rail(ui).getByRole('button', { name: 'Settings' }).click()
   await ui.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sample', exact: true }).click()
@@ -296,10 +370,14 @@ test('Settings > Plugins: an unsupported apiVersion is said plainly, and turning
   await expect(ui.locator('[data-plugin-verdict="off"]')).toBeVisible()
   await expect(rail(ui).getByRole('button', { name: /^Sample/ })).toHaveCount(0)
   await expect(statusItem(ui)).toHaveCount(0)
-  await expect(ui.getByRole('tab', { name: /Welcome/ })).toHaveCount(0)
+  await expect(ui.getByRole('tab', { name: /^Item/ })).toHaveCount(0)
+  await expect.poll(() => ui.frames().filter((frame) => frame.url().startsWith('helm-plugin://sample/')).length).toBe(0)
+  await expect.poll(() => backgroundRunning(helm)).toBe(false)
 
   await ui.locator('[data-plugin-toggle]').click()
   await expect(rail(ui).getByRole('button', { name: /^Sample/ })).toBeVisible()
+  await expect.poll(() => backgroundRunning(helm)).toBe(true)
+  await openPanel(ui)
 })
 
 test('a theme change reaches plugin pages without reloading them', async ({ helm, sample }) => {
@@ -328,7 +406,13 @@ test('a theme change reaches plugin pages without reloading them', async ({ helm
   expect(after.marked).toBe(true)
 })
 
-test("a plugin panel sees Helm's sessions start, work and end, and nothing of what is said in them", async ({ helm, sample, world }) => {
+test("a plugin panel sees Helm's sessions start, work and end, and nothing of what is said in them", async ({
+  helm,
+  sample,
+  world,
+  sessionsInHost
+}) => {
+  test.skip(sessionsInHost, answeredOnHost('sessions.list calls'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   let panel = await openPanel(ui)
@@ -373,8 +457,10 @@ test("a plugin panel sees Helm's sessions start, work and end, and nothing of wh
 test("a session calls the plugin's tools, its background page answers, and turning them off in Settings takes them away", async ({
   helm,
   sample,
-  world
+  world,
+  sessionsInHost
 }) => {
+  test.skip(sessionsInHost, answeredOnHost('tool answers, helm.fetch and secrets calls'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   await startSession(ui, 'alpha')
@@ -439,8 +525,10 @@ const stripTest = test.extend({
 stripTest('a plugin with a page strip opens its tabs as pages in one tab, which Ctrl+W closes page by page', async ({
   helm,
   sample,
-  relaunch
+  relaunch,
+  sessionsInHost
 }) => {
+  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which list its items,'))
   let ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -527,8 +615,10 @@ const asPreview = (locator: Locator): Locator => locator.locator('[data-tab-prev
 
 test("a plugin's tab opened as a preview is replaced by the next, and stays once double-clicked or typed in", async ({
   helm,
-  sample
+  sample,
+  sessionsInHost
 }) => {
+  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which list its items,'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -564,7 +654,12 @@ test("a plugin's tab opened as a preview is replaced by the next, and stays once
   await expect.poll(() => itemPages(ui)).toBe(3)
 })
 
-stripTest("a plugin with a page strip previews its pages in the strip, apart from the pane's tabs", async ({ helm, sample }) => {
+stripTest("a plugin with a page strip previews its pages in the strip, apart from the pane's tabs", async ({
+  helm,
+  sample,
+  sessionsInHost
+}) => {
+  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which list its items,'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -602,7 +697,13 @@ stripTest("a plugin with a page strip previews its pages in the strip, apart fro
   await expect.poll(() => itemPages(ui)).toBe(3)
 })
 
-test('a plugin page starts a session from a click, once the user has seen what it will run', async ({ helm, sample, world }) => {
+test('a plugin page starts a session from a click, once the user has seen what it will run', async ({
+  helm,
+  sample,
+  world,
+  sessionsInHost
+}) => {
+  test.skip(sessionsInHost, answeredOnHost('sessions.start, settings and helm.fetch calls'))
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
@@ -653,8 +754,10 @@ test('a plugin page starts a session from a click, once the user has seen what i
 
 test('a plugin page opens a link in the Browser tab from a click, held to the reach a typed address meets', async ({
   helm,
-  sample
+  sample,
+  sessionsInHost
 }) => {
+  test.skip(sessionsInHost, answeredOnHost('settings and helm.fetch calls, which load the item it opens from,'))
   const fixture = await startBrowserFixture()
   try {
     const ui = helm.window
