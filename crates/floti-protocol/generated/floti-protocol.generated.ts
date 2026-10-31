@@ -54,6 +54,25 @@ export type AgentPluginCallCancel = {
 callId: number, };
 
 /**
+ * The session a plugin tool call came from, as the plugin is told it: never
+ * the host's row id and nothing of the session's conversation.
+ */
+export type AgentPluginCaller = { 
+/**
+ * Minted by the host when the session launched, random, and the same id
+ * the plugin's `sessions.list` and `sessions` event show it under.
+ */
+id: string, 
+/**
+ * The session's name.
+ */
+label: string, 
+/**
+ * The folder it runs in.
+ */
+folder: string, };
+
+/**
  * What a plugin tool call came to.
  */
 export type AgentPluginOutcome = { "status": "done", value: unknown, } | { "status": "failed", message: string, };
@@ -117,6 +136,11 @@ callId: number,
  * The id of the hosted session whose agent called the tool.
  */
 session: number, 
+/**
+ * That session as the plugin knows it, minted by the host; null while
+ * the host has no running session to name.
+ */
+caller: AgentPluginCaller | null, 
 /**
  * The plugin's id.
  */
@@ -1590,6 +1614,27 @@ callId: string, };
 
 export type PluginCancelRequest = { callId: string, };
 
+/**
+ * A message posted on one of a plugin's `BroadcastChannel`s.
+ */
+export type PluginChannelMessage = { 
+/**
+ * The channel's name, as the page opened it.
+ */
+name: string, 
+/**
+ * What was posted, limited to what the protocol carries: the bridge
+ * throws a `DataCloneError` for anything else, as structured clone does,
+ * and nothing is sent.
+ */
+message: unknown, 
+/**
+ * Chosen by the bridge for the channel object that posted, so that one
+ * is skipped and other channels of that name in the same page still
+ * hear it.
+ */
+token: string, };
+
 export type PluginCommandEvent = { id: string, };
 
 /**
@@ -1616,7 +1661,7 @@ id: string, };
  * An event for a plugin's pages, by event name. Each client framing the
  * plugin delivers it to its own frames.
  */
-export type PluginDelivery = { "event": "settings", plugin: string, data: { [key in string]?: PluginSettingValue }, to: PluginDeliveryTarget, } | { "event": "secrets", plugin: string, data: { [key in string]?: PluginPageSecretState }, to: PluginDeliveryTarget, } | { "event": "command", plugin: string, data: PluginCommandEvent, to: PluginDeliveryTarget, } | { "event": "sessions", plugin: string, data: Array<PluginSession>, to: PluginDeliveryTarget, };
+export type PluginDelivery = { "event": "settings", plugin: string, data: { [key in string]?: PluginSettingValue }, to: PluginDeliveryTarget, } | { "event": "secrets", plugin: string, data: { [key in string]?: PluginPageSecretState }, to: PluginDeliveryTarget, } | { "event": "command", plugin: string, data: PluginCommandEvent, to: PluginDeliveryTarget, } | { "event": "sessions", plugin: string, data: Array<PluginSession>, to: PluginDeliveryTarget, } | { "event": "channel", plugin: string, data: PluginChannelMessage, to: PluginDeliveryTarget, };
 
 /**
  * Which of a plugin's pages a delivery is for.
@@ -1952,7 +1997,19 @@ export type PluginSwitchRequest = { path: string, enabled: boolean, };
 
 export type PluginTabInfo = { title: string, url: string, };
 
-export type PluginToolInfo = { name: string, description: string, };
+/**
+ * One tool as the manifest declares it: enough for a client whose plugin
+ * pages answer its calls to offer it on `agentPlugin:offer`.
+ */
+export type PluginToolInfo = { name: string, description: string, 
+/**
+ * Its arguments' JSON Schema, an object.
+ */
+inputSchema: unknown, 
+/**
+ * The manifest marks it as changing nothing.
+ */
+readOnly: boolean, };
 
 /**
  * The host asking a client to do something a plugin asked for.

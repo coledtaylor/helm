@@ -1362,7 +1362,7 @@ describe('the tool endpoint', () => {
           arguments: {}
         })
         const relayed = new Promise<P.AgentPluginToolAnswer>((resolve) => answers.set(callId, resolve))
-        connection.push('agentPlugin:call', { callId, session: 3, plugin: 'tracker', tool: 'list_cards', arguments: {} })
+        connection.push('agentPlugin:call', { callId, session: 3, caller: null, plugin: 'tracker', tool: 'list_cards', arguments: {} })
         expect((await relayed).outcome).toEqual({ status: 'done', value: routed })
       }
       // The relay names the session as main knows it, never by a token.

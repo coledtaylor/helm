@@ -101,6 +101,9 @@ pub struct AgentPluginToolCall {
     /// The id of the hosted session whose agent called the tool.
     #[ts(type = "number")]
     pub session: u64,
+    /// That session as the plugin knows it, minted by the host; null while
+    /// the host has no running session to name.
+    pub caller: Option<AgentPluginCaller>,
     /// The plugin's id.
     pub plugin: String,
     /// The tool's name, as the server lists it.
@@ -109,6 +112,20 @@ pub struct AgentPluginToolCall {
     #[schemars(with = "serde_json::Value")]
     #[ts(type = "unknown")]
     pub arguments: Payload,
+}
+
+/// The session a plugin tool call came from, as the plugin is told it: never
+/// the host's row id and nothing of the session's conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPluginCaller {
+    /// Minted by the host when the session launched, random, and the same id
+    /// the plugin's `sessions.list` and `sessions` event show it under.
+    pub id: String,
+    /// The session's name.
+    pub label: String,
+    /// The folder it runs in.
+    pub folder: String,
 }
 
 /// The client's answer to a plugin tool call.

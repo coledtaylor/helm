@@ -173,6 +173,7 @@ impl PluginRelay {
             let call = AgentPluginToolCall {
                 call_id,
                 session,
+                caller: None,
                 plugin: plugin.to_owned(),
                 tool: tool.to_owned(),
                 arguments,

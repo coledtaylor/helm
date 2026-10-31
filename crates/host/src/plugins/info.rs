@@ -11,6 +11,8 @@
 
 use std::collections::BTreeMap;
 
+use floti_protocol::Payload;
+use floti_protocol::channel::to_payload;
 use floti_protocol::channels::plugins::{
     PluginAgentInfo, PluginBackgroundInfo, PluginBackgroundState, PluginExecInfo, PluginInfo,
     PluginPanelInfo, PluginSecretInfo, PluginServiceInfo, PluginSettingValue, PluginStatusItem,
@@ -202,6 +204,11 @@ pub fn loaded(
                 .map(|tool| PluginToolInfo {
                     name: tool.name.clone(),
                     description: tool.description.clone(),
+                    // A JSON value always encodes; the manifest reader has
+                    // already held it to an object.
+                    input_schema: to_payload(&tool.input_schema)
+                        .unwrap_or_else(|_| Payload::Map(Vec::new())),
+                    read_only: tool.read_only,
                 })
                 .collect(),
         }),

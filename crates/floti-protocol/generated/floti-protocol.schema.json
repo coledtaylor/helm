@@ -102,6 +102,29 @@
       ],
       "type": "object"
     },
+    "AgentPluginCaller": {
+      "description": "The session a plugin tool call came from, as the plugin is told it: never\nthe host's row id and nothing of the session's conversation.",
+      "properties": {
+        "folder": {
+          "description": "The folder it runs in.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Minted by the host when the session launched, random, and the same id\nthe plugin's `sessions.list` and `sessions` event show it under.",
+          "type": "string"
+        },
+        "label": {
+          "description": "The session's name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "folder"
+      ],
+      "type": "object"
+    },
     "AgentPluginOutcome": {
       "description": "What a plugin tool call came to.",
       "oneOf": [
@@ -239,6 +262,17 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "caller": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentPluginCaller"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "That session as the plugin knows it, minted by the host; null while\nthe host has no running session to name."
         },
         "plugin": {
           "description": "The plugin's id.",
@@ -4946,6 +4980,28 @@
       ],
       "type": "object"
     },
+    "PluginChannelMessage": {
+      "description": "A message posted on one of a plugin's `BroadcastChannel`s.",
+      "properties": {
+        "message": {
+          "description": "What was posted, limited to what the protocol carries: the bridge\nthrows a `DataCloneError` for anything else, as structured clone does,\nand nothing is sent."
+        },
+        "name": {
+          "description": "The channel's name, as the page opened it.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Chosen by the bridge for the channel object that posted, so that one\nis skipped and other channels of that name in the same page still\nhear it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "message",
+        "token"
+      ],
+      "type": "object"
+    },
     "PluginCommandEvent": {
       "properties": {
         "id": {
@@ -5092,6 +5148,31 @@
             },
             "event": {
               "const": "sessions",
+              "type": "string"
+            },
+            "plugin": {
+              "type": "string"
+            },
+            "to": {
+              "$ref": "#/$defs/PluginDeliveryTarget"
+            }
+          },
+          "required": [
+            "event",
+            "plugin",
+            "data",
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One of the plugin's pages, on any client, or its background posted on\na `BroadcastChannel`. Every page of the plugin hears it on its\nchannels of that name, except the channel that posted it.",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/PluginChannelMessage"
+            },
+            "event": {
+              "const": "channel",
               "type": "string"
             },
             "plugin": {
@@ -6219,17 +6300,27 @@
       "type": "object"
     },
     "PluginToolInfo": {
+      "description": "One tool as the manifest declares it: enough for a client whose plugin\npages answer its calls to offer it on `agentPlugin:offer`.",
       "properties": {
         "description": {
           "type": "string"
         },
+        "inputSchema": {
+          "description": "Its arguments' JSON Schema, an object."
+        },
         "name": {
           "type": "string"
+        },
+        "readOnly": {
+          "description": "The manifest marks it as changing nothing.",
+          "type": "boolean"
         }
       },
       "required": [
         "name",
-        "description"
+        "description",
+        "inputSchema",
+        "readOnly"
       ],
       "type": "object"
     },

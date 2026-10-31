@@ -6,9 +6,9 @@
 use ciborium::Value;
 use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::agent_plugin::{
-    AgentPluginAnswer, AgentPluginCallCancel, AgentPluginCalls, AgentPluginCancels,
-    AgentPluginOffer, AgentPluginOutcome, AgentPluginServer, AgentPluginServers, AgentPluginTool,
-    AgentPluginToolAnswer, AgentPluginToolCall,
+    AgentPluginAnswer, AgentPluginCallCancel, AgentPluginCaller, AgentPluginCalls,
+    AgentPluginCancels, AgentPluginOffer, AgentPluginOutcome, AgentPluginServer,
+    AgentPluginServers, AgentPluginTool, AgentPluginToolAnswer, AgentPluginToolCall,
 };
 use floti_protocol::message::{Request, Subscribe};
 use floti_protocol::{
@@ -124,6 +124,11 @@ fn a_call_names_the_call_the_session_the_plugin_and_the_tool_and_an_answer_is_do
     let call = AgentPluginToolCall {
         call_id: 7,
         session: 4,
+        caller: Some(AgentPluginCaller {
+            id: "k3v9q2".into(),
+            label: "notes: triage".into(),
+            folder: "C:\\work\\a repo".into(),
+        }),
         plugin: "notes".into(),
         tool: "find".into(),
         arguments: to_payload(&json!({ "query": "x" })).unwrap(),
@@ -134,11 +139,22 @@ fn a_call_names_the_call_the_session_the_plugin_and_the_tool_and_an_answer_is_do
         json!({
             "callId": 7,
             "session": 4,
+            "caller": { "id": "k3v9q2", "label": "notes: triage", "folder": "C:\\work\\a repo" },
             "plugin": "notes",
             "tool": "find",
             "arguments": { "query": "x" },
         })
     );
+    let back: AgentPluginToolCall = from_payload(&to_payload(&wire).unwrap()).unwrap();
+    assert_eq!(back, call);
+
+    // A host with no running session to name sends null.
+    let unnamed = AgentPluginToolCall {
+        caller: None,
+        ..call
+    };
+    let wire: serde_json::Value = from_payload(&to_payload(&unnamed).unwrap()).unwrap();
+    assert_eq!(wire["caller"], serde_json::Value::Null);
 
     let done: serde_json::Value = from_payload(
         &to_payload(&AgentPluginToolAnswer {

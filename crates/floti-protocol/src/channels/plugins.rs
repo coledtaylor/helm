@@ -20,6 +20,10 @@
 //!   read.
 //! - Fire-and-forget sends (`plugins:cancel`, `plugins:answer`) are requests,
 //!   so a client learns when one did not land.
+//! - A plugin's `BroadcastChannel`s span every client and its background, so
+//!   they need no channel of their own: a page's post is a `plugins:call` of
+//!   the bridge's [`PLUGIN_CHANNEL_POST`], and the host hands it on as a
+//!   `channel` delivery on `plugins:deliver`.
 //! - Whole-state pushes (`plugins:changed`, `secrets:changed`) are events that
 //!   carry state: a subscription starts with a snapshot of every plugin, or of
 //!   the secrets list.
@@ -461,6 +465,39 @@ pub enum PluginDelivery {
         data: Vec<PluginSession>,
         to: PluginDeliveryTarget,
     },
+    /// One of the plugin's pages, on any client, or its background posted on
+    /// a `BroadcastChannel`. Every page of the plugin hears it on its
+    /// channels of that name, except the channel that posted it.
+    Channel {
+        plugin: String,
+        data: PluginChannelMessage,
+        to: PluginDeliveryTarget,
+    },
+}
+
+/// The bridge method a page's `BroadcastChannel.postMessage` is relayed
+/// through, on `plugins:call`, with the arguments `[name, message, token]`
+/// of [`PluginChannelMessage`]. It is the bridge's own, not part of the API a
+/// plugin calls: the host refuses it for anything but a well-formed post and
+/// answers `null` once the post is on its way.
+pub const PLUGIN_CHANNEL_POST: &str = "channel.post";
+
+/// A message posted on one of a plugin's `BroadcastChannel`s.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginChannelMessage {
+    /// The channel's name, as the page opened it.
+    pub name: String,
+    /// What was posted, limited to what the protocol carries: the bridge
+    /// throws a `DataCloneError` for anything else, as structured clone does,
+    /// and nothing is sent.
+    #[schemars(with = "serde_json::Value")]
+    #[ts(type = "unknown")]
+    pub message: Payload,
+    /// Chosen by the bridge for the channel object that posted, so that one
+    /// is skipped and other channels of that name in the same page still
+    /// hear it.
+    pub token: String,
 }
 
 /// Which of a plugin's pages a delivery is for.
@@ -816,7 +853,7 @@ pub enum PluginServiceState {
 }
 
 /// What a plugin offers the sessions the host starts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginAgentInfo {
     /// The user's switch: whether new sessions are offered these tools.
@@ -827,11 +864,19 @@ pub struct PluginAgentInfo {
     pub tools: Vec<PluginToolInfo>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+/// One tool as the manifest declares it: enough for a client whose plugin
+/// pages answer its calls to offer it on `agentPlugin:offer`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginToolInfo {
     pub name: String,
     pub description: String,
+    /// Its arguments' JSON Schema, an object.
+    #[schemars(with = "serde_json::Value")]
+    #[ts(type = "unknown")]
+    pub input_schema: Payload,
+    /// The manifest marks it as changing nothing.
+    pub read_only: bool,
 }
 
 /// The plugin's item on the status bar. Clicking it opens the plugin's rail

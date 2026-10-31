@@ -314,10 +314,23 @@ fn plugin() -> PluginInfo {
             enabled: true,
             server: "floti-plugin-factory".into(),
             instructions: None,
-            tools: vec![PluginToolInfo {
-                name: "runs".into(),
-                description: "Lists runs.".into(),
-            }],
+            tools: vec![
+                PluginToolInfo {
+                    name: "runs".into(),
+                    description: "Lists runs.".into(),
+                    input_schema: Value::Map(vec![
+                        (text("type"), text("object")),
+                        (text("properties"), Value::Map(vec![])),
+                    ]),
+                    read_only: true,
+                },
+                PluginToolInfo {
+                    name: "rerun".into(),
+                    description: "Runs one again.".into(),
+                    input_schema: Value::Map(vec![(text("type"), text("object"))]),
+                    read_only: false,
+                },
+            ],
         }),
         starts_sessions: true,
         sees_sessions: false,
@@ -792,6 +805,21 @@ fn every_kind_of_page_delivery_arrives_as_an_event_with_typed_data() {
             },
             "sessions",
         ),
+        (
+            PluginDelivery::Channel {
+                plugin: "factory".into(),
+                data: PluginChannelMessage {
+                    name: "factory-runs".into(),
+                    message: Value::Map(vec![
+                        (text("type"), text("changed")),
+                        (text("ids"), Value::Array(vec![Value::Integer(3.into())])),
+                    ]),
+                    token: "c-7".into(),
+                },
+                to: PluginDeliveryTarget::All,
+            },
+            "channel",
+        ),
     ];
     for (delivery, name) in deliveries {
         let wire = event::<PluginsDeliver>(delivery);
@@ -906,6 +934,48 @@ fn page_files_are_asked_by_a_client_and_never_named_in_ipc_ts() {
 }
 
 #[test]
+fn a_channel_post_carries_its_name_message_and_posting_token() {
+    let wire = event::<PluginsDeliver>(PluginDelivery::Channel {
+        plugin: "factory".into(),
+        data: PluginChannelMessage {
+            name: "factory-runs".into(),
+            message: text("refresh"),
+            token: "c-7".into(),
+        },
+        to: PluginDeliveryTarget::All,
+    });
+    assert_eq!(field(&wire, "to"), &text("all"));
+    let data = field(&wire, "data");
+    assert_eq!(field(data, "name"), &text("factory-runs"));
+    assert_eq!(field(data, "message"), &text("refresh"));
+    assert_eq!(field(data, "token"), &text("c-7"));
+
+    // A post goes to the host as a call of the bridge's own method.
+    exchange::<PluginsCall>(
+        PluginCallRequest {
+            plugin: "factory".into(),
+            surface: PluginSurfaceKind::Tab,
+            method: PLUGIN_CHANNEL_POST.into(),
+            args: vec![text("factory-runs"), text("refresh"), text("c-7")],
+            call_id: "9".into(),
+        },
+        PluginCallOutcome::ok(Value::Null),
+    );
+}
+
+#[test]
+fn a_plugin_tool_carries_its_input_schema_and_read_only_mark() {
+    let wire = to_payload(&plugin()).unwrap();
+    let tools = field(field(&wire, "agent"), "tools").as_array().unwrap();
+    assert_eq!(field(&tools[0], "readOnly"), &Value::Bool(true));
+    assert_eq!(
+        field(field(&tools[0], "inputSchema"), "type"),
+        &text("object")
+    );
+    assert_eq!(field(&tools[1], "readOnly"), &Value::Bool(false));
+}
+
+#[test]
 fn the_plugin_list_is_state_with_a_snapshot() {
     state::<PluginsChanged>(plugins());
     state::<PluginsChanged>(vec![]);
@@ -975,6 +1045,9 @@ fn the_generated_typescript_keeps_the_ipc_ts_shapes() {
         "\"kind\": \"openTab\"",
         "requestId: string",
         "\"event\": \"sessions\"",
+        "\"event\": \"channel\"",
+        "inputSchema: unknown",
+        "readOnly: boolean",
         "boolean | number | string | null",
         "description?: string",
         "args: unknown[]",
