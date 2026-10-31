@@ -8,7 +8,7 @@ import { PATIENCE } from '../../../../../test/patience'
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
 
 const { programEnv, readExecRequest, resolveProgram, runProgram } = await import('./exec')
-const { PluginCallError } = await import('./errors')
+const { PluginCallError } = await import('../../shared/plugins/errors')
 
 /**
  * `helm.exec`: a declared program run with the page's arguments as an array

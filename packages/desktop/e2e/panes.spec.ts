@@ -21,9 +21,10 @@ async function dropOn(tab: Locator, pane: Locator, zone: Zone): Promise<void> {
 
 const pane = (window: Page, name: string): Locator => window.getByRole('region', { name })
 
-type Bridge = { helm: { invoke: (channel: string) => Promise<unknown> } }
+/** The window's routed bridge (`inspect.ts`): what the window's hooks call. */
+type Bridge = { __helmRouted: { invoke: (channel: string) => Promise<unknown> } }
 const savedLayout = async (window: Page): Promise<AppSettings['paneLayout']> =>
-  ((await window.evaluate(() => (window as unknown as Bridge).helm.invoke('settings:read'))) as AppSettings).paneLayout
+  ((await window.evaluate(() => (window as unknown as Bridge).__helmRouted.invoke('settings:read'))) as AppSettings).paneLayout
 
 /** The saved arrangement by shape, each group as its tab count: `row(1, column(1, 1))`. */
 async function savedShape(window: Page): Promise<string> {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { isClientOnly } from '../../../../shared/host/protocol'
+import { isClientOnly, isHostInternal } from '../../../../shared/host/protocol'
+import { EVENT_CHANNELS, REQUEST_CHANNELS, SEND_CHANNELS } from '../../../../shared/ipc'
 import { bridge } from '../bridge.testkit'
-import { createRouter, type HostAdapter } from './router'
+import { createRouter, refusedSentence, routedChannels, type HostAdapter } from './router'
 
 const SUMMARY = {
   sessions: 3,
@@ -50,7 +51,9 @@ function routerFor(inHost: Promise<boolean>) {
       return inHost
     },
     adapters: [host.adapter],
-    clientOnly: isClientOnly
+    clientOnly: isClientOnly,
+    hostInternal: isHostInternal,
+    log: () => undefined
   })
   return { helm, host, asked: () => asked }
 }
@@ -82,10 +85,27 @@ describe('where the window’s calls go', () => {
     expect(bridge.sent('sessions:watch')).toEqual([])
   })
 
-  it('with the setting on, a channel no adapter takes yet stays on the preload’s bridge, without waiting', async () => {
-    const r = routerFor(new Promise<boolean>(() => undefined))
+  it('with the setting on, refuses a channel that is neither client-only, routed nor host-internal rather than asking main', async () => {
+    const r = routerFor(Promise.resolve(true))
     bridge.answer('session:list', () => [])
-    expect(await r.helm.invoke('session:list')).toEqual([])
+    await expect(r.helm.invoke('session:list')).rejects.toThrow(refusedSentence('session:list'))
+    r.helm.send('session:input', { id: 1, data: 'x' })
+    const heard: unknown[] = []
+    r.helm.on('session:exit', (payload) => heard.push(payload))
+    await Promise.resolve()
+    await Promise.resolve()
+    bridge.emit('session:exit', { id: 1 } as never)
+    expect(bridge.invoked('session:list')).toEqual([])
+    expect(bridge.sent('session:input')).toEqual([])
+    expect(heard).toEqual([])
+  })
+
+  it('sends a client-only or host-internal channel to the preload’s bridge at once, without waiting for main’s answer', async () => {
+    const r = routerFor(new Promise<boolean>(() => undefined))
+    bridge.answer('clipboard:read', () => 'copied')
+    expect(await r.helm.invoke('clipboard:read')).toBe('copied')
+    r.helm.send('plugins:toolResult', { id: 't1', ok: true, text: 'done' })
+    expect(bridge.sent('plugins:toolResult')).toEqual([{ id: 't1', ok: true, text: 'done' }])
     expect(r.asked()).toBe(0)
   })
 
@@ -124,8 +144,39 @@ describe('where the window’s calls go', () => {
         own: bridge,
         inHost: () => Promise.resolve(true),
         adapters: [{ requests: { 'clipboard:read': () => Promise.resolve('') } }],
-        clientOnly: isClientOnly
+        clientOnly: isClientOnly,
+        hostInternal: isHostInternal
       })
     ).toThrow('clipboard:read is client-only')
+  })
+})
+
+describe('every channel a Helm page uses, with the setting on', () => {
+  /** The window's and the hidden plugin window's adapters, as their bridges build them, on a preload that answers nothing. */
+  async function pages() {
+    Object.defineProperty(window, 'helm', { value: bridge, configurable: true })
+    const { hostAdapters } = await import('../bridge')
+    const { background } = await import('../../pluginHost/bridge')
+    return { window: hostAdapters, background: [background] }
+  }
+
+  const ALL = [...REQUEST_CHANNELS, ...SEND_CHANNELS, ...EVENT_CHANNELS]
+
+  it('is client-only, taken by one of the window’s adapters, or host-internal', async () => {
+    const routed = routedChannels((await pages()).window, isClientOnly)
+    const strays = ALL.filter((channel) => !isClientOnly(channel) && !routed.has(channel) && !isHostInternal(channel))
+    expect([...new Set(strays)].sort()).toEqual([])
+  })
+
+  it('in the hidden plugin window, routes only the plugin channels a background page needs, and leaves host-internal ones to the preload', async () => {
+    const routed = routedChannels((await pages()).background, isClientOnly)
+    expect([...routed].sort()).toEqual(['plugins:call', 'plugins:cancel', 'plugins:changed', 'plugins:deliver', 'plugins:list', 'settings:read'])
+    expect(ALL.filter((channel) => isHostInternal(channel)).sort()).toEqual([
+      'plugins:backgroundState',
+      'plugins:tool',
+      'plugins:toolCancel',
+      'plugins:toolResult'
+    ])
+    expect([...routed].filter((channel) => isHostInternal(channel))).toEqual([])
   })
 })

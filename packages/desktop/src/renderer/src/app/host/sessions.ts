@@ -62,9 +62,15 @@ export interface SessionsAdapterDeps {
 
 type Question = Omit<SessionConfirmRequest, 'id'>
 
+/** The sessions and terminals adapters, and the way in for a session the host started for someone else. */
+export type SessionsAdapters = HostAdapter[] & {
+  /** A session the host started for a plugin: kept with the window's tabs, its terminal carried. */
+  adopt(row: P.SessionRecord): SessionRecord
+}
+
 const isRunning = (record: SessionRecord): boolean => record.status === 'running'
 
-export function createSessionsAdapters(deps: SessionsAdapterDeps): HostAdapter[] {
+export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapters {
   const { link, own } = deps
   const log = deps.log ?? (() => undefined)
   const host = (): Promise<HostConnection> => link.connection()
@@ -432,5 +438,5 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): HostAdapter[]
     log
   })
 
-  return [sessions, terminals]
+  return Object.assign([sessions, terminals], { adopt: (row: P.SessionRecord) => adopt(sessionFromHost(row)) })
 }

@@ -30,7 +30,8 @@ import { activePty, windowsBuildNumber } from './pty'
 import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
 import { updateSettings, type Services } from './services'
 import { localWorkspace, type WorkspaceService } from './workspace'
-import { showExitNotification, type SessionHost } from './sessions'
+import { registerConfirmAnswers, showExitNotification, type SessionHost } from './sessions'
+import { isClientOnly, isHostInternal } from '../shared/host/protocol'
 import type { ActivityService } from './activity'
 import type { ResourcesService } from './resources'
 import type {
@@ -195,11 +196,21 @@ interface IpcContextBase {
   /** Plugin folders, their pages' bridge calls, services and secrets; see `plugins/host.ts`. */
   plugins: PluginHost
   /**
-   * The plugin registry, settings and secrets Settings acts on, while sessions
-   * run in the local host, which keeps them (`host/plugins.ts`); absent
-   * otherwise, when `plugins` keeps them. A page's bridge calls stay `plugins`'.
+   * What main keeps of the local host's plugins while sessions run there
+   * (`host/plugins.ts`): the hidden window's reports of the background pages
+   * it runs. Absent otherwise, when `plugins` keeps everything.
    */
   hostPlugins?: HostPlugins | undefined
+  /** The hidden window plugins' background pages run in, while sessions run in the local host. */
+  pluginBackground?: (() => Electron.WebContents | null) | undefined
+  /**
+   * Whether sessions run in the local host this run. Then every Helm page
+   * reaches the host over its own connection, and main registers only what
+   * `boundary.rs` lists as client-only, and the host-internal channels from the
+   * hidden plugin window: a host feature asked over Electron IPC has no
+   * handler and is refused.
+   */
+  sessionsInHost?: boolean | undefined
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
@@ -231,43 +242,18 @@ interface IpcContextBase {
   claudeHome?: string | undefined
 }
 
-/** Where a plugin page's calls and the window's answers for them go. */
-export interface PluginPageRoutes {
-  call: PluginHost['call']
-  cancel: PluginHost['cancel']
-  command: (plugin: string, id: string) => void | Promise<void>
-  answer: PluginHost['answer']
-  session: PluginHost['session']
-}
-
-/**
- * A plugin page's calls go to whatever keeps the plugins: the local host's
- * plugins while sessions run there (`host/plugins.ts`), Helm's own registry
- * otherwise, which answers every one itself and asks the host nothing.
- */
-export function pluginPages(ctx: Pick<IpcContext, 'plugins' | 'hostPlugins'>): PluginPageRoutes {
-  const host = ctx.hostPlugins
-  if (host !== undefined) {
-    return {
-      call: (request, sender) => host.call(request, sender),
-      cancel: (callId, sender) => host.cancel(callId, sender),
-      command: (plugin, id) => host.command(plugin, id),
-      answer: (requestId) => host.answer(requestId),
-      session: (answer, sender) => host.session(answer, sender)
-    }
-  }
-  const own = ctx.plugins
-  return {
-    call: (request, sender) => own.call(request, sender),
-    cancel: (callId, sender) => own.cancel(callId, sender),
-    command: (plugin, id) => own.command(plugin, id),
-    answer: (requestId) => own.answer(requestId),
-    session: (answer, sender) => own.session(answer, sender)
-  }
+/** Whether main handles a channel this run: every one with the setting off; with it on, see `IpcContext.sessionsInHost`. */
+export function mainHandles(channel: string, sessionsInHost: boolean): 'always' | 'fromPluginWindow' | 'never' {
+  if (!sessionsInHost || isClientOnly(channel)) return 'always'
+  return isHostInternal(channel) ? 'fromPluginWindow' : 'never'
 }
 
 export function registerIpc(ctx: IpcContext): void {
   const { services } = ctx
+  const inHost = ctx.sessionsInHost === true
+  registerConfirmAnswers(inHost)
+  /** Whether a message came from the hidden plugin window, the only page a host-internal channel is taken from. */
+  const fromPluginWindow = (sender: WebContents): boolean => ctx.pluginBackground?.()?.id === sender.id
   const profileService =
     ctx.profiles ??
     createLocalProfiles(services, nativeProfileDialogs(ctx.window), (channel, payload) =>
@@ -379,8 +365,6 @@ export function registerIpc(ctx: IpcContext): void {
     }
   }
 
-  const pages = pluginPages(ctx)
-
   const requests: RequestHandlers = {
     // Only a Helm page's own frame: never a frame inside it, which is where
     // an artifact or a plugin page would be.
@@ -393,6 +377,7 @@ export function registerIpc(ctx: IpcContext): void {
 
     'ownApp:info': () => ownAppInfo(),
     'windowSessions:lostLayout': () => services.lost.layout,
+    'pluginBackground:states': () => ctx.hostPlugins?.reports() ?? [],
 
     'settings:read': () => workspace.settings(),
 
@@ -710,7 +695,7 @@ export function registerIpc(ctx: IpcContext): void {
      * Plugins. Every decision - what a manifest allows, whose secret may go
      * where, what a page may open - is in `main/plugins/`; these delegate.
      */
-    'plugins:list': () => ctx.hostPlugins?.list() ?? ctx.plugins.list(),
+    'plugins:list': () => ctx.plugins.list(),
     'plugins:add': async () => {
       const title = 'Add a plugin folder'
       let path: string | null
@@ -721,28 +706,28 @@ export function registerIpc(ctx: IpcContext): void {
         const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
         path = result.canceled ? null : (result.filePaths[0] ?? null)
       }
-      if (path === null) return { path: null, error: null, plugins: await (ctx.hostPlugins?.list() ?? ctx.plugins.list()) }
-      return ctx.hostPlugins?.add(path) ?? ctx.plugins.add(path)
+      if (path === null) return { path: null, error: null, plugins: await (ctx.plugins.list()) }
+      return ctx.plugins.add(path)
     },
     'plugins:remove': ({ path, deleteSecrets }) =>
-      ctx.hostPlugins?.remove(path, deleteSecrets) ?? ctx.plugins.remove(path, deleteSecrets),
+      ctx.plugins.remove(path, deleteSecrets),
     'plugins:setEnabled': ({ path, enabled }) =>
-      ctx.hostPlugins?.setEnabled(path, enabled) ?? ctx.plugins.setEnabled(path, enabled),
-    'plugins:setTools': ({ path, enabled }) => ctx.hostPlugins?.setTools(path, enabled) ?? ctx.plugins.setTools(path, enabled),
-    'plugins:reload': ({ path }) => ctx.hostPlugins?.reload(path) ?? ctx.plugins.reload(path),
+      ctx.plugins.setEnabled(path, enabled),
+    'plugins:setTools': ({ path, enabled }) => ctx.plugins.setTools(path, enabled),
+    'plugins:reload': ({ path }) => ctx.plugins.reload(path),
     'plugins:setSetting': ({ plugin, key, value }) =>
-      ctx.hostPlugins?.setSetting(plugin, key, value) ?? ctx.plugins.setSetting(plugin, key, value),
+      ctx.plugins.setSetting(plugin, key, value),
     // The sender is part of the call's name, so two Helm pages relaying calls
     // cannot cancel each other's.
-    'plugins:call': (request, event) => pages.call(request, event.sender.id),
-    'plugins:session': (answer, event) => pages.session(answer, event.sender.id),
-    'plugins:command': ({ plugin, id }) => pages.command(plugin, id),
-    'plugins:metrics': () => ctx.hostPlugins?.metrics() ?? ctx.plugins.metrics(),
-    'plugins:log': ({ path }) => ctx.hostPlugins?.log(path) ?? ctx.plugins.log(path),
-    'plugins:ownSecrets': ({ path }) => ctx.hostPlugins?.ownSecrets(path) ?? ctx.plugins.ownSecrets(path),
-    'secrets:list': () => ctx.hostPlugins?.secrets.list() ?? ctx.plugins.secrets.list(),
-    'secrets:save': (input) => ctx.hostPlugins?.secrets.save(input) ?? ctx.plugins.secrets.save(input),
-    'secrets:remove': ({ key }) => ctx.hostPlugins?.secrets.remove(key) ?? ctx.plugins.secrets.remove(key),
+    'plugins:call': (request, event) => ctx.plugins.call(request, event.sender.id),
+    'plugins:session': (answer, event) => ctx.plugins.session(answer, event.sender.id),
+    'plugins:command': ({ plugin, id }) => ctx.plugins.command(plugin, id),
+    'plugins:metrics': () => ctx.plugins.metrics(),
+    'plugins:log': ({ path }) => ctx.plugins.log(path),
+    'plugins:ownSecrets': ({ path }) => ctx.plugins.ownSecrets(path),
+    'secrets:list': () => ctx.plugins.secrets.list(),
+    'secrets:save': (input) => ctx.plugins.secrets.save(input),
+    'secrets:remove': ({ key }) => ctx.plugins.secrets.remove(key),
 
     /*
      * The browser pane. Every handler is a one-line delegation on purpose:
@@ -798,12 +783,23 @@ export function registerIpc(ctx: IpcContext): void {
 
     'browser:bounds': (payload) => ctx.browsers.bounds(payload),
 
-    'plugins:cancel': ({ callId }, event) => pages.cancel(callId, event.sender.id),
-    'plugins:answer': ({ requestId }) => pages.answer(requestId),
+    'plugins:cancel': ({ callId }, event) => ctx.plugins.cancel(callId, event.sender.id),
+    'plugins:answer': ({ requestId }) => ctx.plugins.answer(requestId),
     'plugins:backgroundState': ({ plugin, revision, state, error }) =>
       ctx.hostPlugins !== undefined
         ? ctx.hostPlugins.backgroundState(plugin, revision, state, error)
         : ctx.plugins.backgroundState(plugin, revision, state, error),
+    // A background page's ask that only the window can draw, from the hidden
+    // window, and the window's word that a secret dialog it asked for closed.
+    'pluginWindow:ask': (request, event) => {
+      if (ctx.pluginBackground?.()?.id === event.sender.id) emit(ctx.window(), 'pluginWindow:asked', request)
+    },
+    'pluginWindow:answer': (answer, event) => {
+      const win = ctx.window()
+      const hidden = ctx.pluginBackground?.() ?? null
+      if (win === null || win.webContents.id !== event.sender.id || hidden === null || hidden.isDestroyed()) return
+      hidden.send('pluginWindow:answered', answer)
+    },
     'plugins:toolResult': (outcome, event) => ctx.plugins.toolResult(outcome, event.sender.id),
 
     // Consumed by one-shot `ipcMain.once` listeners in the spike drivers, which
@@ -829,7 +825,14 @@ export function registerIpc(ctx: IpcContext): void {
   for (const [channel, handler] of Object.entries(requests) as Array<
     [string, (payload: unknown, event: Electron.IpcMainInvokeEvent) => unknown]
   >) {
-    ipcMain.handle(channel, (event, payload: unknown) => handler(payload, event))
+    const handles = mainHandles(channel, inHost)
+    if (handles === 'never') continue
+    ipcMain.handle(channel, (event, payload: unknown) => {
+      if (handles === 'fromPluginWindow' && !fromPluginWindow(event.sender)) {
+        return Promise.reject(new Error(`${channel} is taken only from the hidden plugin window.`))
+      }
+      return handler(payload, event)
+    })
   }
 
   /*
@@ -853,7 +856,10 @@ export function registerIpc(ctx: IpcContext): void {
   for (const [channel, handler] of Object.entries(sends) as Array<
     [string, (payload: unknown, event: Electron.IpcMainEvent) => void]
   >) {
+    const handles = mainHandles(channel, inHost)
+    if (handles === 'never') continue
     ipcMain.on(channel, (event, payload: unknown) => {
+      if (handles === 'fromPluginWindow' && !fromPluginWindow(event.sender)) return
       try {
         handler(payload, event)
       } catch (err) {

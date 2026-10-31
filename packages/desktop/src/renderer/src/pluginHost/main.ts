@@ -1,15 +1,18 @@
 import type { PluginInfo } from '../../../shared/ipc'
-import { helm } from '../app/bridge'
+import { background, helm } from './bridge'
 import { createPluginRelay, type SurfaceSpec } from '../plugins/relay'
 
 /**
  * The background host: every enabled plugin's background page, each an
  * iframe on its plugin's origin, in a window nobody sees.
  *
- * Main decides which plugins need one (`plugins:changed` says, through each
+ * The plugin list says which plugins need one (`plugins:changed`, through each
  * plugin's background state) and this page keeps exactly those frames. It
  * reports back what only it can see: that a page connected (`running`), or
  * that it failed to load or stopped (`crashed`), which main shows in Settings.
+ * With sessions in the local host the list is the host's, read over this
+ * window's own connection (`bridge.ts`), and what this window saw of its
+ * frames is laid over it here as well as told to main.
  * A crashed page is not brought back here - Reload in Settings is the way back,
  * because a page that dies on start would otherwise restart forever.
  */
@@ -60,12 +63,14 @@ function report(): void {
     const said = `${String(spec.revision)}:${state.kind}`
     if (reported.get(spec.key) === said) continue
     reported.set(spec.key, said)
-    helm.send('plugins:backgroundState', {
+    const report = {
       plugin: spec.plugin,
       revision: spec.revision,
-      state: state.kind === 'ready' ? 'running' : 'crashed',
+      state: state.kind === 'ready' ? ('running' as const) : ('crashed' as const),
       error: state.kind === 'failed' ? state.message : null
-    })
+    }
+    helm.send('plugins:backgroundState', report)
+    background.reported(report)
   }
 }
 

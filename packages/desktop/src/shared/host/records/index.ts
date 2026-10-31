@@ -34,6 +34,14 @@ export {
   unreadableUsage,
   usageFromHost
 } from './history'
+export {
+  deliveryFromHost,
+  isBackgroundPage,
+  logFromHost,
+  pluginFromHost,
+  uiFromHost,
+  withBackgroundReports
+} from './plugins'
 
 /**
  * The host's rows and states in the window's vocabulary. Nothing here reaches

@@ -220,24 +220,10 @@ export function createDesktopHost({
     writeFile: (path, text) => writeFile(path, text, 'utf8'),
     log
   })
-  const sendBackground: Emit = (channel, payload) => {
-    const contents = pluginBackground.contents()
-    if (contents !== null && !contents.isDestroyed()) contents.send(channel, payload)
-  }
   const hostPlugins: HostPlugins = createHostPlugins({
     link,
-    // Every Helm page that frames plugins: the window, and the background host.
-    emit: (channel, payload) => {
-      send(channel, payload)
-      sendBackground(channel, payload)
-    },
-    emitWindow: send,
-    emitBackground: sendBackground,
-    isWindow: (sender) => {
-      const win = window()
-      return win !== null && !win.isDestroyed() && win.webContents.id === sender
-    },
-    adoptSession: (row) => hosted.adoptSession(row),
+    // The window lays these over the host's list, which it reads itself.
+    reportsChanged: (reports) => send('pluginBackground:changed', reports),
     runTool: runPluginTool,
     onToolsChanged: () => pluginRelay.offer(),
     background: pluginBackground,

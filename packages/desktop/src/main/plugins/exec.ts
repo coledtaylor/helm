@@ -5,7 +5,7 @@ import type { ExecResult } from '@coledtaylor/helm-plugin-sdk'
 import type { NormalizedExec } from '@coledtaylor/helm-plugin-sdk/manifest'
 import { isExecutableFile, searchPath } from '../claude-cli'
 import { POSIX_OWN_GROUP, treeKill } from '../treekill'
-import { PluginCallError } from './errors'
+import { PluginCallError } from '../../shared/plugins/errors'
 import { resolveInside } from './loader'
 
 /**

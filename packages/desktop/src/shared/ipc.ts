@@ -695,6 +695,12 @@ export interface IpcRequests {
    * the host's restore offer is placed by. Main keeps it; the window asks.
    */
   'windowSessions:lostLayout': { request: void; response: SavedPaneLayout | null }
+  /**
+   * With sessions in the local host, what the hidden plugin host window has
+   * reported of the background pages it runs, which Settings lays over the
+   * host's list. Main alone hears those reports.
+   */
+  'pluginBackground:states': { request: void; response: PluginBackgroundReport[] }
 
   /** Rows from the last scan, for painting before a fresh one finishes. */
   'discovery:cached': { request: void; response: CachedProject[] }
@@ -1596,6 +1602,17 @@ export const PLUGIN_TOOL_ANSWER_MAX_CHARS = 1_000_000
 /** The background page's answer, or the background host's word that there is no page to give one. */
 export type PluginToolOutcome = { id: string; ok: true; text: string } | { id: string; ok: false; message: string }
 
+/**
+ * What the hidden plugin host window saw of one background page it runs,
+ * under plugin API v1, for the read of the plugin it was started from.
+ */
+export interface PluginBackgroundReport {
+  plugin: string
+  revision: number
+  state: 'running' | 'crashed'
+  error: string | null
+}
+
 /** The kind of theme on screen - what `.dark` on `<html>` says. */
 export type ResolvedTheme = 'light' | 'dark'
 
@@ -1676,6 +1693,14 @@ export interface IpcSends {
   'plugins:backgroundState': { plugin: string; revision: number; state: 'running' | 'crashed'; error: string | null }
   /** A tool call answered, from the background host. Main takes it from that window only. */
   'plugins:toolResult': PluginToolOutcome
+  /**
+   * With sessions in the local host, what a background page asked that only
+   * Helm's window can draw (one of the plugin's tabs, a secret dialog), from
+   * the hidden plugin host window, for main to hand the window.
+   */
+  'pluginWindow:ask': PluginUiRequest
+  /** A secret dialog the hidden window handed over has closed, from the window, for main to tell the hidden window. */
+  'pluginWindow:answer': { requestId: string }
 
   /** A Helm page's protocol bytes, for its bridge to the host. One-way: frames have their own replies. */
   'hostLink:send': { connection: number; bytes: Uint8Array }
@@ -1707,6 +1732,12 @@ export interface IpcEvents {
   'windowSessions:quitConfirm': SessionConfirmRequest
   /** With sessions in the local host, a click on a session's notification: bring its tab forward. */
   'windowSessions:activate': { id: number }
+  /** With sessions in the local host, what the hidden plugin host window reports of the background pages it runs. */
+  'pluginBackground:changed': PluginBackgroundReport[]
+  /** With sessions in the local host, a background page's ask for the window, from the hidden window through main. */
+  'pluginWindow:asked': PluginUiRequest
+  /** With sessions in the local host, the window closed a secret dialog the hidden window handed it. */
+  'pluginWindow:answered': { requestId: string }
   /** The whole list after any write, so every surface showing profiles agrees
    * without each of them refetching. */
   'profiles:changed': Profile[]
@@ -1931,6 +1962,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'profileDialog:export': true,
   'profileDialog:import': true,
   'windowSessions:lostLayout': true,
+  'pluginBackground:states': true,
   'discovery:cached': true,
   'discovery:scan': true,
   'roots:suggest': true,
@@ -2080,6 +2112,8 @@ export const SEND_CHANNELS = Object.keys({
   'session:confirmed': true,
   'windowSessions:notify': true,
   'windowSessions:quitConfirmed': true,
+  'pluginWindow:ask': true,
+  'pluginWindow:answer': true,
   'probe:res': true,
   'browser:bounds': true,
   'plugins:cancel': true,
@@ -2098,6 +2132,9 @@ export const EVENT_CHANNELS = Object.keys({
   'ownSettings:changed': true,
   'windowSessions:quitConfirm': true,
   'windowSessions:activate': true,
+  'pluginBackground:changed': true,
+  'pluginWindow:asked': true,
+  'pluginWindow:answered': true,
   'profiles:changed': true,
   'theme:changed': true,
   'themes:changed': true,

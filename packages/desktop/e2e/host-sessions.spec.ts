@@ -69,9 +69,10 @@ const withSample = test.extend<{ sample: SampleFixture }>({
 const clientFolder = (world: World): string => join(world.dataDir, 'host-client')
 const enrolmentFile = (world: World): string => join(world.dataDir, 'host', 'data', 'enrolment.json')
 
-type Bridge = { helm: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
+/** The window's routed bridge (`inspect.ts`): host features over the window's own connection. */
+type Bridge = { __helmRouted: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
 const invoke = <T>(window: Page, channel: string): Promise<T> =>
-  window.evaluate((name) => (window as unknown as Bridge).helm.invoke(name), channel) as Promise<T>
+  window.evaluate((name) => (window as unknown as Bridge).__helmRouted.invoke(name), channel) as Promise<T>
 
 /** How many times `text` is on a session's screen. */
 const count = (screen: string, text: string): number => screen.split(text).length - 1
@@ -336,7 +337,7 @@ withSample(
     const ui = helm.window
     await ui.evaluate(
       ({ token, host }) =>
-        (window as unknown as Bridge).helm.invoke('secrets:save', {
+        (window as unknown as Bridge).__helmRouted.invoke('secrets:save', {
           key: 'sample-token',
           value: token,
           hosts: [host],
@@ -382,7 +383,7 @@ withSample(
     const ui = helm.window
     await ui.evaluate(
       ({ token, host }) =>
-        (window as unknown as Bridge).helm.invoke('secrets:save', {
+        (window as unknown as Bridge).__helmRouted.invoke('secrets:save', {
           key: 'sample-token',
           value: token,
           hosts: [host],

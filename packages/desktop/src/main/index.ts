@@ -820,6 +820,8 @@ function startApp(options: AppOptions = {}): void {
     themes,
     plugins,
     ...(desktopHost !== null ? { hostPlugins: desktopHost.plugins } : {}),
+    ...(pluginBackground !== undefined ? { pluginBackground: () => pluginBackground.contents() } : {}),
+    sessionsInHost: desktopHost !== null,
     window: () => win,
     ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),

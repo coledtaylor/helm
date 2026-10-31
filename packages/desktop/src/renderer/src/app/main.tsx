@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import '@helm/ui/styles.css'
 import { App } from './App'
 import { helm } from './bridge'
-import { installOverlayInspector, installTerminalInspector } from './inspect'
+import { installOverlayInspector, installRoutedBridge, installTerminalInspector } from './inspect'
 import { applyShape, applyTheme } from './theme'
 
 const container = document.getElementById('root')
@@ -13,6 +13,7 @@ if (!container) throw new Error('#root is missing from index.html')
 // says a modal is up. This is how a check driving the real window sees either.
 installTerminalInspector()
 installOverlayInspector()
+installRoutedBridge(helm)
 
 /*
  * The theme and the shape are painted before React's first frame, not after:

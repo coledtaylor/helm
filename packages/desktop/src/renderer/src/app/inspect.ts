@@ -1,4 +1,5 @@
 import { overlayOpen } from '@helm/ui'
+import type { HelmBridge } from '../../../shared/ipc'
 import { describeSessionTerminals } from './terminals'
 import { describeShellTerminals } from './pterms'
 import { terminalPrefs } from './termprefs'
@@ -40,4 +41,20 @@ export function installOverlayInspector(): void {
     value: () => overlayOpen(),
     configurable: true
   })
+}
+
+/**
+ * The window's routed bridge, for the end-to-end tests: what the app's own
+ * hooks call, so a test asks for a host feature the way the window does, over
+ * the window's own connection when sessions run in the local host and over
+ * Electron IPC otherwise.
+ *
+ * Only on Helm's own top-level window. It is the same object the app imports
+ * and reaches nothing the page did not already have: a plugin page, an
+ * artifact frame and a page in the Browser tab are other origins and never see
+ * this window's globals.
+ */
+export function installRoutedBridge(routed: HelmBridge): void {
+  if (window.top !== window) return
+  Object.defineProperty(window, '__helmRouted', { value: routed, configurable: true })
 }

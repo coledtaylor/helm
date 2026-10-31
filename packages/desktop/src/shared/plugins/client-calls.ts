@@ -1,6 +1,6 @@
-import { PLUGIN_TITLE_MAX, pluginParamsProblem } from '@helm/core'
+import { PLUGIN_TITLE_MAX, pluginParamsProblem } from '@helm/core/types'
 import type { SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
-import type { PluginUiRequest } from '../../shared/ipc'
+import type { PluginUiRequest } from '../ipc'
 import { PluginCallError } from './errors'
 
 /**

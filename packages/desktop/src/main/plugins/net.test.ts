@@ -46,7 +46,7 @@ vi.mock('electron', async () => {
 
 const { electronSender, pluginFetch, PLUGIN_NET_PARTITION, RESPONSE_MAX_BYTES, SERVICE_TOKEN_HEADER } = await import('./net')
 const { createSecretStore } = await import('./secrets')
-const { PluginCallError } = await import('./errors')
+const { PluginCallError } = await import('../../shared/plugins/errors')
 
 /**
  * `helm.fetch` against real servers on this machine: three origins, two of

@@ -48,9 +48,10 @@ const test = base.extend({
   }
 })
 
-type Bridge = { helm: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
+/** The window's routed bridge (`inspect.ts`): host features over the window's own connection. */
+type Bridge = { __helmRouted: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
 const invoke = <T>(window: Page, channel: string): Promise<T> =>
-  window.evaluate((name) => (window as unknown as Bridge).helm.invoke(name), channel) as Promise<T>
+  window.evaluate((name) => (window as unknown as Bridge).__helmRouted.invoke(name), channel) as Promise<T>
 
 const after = (argv: readonly string[], flag: string): string | undefined => argv[argv.indexOf(flag) + 1]
 

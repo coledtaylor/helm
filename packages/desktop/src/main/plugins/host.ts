@@ -36,8 +36,8 @@ import {
   type SecretsState
 } from '../../shared/ipc'
 import { createBackgroundHost, type BackgroundHost } from './background'
-import { createClientCalls, type ClientCaller } from './client-calls'
-import { failure, PluginCallError } from './errors'
+import { createClientCalls, type ClientCaller } from '../../shared/plugins/client-calls'
+import { failure, PluginCallError } from '../../shared/plugins/errors'
 import { readExecRequest, runProgram } from './exec'
 import { loadPluginFolder, MANIFEST_FILE, type LoadedPlugin, type LoadResult } from './loader'
 import { electronSender, pluginFetch, type SendHop } from './net'

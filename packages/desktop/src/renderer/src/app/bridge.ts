@@ -1,9 +1,10 @@
-import { isClientOnly } from '../../../shared/host/protocol'
+import { isClientOnly, isHostInternal } from '../../../shared/host/protocol'
 import type { HelmBridge } from '../../../shared/ipc'
 import { createConfigAdapter } from './host/config'
 import { createFilesAdapter } from './host/files'
 import { createHistoryAdapter } from './host/history'
 import { WINDOW_CAPABILITIES, createPageLink } from './host/link'
+import { createPluginsAdapter } from './host/plugins'
 import { createProfilesAdapter } from './host/profiles'
 import { createRouter, type HostAdapter } from './host/router'
 import { createSessionsAdapters } from './host/sessions'
@@ -31,6 +32,24 @@ const workspace = createWorkspaceAdapter({
   log
 })
 
+const sessions = createSessionsAdapters({
+  link,
+  own: window.helm,
+  front: {
+    focused: () => document.hasFocus(),
+    onChange: (listener) => {
+      window.addEventListener('focus', listener)
+      window.addEventListener('blur', listener)
+    }
+  },
+  // A terminal tab's shell outlives a reload of the page, and so does this.
+  shelf: {
+    read: () => sessionStorage.getItem('helm.hostTerminals'),
+    write: (text) => sessionStorage.setItem('helm.hostTerminals', text)
+  },
+  log
+})
+
 /** The window's areas that reach the host over its own connection. */
 export const hostAdapters: readonly HostAdapter[] = [
   createHistoryAdapter(link, log),
@@ -38,23 +57,9 @@ export const hostAdapters: readonly HostAdapter[] = [
   createProfilesAdapter({ link, own: window.helm, log }),
   createConfigAdapter({ link, scanned: () => workspace.scannedProjects(), log }),
   createFilesAdapter(link, log),
-  ...createSessionsAdapters({
-    link,
-    own: window.helm,
-    front: {
-      focused: () => document.hasFocus(),
-      onChange: (listener) => {
-        window.addEventListener('focus', listener)
-        window.addEventListener('blur', listener)
-      }
-    },
-    // A terminal tab's shell outlives a reload of the page, and so does this.
-    shelf: {
-      read: () => sessionStorage.getItem('helm.hostTerminals'),
-      write: (text) => sessionStorage.setItem('helm.hostTerminals', text)
-    },
-    log
-  })
+  ...sessions,
+  // A session a plugin asked for, started after the user's yes, opens as one of the window's tabs.
+  createPluginsAdapter({ link, own: window.helm, adopt: (row) => sessions.adopt(row), log })
 ]
 
 /**
@@ -66,12 +71,15 @@ export const hostAdapters: readonly HostAdapter[] = [
  *
  * With "Run sessions in the local host" off it is the preload's bridge. With
  * it on, each channel `boundary.rs` lists as client-only stays on the preload's
- * bridge and each a host adapter takes goes to the host over this window's own
- * connection (`host/router.ts`); hooks see the same shape either way.
+ * bridge, each a host adapter takes goes to the host over this window's own
+ * connection, and any other is refused (`host/router.ts`); hooks see the same
+ * shape either way.
  */
 export const helm: HelmBridge = createRouter({
   own: window.helm,
   inHost: () => link.inHost(),
   adapters: hostAdapters,
-  clientOnly: isClientOnly
+  clientOnly: isClientOnly,
+  hostInternal: isHostInternal,
+  log
 })

@@ -42,7 +42,8 @@ const test = base.extend<{ sample: SampleFixture; sampleRegistered: boolean }>({
 /** The page's `window.helm`, in a frame's `evaluate`. */
 type PluginWindow = Window & { helm: HelmBridge }
 /** Helm's own window and its IPC bridge, as Settings uses it. */
-type HelmWindow = Window & { helm: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
+/** Helm's window and its routed bridge (`inspect.ts`), which asks for a host feature the way the window does. */
+type HelmWindow = Window & { __helmRouted: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
 
 const statusItem = (ui: Page): Locator => ui.locator('[data-status-plugin="sample"]')
 const rail = (ui: Page): Locator => ui.getByRole('navigation', { name: 'Destinations' })
@@ -56,7 +57,7 @@ async function openPanel(ui: Page): Promise<Frame> {
 async function storeToken(ui: Page, url: string): Promise<void> {
   await ui.evaluate(
     ({ token, host }) =>
-      (window as unknown as HelmWindow).helm.invoke('secrets:save', {
+      (window as unknown as HelmWindow).__helmRouted.invoke('secrets:save', {
         key: 'sample-token',
         value: token,
         hosts: [host],
@@ -451,7 +452,7 @@ test('a theme change reaches plugin pages without reloading them', async ({ helm
   const before = await read()
 
   const next = before.kind === 'dark' ? 'light' : 'dark'
-  await ui.evaluate((theme) => (window as unknown as HelmWindow).helm.invoke('settings:write', { theme }), next)
+  await ui.evaluate((theme) => (window as unknown as HelmWindow).__helmRouted.invoke('settings:write', { theme }), next)
 
   await expect.poll(async () => (await read()).kind).toBe(next)
   const after = await read()
@@ -624,7 +625,7 @@ stripTest('a plugin with a page strip opens its tabs as pages in one tab, which 
   // Written down with the panes, and back after a restart.
   const saved = (): Promise<string> =>
     ui.evaluate(async () => {
-      const settings = (await (window as unknown as HelmWindow).helm.invoke('settings:read')) as { paneLayout: unknown }
+      const settings = (await (window as unknown as HelmWindow).__helmRouted.invoke('settings:read')) as { paneLayout: unknown }
       return JSON.stringify(settings.paneLayout)
     })
   await expect.poll(saved).toMatch(/"kind":"plugin-pages".*"params":\{"id":"1"\}.*"params":\{"id":"2"\}/)
@@ -838,7 +839,7 @@ test('a plugin page opens a link in the Browser tab from a click, held to the re
     await expect(item.locator('[data-sample-link-error]')).toHaveCount(0)
 
     // "This machine only" refuses it on its own tab, as it would a typed address.
-    await ui.evaluate(() => (window as unknown as HelmWindow).helm.invoke('settings:write', { browserReach: 'local' }))
+    await ui.evaluate(() => (window as unknown as HelmWindow).__helmRouted.invoke('settings:write', { browserReach: 'local' }))
     await ui.getByRole('tab', { name: /^Second item/ }).click()
     await item.locator('[data-sample-link-address]').fill(`${fixture.httpsNamed}/two`)
     // One link a second per plugin (`LINK_SPACING_MS`; host.test.ts steps it),

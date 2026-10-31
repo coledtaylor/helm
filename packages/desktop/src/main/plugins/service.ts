@@ -6,7 +6,7 @@ import { cmdShimArgs } from '@helm/core'
 import type { NormalizedService } from '@coledtaylor/helm-plugin-sdk/manifest'
 import type { PluginLogLine, PluginServiceInfo } from '../../shared/ipc'
 import { POSIX_OWN_GROUP, treeKill } from '../treekill'
-import { PluginCallError } from './errors'
+import { PluginCallError } from '../../shared/plugins/errors'
 import { programEnv, resolveProgram } from './exec'
 import { resolveInside } from './loader'
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PluginCallError } from './errors'
+import { PluginCallError } from '../../shared/plugins/errors'
 import { substituteBody, substituteEnv, substituteHeaders, substituteUrl, type Reveal } from './substitute'
 
 /**

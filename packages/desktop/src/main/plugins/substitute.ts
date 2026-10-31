@@ -1,5 +1,5 @@
 import { PLACEHOLDER_PATTERN } from '@coledtaylor/helm-plugin-sdk/manifest'
-import { PluginCallError } from './errors'
+import { PluginCallError } from '../../shared/plugins/errors'
 
 /**
  * Where `{{key}}` is replaced by a secret, and how the value is written there.

@@ -150,17 +150,26 @@ const CONFIRM_TIMEOUT_MS = 120_000
 let nextConfirmId = 1
 const pendingConfirms = new Map<number, (agreed: boolean) => void>()
 
-// Module scope, not per host: a second `createSessionHost` in the same process
-// would otherwise stack a listener per call. Registered alongside the no-op in
-// `ipc.ts`, which keeps the send contract exhaustive without stealing the event.
 const takeAnswer = (_e: unknown, { id, agreed }: { id: number; agreed: boolean }): void => {
   pendingConfirms.get(id)?.(agreed)
   pendingConfirms.delete(id)
 }
-ipcMain.on('session:confirmed', takeAnswer)
-// With sessions in the local host the window's own `session:confirm` is the
-// host's, so main's question travels on a channel of its own.
-ipcMain.on('windowSessions:quitConfirmed', takeAnswer)
+let answersRegistered = false
+
+/**
+ * Listens for the window's answers to main's questions, once per process
+ * however many session hosts are made: called by `registerIpc`, beside the
+ * no-ops there that keep the send contract exhaustive without stealing the
+ * event. With sessions in the local host the window's own `session:confirm`
+ * is the host's, so main's question travels on `windowSessions:quitConfirm`
+ * and only its answer is main's; `session:confirmed` then has no listener here.
+ */
+export function registerConfirmAnswers(sessionsInHost: boolean): void {
+  if (answersRegistered) return
+  answersRegistered = true
+  if (!sessionsInHost) ipcMain.on('session:confirmed', takeAnswer)
+  ipcMain.on('windowSessions:quitConfirmed', takeAnswer)
+}
 
 /**
  * Where main's question goes: `session:confirm`, or with sessions in the local

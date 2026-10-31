@@ -10,7 +10,7 @@ import { PATIENCE } from '../../../../../test/patience'
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
 
 const { childProcessLauncher, createServiceSupervisor, CRASH_LIMIT } = await import('./service')
-const { PluginCallError } = await import('./errors')
+const { PluginCallError } = await import('../../shared/plugins/errors')
 
 /**
  * A plugin's service, run for real as a child process from a folder with

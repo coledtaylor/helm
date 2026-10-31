@@ -5,7 +5,7 @@ import type { SecretCrypto, SecretStore } from './secrets'
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
 
 const { createSecretStore } = await import('./secrets')
-const { PluginCallError } = await import('./errors')
+const { PluginCallError } = await import('../../shared/plugins/errors')
 
 /**
  * The secret store: values go in encrypted and only encrypted, the user's two

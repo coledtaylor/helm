@@ -3446,6 +3446,8 @@ export const CLIENT_ONLY: readonly OutsideEntry[] = [
   { channels: "ownApp:info", reason: "the client's own build, data folder and runtime versions" },
   { channels: "profileDialog:*", reason: "the client's own dialogs for deleting, exporting and importing a profile, and the file it writes or reads on its machine; the profile itself is the host's" },
   { channels: "windowSessions:*", reason: "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, and the pane layout its last run saved" },
+  { channels: "pluginBackground:*", reason: "what the client's hidden plugin window saw of the background pages it runs under plugin API v1, which its main process alone hears and tells its window" },
+  { channels: "pluginWindow:*", reason: "what a background page in the client's hidden plugin window asks that only the client's own window can draw (a plugin tab, a secret dialog), passed between its two windows by its main process" },
 ];
 
 /** Channels between a plugin's background page and what runs it, which never cross the protocol. */

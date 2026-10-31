@@ -105,6 +105,14 @@ pub const CLIENT_ONLY: &[Outside] = &[
         "windowSessions:*",
         "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, and the pane layout its last run saved",
     ),
+    outside(
+        "pluginBackground:*",
+        "what the client's hidden plugin window saw of the background pages it runs under plugin API v1, which its main process alone hears and tells its window",
+    ),
+    outside(
+        "pluginWindow:*",
+        "what a background page in the client's hidden plugin window asks that only the client's own window can draw (a plugin tab, a secret dialog), passed between its two windows by its main process",
+    ),
 ];
 
 /// Channels between a plugin's background page and what runs it, which never

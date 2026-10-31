@@ -7,6 +7,19 @@ import { startBrowserFixture } from './browser-fixture'
 import { TOKEN, installSample, pluginFrame, startServer, type SampleFixture } from './plugin-fixture'
 import { claudeRunIn, expect, startSession, terminalText, test as base, typeLine, type Helm } from './helm'
 
+/** Runs `script` in the sample's background page, in Helm's hidden plugin host window. */
+function inBackground<T>(helm: Helm, script: string): Promise<T> {
+  return helm.app.evaluate(
+    async ({ BrowserWindow }, { script, url }) => {
+      const host = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('/plugin-host.html'))
+      const frame = host?.webContents.mainFrame.framesInSubtree.find((f) => f.url.startsWith(url))
+      if (frame === undefined) throw new Error('no background page')
+      return (await frame.executeJavaScript(script)) as T
+    },
+    { script, url: 'helm-plugin://sample/dist/background/index.html' }
+  )
+}
+
 /**
  * With "Run sessions in the local host" on, Electron IPC carries only what
  * `boundary.rs` lists as client-only: the browser pane, clipboard, window,
@@ -17,39 +30,9 @@ import { claudeRunIn, expect, startSession, terminalText, test as base, typeLine
  * after each workflow the test fails naming any channel the generated
  * client-only list does not cover. A host-internal channel passes only on the
  * hidden window plugins' background pages run in, where API v1 runs them
- * inside the desktop.
+ * inside the desktop. Main registers nothing else with the setting on, so a
+ * channel it does not list could only show up here as one main answered.
  */
-
-/**
- * Channels the window still reaches through Helm's main process while their
- * areas move onto the window's own connection. Each area's move takes its
- * channels out of this list.
- */
-const NOT_YET_MOVED = new Set<string>([
-  // Plugins.
-  'plugins:list',
-  'plugins:changed',
-  'plugins:add',
-  'plugins:remove',
-  'plugins:setEnabled',
-  'plugins:setTools',
-  'plugins:reload',
-  'plugins:setSetting',
-  'plugins:call',
-  'plugins:session',
-  'plugins:command',
-  'plugins:metrics',
-  'plugins:log',
-  'plugins:ownSecrets',
-  'plugins:cancel',
-  'plugins:answer',
-  'plugins:ui',
-  'plugins:deliver',
-  'secrets:list',
-  'secrets:save',
-  'secrets:remove',
-  'secrets:changed'
-])
 
 const test = base.extend<{ sample: SampleFixture }>({
   sessionsInHost: true,
@@ -81,9 +64,7 @@ function strays(channels: readonly RecordedChannel[]): string[] {
   return channels
     .filter(
       ({ channel, page }) =>
-        !isClientOnly(channel) &&
-        !(isHostInternal(channel) && page === 'background') &&
-        !NOT_YET_MOVED.has(channel)
+        !isClientOnly(channel) && !(isHostInternal(channel) && page === 'background')
     )
     .map(({ channel, kind, page }) => `${channel} (${kind}, ${page})`)
     .sort()
@@ -175,8 +156,8 @@ test('a plugin page, its tool called by a session, and the Browser tab use only 
   await window.evaluate(
     ({ token, host }) =>
       (
-        window as unknown as { helm: { invoke: (channel: string, payload: unknown) => Promise<unknown> } }
-      ).helm.invoke('secrets:save', { key: 'sample-token', value: token, hosts: [host], plugins: ['sample'] }),
+        window as unknown as { __helmRouted: { invoke: (channel: string, payload: unknown) => Promise<unknown> } }
+      ).__helmRouted.invoke('secrets:save', { key: 'sample-token', value: token, hosts: [host], plugins: ['sample'] }),
     { token: TOKEN, host: sample.server.url }
   )
   await destination(helm, /^Sample/).click()
@@ -185,10 +166,25 @@ test('a plugin page, its tool called by a session, and the Browser tab use only 
   const item = await pluginFrame(window, 'dist/tabs/item.html')
   await expect(item.locator('h1')).toHaveText('Second item')
 
+  // A panel's post on a BroadcastChannel reaches the background page, through
+  // the host and the hidden window's own connection.
+  const sent = { from: 'the panel' }
+  await expect
+    .poll(() =>
+      inBackground(
+        helm,
+        `(() => { window.__heard = []; new BroadcastChannel('boundary').onmessage = (event) => window.__heard.push(event.data); return true })()`
+      ).catch(() => false)
+    )
+    .toBe(true)
+  await panel.evaluate(`(() => { new BroadcastChannel('boundary').postMessage(${JSON.stringify(sent)}); return true })()`)
+  await expect.poll(() => inBackground(helm, 'window.__heard')).toEqual([sent])
+
   const run = await claudeRunIn(world, world.projects.alpha)
   const config = readMcpConfig(run.argv[run.argv.indexOf('--mcp-config') + 1] ?? '')
   const plugin = config.mcpServers['helm-plugin-sample']
   if (plugin === undefined) throw new Error(`no helm-plugin-sample in ${JSON.stringify(config)}`)
+  // The background page answers the session's call.
   const answered = await callTool(plugin.url, bearerOf(plugin), 'list_items', { unreadOnly: true })
   expect(answered.isError).toBe(false)
 
