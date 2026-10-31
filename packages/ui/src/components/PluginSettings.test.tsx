@@ -58,6 +58,14 @@ describe('PluginsPage', () => {
     expect(screen.queryByText('No plugins')).toBeNull()
   })
 
+  it('says the local host could not be reached and why, rather than that there are no plugins', () => {
+    const why = 'Helm could not reach the local host (it is not running); turn it off.'
+    render(<PluginsPage plugins={null} unavailable={why} addError={null} onAdd={vi.fn()} onOpen={vi.fn()} />)
+    expect(screen.getByText('The local host could not be reached')).toBeTruthy()
+    expect(screen.getByText(why)).toBeTruthy()
+    expect(screen.queryByText('No plugins')).toBeNull()
+  })
+
   it('lists each folder with its version and path, says Off or Not loaded, and opens one', () => {
     const onOpen = vi.fn()
     render(

@@ -80,6 +80,14 @@ export interface PluginHostOptions {
   /** Watch plugin folders and reload on change. On in the app; a test turns it off. */
   watch?: boolean | undefined
   /**
+   * Whether this keeps the plugin registry: reads the folders, runs their
+   * services, watches them and opens the background host for their
+   * background pages. Off while sessions run in the local host, which keeps
+   * all of that (`host/plugins.ts`); what stays here then is what concerns
+   * Helm's own pages - the runtime, the theme and which pages frame plugins.
+   */
+  registry?: boolean | undefined
+  /**
    * The plugins offering tools changed: one was turned on or off, reloaded,
    * or had its tools switched. The MCP endpoint binds or lets go on this.
    */
@@ -198,6 +206,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
   const send = options.send ?? electronSender
   const launcher = options.launcher ?? electronServiceLauncher
   const watching = options.watch ?? true
+  const registry = options.registry ?? true
   const entries: Entry[] = []
   /** Calls in flight, by sender and call id, with the plugin each one turned out to be for. */
   const calls = new Map<string, { controller: AbortController; entry: Entry | null }>()
@@ -280,7 +289,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
   let pending = false
   /** Coalesced to one push per turn: a page setting its status and badge together is one repaint. */
   const changed = (): void => {
-    if (pending || stopped) return
+    if (pending || stopped || !registry) return
     pending = true
     setImmediate(() => {
       pending = false
@@ -815,6 +824,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
 
   return {
     start() {
+      if (!registry) return
       for (const folder of readPluginFolders(store)) {
         const entry = blankEntry(folder)
         entries.push(entry)

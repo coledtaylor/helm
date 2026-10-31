@@ -49,7 +49,8 @@ import {
 } from './content'
 import { PLUGIN_SCHEME } from '../shared/ipc'
 import { createPluginHost } from './plugins/host'
-import { registerPluginProtocol } from './plugins/protocol'
+import { registerHostPluginProtocol, registerPluginProtocol } from './plugins/protocol'
+import { createBackgroundHost } from './plugins/background'
 import { guardPluginFrames, installPluginPermissions } from './plugins/guards'
 // The plugin runtime: served to every plugin page under `/__helm/`, so no
 // plugin carries a copy of its own (see `main/plugins/protocol.ts`).
@@ -430,6 +431,18 @@ function startApp(options: AppOptions = {}): void {
    * moment ago; the first `sessions` event corrects a page that asked early.
    */
   let pluginSessionList = (): PluginSession[] => []
+  /*
+   * With sessions in the local host, the host keeps the plugin registry - the
+   * folders, their switches, settings, services and page files - and Helm keeps
+   * what concerns its own pages: the runtime, the theme, the frames, and the
+   * hidden window background pages run in, which the host's list opens.
+   */
+  const pluginsInHost = services.settings.sessionsInHost
+  /** What hears that the background host's renderer died; the host's plugins, once they exist. */
+  let pluginBackgroundGone = (_reason: string): void => undefined
+  const pluginBackground = pluginsInHost
+    ? createBackgroundHost({ onGone: (reason) => pluginBackgroundGone(reason) })
+    : undefined
 
   const plugins = createPluginHost({
     store: services.store,
@@ -447,10 +460,26 @@ function startApp(options: AppOptions = {}): void {
     // Called only once the user has agreed in the window, which is long after
     // the session host below exists.
     startSession: (request) => sessions.startWithPrompt(request),
-    sessionList: () => pluginSessionList()
+    sessionList: () => pluginSessionList(),
+    registry: !pluginsInHost,
+    background: pluginBackground
   })
   plugins.start()
-  registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
+  if (pluginsInHost) {
+    // Asked only once a page loads, which is after the desktop host below exists.
+    registerHostPluginProtocol(
+      {
+        serves: (id) => (desktopHost === null ? Promise.resolve(false) : desktopHost.plugins.serves(id)),
+        file: (id, path) =>
+          desktopHost === null
+            ? Promise.resolve({ status: 404, contentType: 'text/plain', body: new TextEncoder().encode('Not found') })
+            : desktopHost.plugins.file(id, path)
+      },
+      plugins.runtime
+    )
+  } else {
+    registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
+  }
   installPluginPermissions()
   pluginFrameHosts = (id) => plugins.framesPlugins(id)
 
@@ -471,7 +500,8 @@ function startApp(options: AppOptions = {}): void {
    * which Helm connects to now and starts when none answers. A change to the
    * setting takes effect the next time Helm starts.
    */
-  const desktopHost: DesktopHost | null = services.settings.sessionsInHost
+  // `pluginBackground` exists exactly when the setting is on.
+  const desktopHost: DesktopHost | null = pluginBackground !== undefined
     ? createDesktopHost({
         services,
         window: () => win,
@@ -481,10 +511,12 @@ function startApp(options: AppOptions = {}): void {
         plugins: {
           servers: () => plugins.toolServers(),
           call: (request, signal) => plugins.callTool(request, signal)
-        }
+        },
+        pluginBackground
       })
     : null
   if (desktopHost !== null) {
+    pluginBackgroundGone = (reason) => desktopHost.plugins.backgroundGone(reason)
     hostPluginToolsChanged = () => desktopHost.pluginRelay.offer()
     // An artifact frame keeps the window's scheme, answered from the host's bytes.
     serveArtifactsFrom((url) => desktopHost.files.artifactBytes(url))
@@ -791,6 +823,7 @@ function startApp(options: AppOptions = {}): void {
     templates,
     themes,
     plugins,
+    ...(desktopHost !== null ? { hostPlugins: desktopHost.plugins } : {}),
     window: () => win,
     ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
@@ -983,6 +1016,7 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.browserRelay.stop()
         desktopHost.pluginRelay.stop()
         desktopHost.profiles.shutdown()
+        desktopHost.plugins.shutdown()
         desktopHost.history.shutdown()
         desktopHost.config.shutdown()
         desktopHost.workspace.shutdown()

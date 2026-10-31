@@ -32,15 +32,17 @@ type SettingSpec = PluginInfo['settings'][number]
 type SettingValue = PluginInfo['settingValues'][string]
 
 export interface PluginsPageProps {
-  /** Null while main has not answered. */
+  /** Null while main has not answered, or could not say. */
   plugins: readonly PluginInfo[] | null
+  /** Why main could not say which plugins there are, as a sentence; shown in place of the list. */
+  unavailable?: string | null | undefined
   /** Why the last folder picked was not added, as a sentence. */
   addError: string | null
   onAdd: () => void
   onOpen: (path: string) => void
 }
 
-export function PluginsPage({ plugins, addError, onAdd, onOpen }: PluginsPageProps): JSX.Element {
+export function PluginsPage({ plugins, unavailable = null, addError, onAdd, onOpen }: PluginsPageProps): JSX.Element {
   return (
     <SettingsPage
       data-settings-section="plugins"
@@ -65,7 +67,11 @@ export function PluginsPage({ plugins, addError, onAdd, onOpen }: PluginsPagePro
             <Verdict tone="warn" text={addError} data-plugin-add-error />
           </div>
         )}
-        {plugins !== null && plugins.length === 0 ? (
+        {plugins === null && unavailable !== null ? (
+          <EmptyState size="list" name="plugins-unavailable" icon={<PlugIcon width={18} height={18} />} title="The local host could not be reached">
+            {unavailable}
+          </EmptyState>
+        ) : plugins !== null && plugins.length === 0 ? (
           <EmptyState size="list" name="plugins" icon={<PlugIcon width={18} height={18} />} title="No plugins">
             Add a folder that holds a helm-plugin.json.
           </EmptyState>

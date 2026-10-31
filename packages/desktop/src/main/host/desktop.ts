@@ -4,12 +4,13 @@ import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { listProfiles } from '@helm/core'
+import { listProfiles, readPluginFolders, readPluginSettings } from '@helm/core'
 import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
 import { emit } from '../ipc'
 import { appMode, dataDir, templatesDir } from '../paths'
 import { showExitNotification, type Confirm } from '../sessions'
 import type { BrowserMcpHost } from '../browser-mcp'
+import type { BackgroundHost } from '../plugins/background'
 import type { PluginToolProvider } from '../plugins/tools'
 import { nativeProfileDialogs } from '../profiles'
 import { updateSettings, type Services } from '../services'
@@ -20,6 +21,7 @@ import { createHostHistory, type HostHistory } from './history'
 import { startLocalHost, type HostChild, type LocalHost } from './launcher'
 import { createHostLink, type HostLink } from './link'
 import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
+import { createHostPlugins, type HostPlugins } from './plugins'
 import { createHostProfiles, type HostProfiles } from './profiles'
 import { createHostResources, type HostResources } from './resources'
 import type { HostSettingsPatch } from './protocol'
@@ -44,6 +46,8 @@ export interface DesktopHost extends HostSessions {
   pluginRelay: PluginToolRelay
   /** Helm's saved profiles, which live in the host while sessions run there. */
   profiles: HostProfiles
+  /** Plugin folders, switches, settings, secrets and page files, which the host keeps while sessions run there. */
+  plugins: HostPlugins
   /** Session history, the transcript archive and usage, which the host keeps while sessions run there. */
   history: HostHistory
   /** The config console, which reads and writes the agent's configuration in the host while sessions run there. */
@@ -68,6 +72,8 @@ export interface DesktopHostDeps {
   browserTools: () => BrowserMcpHost | null
   /** Helm's plugins offering tools, and a way to call one. */
   plugins: PluginToolProvider
+  /** The hidden window plugins' background pages run in, which the host's list opens and closes. */
+  pluginBackground: BackgroundHost
 }
 
 /** The checkout an unpackaged build runs from: `out/main` is three folders inside it. */
@@ -119,7 +125,8 @@ export function createDesktopHost({
   confirm,
   onActivityChange,
   browserTools,
-  plugins
+  plugins,
+  pluginBackground
 }: DesktopHostDeps): DesktopHost {
   const log = (line: string): void => console.log(line)
   const link = createLocalHostLink(() => hostSettingsFor(services.settings, findClaudeExecutable()), log)
@@ -185,6 +192,23 @@ export function createDesktopHost({
     writeFile: (path, text) => writeFile(path, text, 'utf8'),
     log
   })
+  const hostPlugins = createHostPlugins({
+    link,
+    // Every Helm page that frames plugins: the window, and the background host.
+    emit: (channel, payload) => {
+      send(channel, payload)
+      const contents = pluginBackground.contents()
+      if (contents !== null && !contents.isDestroyed()) contents.send(channel, payload)
+    },
+    background: pluginBackground,
+    ownFolders: () => readPluginFolders(services.store),
+    ownSettings: (plugin) => readPluginSettings(services.store, plugin),
+    copied: () => services.settings.pluginsCopiedToHostAt !== null,
+    markCopied: () => {
+      updateSettings(services, { pluginsCopiedToHostAt: new Date().toISOString() })
+    },
+    log
+  })
   const history = createHostHistory({ link, emit: send, log })
   const config = createHostConfig({
     link,
@@ -196,5 +220,19 @@ export function createDesktopHost({
   const files = createHostFiles({ link, emit: send, log })
   const resources = createHostResources({ link, emit: send, log })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
-  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history, config, workspace, files, resources }
+  return {
+    ...hosted,
+    link,
+    streams,
+    pterm,
+    browserRelay,
+    pluginRelay,
+    profiles,
+    plugins: hostPlugins,
+    history,
+    config,
+    workspace,
+    files,
+    resources
+  }
 }

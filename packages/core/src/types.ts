@@ -1669,6 +1669,18 @@ export interface AppSettings {
    * start. Helm's own profiles are never changed by the copy.
    */
   profilesCopiedToHostAt: string | null
+  /**
+   * When Helm's plugin folders were copied into the local host, ISO 8601, or
+   * null while they never have been.
+   *
+   * Internal state, like `profilesCopiedToHostAt`, and not in the settings
+   * pane. With `sessionsInHost` on, plugins are registered in the host; the
+   * first time Helm connects to one it copies its folders, their on/off and
+   * tools switches and their setting values into it, once (never a secret),
+   * and this keeps a plugin removed in the host afterwards from coming back on
+   * the next start. Helm's own plugin records are never changed by the copy.
+   */
+  pluginsCopiedToHostAt: string | null
 }
 
 /** How many addresses the dropdown offers. Ten, and no manager behind it. */
@@ -1740,7 +1752,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // it. See the field for what is not in it, which is what makes that true.
   sessionMcp: true,
   sessionsInHost: false,
-  profilesCopiedToHostAt: null
+  profilesCopiedToHostAt: null,
+  pluginsCopiedToHostAt: null
 }
 
 /**

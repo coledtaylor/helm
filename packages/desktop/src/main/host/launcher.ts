@@ -139,22 +139,48 @@ export function clientFolder(places: HostPlaces, platform: NodeJS.Platform): str
  * meets the user's real host. The config folder is the one exception, in every
  * run: it is the folder holding Helm's templates folder, which is all the
  * host keeps there.
+ *
+ * A build that is not packaged carries no Node beside `floti`, so it hands the
+ * host the `node` on PATH (`FLOTI_NODE`, an absolute path) for plugin
+ * services: `pnpm dev` and the checks run them on it. A packaged build passes
+ * none, and the host uses the Node shipped beside it. A `FLOTI_NODE` already
+ * in the environment is kept.
  */
 export function hostEnvironment(
   places: HostPlaces,
-  deps: Pick<LauncherDeps, 'platform' | 'env' | 'tmpdir'>
+  deps: Pick<LauncherDeps, 'platform' | 'env' | 'tmpdir'> & Partial<Pick<LauncherDeps, 'exists'>>
 ): NodeJS.ProcessEnv {
   const paths = pathsFor(deps.platform)
   const config = paths.dirname(places.templatesDir)
-  if (places.appMode === 'installed') return { ...deps.env, FLOTI_CONFIG_DIR: config }
+  const node = places.packaged || deps.env['FLOTI_NODE'] !== undefined ? null : nodeOnPath(deps)
+  const env = node === null ? deps.env : { ...deps.env, FLOTI_NODE: node }
+  if (places.appMode === 'installed') return { ...env, FLOTI_CONFIG_DIR: config }
   const root = paths.join(places.dataDir, 'host')
   return {
-    ...deps.env,
+    ...env,
     FLOTI_DATA_DIR: paths.join(root, 'data'),
     FLOTI_LOG_DIR: paths.join(root, 'logs'),
     FLOTI_CONFIG_DIR: config,
     FLOTI_RUNTIME_DIR: runtimeFolder(places.dataDir, deps)
   }
+}
+
+/** The absolute path of the first `node` on PATH, or null when there is none (or nothing to look with). */
+export function nodeOnPath(deps: Pick<LauncherDeps, 'platform' | 'env'> & Partial<Pick<LauncherDeps, 'exists'>>): string | null {
+  const { exists } = deps
+  if (exists === undefined) return null
+  const paths = pathsFor(deps.platform)
+  // Windows spells the variable however it likes; the first spelling found wins.
+  const key = Object.keys(deps.env).find((name) => name.toUpperCase() === 'PATH')
+  const list = key === undefined ? '' : (deps.env[key] ?? '')
+  const name = deps.platform === 'win32' ? 'node.exe' : 'node'
+  for (const folder of list.split(deps.platform === 'win32' ? ';' : ':')) {
+    const dir = folder.trim().replace(/^"(.*)"$/, '$1')
+    if (dir === '' || !paths.isAbsolute(dir)) continue
+    const candidate = paths.join(dir, name)
+    if (exists(candidate)) return candidate
+  }
+  return null
 }
 
 /**

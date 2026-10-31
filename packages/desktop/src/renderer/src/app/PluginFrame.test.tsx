@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CRASH_GRACE_MS, LOAD_GRACE_MS, type SurfaceSpec } from '../plugins/relay'
 import { FakeChannel, sayHello, type FakePort } from '../plugins/page.testkit'
 import { bridge } from './bridge.testkit'
-import { PluginFrame } from './PluginFrame'
+import { PluginFrame, PluginsUnavailable } from './PluginFrame'
 import { pluginFrameSpecs, resetPluginFrames } from './pluginFrames'
 
 vi.mock('./bridge', () => import('./bridge.testkit'))
@@ -135,5 +135,14 @@ describe('PluginFrame', () => {
     rerender(<PluginFrame spec={spec({ revision: 2 })} pluginName="Sample" />)
     expect(failure()).toBeNull()
     expect(frame()).toBe(element)
+  })
+})
+
+describe('PluginsUnavailable', () => {
+  it('says in the surface’s own place that the local host could not be reached, and why', () => {
+    const why = 'Helm could not reach the local host (it is not running); turn it off.'
+    render(<PluginsUnavailable reason={why} />)
+    expect(screen.getByText('The local host could not be reached')).toBeTruthy()
+    expect(screen.getByText(why)).toBeTruthy()
   })
 })

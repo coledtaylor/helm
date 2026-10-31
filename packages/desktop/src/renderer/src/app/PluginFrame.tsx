@@ -78,3 +78,18 @@ export function PluginFrame({ spec, pluginName, onOpenSettings, className }: Plu
     </div>
   )
 }
+
+/**
+ * A plugin's surface while Helm could not say which plugins there are: the
+ * local host could not be reached. Drawn in the surface's own place, saying
+ * why, so a restored tab or an open panel is kept rather than dropped.
+ */
+export function PluginsUnavailable({ reason, className }: { reason: string; className?: string | undefined }): JSX.Element {
+  return (
+    <div data-plugins-unavailable className={cn('bg-surface', className)}>
+      <EmptyState name="plugins-unavailable" icon={<WarnIcon width={18} height={18} />} title="The local host could not be reached">
+        {reason}
+      </EmptyState>
+    </div>
+  )
+}

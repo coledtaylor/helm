@@ -132,8 +132,9 @@ export interface HostConnection {
 /**
  * What the desktop says it can do; the host ignores names it does not know.
  * `browser`: its browser pane answers the browser tools' calls (`browser-tools.ts`).
+ * `pluginPages`: it draws plugins' pages, from files the host serves (`plugins.ts`).
  */
-const CAPABILITIES: Capability[] = ['terminal', 'files', 'browser']
+const CAPABILITIES: Capability[] = ['terminal', 'files', 'browser', 'pluginPages']
 
 /**
  * Credit is returned once this much has been consumed rather than per chunk,

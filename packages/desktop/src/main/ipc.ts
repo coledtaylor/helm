@@ -22,6 +22,7 @@ import { readClaudeStatus } from './setup'
 import { checkForUpdate, RELEASES_PAGE } from './update'
 import { appMode, dataDir, dbFile } from './paths'
 import type { PluginHost } from './plugins/host'
+import type { HostPlugins } from './host/plugins'
 import { activePty, windowsBuildNumber } from './pty'
 import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
 import type { Services } from './services'
@@ -168,6 +169,12 @@ interface IpcContextBase {
   themes: ThemeService
   /** Plugin folders, their pages' bridge calls, services and secrets; see `plugins/host.ts`. */
   plugins: PluginHost
+  /**
+   * The plugin registry, settings and secrets Settings acts on, while sessions
+   * run in the local host, which keeps them (`host/plugins.ts`); absent
+   * otherwise, when `plugins` keeps them. A page's bridge calls stay `plugins`'.
+   */
+  hostPlugins?: HostPlugins | undefined
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
@@ -589,7 +596,7 @@ export function registerIpc(ctx: IpcContext): void {
      * Plugins. Every decision - what a manifest allows, whose secret may go
      * where, what a page may open - is in `main/plugins/`; these delegate.
      */
-    'plugins:list': () => ctx.plugins.list(),
+    'plugins:list': () => ctx.hostPlugins?.list() ?? ctx.plugins.list(),
     'plugins:add': async () => {
       const title = 'Add a plugin folder'
       let path: string | null
@@ -600,25 +607,28 @@ export function registerIpc(ctx: IpcContext): void {
         const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
         path = result.canceled ? null : (result.filePaths[0] ?? null)
       }
-      if (path === null) return { path: null, error: null, plugins: ctx.plugins.list() }
-      return ctx.plugins.add(path)
+      if (path === null) return { path: null, error: null, plugins: await (ctx.hostPlugins?.list() ?? ctx.plugins.list()) }
+      return ctx.hostPlugins?.add(path) ?? ctx.plugins.add(path)
     },
-    'plugins:remove': ({ path, deleteSecrets }) => ctx.plugins.remove(path, deleteSecrets),
-    'plugins:setEnabled': ({ path, enabled }) => ctx.plugins.setEnabled(path, enabled),
-    'plugins:setTools': ({ path, enabled }) => ctx.plugins.setTools(path, enabled),
-    'plugins:reload': ({ path }) => ctx.plugins.reload(path),
-    'plugins:setSetting': ({ plugin, key, value }) => ctx.plugins.setSetting(plugin, key, value),
+    'plugins:remove': ({ path, deleteSecrets }) =>
+      ctx.hostPlugins?.remove(path, deleteSecrets) ?? ctx.plugins.remove(path, deleteSecrets),
+    'plugins:setEnabled': ({ path, enabled }) =>
+      ctx.hostPlugins?.setEnabled(path, enabled) ?? ctx.plugins.setEnabled(path, enabled),
+    'plugins:setTools': ({ path, enabled }) => ctx.hostPlugins?.setTools(path, enabled) ?? ctx.plugins.setTools(path, enabled),
+    'plugins:reload': ({ path }) => ctx.hostPlugins?.reload(path) ?? ctx.plugins.reload(path),
+    'plugins:setSetting': ({ plugin, key, value }) =>
+      ctx.hostPlugins?.setSetting(plugin, key, value) ?? ctx.plugins.setSetting(plugin, key, value),
     // The sender is part of the call's name, so two Helm pages relaying calls
     // cannot cancel each other's.
     'plugins:call': (request, event) => ctx.plugins.call(request, event.sender.id),
     'plugins:session': (answer, event) => ctx.plugins.session(answer, event.sender.id),
     'plugins:command': ({ plugin, id }) => ctx.plugins.command(plugin, id),
-    'plugins:metrics': () => ctx.plugins.metrics(),
-    'plugins:log': ({ path }) => ctx.plugins.log(path),
-    'plugins:ownSecrets': ({ path }) => ctx.plugins.ownSecrets(path),
-    'secrets:list': () => ctx.plugins.secrets.list(),
-    'secrets:save': (input) => ctx.plugins.secrets.save(input),
-    'secrets:remove': ({ key }) => ctx.plugins.secrets.remove(key),
+    'plugins:metrics': () => ctx.hostPlugins?.metrics() ?? ctx.plugins.metrics(),
+    'plugins:log': ({ path }) => ctx.hostPlugins?.log(path) ?? ctx.plugins.log(path),
+    'plugins:ownSecrets': ({ path }) => ctx.hostPlugins?.ownSecrets(path) ?? ctx.plugins.ownSecrets(path),
+    'secrets:list': () => ctx.hostPlugins?.secrets.list() ?? ctx.plugins.secrets.list(),
+    'secrets:save': (input) => ctx.hostPlugins?.secrets.save(input) ?? ctx.plugins.secrets.save(input),
+    'secrets:remove': ({ key }) => ctx.hostPlugins?.secrets.remove(key) ?? ctx.plugins.secrets.remove(key),
 
     /*
      * The browser pane. Every handler is a one-line delegation on purpose:
@@ -673,7 +683,9 @@ export function registerIpc(ctx: IpcContext): void {
     'plugins:cancel': ({ callId }, event) => ctx.plugins.cancel(callId, event.sender.id),
     'plugins:answer': ({ requestId }) => ctx.plugins.answer(requestId),
     'plugins:backgroundState': ({ plugin, revision, state, error }) =>
-      ctx.plugins.backgroundState(plugin, revision, state, error),
+      ctx.hostPlugins !== undefined
+        ? ctx.hostPlugins.backgroundState(plugin, revision, state, error)
+        : ctx.plugins.backgroundState(plugin, revision, state, error),
     'plugins:toolResult': (outcome, event) => ctx.plugins.toolResult(outcome, event.sender.id),
 
     // Consumed by one-shot `ipcMain.once` listeners in the spike drivers, which

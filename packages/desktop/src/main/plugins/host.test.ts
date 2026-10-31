@@ -233,6 +233,19 @@ describe('reading folders', () => {
     expect(background.needed.every((need) => need)).toBe(true)
   })
 
+  it('reads no folder, runs nothing and leaves the background host alone when the local host keeps the registry', async () => {
+    start([sampleDir], { registry: false })
+    await tick()
+    expect(host.list()).toEqual([])
+    expect(host.served('sample')).toBeNull()
+    expect(background.needed).toEqual([])
+    expect(launched).toBe(0)
+    expect(events('plugins:changed')).toEqual([])
+    // What concerns Helm's own pages stays.
+    expect(host.framesPlugins(fakeWindow.webContents.id)).toBe(true)
+    expect(host.runtime.bridge()).toBe('bridge')
+  })
+
   it('gives a second plugin with an id already loaded an error naming the first', () => {
     start([sampleDir, join(root, 'same id')])
     expect(info(join(root, 'same id')).error).toBe(`a plugin with the id "sample" is already loaded from ${sampleDir}`)

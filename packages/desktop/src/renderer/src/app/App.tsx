@@ -204,7 +204,7 @@ import { useShells } from './useShells'
 import { useUpdate } from './useUpdate'
 import { useUsage } from './useUsage'
 import { usePlugins } from './usePlugins'
-import { PluginFrame } from './PluginFrame'
+import { PluginFrame, PluginsUnavailable } from './PluginFrame'
 import {
   disposePluginFrames,
   emitToPluginFrame,
@@ -2474,6 +2474,7 @@ export function App(): JSX.Element {
       return (
         <PluginsPage
           plugins={pluginState.list}
+          unavailable={pluginState.error}
           addError={pluginSettings.addError}
           onAdd={pluginSettings.add}
           onOpen={(path) => setSettingsSection(pluginSection(path))}
@@ -2581,7 +2582,9 @@ export function App(): JSX.Element {
    */
   const renderPluginPages = (ref: PluginPagesRef): ReactNode => {
     const plugin = plugins.get(ref.plugin)
-    if (plugin === undefined) return null
+    if (plugin === undefined) {
+      return pluginState.error === null ? null : <PluginsUnavailable reason={pluginState.error} className="absolute inset-0" />
+    }
     const pages = ref.pages.filter((page) => plugin.tabs[page.tab] !== undefined)
     const shown = frontPluginPage({ ...ref, pages })
     const surface = shown === null ? undefined : plugin.tabs[shown.tab]
@@ -2838,6 +2841,9 @@ export function App(): JSX.Element {
       case 'plugin': {
         const plugin = plugins.get(ref.plugin)
         const surface = plugin?.tabs[ref.tab]
+        if (plugin === undefined && pluginState.error !== null) {
+          return <PluginsUnavailable reason={pluginState.error} className="absolute inset-0" />
+        }
         if (plugin === undefined || surface === undefined) return null
         return (
           <PluginFrame
@@ -3493,6 +3499,11 @@ export function App(): JSX.Element {
             onTogglePin={(profile) => void profileState.togglePin(profile)}
             onReorder={(ids) => void profileState.reorder(ids)}
           />
+        </Sidebar>
+      )}
+      {sidebarPanel === null && sidebarView.startsWith('plugin:') && pluginState.error !== null && (
+        <Sidebar title="Plugin">
+          <PluginsUnavailable reason={pluginState.error} className="min-h-0 flex-1" />
         </Sidebar>
       )}
       {sidebarPanel !== null && (

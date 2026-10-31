@@ -251,7 +251,7 @@ describe('SettingsPane', () => {
     for (const { id } of SETTINGS_SECTIONS) {
       rerender({ section: id })
       const text = document.body.textContent ?? ''
-      for (const key of ['windowBounds', 'firstRunCompletedAt', 'paneLayout', 'browserRecentUrls', 'browserProjectUrls', 'railHidden', 'profilesCopiedToHostAt']) {
+      for (const key of ['windowBounds', 'firstRunCompletedAt', 'paneLayout', 'browserRecentUrls', 'browserProjectUrls', 'railHidden', 'profilesCopiedToHostAt', 'pluginsCopiedToHostAt']) {
         expect(text).not.toContain(key)
       }
     }

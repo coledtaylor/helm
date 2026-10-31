@@ -69,12 +69,21 @@ const HEADERS = {
   'cache-control': 'no-store'
 }
 
-/** Answers one request on the scheme. Separate from the registration so a test can call it. */
-export function servePluginRequest(
-  requestUrl: string,
-  lookup: (id: string) => ServedPlugin | null,
-  runtime: PluginRuntime
-): Response {
+/**
+ * Where a plugin's page files come from when the local host has its folder,
+ * with sessions running there (`host/plugins.ts`).
+ */
+export interface PluginPageSource {
+  /** Whether the plugin is on, so its pages and runtime are served. */
+  serves(id: string): Promise<boolean>
+  /** A file by its path on the plugin's origin: 403 outside its folder, 404 not there. */
+  file(id: string, path: string): Promise<{ status: number; contentType: string; body: Uint8Array }>
+}
+
+/** A request on the scheme, taken apart: the plugin, and the runtime file or the page path it names. */
+type Parsed = { id: string; runtime: string } | { id: string; parts: string[] } | Response
+
+function parse(requestUrl: string): Parsed {
   let url: URL
   try {
     url = new URL(requestUrl)
@@ -82,26 +91,50 @@ export function servePluginRequest(
     return new Response('Bad request', { status: 400 })
   }
   const id = url.hostname
-  const plugin = lookup(id)
-  if (plugin === null) return new Response('Not found', { status: 404 })
-
-  if (url.pathname.startsWith(RUNTIME_PATH)) {
-    const name = url.pathname.slice(RUNTIME_PATH.length)
-    if (name === 'bridge.js') return asset(runtime.bridge(), 'text/javascript; charset=utf-8')
-    if (name === 'helm.css') return asset(runtime.css(), 'text/css; charset=utf-8')
-    return new Response('Not found', { status: 404 })
-  }
-
-  let rel: string
+  if (url.pathname.startsWith(RUNTIME_PATH)) return { id, runtime: url.pathname.slice(RUNTIME_PATH.length) }
   try {
-    rel = url.pathname
-      .split('/')
-      .filter((part) => part !== '')
-      .map((part) => decodeURIComponent(part))
-      .join(sep)
+    return {
+      id,
+      parts: url.pathname
+        .split('/')
+        .filter((part) => part !== '')
+        .map((part) => decodeURIComponent(part))
+    }
   } catch {
     return new Response('Bad request', { status: 400 })
   }
+}
+
+function runtimeAsset(name: string, runtime: PluginRuntime): Response {
+  if (name === 'bridge.js') return asset(runtime.bridge(), 'text/javascript; charset=utf-8')
+  if (name === 'helm.css') return asset(runtime.css(), 'text/css; charset=utf-8')
+  return new Response('Not found', { status: 404 })
+}
+
+/** A page file's bytes as served: an HTML page with the runtime injected, and every file with the headers. */
+function page(id: string, path: string, bytes: Uint8Array, runtime: PluginRuntime, fallbackType: string): Response {
+  const extension = extname(path).toLowerCase()
+  const type = MIME[extension] ?? fallbackType
+  if (extension === '.html' || extension === '.htm') {
+    return asset(injectRuntime(Buffer.from(bytes).toString('utf8'), runtime.boot(id)), type)
+  }
+  return new Response(new Uint8Array(bytes), { status: 200, headers: { ...HEADERS, 'content-type': type } })
+}
+
+/** Answers one request on the scheme. Separate from the registration so a test can call it. */
+export function servePluginRequest(
+  requestUrl: string,
+  lookup: (id: string) => ServedPlugin | null,
+  runtime: PluginRuntime
+): Response {
+  const parsed = parse(requestUrl)
+  if (parsed instanceof Response) return parsed
+  const { id } = parsed
+  const plugin = lookup(id)
+  if (plugin === null) return new Response('Not found', { status: 404 })
+  if ('runtime' in parsed) return runtimeAsset(parsed.runtime, runtime)
+
+  const rel = parsed.parts.join(sep)
   if (rel === '' || rel.includes('\0')) return new Response('Not found', { status: 404 })
   const target = resolveInside(plugin.dir, rel)
   if (target === 'outside') return new Response('Forbidden', { status: 403 })
@@ -113,12 +146,41 @@ export function servePluginRequest(
   } catch {
     return new Response('Not found', { status: 404 })
   }
-  const extension = extname(target).toLowerCase()
-  const type = MIME[extension] ?? 'application/octet-stream'
-  if (extension === '.html' || extension === '.htm') {
-    return asset(injectRuntime(bytes.toString('utf8'), runtime.boot(id)), type)
+  return page(id, target, bytes, runtime, 'application/octet-stream')
+}
+
+/**
+ * Answers one request on the scheme from the local host's files: the same
+ * origin, headers, CSP and injected runtime as a folder Helm reads itself.
+ * The host resolves the path inside the plugin's folder and refuses one
+ * outside it (403) or not there (404); a host that cannot be reached is a 503
+ * saying why.
+ */
+export async function servePluginRequestFrom(
+  requestUrl: string,
+  source: PluginPageSource,
+  runtime: PluginRuntime
+): Promise<Response> {
+  const parsed = parse(requestUrl)
+  if (parsed instanceof Response) return parsed
+  const { id } = parsed
+  try {
+    if ('runtime' in parsed) {
+      return (await source.serves(id)) ? runtimeAsset(parsed.runtime, runtime) : new Response('Not found', { status: 404 })
+    }
+    const path = parsed.parts.join('/')
+    if (path === '' || path.includes('\0')) return new Response('Not found', { status: 404 })
+    const file = await source.file(id, path)
+    if (file.status !== 200) {
+      return new Response(new Uint8Array(file.body), { status: file.status, headers: { 'content-type': file.contentType } })
+    }
+    return page(id, path, file.body, runtime, file.contentType)
+  } catch (error) {
+    return new Response(error instanceof Error ? error.message : String(error), {
+      status: 503,
+      headers: { 'content-type': 'text/plain; charset=utf-8' }
+    })
   }
-  return new Response(new Uint8Array(bytes), { status: 200, headers: { ...HEADERS, 'content-type': type } })
 }
 
 function asset(body: string, type: string): Response {
@@ -152,4 +214,9 @@ function insertAt(text: string, at: number, insert: string): string {
 
 export function registerPluginProtocol(lookup: (id: string) => ServedPlugin | null, runtime: PluginRuntime): void {
   protocol.handle(PLUGIN_SCHEME, (request) => servePluginRequest(request.url, lookup, runtime))
+}
+
+/** The scheme, answered from the local host's files while sessions run there. */
+export function registerHostPluginProtocol(source: PluginPageSource, runtime: PluginRuntime): void {
+  protocol.handle(PLUGIN_SCHEME, (request) => servePluginRequestFrom(request.url, source, runtime))
 }

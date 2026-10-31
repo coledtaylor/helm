@@ -30,6 +30,8 @@ function sync(list: readonly PluginInfo[]): void {
     const { background } = plugin
     if (!plugin.enabled || plugin.error !== null || plugin.id === null || background === null) continue
     if (background.state !== 'starting' && background.state !== 'running') continue
+    // A background script runs in the local host's engine, not in a frame here.
+    if (!/\.html?$/i.test(new URL(background.url).pathname)) continue
     const key = keyOf(plugin.id)
     wanted.set(key, {
       key,

@@ -83,11 +83,18 @@ describe('usePlugins', () => {
     expect(result.current.list).toEqual([on, off])
   })
 
-  it('reads a list main could not give as empty, not as still waiting', async () => {
-    // Nothing answers `plugins:list`: the invoke rejects.
+  it('keeps the list unknown and says why when main could not look, rather than reading it as no plugins', async () => {
+    const sentence = 'Helm could not reach the local host (it is not running); turn off “Run sessions in the local host”.'
+    bridge.answer('plugins:list', () => Promise.reject(new Error(sentence)))
     const { result } = renderHook(() => usePlugins())
-    await waitFor(() => expect(result.current.list).toEqual([]))
+    await waitFor(() => expect(result.current.error).toBe(sentence))
+    expect(result.current.list).toBeNull()
     expect(result.current.live.size).toBe(0)
+
+    // The host reached later: its list replaces the sentence.
+    act(() => bridge.emit('plugins:changed', [on]))
+    expect(result.current.error).toBeNull()
+    expect(result.current.list).toEqual([on])
   })
 
   it('stops listening when it unmounts', async () => {

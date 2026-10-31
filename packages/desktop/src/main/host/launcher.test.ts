@@ -225,6 +225,43 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       }
     })
 
+    it('hands an unpackaged build’s host the node on PATH, and a packaged one none', () => {
+      const env = { Path: 'C:\\Windows;relative\\bin;"C:\\Program Files\\nodejs";C:\\later' }
+      const exists = (path: string): boolean =>
+        path === 'C:\\Program Files\\nodejs\\node.exe' || path === 'C:\\later\\node.exe'
+      const temp = (): string => 'C:\\Temp'
+      for (const appMode of ['dev', 'dev-live'] as const) {
+        expect(
+          hostEnvironment({ ...WIN_PLACES, appMode }, { platform: 'win32', env, tmpdir: temp, exists })['FLOTI_NODE']
+        ).toBe('C:\\Program Files\\nodejs\\node.exe')
+      }
+      for (const appMode of ['installed', 'portable'] as const) {
+        expect(
+          hostEnvironment({ ...WIN_PLACES, appMode, packaged: true }, { platform: 'win32', env, tmpdir: temp, exists })[
+            'FLOTI_NODE'
+          ]
+        ).toBeUndefined()
+      }
+      expect(
+        hostEnvironment(
+          { ...WIN_PLACES, dataDir: '/home/me/helm-data' },
+          { platform: 'linux', env: { PATH: '/usr/bin:/opt/node/bin' }, tmpdir: () => '/tmp', exists: (path) => path === '/opt/node/bin/node' }
+        )['FLOTI_NODE']
+      ).toBe('/opt/node/bin/node')
+      // One the environment already names is kept, and no node anywhere passes none.
+      expect(
+        hostEnvironment(WIN_PLACES, {
+          platform: 'win32',
+          env: { ...env, FLOTI_NODE: 'D:\\node\\node.exe' },
+          tmpdir: temp,
+          exists
+        })['FLOTI_NODE']
+      ).toBe('D:\\node\\node.exe')
+      expect(
+        hostEnvironment(WIN_PLACES, { platform: 'win32', env, tmpdir: temp, exists: () => false })
+      ).not.toHaveProperty('FLOTI_NODE')
+    })
+
     it('keeps the socket under the macOS and Linux path limit when the data directory is too deep for it', () => {
       const shallow = {
         ...WIN_PLACES,

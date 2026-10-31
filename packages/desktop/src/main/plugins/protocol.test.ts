@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { linkFolder, unlinkFolder } from '../../../test/links'
-import type { PluginRuntime } from './protocol'
+import type { PluginPageSource, PluginRuntime } from './protocol'
 
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
 
-const { injectRuntime, PLUGIN_CSP, servePluginRequest } = await import('./protocol')
+const { injectRuntime, PLUGIN_CSP, servePluginRequest, servePluginRequestFrom } = await import('./protocol')
 
 /**
  * `helm-plugin://<id>/`: a plugin's folder served under its own origin, every
@@ -136,5 +136,74 @@ describe('injectRuntime', () => {
     // What the browser hands the bridge, once it has decoded the attribute.
     const decoded = attribute!.replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&amp;/g, '&')
     expect(JSON.parse(decoded)).toEqual({ a: "it's <b> & co" })
+  })
+})
+
+describe('servePluginRequestFrom: pages from the local host’s files', () => {
+  const text = (body: string): Uint8Array => new TextEncoder().encode(body)
+  /** The host, as the scheme meets it: one plugin on, its files by path, and every path it was asked for. */
+  const host = (): PluginPageSource & { asked: string[] } => {
+    const asked: string[] = []
+    return {
+      asked,
+      serves: (id) => Promise.resolve(id === 'sample'),
+      file: (id, path) => {
+        asked.push(`${id}:${path}`)
+        if (id !== 'sample') return Promise.resolve({ status: 404, contentType: 'text/plain', body: text('Not found') })
+        if (path === 'dist/main page.html') {
+          return Promise.resolve({ status: 200, contentType: 'text/html; charset=utf-8', body: text('<!doctype html><html><head><title>t</title></head><body>hi</body></html>') })
+        }
+        if (path === 'dist/assets/app.js') return Promise.resolve({ status: 200, contentType: 'text/javascript; charset=utf-8', body: text('console.log(1)') })
+        if (path === 'escape/x.js') return Promise.resolve({ status: 403, contentType: 'text/plain', body: text('Forbidden') })
+        return Promise.resolve({ status: 404, contentType: 'text/plain', body: text('Not found') })
+      }
+    }
+  }
+
+  it('renders a page the host served on the plugin’s origin, with the runtime injected and the same policy as today', async () => {
+    const source = host()
+    const response = await servePluginRequestFrom('helm-plugin://sample/dist/main%20page.html', source, runtime)
+    expect(source.asked).toEqual(['sample:dist/main page.html'])
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-security-policy')).toBe(PLUGIN_CSP)
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    const html = await response.text()
+    expect(html.indexOf('<head>')).toBeLessThan(html.indexOf('/__helm/helm.css'))
+    expect(html).toContain('<script src="/__helm/bridge.js" data-helm-boot=')
+
+    const js = await servePluginRequestFrom('helm-plugin://sample/dist/assets/app.js?v=2', source, runtime)
+    expect(js.headers.get('content-security-policy')).toBe(PLUGIN_CSP)
+    expect(await js.text()).toBe('console.log(1)')
+  })
+
+  it('serves the runtime only on the origin of a plugin the host has on', async () => {
+    const source = host()
+    const bridge = await servePluginRequestFrom('helm-plugin://sample/__helm/bridge.js', source, runtime)
+    expect(await bridge.text()).toBe('window.__bridge = 1')
+    expect(bridge.headers.get('content-security-policy')).toBe(PLUGIN_CSP)
+    expect((await servePluginRequestFrom('helm-plugin://other/__helm/bridge.js', source, runtime)).status).toBe(404)
+    expect(source.asked).toEqual([])
+  })
+
+  it('passes on the host’s refusals as they are', async () => {
+    const source = host()
+    expect((await servePluginRequestFrom('helm-plugin://sample/escape/x.js', source, runtime)).status).toBe(403)
+    expect((await servePluginRequestFrom('helm-plugin://sample/dist/gone.js', source, runtime)).status).toBe(404)
+    expect((await servePluginRequestFrom('helm-plugin://other/dist/main%20page.html', source, runtime)).status).toBe(404)
+    expect((await servePluginRequestFrom('helm-plugin://sample/', source, runtime)).status).toBe(404)
+  })
+
+  it('says why when the host cannot be reached, in the page’s own place', async () => {
+    const sentence = 'Helm could not reach the local host; turn it off.'
+    const source: PluginPageSource = {
+      serves: () => Promise.reject(new Error(sentence)),
+      file: () => Promise.reject(new Error(sentence))
+    }
+    const page = await servePluginRequestFrom('helm-plugin://sample/dist/main%20page.html', source, runtime)
+    expect(page.status).toBe(503)
+    expect(await page.text()).toBe(sentence)
+    expect((await servePluginRequestFrom('helm-plugin://sample/__helm/bridge.js', source, runtime)).status).toBe(503)
   })
 })

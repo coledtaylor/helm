@@ -552,6 +552,13 @@ export const SETTING_VALIDATORS: SettingValidators = {
     return Number.isFinite(Date.parse(value)) ? null : 'must be an ISO 8601 instant'
   },
 
+  /** An instant Helm wrote, checked as `profilesCopiedToHostAt` is. */
+  pluginsCopiedToHostAt: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'string') return 'must be an ISO 8601 string or null'
+    return Number.isFinite(Date.parse(value)) ? null : 'must be an ISO 8601 instant'
+  },
+
   /**
    * Addresses the browser pane has been to, newest first.
    *
