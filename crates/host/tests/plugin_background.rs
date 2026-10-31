@@ -23,16 +23,17 @@ use std::time::{Duration, Instant};
 use floti_host::platform::socket::Endpoint;
 use floti_host::server::{HostConfig, HostRun, backends};
 use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
-use floti_protocol::Message;
 use floti_protocol::channel::{EventChannel, from_payload};
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::plugins::{
-    PluginAddRequest, PluginBackgroundState, PluginCommandRequest, PluginInfo,
-    PluginSetSettingRequest, PluginSettingValue, PluginStatusItem, PluginStatusTone, PluginsAdd,
-    PluginsChanged, PluginsCommand, PluginsSetSetting, SecretInput, SecretRemoveRequest,
-    SecretsRemove, SecretsSave,
+    PLUGIN_CHANNEL_POST, PluginAddRequest, PluginBackgroundState, PluginCallOutcome,
+    PluginCallRequest, PluginCommandRequest, PluginDelivery, PluginDeliveryTarget, PluginInfo,
+    PluginSetSettingRequest, PluginSettingValue, PluginStatusItem, PluginStatusTone,
+    PluginSurfaceKind, PluginsAdd, PluginsCall, PluginsChanged, PluginsCommand, PluginsDeliver,
+    PluginsSetSetting, SecretInput, SecretRemoveRequest, SecretsRemove, SecretsSave,
 };
 use floti_protocol::channels::workspace::AppMode;
+use floti_protocol::{Message, Payload};
 use serde_json::{Value, json};
 
 const PLUGINS_CHANGED: u64 = 1;
@@ -791,4 +792,95 @@ async fn a_plugin_like_the_sample_plugin_has_each_of_its_background_calls_answer
     drop((first, second));
     world.stop().await;
     drop(server);
+}
+
+// ---------------------------------------------------------------------------
+// A page's BroadcastChannel post reaches the script, and the script's reaches
+// the pages
+// ---------------------------------------------------------------------------
+
+/// Hears each post on `updates`, shows it in the status item and answers it
+/// on the same channel.
+const ECHO: &str = r#"
+const channel = new BroadcastChannel("updates");
+channel.onmessage = (event) => {
+  void floti.status.set({ text: `heard ${JSON.stringify(event.data)}` });
+  channel.postMessage({ echo: event.data });
+};
+void floti.status.set({ text: "listening" });
+"#;
+
+/// The subscription a window hears `plugins:deliver` on.
+const DELIVER: u64 = 2;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_broadcast_channel_post_reaches_the_background_script_in_the_host_and_its_own_post_reaches_every_page()
+ {
+    let mut world = HostWorld::start().await;
+    let folder = world.plugin(
+        "echo",
+        &json!({
+            "apiVersion": 2,
+            "id": "echo",
+            "name": "Echo",
+            "background": "bg.js",
+        }),
+        ECHO,
+    );
+    let mut watcher = world.watcher().await;
+    let mut window = TestClient::connect(&world.endpoint, &["pluginPages"]).await;
+    window
+        .subscribe_quietly(DELIVER, PluginsDeliver::NAME)
+        .await;
+    world.add(&folder).await;
+    push_where(&mut watcher, "the echo script listening", |listed| {
+        status_text(by_id(listed, "echo")) == Some("listening")
+    })
+    .await;
+
+    // A panel posts, as the bridge does for a page's BroadcastChannel.
+    let posted = window
+        .request::<PluginsCall>(&PluginCallRequest {
+            plugin: "echo".into(),
+            surface: PluginSurfaceKind::Panel,
+            method: PLUGIN_CHANNEL_POST.into(),
+            args: vec![
+                Payload::serialized(&json!("updates")).unwrap(),
+                Payload::serialized(&json!({ "n": 1 })).unwrap(),
+                Payload::serialized(&json!("panel-channel")).unwrap(),
+            ],
+            call_id: "post-1".into(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(posted, PluginCallOutcome::Ok { .. }),
+        "the post is on its way: {posted:?}"
+    );
+
+    // The script's channel of that name heard it.
+    push_where(&mut watcher, "the script hearing the post", |listed| {
+        status_text(by_id(listed, "echo")) == Some(r#"heard {"n":1}"#)
+    })
+    .await;
+
+    // And its answer reaches the pages, under the background's token, so no
+    // page channel takes it for its own.
+    let delivered: PluginDelivery = window
+        .event_on(DELIVER, "the script's post", |delivery: &PluginDelivery| {
+            matches!(delivery, PluginDelivery::Channel { data, .. } if data.token == "host-background")
+        })
+        .await;
+    let PluginDelivery::Channel { plugin, data, to } = delivered else {
+        unreachable!()
+    };
+    assert_eq!((plugin.as_str(), to), ("echo", PluginDeliveryTarget::All));
+    assert_eq!(data.name, "updates");
+    assert_eq!(
+        from_payload::<Value>(&data.message).unwrap(),
+        json!({ "echo": { "n": 1 } })
+    );
+
+    drop((watcher, window));
+    world.stop().await;
 }
