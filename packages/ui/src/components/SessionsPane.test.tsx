@@ -202,6 +202,41 @@ describe('SessionsPane', () => {
   })
 })
 
+describe('SessionsPane sessions not open here', () => {
+  it('lists a session running in the host with no tab on this device as not open here, once, with Open and End', async () => {
+    const onEndSession = vi.fn()
+    const props = renderPane({ notOpenHere: [row(2, 'docs', 'C:\\work\\docs')], onEndSession })
+    const notHere = screen.getByRole('region', { name: 'Not open here' })
+    expect(notHere.textContent).toContain('docs')
+    expect(notHere.textContent).toContain('C:\\work\\docs')
+    // Its dot is the registry's word on it, as on every other row.
+    expect(notHere.querySelector('[data-session-dot]')?.className).toContain('bg-accent')
+
+    const inHelm = screen.getByRole('region', { name: 'In Helm' })
+    expect(within(inHelm).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      expect.stringContaining('shop'),
+      expect.stringContaining('quiet')
+    ])
+
+    await userEvent.click(within(notHere).getByRole('button', { name: 'Open docs' }))
+    expect(props.onOpenSession).toHaveBeenCalledWith(2)
+    await userEvent.click(within(notHere).getByRole('button', { name: 'End docs' }))
+    expect(onEndSession).toHaveBeenCalledWith(2)
+  })
+
+  it('lists a session not open here before Claude Code has written its record, rather than saying nothing runs', () => {
+    renderPane({ sessions: [], notOpenHere: [row(4, 'api', 'C:\\work\\api')], onEndSession: vi.fn() })
+    expect(screen.getByRole('region', { name: 'Not open here' }).textContent).toContain('api')
+    expect(screen.queryByText('Nothing running')).toBeNull()
+    expect(screen.getByText('No session is open here.')).toBeDefined()
+  })
+
+  it('draws no not-open-here heading when every session has a tab here, as with sessions in Helm itself', () => {
+    renderPane()
+    expect(screen.queryByRole('region', { name: 'Not open here' })).toBeNull()
+  })
+})
+
 describe('SessionsPane on its pane', () => {
   it('draws no island of its own, and its bar repeats no title the tab already says', () => {
     renderPane()

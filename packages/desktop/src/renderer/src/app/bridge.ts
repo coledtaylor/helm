@@ -53,6 +53,16 @@ const sessions = createSessionsAdapters({
 /** Whether sessions run in the local host this run: main says once, when the window first asks. */
 export const sessionsInHost = (): Promise<boolean> => link.inHost()
 
+/**
+ * With sessions in the local host, which of them have a tab in this window:
+ * the layout is this device's own, so the window tells its own connection
+ * which terminals to carry. Unused with the setting off.
+ */
+export const hostSessionTabs: Pick<typeof sessions, 'show' | 'release'> = {
+  show: (ids) => sessions.show(ids),
+  release: (id) => sessions.release(id)
+}
+
 /** The window's areas that reach the host over its own connection. */
 export const hostAdapters: readonly HostAdapter[] = [
   createHistoryAdapter(link, log),

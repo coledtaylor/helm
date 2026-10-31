@@ -8,6 +8,7 @@ import {
   type SessionState
 } from '../lib/sessionstate'
 import { CloseIcon, PlusIcon } from './icons'
+import { Menu, type MenuAnchor, type MenuEntry } from './Menu'
 
 /**
  * Whether a tab's session is alive, what it is doing, and how it ended. An
@@ -82,6 +83,13 @@ export interface TabBarProps {
   onRename?: ((id: string, label: string | null) => void) | undefined
   /** A preview tab was double-clicked: it stays rather than being replaced. */
   onKeep?: ((id: string) => void) | undefined
+  /**
+   * What a tab's menu offers, opened by a right-click or the keyboard's menu
+   * key. A tab with nothing to offer opens no menu.
+   */
+  menuFor?: ((id: string) => readonly MenuEntry[]) | undefined
+  /** A row of a tab's menu was chosen. */
+  onMenu?: ((id: string, item: string) => void) | undefined
   /** The pane's own controls - split, maximize, close - kept out of the
    * strip's scroll so they stay reachable when tabs overflow. */
   actions?: ReactNode | undefined
@@ -161,6 +169,8 @@ export function TabBar({
   onMove,
   onRename,
   onKeep,
+  menuFor,
+  onMenu,
   actions,
   onNewTab,
   newTabOpen = false,
@@ -175,6 +185,8 @@ export function TabBar({
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   /** The tab being renamed, or null. One at a time - there is one caret. */
   const [editing, setEditing] = useState<string | null>(null)
+  /** The tab whose menu is open, where, and what it offers. One at a time. */
+  const [menu, setMenu] = useState<{ tab: Tab; at: MenuAnchor; entries: readonly MenuEntry[] } | null>(null)
   const stripRef = useRef<HTMLDivElement>(null)
 
   /**
@@ -343,6 +355,17 @@ export function TabBar({
                 onAuxClick={(event) => {
                   if (event.button === 1 && closable) onClose(tab.id)
                 }}
+                onContextMenu={(event) => {
+                  const entries = menuFor?.(tab.id) ?? []
+                  if (entries.length === 0) return
+                  event.preventDefault()
+                  // The keyboard's menu key has no pointer: the menu hangs from the tab.
+                  const at: MenuAnchor =
+                    event.clientX === 0 && event.clientY === 0
+                      ? { below: event.currentTarget.getBoundingClientRect() }
+                      : { x: event.clientX, y: event.clientY }
+                  setMenu({ tab, at, entries })
+                }}
                 className={cn(
                   'group relative flex h-[calc(var(--helm-strip)-10px)] min-w-0 shrink-0 items-center rounded-raised transition-colors',
                   active ? (focused ? 'bg-active' : 'bg-hover') : 'hover:bg-hover',
@@ -490,6 +513,16 @@ export function TabBar({
       </div>
 
       {actions && <div className="flex shrink-0 items-center gap-0.5">{actions}</div>}
+
+      {menu !== null && (
+        <Menu
+          label={`${menu.tab.title} tab`}
+          entries={menu.entries}
+          at={menu.at}
+          onSelect={(item) => onMenu?.(menu.tab.id, item)}
+          onDismiss={() => setMenu(null)}
+        />
+      )}
     </div>
   )
 }

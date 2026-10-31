@@ -6,16 +6,26 @@ import { disposeTerminal, estimateGrid } from './terminals'
 /**
  * The renderer's half of session ownership.
  *
- * Main owns the processes and the rows; this owns which of them have a tab and
- * in what order. The split matters at both ends: a tab closed here does not
+ * Main (or the local host) owns the processes and the rows; this holds them
+ * for the window, and the layout says which have a tab. The split matters at
+ * both ends: a tab closed here does not
  * decide whether the process died (main confirms first, and the user can say
  * no), and a process that exits on its own does not remove its tab - the
  * scrollback is still worth reading.
  */
 
 export interface SessionsState {
-  /** Open session tabs, in tab-strip order. */
+  /**
+   * Helm's sessions, in tab-strip order: every one main hosts, or with
+   * sessions in the local host every one the host runs, and those this
+   * window started. Which have a tab is the layout's.
+   */
   sessions: SessionRecord[]
+  /**
+   * Whether the first list has come. Until it has, a saved session tab is
+   * not a session that has gone: nothing has said which sessions there are.
+   */
+  listed: boolean
   /**
    * What each live session is doing, keyed by session id.
    *
@@ -53,6 +63,7 @@ export interface SessionsState {
 
 export function useSessions(onActivate: (id: number) => void): SessionsState {
   const [sessions, setSessions] = useState<SessionRecord[]>([])
+  const [listed, setListed] = useState(false)
   const [activity, setActivity] = useState<Map<number, SessionActivityState>>(new Map())
   const [launchError, setLaunchError] = useState<string | null>(null)
 
@@ -82,9 +93,14 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
     // A renderer reload (dev HMR, or a crashed renderer) leaves main holding
     // processes this side has forgotten. Adopting them back is the difference
     // between a reload and an orphan.
-    void helm.invoke('session:list').then((live) => {
-      setSessions((current) => (current.length > 0 ? current : live))
-    })
+    void helm.invoke('session:list').then(
+      (live) => {
+        setSessions((current) => (current.length > 0 ? current : live))
+        setListed(true)
+      },
+      // Not listed: a host that cannot be reached has not said there are none.
+      () => undefined
+    )
     // Adopted with them, for the same reason: an idle session publishes nothing
     // until somebody types at it, so a strip waiting for the next push would sit
     // without dots for as long as nobody used it.
@@ -167,6 +183,7 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
 
   return {
     sessions,
+    listed,
     activity,
     launchError,
     dismissLaunchError,

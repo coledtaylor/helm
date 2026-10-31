@@ -129,6 +129,17 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   (after saying how many sessions it ends) sends `host:stop`, and a host Helm
   started (`floti host --desktop`) exits by itself once it runs nothing and
   no client is attached.
+- With "Run sessions in the local host" on, every client sees every session
+  in the host, and tabs, panes and splits are kept per device: `paneLayout`
+  stays in `helm.db` and never reaches the host. A window gives a tab only to
+  a session its saved layout names or that it opened (`unplacedSessionTabs`
+  in `core/layout/panes.ts`), and its connection carries only those
+  sessions' terminals. Every other running session is in the sessions pane
+  as not open here, with Open (a tab whose screen comes through the host's
+  attach, never a second restore path) and End. Closing a running session's
+  tab asks first, naming its host, which the window names; Close tab, keep
+  running in the tab's menu ends nothing. With the setting off, every session
+  Helm hosts has a tab, and there is no tab menu.
 - Do not use `@anthropic-ai/claude-agent-sdk`.
 - Helm renders nothing for a live session: it parses no session output,
   answers no permission prompt and puts nothing between the user and the TUI.

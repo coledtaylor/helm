@@ -820,9 +820,9 @@ export function resizeSplit(layout: PaneLayout, path: readonly number[], sizes: 
  *
  * `keep` says whether a tab's thing still exists - a project discovery still
  * finds, a session main still hosts, a view main still holds. `extra` is what
- * exists and must have a tab whether or not anything placed it: every hosted
- * session, and the Browser tab while main holds a page. Those land in the
- * focused group.
+ * exists and must have a tab whether or not anything placed it: every session
+ * Helm's own process hosts (`unplacedSessionTabs`), and the Browser tab while
+ * main holds a page. Those land in the focused group.
  *
  * Derived, rather than synced into state in an effect, for the reason the
  * strips always were: a session that appears after a renderer reload, or a
@@ -849,6 +849,36 @@ export function reconcile(
     groups[into] = { ...target, tabs: [...target.tabs, ...added] }
   }
   return normalize(layout.root, groups, layout.focused, layout.nextId)
+}
+
+/**
+ * The sessions `reconcile` gives a tab to whether or not anything placed one.
+ *
+ * Sessions in Helm's own process end with it, so each one it hosts is this
+ * window's and has a tab. Sessions in a host outlive the window and are shared
+ * by every device that reaches it, while the arrangement is kept per device:
+ * a session gets a tab here only where this device placed one (its saved
+ * layout, a launch, Open in the sessions pane), so none is given one unasked.
+ */
+export function unplacedSessionTabs(sessions: readonly { id: number }[], perDevice: boolean): PaneRef[] {
+  return perDevice ? [] : sessions.map((session) => ({ kind: 'session', id: session.id }))
+}
+
+/** The session ids the layout has a tab for. */
+export function sessionTabIds(layout: PaneLayout): Set<number> {
+  return new Set(
+    layout.groups.flatMap((group) => group.tabs.flatMap((ref) => (ref.kind === 'session' ? [ref.id] : [])))
+  )
+}
+
+/**
+ * The running sessions this layout has no tab for: the sessions pane lists
+ * them as not open here, with Open and End. An ended session has nothing to
+ * open.
+ */
+export function notOpenHere<T extends { id: number; status: string }>(layout: PaneLayout, sessions: readonly T[]): T[] {
+  const tabs = sessionTabIds(layout)
+  return sessions.filter((session) => session.status === 'running' && !tabs.has(session.id))
 }
 
 /**

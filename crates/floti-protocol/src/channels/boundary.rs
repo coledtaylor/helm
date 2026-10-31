@@ -91,7 +91,7 @@ pub const CLIENT_ONLY: &[Outside] = &[
     ),
     outside(
         "ownSettings:*",
-        "the settings the client keeps for itself: its window, theme, terminal and browser preferences, and the programs it picked, which its main process tells the host",
+        "the settings the client keeps for itself: its window, theme, terminal and browser preferences, the programs it picked, which its main process tells the host, and its tabs, panes and splits, which are kept per device and never reach the host",
     ),
     outside(
         "ownApp:info",
@@ -103,7 +103,7 @@ pub const CLIENT_ONLY: &[Outside] = &[
     ),
     outside(
         "windowSessions:*",
-        "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, and the pane layout its last run saved",
+        "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, the count before it stops the host, and the pane layout its last run saved; every client sees every session, and which have a tab is each device's own",
     ),
     outside(
         "pluginBackground:*",

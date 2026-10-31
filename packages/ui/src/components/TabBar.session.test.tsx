@@ -31,6 +31,44 @@ function dotOf(tab: HTMLElement): string[] {
 }
 
 describe('TabBar session tabs', () => {
+  it('opens a session tab’s menu on a right-click, and a chosen row is told with the tab it was for', async () => {
+    const user = userEvent.setup()
+    const onMenu = vi.fn()
+    const onClose = vi.fn()
+    const menuFor = (id: string) =>
+      id === 'session:7' ? [{ kind: 'item' as const, id: 'keep-running', label: 'Close tab, keep running' }] : []
+    renderBar(
+      [
+        { id: 'session:7', title: 'alpha', indicator: 'idle' },
+        { id: 'history', title: 'History' }
+      ],
+      { menuFor, onMenu, onClose }
+    )
+
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'alpha, ready' }), { clientX: 40, clientY: 12 })
+    expect(screen.getByRole('menu', { name: 'alpha tab' })).toBeTruthy()
+    await user.click(screen.getByRole('menuitem', { name: 'Close tab, keep running' }))
+    expect(onMenu).toHaveBeenCalledWith('session:7', 'keep-running')
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('opens no menu on a tab with nothing to offer, or on any tab when the strip offers none', () => {
+    const menuFor = (id: string) =>
+      id === 'session:7' ? [{ kind: 'item' as const, id: 'keep-running', label: 'Close tab, keep running' }] : []
+    renderBar([{ id: 'history', title: 'History' }], { menuFor })
+    const plain = fireEvent.contextMenu(screen.getByRole('tab', { name: 'History' }))
+    // Not prevented: the right-click is left to do what it otherwise does.
+    expect(plain).toBe(true)
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('offers no menu on a session tab when the strip is given none, as with sessions in Helm itself', () => {
+    renderBar([{ id: 'session:7', title: 'alpha', indicator: 'idle' }])
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'alpha, ready' }), { clientX: 40, clientY: 12 })
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
   it('paints each session state in the tone DESIGN.md gives it, with busy, waiting and idle all distinct', () => {
     const states: [SessionState, string][] = [
       ['busy', 'working'],

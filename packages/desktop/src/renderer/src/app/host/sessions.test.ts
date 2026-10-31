@@ -138,13 +138,14 @@ describe('sessions over the window’s own connection', () => {
     expect(stream?.text()).toBe('ls\r')
   })
 
-  it('draws each running session in a page that has just loaded from a new stream, which starts with the host’s redraw', async () => {
+  it('draws each running session with a tab in a page that has just loaded from a new stream, which starts with the host’s redraw', async () => {
     const { adapters, connection } = world({ listed: [row(), row({ id: 8, status: 'exited', exitCode: 0 })] })
     const data = hear(adapters, 'session:data')
     await expect(ask(adapters, 'session:list')).resolves.toEqual([
       expect.objectContaining({ id: 7, status: 'running' }),
       expect.objectContaining({ id: 8, status: 'exited' })
     ])
+    adapters.show([7, 8])
     expect(connection.streamsFor('session:data', 7)).toHaveLength(1)
     expect(connection.streamsFor('session:data', 8)).toHaveLength(0)
     connection.streamsFor('session:data', 7)[0]?.send('\x1b[H\x1b[2Jscreen as it is')
@@ -155,10 +156,15 @@ describe('sessions over the window’s own connection', () => {
     const { adapters, connection } = world({ listed: [row()] })
     const questions = hear(adapters, 'session:confirm')
     await ask(adapters, 'session:list')
+    adapters.show([7])
     const closing = ask(adapters, 'session:close', { id: 7 })
     await settle()
     expect(questions).toEqual([
-      expect.objectContaining({ kind: 'close-session', message: '“app” is still running.', sessionNames: ['app'] })
+      expect.objectContaining({
+        kind: 'close-session',
+        message: '“app” is still running on this PC’s host.',
+        sessionNames: ['app']
+      })
     ])
     expect(connection.payloads('session:close')).toEqual([])
     send(adapters, 'session:confirmed', { id: (questions[0] as SessionConfirmRequest).id, agreed: true })
@@ -183,6 +189,7 @@ describe('sessions over the window’s own connection', () => {
     const { adapters, connection, setFront, bridge } = world({ listed: [row()] })
     const exits = hear(adapters, 'session:exit')
     await ask(adapters, 'session:list')
+    adapters.show([7])
     send(adapters, 'session:focus', { ids: [7] })
     setFront(false)
     setFront(true)
@@ -238,15 +245,55 @@ describe('sessions over the window’s own connection', () => {
     ])
   })
 
-  it('adopts and carries a session started outside this window once the host’s activity moves', async () => {
+  it('lists a session started outside this window once the host’s activity moves, and carries none it has no tab for', async () => {
     const connection = new FakeConnection()
-    const { adapters } = world({ connection })
+    const { adapters, bridge } = world({ connection })
     await ask(adapters, 'session:list')
-    connection.answer('session:list', () => [row({ id: 12, name: 'from a plugin' })])
+    connection.answer('session:list', () => [row({ id: 12, name: 'from another device' })])
     connection.push('session:activity', [])
     await settle()
-    expect(connection.streamsFor('session:data', 12)).toHaveLength(1)
     await expect(ask(adapters, 'session:list')).resolves.toEqual([expect.objectContaining({ id: 12 })])
+    expect(connection.streamsFor('session:data', 12)).toHaveLength(0)
+    // Nobody here is watching it, so its exit is nobody's notification here.
+    connection.push('session:notify', row({ id: 12, status: 'exited', exitCode: 0 }))
+    expect(bridge.sent).toEqual([])
+  })
+
+  it('opens a session it had no tab for on a new stream that starts with its screen, and lets it go again when its tab closes and it keeps running', async () => {
+    const { adapters, connection } = world({ listed: [row(), row({ id: 9, name: 'api' })] })
+    const data = hear(adapters, 'session:data')
+    await ask(adapters, 'session:list')
+    adapters.show([7])
+    expect(connection.streamsFor('session:data', 7)).toHaveLength(1)
+    expect(connection.streamsFor('session:data', 9)).toHaveLength(0)
+
+    adapters.show([7, 9])
+    adapters.show([7, 9])
+    expect(connection.streamsFor('session:data', 7)).toHaveLength(1)
+    expect(connection.streamsFor('session:data', 9)).toHaveLength(1)
+    connection.streamsFor('session:data', 9)[0]?.send('\x1b[H\x1b[2Japi as it is')
+    expect(data).toEqual([{ id: 9, data: '\x1b[H\x1b[2Japi as it is' }])
+
+    send(adapters, 'session:focus', { ids: [9] })
+    adapters.release(9)
+    expect(connection.streamsFor('session:data', 9)[0]?.closed).toBe(true)
+    // Kept running: the host is not asked to end it, and it is still listed.
+    expect(connection.payloads('session:close')).toEqual([])
+    expect(connection.payloads('session:focus').at(-1)).toEqual({ ids: [] })
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([
+      expect.objectContaining({ id: 7 }),
+      expect.objectContaining({ id: 9, status: 'running' })
+    ])
+
+    // Opened here again, it is drawn afresh from a new stream.
+    adapters.show([7, 9])
+    expect(connection.streamsFor('session:data', 9)).toHaveLength(2)
+  })
+
+  it('carries a session this window started from the start, before the window has said it has a tab', async () => {
+    const { adapters, connection } = world()
+    await ask(adapters, 'session:start', { cwd: '/work dir/app', projectPath: '/work dir/app', cols: 100, rows: 30 })
+    expect(connection.streamsFor('session:data', 7)).toHaveLength(1)
   })
 
   it('says the link’s sentence when the host cannot be reached, never no sessions or no processes', async () => {
@@ -263,6 +310,7 @@ describe('sessions over the window’s own connection', () => {
     const { own } = ownBridge()
     const adapters = createSessionsAdapters({ link, own, front: { focused: () => true, onChange: () => undefined }, shelf: null })
     await ask(adapters, 'session:list')
+    adapters.show([7])
     expect(first.streamsFor('session:data', 7)).toHaveLength(1)
     const second = new FakeConnection().answer('session:list', () => [row()])
     first.streamsFor('session:data', 7)[0]?.end('The connection to the local host was closed.')

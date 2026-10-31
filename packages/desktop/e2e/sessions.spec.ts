@@ -93,6 +93,16 @@ test('with the local host setting never changed, sessions run in Helm itself: no
   expect(processAlive(run.pid)).toBe(true)
   expect(flotiChildren(main)).toEqual([])
 
+  // As before the host: no tab menu to keep a session running, no host in the
+  // status bar, and nothing in the sessions pane is not open here.
+  await pane.getByRole('tab', { name: 'review, ready' }).click({ button: 'right' })
+  await expect(window.getByRole('menu')).toHaveCount(0)
+  await expect(window.getByRole('contentinfo').locator('[data-status-host]')).toHaveCount(0)
+  await window.locator('[data-open-sessions]').click()
+  await expect(window.getByRole('region', { name: 'In Helm' })).toBeVisible()
+  await expect(window.getByRole('region', { name: 'Not open here' })).toHaveCount(0)
+  await pane.getByRole('tab', { name: 'review, ready' }).click()
+
   await pane.getByRole('button', { name: 'Close review' }).click()
   await window
     .getByRole('alertdialog', { name: '“review” is still running.' })

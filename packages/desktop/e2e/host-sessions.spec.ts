@@ -151,7 +151,7 @@ test('a session in the host takes input, takes the pane’s size, is drawn again
   expect(log()?.received).toEqual(['hello there', 'after the reload'])
 
   // Declined, the session keeps running; agreed, the host ends it.
-  const dialog = window.getByRole('alertdialog', { name: '“alpha” is still running.' })
+  const dialog = window.getByRole('alertdialog', { name: '“alpha” is still running on this PC’s host.' })
   await pane.getByRole('button', { name: 'Close alpha' }).click()
   await dialog.getByRole('button', { name: 'Cancel' }).click()
   await expect(pane.getByRole('tab', { name: 'alpha, ready' })).toBeVisible()
@@ -612,6 +612,127 @@ test('Settings’ Stop host says how many sessions end; Cancel changes nothing, 
   await window.locator('[data-settings-stop-host]').click()
   await ask.getByRole('button', { name: 'Stop host' }).click()
   await expect.poll(() => [host!, ...pids].filter(processAlive)).toEqual([])
+})
+
+/** Picks Close tab, keep running from a session tab's menu. */
+async function closeKeepRunning(window: Page, tab: Locator, name: string): Promise<void> {
+  await tab.click({ button: 'right' })
+  await window
+    .getByRole('menu', { name: `${name} tab` })
+    .getByRole('menuitem', { name: 'Close tab, keep running' })
+    .click()
+}
+
+test('closing a session’s tab asks first naming its host; Close tab, keep running leaves it not open here, where Open shows its screen and End ends it after asking', async ({
+  helm,
+  world
+}) => {
+  const { window } = helm
+  const id = await startSession(window, 'alpha')
+  const pane = window.getByRole('region', { name: 'First pane' })
+  await typeLine(pane, 'draft the schema')
+  await expect.poll(() => terminalText(window, id)).toContain('You said: draft the schema')
+  const run = await claudeRunIn(world, world.projects.alpha)
+  const tab = pane.getByRole('tab', { name: 'alpha, ready' })
+
+  // Closing asks, naming the session and its host; Cancel keeps the tab and the session.
+  const ask = window.getByRole('alertdialog', { name: '“alpha” is still running on this PC’s host.' })
+  await pane.getByRole('button', { name: 'Close alpha' }).click()
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(ask).toHaveCount(0)
+  await expect(tab).toBeVisible()
+  expect(processAlive(run.pid)).toBe(true)
+
+  // Close tab, keep running: no question, and the session runs on, not open here.
+  await closeKeepRunning(window, tab, 'alpha')
+  await expect(window.getByRole('tab', { name: /^alpha/ })).toHaveCount(0)
+  await expect(window.getByRole('alertdialog')).toHaveCount(0)
+  expect(processAlive(run.pid)).toBe(true)
+  await window.locator('[data-open-sessions]').click()
+  const notHere = window.getByRole('region', { name: 'Not open here' })
+  await expect(notHere.locator(`[data-not-open-here="${String(id)}"]`)).toContainText('alpha')
+
+  // Open: a tab again, drawing its screen as it is, then streaming and taking input.
+  await notHere.getByRole('button', { name: 'Open alpha' }).click()
+  await expect(pane.getByRole('tab', { name: 'alpha, ready' })).toBeVisible()
+  expect(await sessionIdOf(window, 'alpha, ready')).toBe(id)
+  await expect.poll(() => terminalText(window, id)).toContain('You said: draft the schema')
+  await typeLine(pane, 'add the indexes')
+  await expect.poll(() => terminalText(window, id)).toContain('You said: add the indexes')
+  expect(count(await terminalText(window, id), 'You said: draft the schema')).toBe(1)
+
+  // End from the sessions pane asks the same question; Cancel changes nothing, End session ends it.
+  await closeKeepRunning(window, pane.getByRole('tab', { name: 'alpha, ready' }), 'alpha')
+  await pane.getByRole('tab', { name: 'Sessions' }).click()
+  await notHere.getByRole('button', { name: 'End alpha' }).click()
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(notHere.locator(`[data-not-open-here="${String(id)}"]`)).toBeVisible()
+  expect(processAlive(run.pid)).toBe(true)
+  await notHere.getByRole('button', { name: 'End alpha' }).click()
+  await ask.getByRole('button', { name: 'End session' }).click()
+  await expect.poll(() => processAlive(run.pid)).toBe(false)
+  await expect(notHere).toHaveCount(0)
+})
+
+test('tabs, panes and splits come back on this device after a Keep running restart, kept in its own data, and a session it has no tab for gets none', async ({
+  helm,
+  world
+}) => {
+  let { window } = helm
+  const alpha = await startSession(window, 'alpha')
+  const beta = await startSession(window, 'beta')
+  await typeLine(window.getByRole('region', { name: 'First pane' }), 'draft the schema')
+  await expect.poll(() => terminalText(window, beta)).toContain('You said: draft the schema')
+  const runs = [(await claudeRunIn(world, world.projects.alpha)).pid, (await claudeRunIn(world, world.projects.beta)).pid]
+
+  // beta in a pane of its own, with the history beside it there; then beta's tab closed, kept running.
+  await window.getByRole('button', { name: /^Split: move this tab to a pane of its own/ }).click()
+  await window.locator('[data-rail="history"]').click()
+  const first = window.getByRole('region', { name: 'First pane' })
+  const second = window.getByRole('region', { name: 'Second pane' })
+  await expect(second.getByRole('tab')).toHaveText(['beta', 'Session history'])
+  await closeKeepRunning(window, second.getByRole('tab', { name: 'beta, ready' }), 'beta')
+  await expect(first.getByRole('tab')).toHaveText(['alpha'])
+  await expect(second.getByRole('tab')).toHaveText(['Session history'])
+
+  // Saved in this device's own settings: alpha's tab, the split, and no tab for beta.
+  const saved = async (): Promise<string> =>
+    JSON.stringify((await invoke<AppSettings>(window, 'settings:read')).paneLayout ?? null)
+  await expect
+    .poll(async () => {
+      const layout = await saved()
+      return layout.includes(`"id":${String(alpha)}`) && !layout.includes(`"id":${String(beta)}`) && layout.includes('"axis"')
+    })
+    .toBe(true)
+  const before = await saved()
+
+  const main = await mainPid(helm)
+  await closeWindow(helm.app)
+  await answer(
+    window
+      .getByRole('alertdialog', { name: 'Quitting Helm ends 2 sessions on this PC’s host.' })
+      .getByRole('button', { name: 'Keep running and quit' })
+  )
+  await expect.poll(() => processAlive(main)).toBe(false)
+  expect(runs.every(processAlive)).toBe(true)
+
+  const next = await launchHelm(world)
+  Object.assign(helm, next)
+  window = next.window
+  const firstAgain = window.getByRole('region', { name: 'First pane' })
+  const secondAgain = window.getByRole('region', { name: 'Second pane' })
+  await expect(firstAgain.getByRole('tab')).toHaveText(['alpha'])
+  await expect(secondAgain.getByRole('tab')).toHaveText(['Session history'])
+  expect(await sessionIdOf(window, 'alpha, ready')).toBe(alpha)
+  // Nothing opened for beta, so the arrangement stands as it was saved.
+  await expect(window.getByRole('tab', { name: /^beta/ })).toHaveCount(0)
+  expect(await saved()).toBe(before)
+
+  await window.locator('[data-open-sessions]').click()
+  await expect(
+    window.getByRole('region', { name: 'Not open here' }).locator(`[data-not-open-here="${String(beta)}"]`)
+  ).toContainText('beta')
+  expect(runs.every(processAlive)).toBe(true)
 })
 
 test('after Helm is killed outright, its sessions run on in the host, and the next start reattaches to that host and shows them, offering no restore', async ({

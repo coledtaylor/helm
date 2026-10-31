@@ -78,8 +78,16 @@ export interface SessionsPaneProps {
   /** The row on screen, by pid. Null for none. */
   selectedPid: number | null
   onSelect: (session: LiveSession | null) => void
-  /** Brings a hosted session's terminal tab forward. */
+  /** Brings a hosted session's terminal tab forward, opening one here when it has none. */
   onOpenSession?: ((id: number) => void) | undefined
+  /**
+   * With sessions in a host: the running sessions this device has no tab for.
+   * Every device sees every session, and which have a tab is each device's
+   * own, so these are listed as not open here, with Open and End.
+   */
+  notOpenHere?: readonly SessionRecord[] | undefined
+  /** Ends a session, after the confirmation naming its host. */
+  onEndSession?: ((id: number) => void) | undefined
   onReveal: (path: string) => void
   /** Docked beside a session split: list *or* detail, never both. */
   compact?: boolean | undefined
@@ -109,6 +117,8 @@ export function SessionsPane({
   selectedPid,
   onSelect,
   onOpenSession,
+  notOpenHere = [],
+  onEndSession,
   onReveal,
   compact = false
 }: SessionsPaneProps): JSX.Element {
@@ -116,7 +126,10 @@ export function SessionsPane({
   const showList = !compact || selected === null
   const showDetail = !compact || selected !== null
 
+  // A session not open here is listed once, under its own heading.
+  const elsewhere = new Set(notOpenHere.map((record) => record.id))
   const hosted = sessions.filter((session) => session.helmSessionId !== null)
+  const hostedHere = hosted.filter((session) => !elsewhere.has(session.helmSessionId!))
   const foreign = sessions.filter((session) => session.helmSessionId === null)
 
   /*
@@ -173,7 +186,7 @@ export function SessionsPane({
             )}
           >
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
-              {sessions.length === 0 ? (
+              {sessions.length === 0 && notOpenHere.length === 0 ? (
                 <EmptyState
                   size="list"
                   name="sessions-list"
@@ -184,8 +197,22 @@ export function SessionsPane({
                 </EmptyState>
               ) : (
                 <>
-                  <Section label="In Helm" count={hosted.length}>
-                    {hosted.map((session) => (
+                  {notOpenHere.length > 0 && (
+                    <Section label="Not open here" count={notOpenHere.length}>
+                      {notOpenHere.map((record) => (
+                        <NotOpenRow
+                          key={record.id}
+                          record={record}
+                          live={hosted.find((session) => session.helmSessionId === record.id) ?? null}
+                          onOpen={onOpenSession}
+                          onEnd={onEndSession}
+                        />
+                      ))}
+                    </Section>
+                  )}
+
+                  <Section label="In Helm" count={hostedHere.length}>
+                    {hostedHere.map((session) => (
                       <Row
                         key={session.pid}
                         session={session}
@@ -199,9 +226,9 @@ export function SessionsPane({
                         onSelect={onSelect}
                       />
                     ))}
-                    {hosted.length === 0 && (
+                    {hostedHere.length === 0 && (
                       <p className="px-2.5 py-2 text-[11px] text-fg-subtle">
-                        Helm is hosting no sessions.
+                        {notOpenHere.length === 0 ? 'Helm is hosting no sessions.' : 'No session is open here.'}
                       </p>
                     )}
                   </Section>
@@ -392,6 +419,65 @@ function Row({
         )}
       </span>
     </button>
+  )
+}
+
+/**
+ * A session running in the host that this device has no tab for. The one row
+ * in this pane that carries buttons: there is no tab to bring forward, and
+ * opening one or ending the session are the two things there are to do.
+ */
+function NotOpenRow({
+  record,
+  live,
+  onOpen,
+  onEnd
+}: {
+  record: SessionRecord
+  /** Its registry row, when Claude Code has written one: the state dot. */
+  live: LiveSession | null
+  onOpen?: ((id: number) => void) | undefined
+  onEnd?: ((id: number) => void) | undefined
+}): JSX.Element {
+  const state = live === null ? 'running' : stateOf(live)
+  const name = sessionLabel(record)
+  return (
+    <div
+      data-not-open-here={record.id}
+      title={`${name} - ${SESSION_STATE_LABEL[state]}, not open here\n${record.cwd}`}
+      className="flex min-w-0 items-center gap-2 rounded-raised px-2.5 py-row transition-colors hover:bg-hover"
+    >
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-center gap-2">
+          <span aria-hidden data-session-dot className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[state])} />
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">{name}</span>
+        </span>
+        <span className="min-w-0 truncate pl-[14px] font-mono text-[10.5px] text-fg-subtle">{record.cwd}</span>
+      </span>
+      {onOpen !== undefined && (
+        <button
+          type="button"
+          data-not-open-here-open
+          aria-label={`Open ${name}`}
+          onClick={() => onOpen(record.id)}
+          className="shrink-0 rounded-well border border-border-strong px-2.5 py-0.5 text-[11.5px] text-fg transition-colors hover:bg-hover"
+        >
+          Open
+        </button>
+      )}
+      {onEnd !== undefined && (
+        // Danger in the text and the hover wash, never a fill (DESIGN.md).
+        <button
+          type="button"
+          data-not-open-here-end
+          aria-label={`End ${name}`}
+          onClick={() => onEnd(record.id)}
+          className="shrink-0 rounded-well border border-danger/50 px-2.5 py-0.5 text-[11.5px] text-danger transition-colors hover:bg-danger/10"
+        >
+          End
+        </button>
+      )}
+    </div>
   )
 }
 

@@ -14,6 +14,7 @@ import {
   isSplit,
   moveTab,
   neighbourAt,
+  notOpenHere,
   openFile,
   openTabWithPreview,
   openTab,
@@ -26,8 +27,10 @@ import {
   retitleTab,
   savedGroups,
   sendBeside,
+  sessionTabIds,
   splitWith,
   toSaved,
+  unplacedSessionTabs,
   upgradeSavedLayout,
   visibleTabs,
   type FileRef,
@@ -446,6 +449,39 @@ describe('reconcile', () => {
     const reconciled = reconcile(layout, (ref) => ref.kind !== 'session', [])
     expect(shape(reconciled)).toEqual(['>*history', ' *settings'])
     expect(sizes(reconciled.root)).toEqual([[0.5, 0.5]])
+  })
+
+  it('gives every session Helm’s own process hosts a tab, placed or not', () => {
+    const layout = layoutOf(g(HISTORY), 0)
+    const reconciled = reconcile(layout, () => true, unplacedSessionTabs([{ id: 1 }, { id: 2 }], false))
+    expect(shape(reconciled)).toEqual(['>*history session:1 session:2'])
+  })
+
+  it('with the layout kept per device, keeps this device’s tabs, panes and split sizes and opens no tab for a session it did not place', () => {
+    const saved = layoutOf(row([g(session(1), HISTORY), g(session(2))], [0.3, 0.7]), 1)
+    const hosted = [{ id: 1 }, { id: 2 }, { id: 3 }]
+    const reconciled = reconcile(saved, () => true, unplacedSessionTabs(hosted, true))
+    expect(shape(reconciled)).toEqual([' session:1 *history', '>*session:2'])
+    expect(sizes(reconciled.root)).toEqual([[0.3, 0.7]])
+    expect(sessionTabIds(reconciled)).toEqual(new Set([1, 2]))
+  })
+})
+
+describe('notOpenHere', () => {
+  const running = (id: number) => ({ id, status: 'running' })
+
+  it('lists the running sessions this device has no tab for, and none it has one for or that ended', () => {
+    const layout = layoutOf(row([g(session(1)), g(HISTORY)]), 0)
+    const sessions = [running(1), running(2), { id: 3, status: 'exited' }, running(4)]
+    expect(notOpenHere(layout, sessions).map((s) => s.id)).toEqual([2, 4])
+  })
+
+  it('lists a session whose tab was closed and kept running, and not once its tab is opened again', () => {
+    const open = layoutOf(g(session(1), session(2)), 0)
+    const closed = closeTab(open, 'session:2')
+    expect(notOpenHere(closed, [running(1), running(2)]).map((s) => s.id)).toEqual([2])
+    const reopened = openTab(closed, session(2))
+    expect(notOpenHere(reopened, [running(1), running(2)])).toEqual([])
   })
 })
 

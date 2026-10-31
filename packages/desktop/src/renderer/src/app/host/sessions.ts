@@ -22,11 +22,13 @@ import { createTerminalsAdapter, type ShellShelf } from './terminals'
 /**
  * Sessions and terminals while sessions run in the local host, over the
  * window's own connection: the host owns each session's process, its row and
- * its terminal, and the window keeps the tabs it shows, as the host last said,
- * and carries each running session's terminal on a stream of its own. A page
- * that has just loaded opens new streams, and the host starts each with a
- * redraw of the terminal's screen as it is, so the page draws what is there
- * and then streams.
+ * its terminal, and every client sees every session it runs. Which of them
+ * have a tab here is this device's own (its saved layout), so the window says
+ * (`show`) and the adapter carries only those sessions' terminals, each on a
+ * stream of its own. The host starts each new stream with a redraw of the
+ * terminal's screen as it is, so a page that has just loaded, or a session
+ * opened here from the sessions pane, draws what is there and then streams.
+ * A tab closed with the session kept running lets its stream go (`release`).
  *
  * Asked in the window: the question before a running session's tab is closed,
  * after which the host is told to end it without asking again; a question the
@@ -66,9 +68,19 @@ type Question = Omit<SessionConfirmRequest, 'id'>
 export type SessionsAdapters = HostAdapter[] & {
   /** A session the host started for a plugin: kept with the window's tabs, its terminal carried. */
   adopt(row: P.SessionRecord): SessionRecord
+  /**
+   * The sessions this window has a tab for. Each running one not carried yet
+   * is carried from here on, on a new stream that starts with its screen.
+   */
+  show(ids: readonly number[]): void
+  /** A tab closed with its session kept running: its terminal is no longer carried. */
+  release(id: number): void
 }
 
 const isRunning = (record: SessionRecord): boolean => record.status === 'running'
+
+/** How the window names the host its sessions run in: this PC's own, the only one it reaches yet. */
+export const LOCAL_HOST_NAME = 'this PC’s host'
 
 export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapters {
   const { link, own } = deps
@@ -97,8 +109,10 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
     log
   })
 
-  /** The tabs: every session the host listed or this window started, until its tab is closed. */
+  /** Every session the host listed or this window started, until it is ended here. */
   const records = new Map<number, SessionRecord>()
+  /** The sessions with a tab in this window, whose terminals are carried while they run. */
+  const shown = new Set<number>()
   let focused: readonly number[] = []
   let states: SessionActivityState[] = []
   let overview: SessionsOverview = { sessions: [], readAtMs: 0 }
@@ -106,9 +120,16 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
   /** The connection's first list, which `session:list` waits for. */
   let listed: Promise<void> = Promise.resolve()
 
+  /** Carries a session's terminal while it runs and has a tab here. */
+  const carry = (record: SessionRecord): void => {
+    if (isRunning(record) && shown.has(record.id)) streams.open('session:data', record.id)
+  }
+
+  /** A session started here, which opens in a tab here. */
   const adopt = (record: SessionRecord): SessionRecord => {
     records.set(record.id, record)
-    if (isRunning(record)) streams.open('session:data', record.id)
+    shown.add(record.id)
+    carry(record)
     return record
   }
 
@@ -117,8 +138,8 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
       const record = sessionFromHost(row)
       const known = records.get(record.id)
       // A rename answered here at once keeps its label until the host's row follows.
-      if (known === undefined || known.status !== record.status) adopt(record)
-      else if (isRunning(known)) streams.open('session:data', known.id)
+      if (known === undefined || known.status !== record.status) records.set(record.id, record)
+      carry(records.get(record.id)!)
     }
   }
 
@@ -204,7 +225,7 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
       connection.subscribe('session:notify', {
         event: (row) => {
           const record = sessionFromHost(row)
-          if (records.has(record.id)) own.send('windowSessions:notify', record)
+          if (shown.has(record.id)) own.send('windowSessions:notify', record)
         },
         error: failed('session:notify')
       }),
@@ -333,10 +354,11 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         const entry = records.get(req.id)
         if (entry === undefined) return { closed: true }
         if (isRunning(entry) && req.force !== true) {
+          // The host is named by the window: a client names its hosts.
           const agreed = await asking({
             kind: 'close-session',
-            message: `“${sessionLabel(entry)}” is still running.`,
-            detail: `Closing the tab ends the Claude Code session in ${entry.cwd}.`,
+            message: `“${sessionLabel(entry)}” is still running on ${LOCAL_HOST_NAME}.`,
+            detail: `Ending it stops the Claude Code session in ${entry.cwd}.`,
             confirmLabel: 'End session',
             sessionNames: [sessionLabel(entry)]
           })
@@ -347,6 +369,7 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         // Asked already, so the host is told not to ask again.
         if (isRunning(now)) await (await host()).request('session:close', { id: req.id, force: true })
         records.delete(req.id)
+        shown.delete(req.id)
         streams.close('session:data', req.id)
         if (focused.includes(req.id)) {
           focused = focused.filter((id) => id !== req.id)
@@ -442,5 +465,22 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
     log
   })
 
-  return Object.assign([sessions, terminals], { adopt: (row: P.SessionRecord) => adopt(sessionFromHost(row)) })
+  return Object.assign([sessions, terminals], {
+    adopt: (row: P.SessionRecord) => adopt(sessionFromHost(row)),
+    show: (ids: readonly number[]) => {
+      for (const id of ids) {
+        shown.add(id)
+        const record = records.get(id)
+        if (record !== undefined) carry(record)
+      }
+    },
+    release: (id: number) => {
+      shown.delete(id)
+      streams.close('session:data', id)
+      if (focused.includes(id)) {
+        focused = focused.filter((each) => each !== id)
+        sendFocus()
+      }
+    }
+  })
 }

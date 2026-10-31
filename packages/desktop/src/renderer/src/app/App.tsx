@@ -19,6 +19,7 @@ import {
   isScanRoot,
   liveSessionsIn,
   moveTab,
+  notOpenHere,
   openFile,
   openTab,
   openTabWithPreview,
@@ -32,8 +33,10 @@ import {
   savedGroups,
   sendBeside,
   sessionLabel,
+  sessionTabIds,
   splitWith,
   toSaved,
+  unplacedSessionTabs,
   withProjectPinned,
   isPluginRailId,
   pluginRailId,
@@ -172,6 +175,7 @@ import {
   type SettingsSectionId,
   type Tab,
   type TabIndicator,
+  type MenuEntry,
   type TreeReveal,
   type TreeSession
 } from '@helm/ui'
@@ -179,10 +183,10 @@ import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
-import { helm, sessionsInHost } from './bridge'
+import { helm, hostSessionTabs, sessionsInHost } from './bridge'
 import { ProjectColumn } from './ProjectColumn'
 import { disposeShell, terminalShellKey } from './pterms'
-import { estimateGrid } from './terminals'
+import { disposeTerminal, estimateGrid } from './terminals'
 import { readable } from './errors'
 import { TerminalPane } from './TerminalPane'
 import { TerminalTabPane } from './TerminalTabPane'
@@ -349,6 +353,9 @@ function pluginPageTitle(page: PluginPagesRef['pages'][number], plugin: PluginIn
 
 /** The session id inside a `session:12` tab id. */
 const sessionIdOf = (id: string): number => Number(id.slice('session:'.length))
+
+/** The session tab menu's Close tab, keep running. */
+const KEEP_RUNNING = 'keep-running'
 
 /** The last segment of a path, for a session in no project the scan found. */
 const folderName = (path: string): string =>
@@ -562,7 +569,25 @@ export function App(): JSX.Element {
   const focusSessionRef = useRef<(id: number) => void>(() => undefined)
   const activateSession = useCallback((id: number) => focusSessionRef.current(id), [])
   const sessionState = useSessions(activateSession)
-  const { sessions, activity: sessionActivity } = sessionState
+  const { sessions, activity: sessionActivity, listed: sessionsListed } = sessionState
+
+  /**
+   * Whether sessions run in this PC's host this run, which the switch alone
+   * does not say: it takes effect the next time Helm starts. Null until known.
+   * With it on, the sessions outlive this window and every device sees them,
+   * so which have a tab here is this device's own layout.
+   */
+  const [hostRunning, setHostRunning] = useState<boolean | null>(null)
+  useEffect(() => {
+    let live = true
+    void sessionsInHost().then(
+      (inHost) => live && setHostRunning(inHost),
+      () => live && setHostRunning(false)
+    )
+    return () => {
+      live = false
+    }
+  }, [])
 
   const sessionsById = useMemo(() => {
     const map = new Map<number, SessionRecord>()
@@ -584,7 +609,9 @@ export function App(): JSX.Element {
       // The Browser tab is there while it holds a page. Its last page closing
       // closes it, as closing a browser's last tab closes the window.
       if (ref.kind === 'browser') return browserViews.size > 0
-      if (ref.kind === 'session') return sessionsById.has(ref.id)
+      // Until the first list, nothing has said which sessions there are: a
+      // saved tab is kept rather than taken for a session that has gone.
+      if (ref.kind === 'session') return !sessionsListed || sessionsById.has(ref.id)
       // Answered, it has nothing left to show.
       if (ref.kind === 'restore') return restoreOffer !== null
       // Kept while the list is still being read, so a restored tab is not
@@ -601,7 +628,7 @@ export function App(): JSX.Element {
       }
       return true
     },
-    [discovery, projectsByPath, browserViews, sessionsById, restoreOffer, plugins, pluginState.list]
+    [discovery, projectsByPath, browserViews, sessionsById, sessionsListed, restoreOffer, plugins, pluginState.list]
   )
 
   /**
@@ -609,14 +636,16 @@ export function App(): JSX.Element {
    * is hosting, and the Browser tab while main holds a page. After a renderer
    * reload the processes outlive the panes that were showing them, and an agent
    * opens pages nothing in this window asked for.
+   *
+   * Sessions in the local host are not among them: they outlive this window
+   * and every device sees them, so one has a tab here only where this device
+   * put one (`unplacedSessionTabs`). Until the window knows which it is, none
+   * is given one unasked, and the derivation adds them once it knows.
    */
   const hasPages = browserViews.size > 0
   const extra = useMemo<PaneRef[]>(
-    () => [
-      ...sessions.map((session) => ({ kind: 'session' as const, id: session.id })),
-      ...(hasPages ? [BROWSER_TAB] : [])
-    ],
-    [sessions, hasPages]
+    () => [...unplacedSessionTabs(sessions, hostRunning !== false), ...(hasPages ? [BROWSER_TAB] : [])],
+    [sessions, hostRunning, hasPages]
   )
 
   const open = useMemo(
@@ -643,6 +672,19 @@ export function App(): JSX.Element {
       return op(reconcile(current ?? fromSaved(saved), exists, unplaced))
     })
   }, [])
+
+  /** With sessions in the local host, the running ones this device has no tab for. */
+  const notOpen = useMemo(() => (hostRunning === true ? notOpenHere(open, sessions) : []), [hostRunning, open, sessions])
+  /**
+   * The window's connection carries the terminals of the sessions with a tab
+   * here, and only those: one opened from the sessions pane starts on a new
+   * stream that draws its screen as it is.
+   */
+  const tabbedSessions = useMemo(() => [...sessionTabIds(open)].sort((a, b) => a - b).join(','), [open])
+  useEffect(() => {
+    if (hostRunning !== true || tabbedSessions === '') return
+    hostSessionTabs.show(tabbedSessions.split(',').map(Number))
+  }, [hostRunning, tabbedSessions])
 
   const shownMax = maximized !== null && groupById(open, maximized) !== undefined ? maximized : null
   const shownGroups = useMemo(
@@ -699,9 +741,6 @@ export function App(): JSX.Element {
     },
     [open, commit]
   )
-  useEffect(() => {
-    focusSessionRef.current = (id: number) => focusTab(`session:${String(id)}`)
-  }, [focusTab])
 
   /** Opens a tab in the focused pane, or brings it forward where it already is. */
   const openPane = useCallback(
@@ -1056,6 +1095,22 @@ export function App(): JSX.Element {
   )
 
   /**
+   * Brings a session's tab forward, or - for a session running in the host
+   * that this device has no tab for - opens one in the focused pane, whose
+   * screen comes on a new stream from the host.
+   */
+  const openSession = useCallback(
+    (id: number) => {
+      if (findTab(open, `session:${String(id)}`) !== null) focusTab(`session:${String(id)}`)
+      else if (sessionsById.has(id)) placeSession(id)
+    },
+    [open, focusTab, sessionsById, placeSession]
+  )
+  useEffect(() => {
+    focusSessionRef.current = openSession
+  }, [openSession])
+
+  /**
    * A terminal tab in `path`: a plain shell, no `claude`. It lands where a
    * launched session would - the focused pane, the pane beside it, or `into`.
    * The id is this window's; the shell is opened when the tab first draws.
@@ -1231,7 +1286,14 @@ export function App(): JSX.Element {
       if (result === null) return
       for (const { launched } of result.restored) sessionState.adopt(launched.session)
       const pairs = new Map(result.restored.map(({ from, launched }) => [from, launched.session.id]))
-      commit((current) => placeRestored(closeTab(current, 'restore'), layout, pairs))
+      commit((current) => {
+        // One the saved layout does not name still opens here: it was asked for.
+        let placed = placeRestored(closeTab(current, 'restore'), layout, pairs)
+        for (const id of pairs.values()) {
+          if (findTab(placed, `session:${String(id)}`) === null) placed = openTab(placed, { kind: 'session', id })
+        }
+        return placed
+      })
     },
     [restoreOffer, restoreLost, sessionState, commit, open]
   )
@@ -1321,6 +1383,36 @@ export function App(): JSX.Element {
       })
     },
     [sessionState, commit]
+  )
+
+  /**
+   * Close tab, keep running: with sessions in the local host, the tab goes and
+   * the session runs on, listed in the sessions pane as not open here. Nothing
+   * is asked, because nothing ends.
+   */
+  const keepRunning = useCallback(
+    (id: number) => {
+      hostSessionTabs.release(id)
+      disposeTerminal(id)
+      commit((current) => closeTab(current, `session:${String(id)}`))
+    },
+    [commit]
+  )
+  /** A tab's menu: a running session's offers Close tab, keep running, with sessions in the local host only. */
+  const tabMenuFor = useCallback(
+    (tab: string): MenuEntry[] =>
+      hostRunning === true &&
+      tab.startsWith('session:') &&
+      sessionsById.get(sessionIdOf(tab))?.status === 'running'
+        ? [{ kind: 'item', id: KEEP_RUNNING, label: 'Close tab, keep running' }]
+        : [],
+    [hostRunning, sessionsById]
+  )
+  const onTabMenu = useCallback(
+    (tab: string, item: string) => {
+      if (item === KEEP_RUNNING) keepRunning(sessionIdOf(tab))
+    },
+    [keepRunning]
   )
 
   const closeAny = useCallback(
@@ -1926,7 +2018,8 @@ export function App(): JSX.Element {
   const openTreeSession = useCallback(
     (id: string) => {
       if (id.startsWith('session:')) {
-        focusTab(id)
+        // One not open here opens in a tab here.
+        openSession(sessionIdOf(id))
         return
       }
       // Somebody else's session has no tab; its row in the sessions pane is
@@ -1934,7 +2027,7 @@ export function App(): JSX.Element {
       setSelectedLivePid(Number(id.slice('pid:'.length)))
       openSessions()
     },
-    [focusTab, openSessions]
+    [openSession, openSessions]
   )
 
   /** Helm's live sessions by what they are doing, for the status bar. */
@@ -1953,7 +2046,7 @@ export function App(): JSX.Element {
     if (ids.length === 0) return
     const at = frontId === null ? -1 : ids.indexOf(frontId)
     const next = ids[(at + 1) % ids.length]
-    if (next !== undefined) focusTab(next)
+    if (next !== undefined) openSession(sessionIdOf(next))
   }
 
   /**
@@ -2206,22 +2299,6 @@ export function App(): JSX.Element {
     },
     [confirmRequest]
   )
-
-  /**
-   * Whether sessions run in this PC's host this run, which the switch alone
-   * does not say: it takes effect the next time Helm starts. Null until known.
-   */
-  const [hostRunning, setHostRunning] = useState<boolean | null>(null)
-  useEffect(() => {
-    let live = true
-    void sessionsInHost().then(
-      (inHost) => live && setHostRunning(inHost),
-      () => live && setHostRunning(false)
-    )
-    return () => {
-      live = false
-    }
-  }, [])
 
   /**
    * Settings' Stop host: how many sessions it ends, asked here, then the stop.
@@ -2723,9 +2800,13 @@ export function App(): JSX.Element {
             resources={machineSessions.resources}
             selectedPid={selectedLivePid}
             onSelect={(session) => setSelectedLivePid(session?.pid ?? null)}
-            // Bringing the terminal forward is the one thing this pane does
-            // *to* a session: the pane is for looking, the tab is for working.
-            onOpenSession={(id) => focusTab(`session:${String(id)}`)}
+            // Bringing the terminal forward, or opening one here for a session
+            // not open here, is what this pane does *to* a session, besides
+            // ending one not open here: the pane is for looking, the tab is
+            // for working.
+            onOpenSession={openSession}
+            notOpenHere={notOpen}
+            onEndSession={closeSession}
             onReveal={launcher.reveal}
             compact={compact}
           />
@@ -3046,6 +3127,8 @@ export function App(): JSX.Element {
               if (tab.startsWith('session:')) void sessionState.rename(sessionIdOf(tab), label)
             }}
             onKeep={keepTab}
+            menuFor={tabMenuFor}
+            onMenu={onTabMenu}
             onDragging={onTabDragging}
             onNewTab={(button) => toggleNewTab(id, button)}
             newTabOpen={newTab?.group === id}
