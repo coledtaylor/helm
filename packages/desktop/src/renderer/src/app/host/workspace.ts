@@ -102,15 +102,20 @@ export function createWorkspaceAdapter({
   link.onConnected((connection) => {
     for (const subscription of subscriptions) subscription.unsubscribe()
     const ended = (channel: string) => (error: Error) => log(`host: ${channel} ended (${error.message})`)
+    // The window is told this connection's settings before its first scan,
+    // so nothing that offers a scan root shows the projects without them.
+    let settingsTold: Promise<unknown> = Promise.resolve()
     const discovered = (result: P.DiscoveryResult): void => {
       const discovery = discoveryFromHost(result)
-      scanned = discovery.projects
-      tell('discovery:updated', discovery)
+      void settingsTold.then(() => {
+        scanned = discovery.projects
+        tell('discovery:updated', discovery)
+      })
     }
     subscriptions = [
       connection.subscribe('settings:changed', {
         snapshot: (state) => {
-          hostSettings = state
+          settingsTold = adoptHost(state).catch(ended('settings:changed'))
         },
         event: (next) => void adoptHost(next).catch(ended('settings:changed')),
         error: ended('settings:changed')

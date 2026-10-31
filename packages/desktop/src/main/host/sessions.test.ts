@@ -42,7 +42,13 @@ interface World {
 }
 
 function world(
-  options: { agree?: boolean; listed?: P.SessionRecord[]; connection?: FakeConnection | null } = {}
+  options: {
+    agree?: boolean
+    listed?: P.SessionRecord[]
+    connection?: FakeConnection | null
+    /** Main's part only: the window carries its own terminals and notifications. */
+    mainOnly?: boolean
+  } = {}
 ): World {
   const connection = options.connection === undefined ? new FakeConnection() : options.connection
   connection?.answer('session:list', () => options.listed ?? [])
@@ -60,13 +66,12 @@ function world(
   })
   const host = createHostSessions({
     link,
-    streams,
+    ...(options.mainOnly === true ? { relist: true } : { streams, notify: (record: SessionRecord) => notified.push(record) }),
     emit: (channel, payload) => emitted.push({ channel, payload }),
     confirm: (request) => {
       asked.push(request)
       return Promise.resolve(options.agree ?? true)
     },
-    notify: (record) => notified.push(record),
     windowFocused: () => focused.value,
     layout: null,
     // Helm knows one project, at /work/app.
@@ -429,6 +434,24 @@ describe('sessions through the local host', () => {
 
     expect(w.connection.payloads('session:focus')).toEqual([{ ids: [] }, { ids: [7] }, { ids: [] }])
     expect(w.notified).toEqual([expect.objectContaining({ id: 7, status: 'exited' })])
+  })
+
+  it('counts the sessions the window started on its own connection, so quitting asks about them, and carries no terminal itself', async () => {
+    const w = world({ mainOnly: true })
+    await w.connect()
+    expect(w.host.sessions.runningCount()).toBe(0)
+
+    // The host moves its activity at once after a launch on any connection.
+    w.connection.answer('session:list', () => [row(), row({ id: 9, name: 'api' })])
+    w.connection.push('session:activity', [])
+    await expect.poll(() => w.host.sessions.runningCount()).toBe(2)
+    await expect(w.host.sessions.confirmCloseAll()).resolves.toBe(true)
+    expect(w.asked).toEqual([expect.objectContaining({ kind: 'quit', confirmLabel: 'End 2 sessions' })])
+    expect(w.connection.streamsFor('session:data', 7)).toHaveLength(0)
+
+    w.connection.push('session:notify', row({ status: 'exited', exitCode: 0 }))
+    expect(w.notified).toEqual([])
+    expect(w.emitted.filter(({ channel }) => channel === 'session:data')).toEqual([])
   })
 
   it('passes the host’s activity and overview to the window in its own words', async () => {

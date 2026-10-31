@@ -159,7 +159,6 @@ test('a session in the host takes input, takes the pane’s size, is drawn again
   await dialog.getByRole('button', { name: 'End session' }).click()
   await expect(window.getByRole('tab', { name: /^alpha/ })).toHaveCount(0)
   await expect.poll(() => processAlive(run.pid)).toBe(false)
-  expect(await invoke<unknown[]>(window, 'session:list')).toEqual([])
 })
 
 test('the sessions pane shows a host session’s process tree and listening ports as the host read them', async ({

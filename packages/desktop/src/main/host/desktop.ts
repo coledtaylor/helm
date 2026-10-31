@@ -8,7 +8,7 @@ import { listProfiles, readPluginFolders, readPluginSettings } from '@helm/core'
 import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
 import { emit } from '../ipc'
 import { appMode, dataDir, templatesDir } from '../paths'
-import { showExitNotification, type Confirm } from '../sessions'
+import type { Confirm } from '../sessions'
 import type { BrowserMcpHost } from '../browser-mcp'
 import type { BackgroundHost } from '../plugins/background'
 import type { ToolAnswer, ToolCallRequest } from '../plugins/tools'
@@ -172,23 +172,21 @@ export function createDesktopHost({
     },
     log
   })
+  // The window carries its own terminals, hears its sessions' exits and the
+  // host's notifications, and asks its own questions over its own connection;
+  // main keeps the running count its quit asks about, the browser tools'
+  // identities and the plugins' sessions.
   const streams = createTerminalStreams({
     connection: () => link.current(),
-    deliver: (channel, id, data) => send(channel, { id, data }),
+    deliver: () => undefined,
     log
   })
   const hosted = createHostSessions({
     link,
-    streams,
-    emit: send,
+    emit: toNoWindow,
     confirm,
-    notify: (record) => {
-      showExitNotification(window, record)
-    },
-    windowFocused: () => {
-      const win = window()
-      return win !== null && !win.isDestroyed() && win.isFocused()
-    },
+    windowFocused: () => false,
+    relist: true,
     layout: services.lost.layout,
     knownProject: (cwd) => workspace.knownProject(cwd),
     onActivityChange,
@@ -260,8 +258,9 @@ export function createDesktopHost({
   })
   // Kept for the artifact frames main answers from the host's bytes.
   const files = createHostFiles({ link, emit: toNoWindow, log })
-  const resources = createHostResources({ link, emit: send, log })
-  const pterm = createHostPtermHost({ link, streams, emit: send, log })
+  // Kept for the session tools' detail; the window reads its own.
+  const resources = createHostResources({ link, emit: toNoWindow, log })
+  const pterm = createHostPtermHost({ link, streams, emit: toNoWindow, log })
   return {
     ...hosted,
     link,

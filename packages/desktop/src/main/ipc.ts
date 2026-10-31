@@ -30,7 +30,7 @@ import { activePty, windowsBuildNumber } from './pty'
 import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
 import { updateSettings, type Services } from './services'
 import { localWorkspace, type WorkspaceService } from './workspace'
-import type { SessionHost } from './sessions'
+import { showExitNotification, type SessionHost } from './sessions'
 import type { ActivityService } from './activity'
 import type { ResourcesService } from './resources'
 import type {
@@ -392,6 +392,7 @@ export function registerIpc(ctx: IpcContext): void {
     'app:info': async () => ({ ...ownAppInfo(), claudeVersion: await readClaudeVersion() }),
 
     'ownApp:info': () => ownAppInfo(),
+    'windowSessions:lostLayout': () => services.lost.layout,
 
     'settings:read': () => workspace.settings(),
 
@@ -813,7 +814,13 @@ export function registerIpc(ctx: IpcContext): void {
     'probe:res': () => undefined,
     // Same shape: the real listener is the one `sessions.ts` registers at
     // module scope, which is the side holding the promise this answers.
-    'session:confirmed': () => undefined
+    'session:confirmed': () => undefined,
+    'windowSessions:quitConfirmed': () => undefined,
+    // The host judged nobody saw this exit, from what the window said was on
+    // screen; only main can show the OS notification.
+    'windowSessions:notify': (record) => {
+      showExitNotification(ctx.window, record, 'windowSessions:activate')
+    }
   }
 
   // The maps above are where the types are checked. Registration itself is

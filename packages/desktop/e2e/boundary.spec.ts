@@ -26,36 +26,6 @@ import { claudeRunIn, expect, startSession, terminalText, test as base, typeLine
  * channels out of this list.
  */
 const NOT_YET_MOVED = new Set<string>([
-  // A profile's launch is a session's.
-  'profile:launch',
-  // Sessions and terminals.
-  'session:start',
-  'session:launch',
-  'session:restorable',
-  'session:restore',
-  'session:close',
-  'session:list',
-  'session:activity',
-  'session:input',
-  'session:resize',
-  'session:focus',
-  'session:confirm',
-  'session:confirmed',
-  'session:data',
-  'session:exit',
-  'session:activate',
-  'session:rename',
-  'sessions:overview',
-  'sessions:resources',
-  'sessions:watch',
-  'history:resume',
-  'pterm:open',
-  'pterm:close',
-  'pterm:shells',
-  'pterm:input',
-  'pterm:resize',
-  'pterm:data',
-  'pterm:exit',
   // Plugins.
   'plugins:list',
   'plugins:changed',

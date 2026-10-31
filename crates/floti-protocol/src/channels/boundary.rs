@@ -101,6 +101,10 @@ pub const CLIENT_ONLY: &[Outside] = &[
         "profileDialog:*",
         "the client's own dialogs for deleting, exporting and importing a profile, and the file it writes or reads on its machine; the profile itself is the host's",
     ),
+    outside(
+        "windowSessions:*",
+        "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, and the pane layout its last run saved",
+    ),
 ];
 
 /// Channels between a plugin's background page and what runs it, which never

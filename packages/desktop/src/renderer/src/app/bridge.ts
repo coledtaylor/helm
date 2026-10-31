@@ -6,6 +6,7 @@ import { createHistoryAdapter } from './host/history'
 import { WINDOW_CAPABILITIES, createPageLink } from './host/link'
 import { createProfilesAdapter } from './host/profiles'
 import { createRouter, type HostAdapter } from './host/router'
+import { createSessionsAdapters } from './host/sessions'
 import { createWorkspaceAdapter } from './host/workspace'
 
 declare global {
@@ -36,7 +37,24 @@ export const hostAdapters: readonly HostAdapter[] = [
   workspace,
   createProfilesAdapter({ link, own: window.helm, log }),
   createConfigAdapter({ link, scanned: () => workspace.scannedProjects(), log }),
-  createFilesAdapter(link, log)
+  createFilesAdapter(link, log),
+  ...createSessionsAdapters({
+    link,
+    own: window.helm,
+    front: {
+      focused: () => document.hasFocus(),
+      onChange: (listener) => {
+        window.addEventListener('focus', listener)
+        window.addEventListener('blur', listener)
+      }
+    },
+    // A terminal tab's shell outlives a reload of the page, and so does this.
+    shelf: {
+      read: () => sessionStorage.getItem('helm.hostTerminals'),
+      write: (text) => sessionStorage.setItem('helm.hostTerminals', text)
+    },
+    log
+  })
 ]
 
 /**

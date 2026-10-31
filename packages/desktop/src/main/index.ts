@@ -502,7 +502,8 @@ function startApp(options: AppOptions = {}): void {
     ? createDesktopHost({
         services,
         window: () => win,
-        confirm: options.confirm ?? sessionConfirm(() => win),
+        // The window's own `session:confirm` is the host's; main's quit question has its own channel.
+        confirm: options.confirm ?? sessionConfirm(() => win, 'windowSessions:quitConfirm'),
         onActivityChange: () => plugins.sessionsChanged(),
         browserTools: () => browserMcp,
         runPluginTool: (request, signal) => plugins.runTool(request, signal),
@@ -516,18 +517,8 @@ function startApp(options: AppOptions = {}): void {
     void desktopHost.link.connection().catch((err: unknown) => {
       console.warn(err instanceof Error ? err.message : String(err))
     })
-    // A page that starts loading gets nothing more of what the last one was
-    // sent; once it is listening, each terminal is drawn from the host's
-    // screen and then streams (`rendererReady` below).
-    win.webContents.on('did-start-navigation', (details) => {
-      if (!details.isMainFrame || details.isSameDocument) return
-      desktopHost.streams.suspend()
-      desktopHost.pterm.windowLoading()
-    })
-    // The host judges whether an exit is worth a notification from what this
-    // window can show, and a window that is not in front shows nobody anything.
-    win.on('focus', () => desktopHost.refocus())
-    win.on('blur', () => desktopHost.refocus())
+    // The window carries its terminals, says what it shows and hears the
+    // host's notifications over its own connection (`renderer/src/app/host/sessions.ts`).
   }
 
   /*
@@ -835,8 +826,6 @@ function startApp(options: AppOptions = {}): void {
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
     ...(desktopHost !== null ? { hostSettingsChanged: () => desktopHost.link.writeSettings() } : {}),
     rendererReady: () => {
-      // Every terminal drawn afresh into the page that has just loaded.
-      desktopHost?.streams.resume()
       pushTheme({ services, themes, plugins, window: () => win })
       // With sessions in the local host the window reads its settings and
       // starts its first scan over its own connection (`renderer/src/app/host/workspace.ts`).

@@ -153,10 +153,20 @@ const pendingConfirms = new Map<number, (agreed: boolean) => void>()
 // Module scope, not per host: a second `createSessionHost` in the same process
 // would otherwise stack a listener per call. Registered alongside the no-op in
 // `ipc.ts`, which keeps the send contract exhaustive without stealing the event.
-ipcMain.on('session:confirmed', (_e, { id, agreed }: { id: number; agreed: boolean }) => {
+const takeAnswer = (_e: unknown, { id, agreed }: { id: number; agreed: boolean }): void => {
   pendingConfirms.get(id)?.(agreed)
   pendingConfirms.delete(id)
-})
+}
+ipcMain.on('session:confirmed', takeAnswer)
+// With sessions in the local host the window's own `session:confirm` is the
+// host's, so main's question travels on a channel of its own.
+ipcMain.on('windowSessions:quitConfirmed', takeAnswer)
+
+/**
+ * Where main's question goes: `session:confirm`, or with sessions in the local
+ * host `windowSessions:quitConfirm`.
+ */
+export type ConfirmChannel = 'session:confirm' | 'windowSessions:quitConfirm'
 
 /**
  * Ask the renderer, so the question is a Helm island rather than a Win32 box.
@@ -166,7 +176,7 @@ ipcMain.on('session:confirmed', (_e, { id, agreed }: { id: number; agreed: boole
  * the reason this indirection is allowed to exist at all: main owns process
  * lifetime, and it must never be unable to ask its question.
  */
-function rendererConfirm(window: () => BrowserWindow | null, native: Confirm): Confirm {
+function rendererConfirm(window: () => BrowserWindow | null, native: Confirm, channel: ConfirmChannel): Confirm {
   return async (request) => {
     const win = window()
     if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return native(request)
@@ -181,7 +191,7 @@ function rendererConfirm(window: () => BrowserWindow | null, native: Confirm): C
         clearTimeout(timer)
         resolve(agreed)
       })
-      emit(win, 'session:confirm', {
+      emit(win, channel, {
         id,
         kind: request.kind,
         message: request.message,
@@ -218,8 +228,11 @@ function nativeConfirm(window: () => BrowserWindow | null): Confirm {
 }
 
 /** How Helm asks before a running session ends: in the window, with the native box behind it. */
-export function sessionConfirm(window: () => BrowserWindow | null): Confirm {
-  return rendererConfirm(window, nativeConfirm(window))
+export function sessionConfirm(
+  window: () => BrowserWindow | null,
+  channel: ConfirmChannel = 'session:confirm'
+): Confirm {
+  return rendererConfirm(window, nativeConfirm(window), channel)
 }
 
 /**
@@ -227,7 +240,11 @@ export function sessionConfirm(window: () => BrowserWindow | null): Confirm {
  * Clicking it brings the window forward on that session's tab. False when
  * this OS shows none.
  */
-export function showExitNotification(window: () => BrowserWindow | null, record: SessionRecord): boolean {
+export function showExitNotification(
+  window: () => BrowserWindow | null,
+  record: SessionRecord,
+  activate: 'session:activate' | 'windowSessions:activate' = 'session:activate'
+): boolean {
   if (!Notification.isSupported()) return false
   const outcome = record.exitCode === 0 ? 'finished' : `exited with code ${String(record.exitCode ?? '?')}`
   const notification = new Notification({
@@ -242,7 +259,7 @@ export function showExitNotification(window: () => BrowserWindow | null, record:
     if (target.isMinimized()) target.restore()
     target.show()
     target.focus()
-    emit(target, 'session:activate', { id: record.id })
+    emit(target, activate, { id: record.id })
   })
   notification.show()
   return true
@@ -370,7 +387,7 @@ export function createSessionHost({
   window,
   browserMcp,
   observer,
-  confirm = rendererConfirm(window, nativeConfirm(window))
+  confirm = sessionConfirm(window)
 }: SessionHostDeps): SessionHost {
   const hosted = new Map<number, Hosted>()
   /**

@@ -246,6 +246,7 @@ describe('the window’s workspace over its own connection', () => {
     connection.push('discovery:updated', scanResult(3))
     connection.push('scan:status', { running: false, error: null })
     connection.push('git:updated', { [ALPHA]: git(4) })
+    await settle()
     expect(emitted).toContainEqual({ channel: 'scan:status', payload: { running: false } })
     expect(emitted).toContainEqual({
       channel: 'git:updated',
@@ -255,6 +256,18 @@ describe('the window’s workspace over its own connection', () => {
     expect(discovered).toHaveLength(2)
   })
 
+  it('tells the window a connection’s settings before its first scan, so a scan root is never offered empty', async () => {
+    const { connection, emitted, listen, link } = world()
+    listen()
+    await link.connect()
+    connection.snapshot('settings:changed', { scanRoots: [ALPHA], pinnedProjects: [], firstRunCompletedAt: null } as never)
+    connection.snapshot('discovery:updated', scanResult(1) as never)
+    await settle()
+    const order = emitted.map((e) => e.channel).filter((c) => c === 'settings:changed' || c === 'discovery:updated')
+    expect(order.slice(0, 2)).toEqual(['settings:changed', 'discovery:updated'])
+    expect(emitted.find((e) => e.channel === 'settings:changed')?.payload).toMatchObject({ scanRoots: [ALPHA] })
+  })
+
   it('reads git again when the window comes to the front, once it has the host’s scan', async () => {
     const { connection, listen, link, focus } = world()
     focus()
@@ -262,6 +275,7 @@ describe('the window’s workspace over its own connection', () => {
     listen()
     await link.connect()
     connection.push('discovery:updated', scanResult(3))
+    await settle()
     focus()
     await settle()
     expect(connection.payloads('git:refresh')).toEqual([null])

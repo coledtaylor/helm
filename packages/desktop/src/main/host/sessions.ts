@@ -88,14 +88,29 @@ export type Emit = <K extends EventChannel>(channel: K, payload: EventPayload<K>
 
 export interface HostSessionsDeps {
   link: HostLink
-  streams: TerminalStreams
+  /**
+   * Carries each running session's terminal for the window. Absent when the
+   * window carries its own over its own connection (`renderer/src/app/host`),
+   * and main keeps only what it needs itself: the running count its quit asks
+   * about, the browser tools' identities, and the plugins' sessions.
+   */
+  streams?: TerminalStreams
   /** Sends an event to the window. */
   emit: Emit
   confirm: Confirm
-  /** Shows the OS notification for a session that ended where nobody saw it. */
-  notify: (record: SessionRecord) => void
+  /**
+   * Shows the OS notification for a session that ended where nobody saw it.
+   * Absent when the window hears the host's word itself and hands it to main.
+   */
+  notify?: (record: SessionRecord) => void
   /** Whether Helm's window is in front, so what is on screen is seen at all. */
   windowFocused: () => boolean
+  /**
+   * Lists the host's sessions again whenever their activity or overview moves,
+   * which the host sends at once after a launch or an exit: so sessions the
+   * window started on its own connection are counted here too.
+   */
+  relist?: boolean
   /** The pane layout the last run saved, which the restore offer is placed by. */
   layout: SavedPaneLayout | null
   /** The discovered project at a folder, by the path discovery spells it, or null. */
@@ -157,7 +172,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   /** A session the window should show: listed, kept, and its terminal carried. */
   const adopt = (record: SessionRecord): SessionRecord => {
     records.set(record.id, record)
-    if (isRunning(record)) streams.open('session:data', record.id)
+    if (isRunning(record)) streams?.open('session:data', record.id)
     else dropOpener(record.id)
     return record
   }
@@ -174,7 +189,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
 
   const onExit = (row: P.SessionRecord): void => {
     const record = sessionFromHost(row)
-    streams.close('session:data', record.id)
+    streams?.close('session:data', record.id)
     dropOpener(record.id)
     // A session whose tab was closed has nobody to tell.
     if (!records.has(record.id)) return
@@ -186,19 +201,24 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   link.onConnected(async (connection) => {
     for (const subscription of subscriptions) subscription.unsubscribe()
     const failed = (channel: string) => (error: Error) => deps.log(`host: ${channel} ended (${error.message})`)
+    const notify = deps.notify
     subscriptions = [
       connection.subscribe('session:exit', { event: onExit, error: failed('session:exit') }),
-      connection.subscribe('session:notify', {
-        event: (row) => {
-          const record = sessionFromHost(row)
-          if (records.has(record.id)) deps.notify(record)
-        },
-        error: failed('session:notify')
-      }),
-      connection.subscribe('session:activate', {
-        event: ({ id }) => deps.emit('session:activate', { id }),
-        error: failed('session:activate')
-      }),
+      ...(notify === undefined
+        ? []
+        : [
+            connection.subscribe('session:notify', {
+              event: (row) => {
+                const record = sessionFromHost(row)
+                if (records.has(record.id)) notify(record)
+              },
+              error: failed('session:notify')
+            }),
+            connection.subscribe('session:activate', {
+              event: ({ id }) => deps.emit('session:activate', { id }),
+              error: failed('session:activate')
+            })
+          ]),
       connection.subscribe('session:activity', {
         snapshot: (next) => setStates(next),
         event: (next) => setStates(next),
@@ -215,16 +235,42 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
     sendFocus()
   })
 
+  let relisting = false
+  let relistAgain = false
+  /** Adopts what the host lists now; one list at a time, and once more if asked meanwhile. */
+  async function relist(): Promise<void> {
+    if (relisting) {
+      relistAgain = true
+      return
+    }
+    relisting = true
+    try {
+      do {
+        relistAgain = false
+        const connection = link.current()
+        if (connection === null) return
+        const rows = await connection.request('session:list', null)
+        for (const row of rows) adopt(sessionFromHost(row))
+      } while (relistAgain)
+    } catch (error) {
+      deps.log(`host: session:list failed (${(error as Error).message})`)
+    } finally {
+      relisting = false
+    }
+  }
+
   function setStates(next: readonly P.SessionActivityState[]): void {
     states = activityFromHost(next)
     deps.emit('session:activity', states)
     deps.onActivityChange?.()
+    if (deps.relist === true) void relist()
   }
 
   function setOverview(next: P.SessionsOverview): void {
     overview = overviewFromHost(next)
     deps.emit('sessions:overview', overview)
     deps.onActivityChange?.()
+    if (deps.relist === true) void relist()
   }
 
   const running = (): SessionRecord[] => [...records.values()].filter(isRunning)
@@ -355,7 +401,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
       records.delete(req.id)
       grids.delete(req.id)
       dropOpener(req.id)
-      streams.close('session:data', req.id)
+      streams?.close('session:data', req.id)
       if (focused.includes(req.id)) {
         focused = focused.filter((id) => id !== req.id)
         sendFocus()
@@ -388,7 +434,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
     settled: () => link.settled(),
 
     input(id, data) {
-      streams.write('session:data', id, data)
+      streams?.write('session:data', id, data)
     },
 
     resize(id, cols, rows) {
@@ -456,7 +502,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
     shutdown() {
       for (const subscription of subscriptions) subscription.unsubscribe()
       subscriptions = []
-      streams.closeAll()
+      streams?.closeAll()
       for (const id of [...openerKeys.keys()]) dropOpener(id)
       // Every session ends with the quit, as Helm's own do, so nothing is left
       // for the window's close to ask about while the host stops them.

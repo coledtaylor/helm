@@ -45,6 +45,7 @@ import type {
   RenameConfigResult,
   RenderedMarkdown,
   SaveFolderAsTemplateResult,
+  SavedPaneLayout,
   SessionActivityState,
   SessionRecord,
   SessionResources,
@@ -688,6 +689,12 @@ export interface IpcRequests {
   'profileDialog:export': { request: { fileName: string; yaml: string }; response: ExportProfileResult }
   /** Helm's open dialog, then the chosen file read. */
   'profileDialog:import': { request: void; response: ProfileFileChosen }
+
+  /**
+   * With sessions in the local host, the pane layout the last run saved, which
+   * the host's restore offer is placed by. Main keeps it; the window asks.
+   */
+  'windowSessions:lostLayout': { request: void; response: SavedPaneLayout | null }
 
   /** Rows from the last scan, for painting before a fresh one finishes. */
   'discovery:cached': { request: void; response: CachedProject[] }
@@ -1639,6 +1646,15 @@ export interface IpcSends {
    */
   'session:confirmed': { id: number; agreed: boolean }
 
+  /**
+   * With sessions in the local host: a session ended that the host judged
+   * nobody saw, from what the window told it was on screen. Main shows the OS
+   * notification, which only main can.
+   */
+  'windowSessions:notify': SessionRecord
+  /** With sessions in the local host, the window's answer to main's `windowSessions:quitConfirm`. */
+  'windowSessions:quitConfirmed': { id: number; agreed: boolean }
+
   /** Spike harness: the renderer's answer to a `probe:req`. */
   'probe:res': { id: number; value: unknown }
 
@@ -1684,6 +1700,13 @@ export interface IpcEvents {
   'settings:changed': AppSettings
   /** With sessions in the local host, Helm's own settings after any change to them. */
   'ownSettings:changed': AppSettings
+  /**
+   * With sessions in the local host, main's question before Helm quits with
+   * sessions running, asked in the window; answered on `windowSessions:quitConfirmed`.
+   */
+  'windowSessions:quitConfirm': SessionConfirmRequest
+  /** With sessions in the local host, a click on a session's notification: bring its tab forward. */
+  'windowSessions:activate': { id: number }
   /** The whole list after any write, so every surface showing profiles agrees
    * without each of them refetching. */
   'profiles:changed': Profile[]
@@ -1907,6 +1930,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'profileDialog:confirmDelete': true,
   'profileDialog:export': true,
   'profileDialog:import': true,
+  'windowSessions:lostLayout': true,
   'discovery:cached': true,
   'discovery:scan': true,
   'roots:suggest': true,
@@ -2054,6 +2078,8 @@ export const SEND_CHANNELS = Object.keys({
   'pterm:input': true,
   'pterm:resize': true,
   'session:confirmed': true,
+  'windowSessions:notify': true,
+  'windowSessions:quitConfirmed': true,
   'probe:res': true,
   'browser:bounds': true,
   'plugins:cancel': true,
@@ -2070,6 +2096,8 @@ export const EVENT_CHANNELS = Object.keys({
   'scan:status': true,
   'settings:changed': true,
   'ownSettings:changed': true,
+  'windowSessions:quitConfirm': true,
+  'windowSessions:activate': true,
   'profiles:changed': true,
   'theme:changed': true,
   'themes:changed': true,
