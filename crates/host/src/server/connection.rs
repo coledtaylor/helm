@@ -20,6 +20,10 @@
 //! way out and opened on the way in; one that does not open ends the
 //! connection.
 //!
+//! The role a device is paired with, read at its handshake (an admin for
+//! the first admin enrolling), goes with each of its requests to the
+//! features, which say what it may change.
+//!
 //! A client leaving detaches it from every session it was attached to and
 //! ends nothing: the sessions run on for the next client.
 //!
@@ -55,10 +59,10 @@ use tokio::task::JoinHandle;
 
 use super::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME};
 use super::events::{Publication, Start};
-use super::features::Features;
+use super::features::{Caller, Features};
 use super::stopper::ReservedStop;
 use super::{CATALOGUE, Stopper, unserved};
-use crate::devices::{DeviceRegistry, Standing};
+use crate::devices::{DeviceRegistry, Role, Standing};
 use crate::platform::socket::LocalStream;
 use crate::session::{ClientId, Session, SessionOutput};
 
@@ -67,16 +71,16 @@ mod tests;
 
 const READ_CHUNK: usize = 64 * 1024;
 
-/// The router that answers `client`'s requests: every feature's handlers,
+/// The router that answers `caller`'s requests: every feature's handlers,
 /// and `host:stop`, which records the stop asked for in `stop`.
 fn router<'a>(
     features: &'a Features,
     capabilities: CapabilitySet,
-    client: ClientId,
+    caller: Caller,
     stop: &'a mut Option<HostStopReason>,
 ) -> Router<'a> {
     let mut router = Router::new(&CATALOGUE, capabilities);
-    features.requests(client, &mut router);
+    features.requests(caller, &mut router);
     router.handle::<HostStop>(move |request| {
         *stop = Some(request.reason);
         Ok(())
@@ -88,7 +92,12 @@ fn router<'a>(
 /// and the features' events and streams.
 pub(crate) fn served_channels(features: &Features) -> BTreeSet<&'static str> {
     let mut stop = None;
-    let router = router(features, CapabilitySet::default(), ClientId(0), &mut stop);
+    let router = router(
+        features,
+        CapabilitySet::default(),
+        Caller::admin(ClientId(0)),
+        &mut stop,
+    );
     let mut served: BTreeSet<&'static str> = router.handled().collect();
     served.extend(features.served_events_and_streams());
     debug_assert!(served.contains(HostStop::NAME));
@@ -114,6 +123,8 @@ pub(crate) struct Admitted {
     /// The code a new device proved, held until its `hello` pairs it as the
     /// first admin; `None` for a paired device.
     pub enrolling: Option<Claim>,
+    /// The role it is paired with, or will be once it enrols.
+    pub role: Role,
 }
 
 /// Why a connection was closed before `hello`, as the host's log says it.
@@ -172,6 +183,7 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
         transport,
         rest,
         enrolling,
+        role,
     } = match admitted {
         Ok(admitted) => admitted,
         Err(refusal) => {
@@ -191,6 +203,7 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
         opener,
         decoder: FrameDecoder::new(),
         client,
+        role,
         features: context.features,
         stopper: context.stopper,
         outbox: Outbox::new(),
@@ -253,15 +266,17 @@ async fn admit(
                 let key = device.device_key();
                 // Read fresh: a device paired or revoked since the last
                 // connection counts from this one.
-                let enrolling = match admission.devices.standing(&key) {
-                    Ok(Standing::Paired) => None,
-                    Ok(Standing::Revoked) => return Err(Some(Refusal::Revoked(key))),
-                    Ok(Standing::Unknown) => {
+                let (enrolling, role) = match admission.devices.device(&key) {
+                    Ok(Some(paired)) if paired.standing() == Standing::Paired => {
+                        (None, paired.role)
+                    }
+                    Ok(Some(_)) => return Err(Some(Refusal::Revoked(key))),
+                    Ok(None) => {
                         let Some(code) = device.enrolment_code() else {
                             return Err(Some(Refusal::Unknown(key)));
                         };
                         match admission.enrolment.claim(&admission.devices, key, code) {
-                            Ok(Some(claim)) => Some(claim),
+                            Ok(Some(claim)) => (Some(claim), Role::Admin),
                             Ok(None) => return Err(Some(Refusal::Unknown(key))),
                             Err(err) => return Err(Some(Refusal::Unchecked(key, err))),
                         }
@@ -278,6 +293,7 @@ async fn admit(
                     transport,
                     rest: buf[used..n].to_vec(),
                     enrolling,
+                    role,
                 });
             }
             Err(err) => return Err(Some(Refusal::Failed(err))),
@@ -305,6 +321,8 @@ struct Connection {
     opener: Opener,
     decoder: FrameDecoder,
     client: ClientId,
+    /// The role its device is paired with.
+    role: Role,
     features: Arc<Features>,
     stopper: Stopper,
     outbox: Outbox,
@@ -504,13 +522,12 @@ impl Connection {
             });
         }
         let mut stop = None;
-        let answer = router(
-            &self.features,
-            channels.capabilities(),
-            self.client,
-            &mut stop,
-        )
-        .dispatch(request);
+        let caller = Caller {
+            client: self.client,
+            role: self.role,
+        };
+        let answer =
+            router(&self.features, channels.capabilities(), caller, &mut stop).dispatch(request);
         // Taken before the answer is queued, so nothing asked once the client
         // has its answer replaces it. A later stop finds it taken and is
         // answered all the same.

@@ -119,6 +119,7 @@ impl ServiceLauncher for Fake {
         let events = self.events.clone();
         Ok(ServiceChild {
             pid: Some(pid),
+            output: Vec::new(),
             exited: Box::pin(async move { receive.await.unwrap_or(None) }),
             end: Box::new(move || {
                 ended.store(true, Ordering::SeqCst);
@@ -179,7 +180,7 @@ impl World {
             }),
             log: {
                 let logs = Arc::clone(&logs);
-                Arc::new(move |plugin, line| {
+                Arc::new(move |plugin, _stream, line| {
                     logs.lock().unwrap().push(format!("{plugin}: {line}"));
                 })
             },

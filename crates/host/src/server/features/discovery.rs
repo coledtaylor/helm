@@ -22,9 +22,8 @@ use floti_protocol::channels::workspace::{
 };
 
 use super::config::off_the_workers;
-use super::{Feature, FeatureContext};
+use super::{Caller, Feature, FeatureContext};
 use crate::server::events::Events;
-use crate::session::ClientId;
 use crate::workspace::discovery::{DiscoveryService, GitStates, ScanTicket, scan};
 
 pub(crate) struct Discovery {
@@ -176,7 +175,7 @@ impl Scanner {
 }
 
 impl Feature for Discovery {
-    fn requests<'a>(&'a self, _client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, _caller: Caller, router: &mut Router<'a>) {
         let scanner = &self.scanner;
         router
             .handle::<ReadCachedDiscovery>(|()| {

@@ -25,13 +25,12 @@ use floti_protocol::channels::workspace::{
 };
 
 use super::config::off_the_workers;
-use super::{Feature, FeatureContext};
+use super::{Caller, Feature, FeatureContext};
 use crate::agent::AgentBackend;
 use crate::config_console::time::now_iso;
 use crate::platform::folders::Folders;
 use crate::server::HostRun;
 use crate::server::hosted::Hosted;
-use crate::session::ClientId;
 use crate::workspace::roots::KnownRoots;
 use crate::workspace::settings::SettingsService;
 use crate::workspace::{app, setup};
@@ -169,7 +168,7 @@ impl Workspace {
 }
 
 impl Feature for Workspace {
-    fn requests<'a>(&'a self, _client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, _caller: Caller, router: &mut Router<'a>) {
         router
             .handle::<ReadAppInfo>(|()| {
                 let store = self.hosted.ledger().store();

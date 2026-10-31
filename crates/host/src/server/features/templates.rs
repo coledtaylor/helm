@@ -22,10 +22,9 @@ use floti_protocol::channels::workspace::{
 };
 
 use super::config::off_the_workers;
-use super::{Feature, FeatureContext};
+use super::{Caller, Feature, FeatureContext};
 use crate::config_console::normalize;
 use crate::server::hosted::Hosted;
-use crate::session::ClientId;
 use crate::workspace::discovery::add_roots;
 use crate::workspace::settings::SettingsService;
 use crate::workspace::templates::authoring::{
@@ -131,7 +130,7 @@ fn covers(root: &Path, path: &Path) -> bool {
 }
 
 impl Feature for Templates {
-    fn requests<'a>(&'a self, _client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, _caller: Caller, router: &mut Router<'a>) {
         let dir = self.dir.as_path();
         router
             .handle::<ListTemplates>(move |()| Ok(off_the_workers(|| list_templates(dir))))

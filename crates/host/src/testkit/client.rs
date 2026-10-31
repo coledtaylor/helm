@@ -78,6 +78,31 @@ impl TestClient {
         Self::over(connection, capabilities).await
     }
 
+    /// Connects to the running host at `endpoint` as a new device of its
+    /// own, paired as `name` with `role`, and is welcomed with
+    /// `capabilities`: for a test of what a device that is not an admin may
+    /// do. The host must already be answering, as it is once a
+    /// [`connect`](Self::connect) to it has returned.
+    pub async fn connect_as(
+        endpoint: &Endpoint,
+        name: &str,
+        role: crate::devices::Role,
+        capabilities: &[&str],
+    ) -> Self {
+        let data = super::data_folder_of(endpoint);
+        let host = host_public_key(&data)
+            .expect("read the host's key")
+            .expect("the host has a key");
+        let device = floti_protocol::noise::KeyPair::generate().expect("make a device key");
+        crate::devices::DeviceRegistry::in_data_folder(&data)
+            .pair(device.public(), name, role)
+            .unwrap_or_else(|err| panic!("pair {name} with the host: {err}"));
+        let connection = client::connect(endpoint, &device, &host)
+            .await
+            .unwrap_or_else(|err| panic!("the host at {endpoint} did not let {name} in: {err}"));
+        Self::over(connection, capabilities).await
+    }
+
     /// Says `hello` on `connection`, a handshake already done, and is
     /// welcomed with `capabilities`: for a test that connects as a device
     /// of its own.

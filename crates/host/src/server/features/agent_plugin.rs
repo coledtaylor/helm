@@ -33,7 +33,7 @@ use floti_protocol::channels::agent_plugin::{
 use floti_protocol::{ClientChannels, EventChannel, Payload};
 use tokio::sync::oneshot;
 
-use super::Feature;
+use super::{Caller, Feature};
 use crate::agent_tools::{JsonObject, Tool, ToolAnnotations};
 use crate::server::events::Events;
 use crate::session::ClientId;
@@ -297,7 +297,7 @@ impl Drop for Withdraw<'_> {
 }
 
 impl Feature for Arc<PluginRelay> {
-    fn requests<'a>(&'a self, client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, Caller { client, .. }: Caller, router: &mut Router<'a>) {
         router
             .handle::<AgentPluginOffer>(move |offer| self.offer(client, offer))
             .handle::<AgentPluginAnswer>(move |answer| self.answered(client, answer));

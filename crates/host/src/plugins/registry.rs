@@ -10,6 +10,12 @@
 //! - Two enabled folders may not be one plugin: the second read of an id
 //!   already loaded is listed with an error naming the first folder.
 //! - Switching a plugin off stops it and bumps its revision without reading.
+//! - An enabled folder is watched for the files its manifest names
+//!   ([`watch`](super::watch)), once [`Registry::watch_folders`] says so; a
+//!   change to one reads it again, as Reload does.
+//! - A version 1 plugin's background page is listed, never started here: a
+//!   client frames it. Only a version 2 background script runs in the
+//!   host's engine.
 //! - Removing one forgets its settings and deletes, of the secrets only it
 //!   could use, only those the client chose.
 //!
@@ -24,15 +30,15 @@
 //! Locks are taken in one order: publishing, then held, then the state, then
 //! the store.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use floti_protocol::Payload;
 use floti_protocol::channels::plugins::{
-    PluginAddResult, PluginBackgroundState, PluginErrorCode, PluginInfo, PluginPageSecretState,
-    PluginSecretState, PluginSettingSpec, PluginSettingValue, PluginStatusItem, PluginStatusTone,
-    PluginSurfaceKind,
+    PluginAddResult, PluginBackgroundState, PluginErrorCode, PluginFile, PluginInfo, PluginLogLine,
+    PluginLogStream, PluginMetrics, PluginPageSecretState, PluginSecretState, PluginSettingSpec,
+    PluginSettingValue, PluginStatusItem, PluginStatusTone, PluginSurfaceKind,
 };
 
 use super::background::{
@@ -43,11 +49,14 @@ use super::call::{
 };
 use super::info::{self, Live};
 use super::loader::{self, LoadFailure, LoadResult, LoadedPlugin};
+use super::log::PluginLogs;
 use super::manifest::{MANIFEST_FILE, Manifest};
 use super::net::service::{PluginServices, ServicePlugin};
+use super::pages;
 use super::secrets::SecretsAccess;
 use super::settings;
 use super::store::{self, PluginFolder};
+use super::watch::{FolderWatch, Relevant};
 use crate::store::Store;
 
 const STATUS_TEXT_MAX: usize = 80;
@@ -62,6 +71,8 @@ pub struct RegistryParts {
     pub secrets: Arc<dyn SecretsAccess>,
     /// Each read's service, for a plugin that declares one.
     pub services: Arc<dyn PluginServices>,
+    /// Each plugin's log, which the registry notes what it did in.
+    pub logs: Arc<PluginLogs>,
     /// Sends every subscriber the whole list.
     pub publish: Publish,
 }
@@ -105,6 +116,9 @@ struct Inner {
     background: Arc<dyn BackgroundRuntime>,
     secrets: Arc<dyn SecretsAccess>,
     services: Arc<dyn PluginServices>,
+    logs: Arc<PluginLogs>,
+    /// The runtime folder watches settle on, once they are asked for.
+    watching: OnceLock<tokio::runtime::Handle>,
     publish: Publish,
     methods: Methods,
     state: Mutex<State>,
@@ -169,6 +183,8 @@ struct Entry {
     /// Cancelled when what this read started stops: every call in flight for
     /// the plugin is a child of it.
     runtime: CancelToken,
+    /// The folder's watch, while it is enabled and watched.
+    watch: Option<FolderWatch>,
 }
 
 impl Entry {
@@ -187,6 +203,7 @@ impl Entry {
             background: PluginBackgroundState::Stopped,
             background_error: None,
             runtime: CancelToken::new(),
+            watch: None,
         }
     }
 
@@ -208,6 +225,21 @@ impl Entry {
 
     fn is_at(&self, path: &str) -> bool {
         self.folder.path.to_lowercase() == path.to_lowercase()
+    }
+
+    /// The id its log is kept under: what its manifest said, loaded or not.
+    fn log_key(&self) -> Option<&str> {
+        match &self.load {
+            Load::Loaded(plugin) => Some(&plugin.manifest.id),
+            Load::Failed(failure) => failure.id.as_deref(),
+        }
+    }
+
+    /// The background script the host runs for it: a version 2 one, while
+    /// it is live.
+    fn host_background(&self) -> Option<&str> {
+        self.live()
+            .and_then(|plugin| plugin.manifest.host_background())
     }
 }
 
@@ -241,6 +273,8 @@ impl Registry {
             background: parts.background,
             secrets: parts.secrets,
             services: parts.services,
+            logs: parts.logs,
+            watching: OnceLock::new(),
             publish: parts.publish,
             methods: Methods::default(),
             state: Mutex::new(State::default()),
@@ -274,6 +308,15 @@ impl Registry {
         lock(&self.inner.held).batches += 1;
         PushesHeld {
             inner: Arc::clone(&self.inner),
+        }
+    }
+
+    /// Watches every enabled folder from now on, settling on the current
+    /// Tokio runtime: what a host does, called before [`start`](Self::start).
+    /// Outside a Tokio runtime nothing is watched.
+    pub fn watch_folders(&self) {
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let _ = self.inner.watching.set(runtime);
         }
     }
 
@@ -409,6 +452,84 @@ impl Registry {
         })
     }
 
+    /// Whether the sessions the host starts are offered the plugin's tools:
+    /// a stored switch, listed.
+    pub fn set_tools(&self, path: &str, enabled: bool) -> Result<Vec<PluginInfo>, String> {
+        self.inner.change(|inner, state| {
+            let at = entry_at(state, path)?;
+            if state.entries[at].folder.tools_enabled == enabled {
+                return Ok((Vec::new(), false));
+            }
+            store::set_tools_enabled(lock(&inner.store).connection(), path, enabled)
+                .map_err(text)?;
+            state.entries[at].folder.tools_enabled = enabled;
+            Ok((Vec::new(), true))
+        })
+    }
+
+    /// The folder's plugin's log, oldest first: what its service printed,
+    /// what its background script wrote, what the host noted. Empty for a
+    /// folder whose manifest said no id.
+    pub fn log(&self, path: &str) -> Result<Vec<PluginLogLine>, String> {
+        let state = lock(&self.inner.state);
+        let at = entry_at(&state, path)?;
+        Ok(state.entries[at]
+            .log_key()
+            .map(|id| self.inner.logs.of(id))
+            .unwrap_or_default())
+    }
+
+    /// Memory and CPU of what each plugin that is on runs on the host: its
+    /// service. The host cannot measure a process yet, so a running
+    /// service's figures are null ("could not look"), never a number; a
+    /// plugin with nothing running here has none.
+    pub fn metrics(&self) -> Vec<PluginMetrics> {
+        let state = lock(&self.inner.state);
+        state
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                let plugin = entry.live()?;
+                let id = &plugin.manifest.id;
+                let running = self
+                    .inner
+                    .services
+                    .status(id, entry.revision)
+                    .and_then(|service| service.pid)
+                    .is_some();
+                Some(PluginMetrics {
+                    path: entry.folder.path.clone(),
+                    plugin: id.clone(),
+                    memory_kb: (!running).then_some(0),
+                    cpu_percent: (!running).then_some(0.0),
+                    processes: 0,
+                })
+            })
+            .collect()
+    }
+
+    /// One file of the pages of `plugin`, from `offset` on, while it is on:
+    /// 403 for a path outside its folder, 404 for a file that is not there
+    /// or a plugin that is not on.
+    pub fn file(&self, plugin: &str, path: &str, offset: u64) -> PluginFile {
+        let found = {
+            let state = lock(&self.inner.state);
+            by_id(&state, plugin).and_then(|entry| {
+                entry.live().map(|loaded| {
+                    (
+                        loaded.dir.clone(),
+                        loaded.manifest.version.clone(),
+                        entry.revision,
+                    )
+                })
+            })
+        };
+        match found {
+            Some((dir, version, revision)) => pages::read(&dir, path, offset, version, revision),
+            None => pages::refusal(404, None, 0),
+        }
+    }
+
     /// Reads the folder again.
     pub fn reload(&self, path: &str) -> Result<Vec<PluginInfo>, String> {
         self.inner.change(|inner, state| {
@@ -460,7 +581,7 @@ impl Registry {
                 &store::read_settings(store.connection(), plugin).unwrap_or_default(),
             );
             drop(store);
-            if entry.live().is_some() && manifest.background.is_some() {
+            if entry.host_background().is_some() {
                 inner
                     .background
                     .deliver(plugin, BackgroundEvent::Settings(values));
@@ -485,6 +606,12 @@ impl Registry {
         if manifest.background.is_none() {
             return Err(format!(
                 "{} has no background to run \"{id}\"",
+                manifest.name
+            ));
+        }
+        if manifest.host_background().is_none() {
+            return Err(format!(
+                "{}'s background page runs in the client that frames it, which runs \"{id}\"",
                 manifest.name
             ));
         }
@@ -606,7 +733,8 @@ impl Registry {
                 .iter()
                 .filter_map(Entry::live)
                 .filter(|plugin| {
-                    plugin.manifest.background.is_some() && !plugin.manifest.secrets.is_empty()
+                    plugin.manifest.host_background().is_some()
+                        && !plugin.manifest.secrets.is_empty()
                 })
                 .map(|plugin| {
                     let id = plugin.manifest.id.clone();
@@ -696,6 +824,62 @@ impl Inner {
         Ok(list)
     }
 
+    /// Notes `text` in the entry's plugin's log.
+    fn note(&self, entry: &Entry, text: String) {
+        if let Some(id) = entry.log_key() {
+            self.logs.push(id, PluginLogStream::Host, text);
+        }
+    }
+
+    /// A watched file of the folder at `path` changed under the read
+    /// `revision`: it is read again, unless it has been read, switched off
+    /// or removed since.
+    fn read_changed(&self, path: &str, revision: u64, changed: &str) {
+        let _ = self.change(|inner, state| {
+            let Ok(at) = entry_at(state, path) else {
+                return Ok((Vec::new(), false));
+            };
+            let entry = &state.entries[at];
+            if entry.revision != revision || !entry.folder.enabled {
+                return Ok((Vec::new(), false));
+            }
+            inner.note(entry, format!("reloaded: {changed} changed"));
+            Ok((inner.read(state, at), true))
+        });
+    }
+
+    /// Watches the entry's folder, when folders are watched and it is on.
+    fn watch(&self, entry: &Entry) -> Option<FolderWatch> {
+        let runtime = self.watching.get()?;
+        if !entry.folder.enabled {
+            return None;
+        }
+        let (dir, relevant) = match &entry.load {
+            Load::Loaded(plugin) => (plugin.dir.clone(), Relevant::of(&plugin.manifest)),
+            Load::Failed(_) => (PathBuf::from(&entry.folder.path), Relevant::Anything),
+        };
+        let myself = self.myself.clone();
+        let path = entry.folder.path.clone();
+        let revision = entry.revision;
+        let settling = runtime.clone();
+        FolderWatch::start(
+            &dir,
+            relevant,
+            runtime,
+            Arc::new(move |changed: String| {
+                let myself = myself.clone();
+                let path = path.clone();
+                // A read runs the manifest validator and walks the folder:
+                // off the runtime's workers.
+                settling.spawn_blocking(move || {
+                    if let Some(inner) = myself.upgrade() {
+                        inner.read_changed(&path, revision, &changed);
+                    }
+                });
+            }),
+        )
+    }
+
     fn list(&self) -> Vec<PluginInfo> {
         let state = lock(&self.state);
         state
@@ -773,6 +957,7 @@ impl Inner {
     fn stop_runtime(&self, entry: &mut Entry) -> Vec<Effect> {
         entry.status = None;
         entry.badge = None;
+        entry.watch = None;
         let had_background = entry.background != PluginBackgroundState::Stopped;
         let mut effects = Vec::new();
         if let Load::Loaded(plugin) = &entry.load {
@@ -822,8 +1007,15 @@ impl Inner {
         entry.runtime = CancelToken::new();
         entry.background_error = None;
         entry.background = PluginBackgroundState::Stopped;
+        if let Load::Failed(failure) = &entry.load {
+            let error = format!("not loaded: {}", failure.error);
+            self.note(entry, error);
+        }
+        entry.watch = self.watch(entry);
+        // A version 1 background page is listed as it is; the client that
+        // frames it says how it is doing.
         if let Some(plugin) = entry.live().cloned()
-            && let Some(module) = plugin.manifest.background.clone()
+            && let Some(module) = plugin.manifest.host_background().map(str::to_owned)
         {
             entry.background = PluginBackgroundState::Starting;
             effects.push(Effect::Start(BackgroundLaunch {

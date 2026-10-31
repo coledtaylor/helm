@@ -115,7 +115,7 @@ impl World {
             }),
             log: {
                 let logs = Arc::clone(&logs);
-                Arc::new(move |plugin, line| {
+                Arc::new(move |plugin, _stream, line| {
                     logs.lock().unwrap().push(format!("{plugin}: {line}"));
                 })
             },
@@ -125,6 +125,7 @@ impl World {
             background: Arc::new(NoBackground),
             secrets: Arc::new(NoSecrets),
             services: Arc::clone(&services) as _,
+            logs: Default::default(),
             publish: Box::new(|_| ()),
         });
         register_methods(

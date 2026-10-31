@@ -30,7 +30,7 @@ use floti_protocol::channels::workspace::{
 };
 use tokio::runtime::{Handle, RuntimeFlavor};
 
-use super::{Feature, FeatureContext};
+use super::{Caller, Feature, FeatureContext};
 use crate::config_console::{ConfigConsole, SnapshotStore, change_sink};
 use crate::session::ClientId;
 
@@ -69,7 +69,7 @@ impl Config {
 }
 
 impl Feature for Config {
-    fn requests<'a>(&'a self, client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, Caller { client, .. }: Caller, router: &mut Router<'a>) {
         router
             .handle::<ListConfigScopes>(|()| self.console()?.scopes())
             .handle::<ReadConfigTree>(|scope| self.console()?.tree(&scope.scope_path))

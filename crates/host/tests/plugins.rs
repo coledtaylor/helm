@@ -9,10 +9,11 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use floti_host::devices::Role;
 use floti_host::platform::socket::Endpoint;
 use floti_host::plugins::background::{
     BackgroundEvent, BackgroundLaunch, BackgroundRuntime, NoBackground, ToolCall, ToolFuture,
@@ -28,10 +29,12 @@ use floti_protocol::channel::{EventChannel, from_payload};
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::plugins::{
     PluginAddRequest, PluginAddResult, PluginBackgroundState, PluginCommandRequest,
-    PluginErrorCode, PluginInfo, PluginPathRequest, PluginRemoveRequest, PluginSetSettingRequest,
-    PluginSettingValue, PluginStatusItem, PluginStatusTone, PluginSurfaceKind, PluginSwitchRequest,
-    PluginsAdd, PluginsChanged, PluginsCommand, PluginsList, PluginsOwnSecrets, PluginsReload,
-    PluginsRemove, PluginsSetEnabled, PluginsSetSetting,
+    PluginErrorCode, PluginFile, PluginFileRequest, PluginInfo, PluginLogStream, PluginPathRequest,
+    PluginRemoveRequest, PluginServiceState, PluginSetSettingRequest, PluginSettingValue,
+    PluginStatusItem, PluginStatusTone, PluginSurfaceKind, PluginSwitchRequest, PluginsAdd,
+    PluginsChanged, PluginsCommand, PluginsFile, PluginsList, PluginsLog, PluginsMetrics,
+    PluginsOwnSecrets, PluginsReload, PluginsRemove, PluginsSetEnabled, PluginsSetSetting,
+    PluginsSetTools,
 };
 use floti_protocol::channels::workspace::AppMode;
 use floti_protocol::{Message, Payload};
@@ -69,17 +72,43 @@ fn values(pairs: &[(&str, PluginSettingValue)]) -> BTreeMap<String, PluginSettin
 
 const PLUGINS_CHANGED: u64 = 1;
 
+/// The capability a client that draws plugin pages declares.
+const PLUGIN_PAGES: &str = "pluginPages";
+
+/// A version 1 plugin as today's Helm runs it: a panel, a background page
+/// and a tool, in `id`'s folder.
+fn helm_plugin(id: &str) -> String {
+    format!(
+        r#"{{ "apiVersion": 1, "id": "{id}", "name": "Board", "version": "1.4.0",
+            "background": "background.html",
+            "panels": {{ "main": {{ "title": "Main", "entry": "panel/index.html" }} }},
+            "agent": {{ "tools": {{ "find": {{ "description": "Finds a card." }} }} }} }}"#
+    )
+}
+
+const HELM_PLUGIN_FILES: &[(&str, &str)] = &[
+    (
+        "background.html",
+        "<!doctype html><script src=\"bg.js\"></script>",
+    ),
+    ("bg.js", "helm.on('command', () => {})"),
+    ("panel/index.html", "<!doctype html><p>first</p>"),
+    ("src/panel.ts", "export {}"),
+];
+
 /// A host over a test's folders, with a client connected to it.
 struct HostWorld {
     host: Option<RunningHost>,
     client: Option<TestClient>,
     endpoint: Endpoint,
+    /// The Node the host runs `node` services on.
+    node: Option<PathBuf>,
     /// Last: fields drop in order, and the folder goes only once the host
     /// has let go of its store.
     dirs: TestDirs,
 }
 
-fn start_host(dirs: &TestDirs, endpoint: &Endpoint) -> RunningHost {
+fn start_host(dirs: &TestDirs, endpoint: &Endpoint, node: Option<PathBuf>) -> RunningHost {
     RunningHost::start(HostConfig {
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
@@ -91,7 +120,7 @@ fn start_host(dirs: &TestDirs, endpoint: &Endpoint) -> RunningHost {
         run: HostRun {
             mode: AppMode::Dev,
             home: Some(dirs.home.clone()),
-            node: None,
+            node,
         },
     })
 }
@@ -103,13 +132,20 @@ impl HostWorld {
 
     /// A host over `dirs`, which a test may have put a store in first.
     async fn start_in(dirs: TestDirs) -> Self {
+        Self::start_with(dirs, None).await
+    }
+
+    /// A host that runs `node` services on `node`, with a client that draws
+    /// plugin pages.
+    async fn start_with(dirs: TestDirs, node: Option<PathBuf>) -> Self {
         let endpoint = dirs.endpoint();
-        let host = start_host(&dirs, &endpoint);
-        let client = TestClient::connect(&endpoint, &[]).await;
+        let host = start_host(&dirs, &endpoint, node.clone());
+        let client = TestClient::connect(&endpoint, &[PLUGIN_PAGES]).await;
         Self {
             host: Some(host),
             client: Some(client),
             endpoint,
+            node,
             dirs,
         }
     }
@@ -131,8 +167,8 @@ impl HostWorld {
     /// Stops the host and starts another over the same folders.
     async fn restart(&mut self) {
         self.stop_host().await;
-        self.host = Some(start_host(&self.dirs, &self.endpoint));
-        self.client = Some(TestClient::connect(&self.endpoint, &[]).await);
+        self.host = Some(start_host(&self.dirs, &self.endpoint, self.node.clone()));
+        self.client = Some(TestClient::connect(&self.endpoint, &[PLUGIN_PAGES]).await);
     }
 
     async fn stop(mut self) {
@@ -168,6 +204,17 @@ impl HostWorld {
             .request::<PluginsSetEnabled>(&PluginSwitchRequest {
                 path: text(path),
                 enabled,
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn file(&mut self, plugin: &str, path: &str) -> PluginFile {
+        self.client()
+            .request::<PluginsFile>(&PluginFileRequest {
+                plugin: plugin.into(),
+                path: path.into(),
+                offset: 0,
             })
             .await
             .unwrap()
@@ -359,23 +406,341 @@ async fn a_wrong_manifest_is_registered_and_listed_with_what_is_wrong_and_runs_n
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_version_1_manifest_is_listed_with_an_error_naming_version_2() {
+async fn a_version_1_plugin_loads_with_its_background_page_listed_for_the_client_and_a_version_2_one_runs_its_script_on_the_host()
+ {
     let mut world = HostWorld::start().await;
-    let folder = world.dirs.plugin_folder(
-        "helm plugin",
-        r#"{ "apiVersion": 1, "id": "old", "name": "Old Plugin", "background": "background.html" }"#,
-        &[("background.html", "<!doctype html>")],
-    );
-    let plugin = only(&world.add(&folder).await.plugins).clone();
-    assert_eq!(
-        plugin.error.as_deref(),
-        Some("apiVersion 1 is not supported: this host runs apiVersion 2 plugins")
-    );
+    let old = world
+        .dirs
+        .plugin_folder("helm plugin", &helm_plugin("board"), HELM_PLUGIN_FILES);
+    let plugin = only(&world.add(&old).await.plugins).clone();
+    assert_eq!(plugin.error, None, "{plugin:#?}");
     assert_eq!(
         (plugin.id.as_deref(), plugin.name.as_str()),
-        (Some("old"), "Old Plugin")
+        (Some("board"), "Board")
     );
-    assert!(plugin.background.is_none());
+    assert_eq!(
+        plugin.panels["main"].url,
+        "helm-plugin://board/panel/index.html"
+    );
+    let background = plugin.background.as_ref().unwrap();
+    assert_eq!(background.url, "helm-plugin://board/background.html");
+    assert_eq!(
+        background.state,
+        PluginBackgroundState::Stopped,
+        "the client frames it; the host runs nothing for it"
+    );
+    assert!(plugin.agent.as_ref().is_some_and(|agent| agent.enabled));
+
+    let new = world.dirs.plugin_folder(
+        "floti plugin",
+        &manifest("script", "Script", r#""background": "bg.mjs""#),
+        &[("bg.mjs", "export {}")],
+    );
+    let listed = world.add(&new).await.plugins;
+    let background = listed[1].background.as_ref().unwrap();
+    assert_eq!(listed[1].error, None);
+    assert_eq!(background.url, "floti-plugin://script/bg.mjs");
+    assert!(
+        matches!(
+            background.state,
+            PluginBackgroundState::Starting | PluginBackgroundState::Running
+        ),
+        "{background:#?}"
+    );
+    assert_eq!(
+        listed[0].background.as_ref().unwrap().state,
+        PluginBackgroundState::Stopped
+    );
+
+    world.restart().await;
+    let listed = world.list().await;
+    assert_eq!(listed[0].error, None, "it still loads after a restart");
+    world.stop().await;
+}
+
+// Admin switches
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_viewer_or_operator_is_refused_adding_removing_or_switching_a_plugin_and_an_admin_is_not()
+{
+    let mut world = HostWorld::start().await;
+    let kept = world
+        .dirs
+        .plugin_folder("kept plugin", &helm_plugin("kept"), HELM_PLUGIN_FILES);
+    let other = world
+        .dirs
+        .plugin_folder("other plugin", &helm_plugin("other"), HELM_PLUGIN_FILES);
+    let before = world.add(&kept).await.plugins;
+
+    for (role, said) in [(Role::Viewer, "a viewer"), (Role::Operator, "an operator")] {
+        let mut device =
+            TestClient::connect_as(&world.endpoint, &format!("a {said} phone"), role, &[]).await;
+        let refused = format!(
+            "Adding, removing or switching a plugin takes an admin device, and this device is paired as {said}."
+        );
+        let switch = PluginSwitchRequest {
+            path: text(&kept),
+            enabled: false,
+        };
+        let errors = [
+            device
+                .request::<PluginsAdd>(&PluginAddRequest { path: text(&other) })
+                .await
+                .map(drop),
+            device
+                .request::<PluginsRemove>(&PluginRemoveRequest {
+                    path: text(&kept),
+                    delete_secrets: Vec::new(),
+                })
+                .await
+                .map(drop),
+            device.request::<PluginsSetEnabled>(&switch).await.map(drop),
+            device.request::<PluginsSetTools>(&switch).await.map(drop),
+        ];
+        for error in errors {
+            assert_eq!(error.unwrap_err().message, refused, "{role:?}");
+        }
+        assert_eq!(
+            device.request::<PluginsList>(&()).await.unwrap(),
+            before,
+            "nothing changed, and the device still sees the list"
+        );
+    }
+
+    // The desktop, this computer's admin, does each.
+    let off = PluginSwitchRequest {
+        path: text(&kept),
+        enabled: false,
+    };
+    let tools_off = world
+        .client()
+        .request::<PluginsSetTools>(&off)
+        .await
+        .unwrap();
+    assert!(!only(&tools_off).agent.as_ref().unwrap().enabled);
+    assert!(only(&tools_off).enabled, "only its tools are off");
+    let switched = world
+        .client()
+        .request::<PluginsSetEnabled>(&off)
+        .await
+        .unwrap();
+    assert!(!only(&switched).enabled);
+    assert_eq!(world.add(&other).await.plugins.len(), 2);
+
+    world.restart().await;
+    let listed = world.list().await;
+    assert!(
+        !listed[0].enabled && !listed[0].agent.as_ref().unwrap().enabled,
+        "both switches are stored: {listed:#?}"
+    );
+    assert!(world.remove(&kept, &[]).await.len() == 1);
+    world.stop().await;
+}
+
+// Page files
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_file_is_served_from_a_plugin_that_is_on_and_nothing_outside_its_folder_is() {
+    let mut world = HostWorld::start().await;
+    let folder = world
+        .dirs
+        .plugin_folder("pages plugin", &helm_plugin("pages"), HELM_PLUGIN_FILES);
+    std::fs::write(world.dirs.root().join("beside.txt"), "not the plugin's").unwrap();
+    let plugin = only(&world.add(&folder).await.plugins).clone();
+
+    let page = world.file("pages", "panel/index.html").await;
+    assert_eq!(page.status, 200);
+    assert_eq!(page.content_type, "text/html; charset=utf-8");
+    assert_eq!(page.body.0, b"<!doctype html><p>first</p>");
+    assert_eq!(
+        (page.version.as_deref(), page.revision),
+        (Some("1.4.0"), plugin.revision)
+    );
+
+    for outside in ["../beside.txt", "panel/../../beside.txt"] {
+        let refused = world.file("pages", outside).await;
+        assert_eq!(
+            (refused.status, refused.body.0.as_slice()),
+            (403, b"Forbidden".as_slice()),
+            "{outside}"
+        );
+    }
+    let missing = world.file("pages", "panel/gone.html").await;
+    assert_eq!(
+        (missing.status, missing.body.0.as_slice()),
+        (404, b"Not found".as_slice())
+    );
+    let nobody = world.file("nobody", "panel/index.html").await;
+    assert_eq!((nobody.status, nobody.revision), (404, 0));
+
+    world.switch(&folder, false).await;
+    let off = world.file("pages", "panel/index.html").await;
+    assert_eq!(
+        (off.status, off.version, off.revision),
+        (404, None, 0),
+        "a plugin that is off serves nothing"
+    );
+
+    // A client that does not draw plugin pages is not served them.
+    let mut plain = TestClient::connect(&world.endpoint, &[]).await;
+    assert!(
+        plain
+            .request::<PluginsFile>(&PluginFileRequest {
+                plugin: "pages".into(),
+                path: "panel/index.html".into(),
+                offset: 0,
+            })
+            .await
+            .is_err()
+    );
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edited_page_file_reads_the_folder_again_and_is_served_at_the_new_revision_as_reload_does()
+ {
+    let mut world = HostWorld::start().await;
+    let folder =
+        world
+            .dirs
+            .plugin_folder("watched plugin", &helm_plugin("watched"), HELM_PLUGIN_FILES);
+    let added = only(&world.add(&folder).await.plugins).clone();
+    let (mut subscriber, _) = world.watcher().await;
+
+    std::fs::write(
+        folder.join("panel").join("index.html"),
+        "<!doctype html><p>second, longer</p>",
+    )
+    .unwrap();
+    let read_again = next_list(&mut subscriber).await;
+    assert!(
+        only(&read_again).revision > added.revision,
+        "the edit read the folder again"
+    );
+    let page = world.file("watched", "panel/index.html").await;
+    assert_eq!(page.body.0, b"<!doctype html><p>second, longer</p>");
+    assert_eq!(page.revision, only(&read_again).revision);
+    let log = world
+        .client()
+        .request::<PluginsLog>(&PluginPathRequest {
+            path: text(&folder),
+        })
+        .await
+        .unwrap();
+    assert!(
+        log.iter().any(|line| line.stream == PluginLogStream::Host
+            && line.text == "reloaded: panel/index.html changed"),
+        "{log:#?}"
+    );
+
+    // Reload in Settings does the same.
+    std::fs::write(folder.join("bg.js"), "// third").unwrap();
+    let reloaded = world.reload(&folder).await;
+    assert!(only(&reloaded).revision > only(&read_again).revision);
+    let page = world.file("watched", "bg.js").await;
+    assert_eq!(
+        (page.body.0.as_slice(), page.revision),
+        (b"// third".as_slice(), only(&reloaded).revision)
+    );
+    world.stop().await;
+}
+
+// Service output
+
+/// The Node running these tests: the first `node` on `PATH`.
+fn node_on_path() -> PathBuf {
+    let path = std::env::var_os("PATH").expect("PATH is set");
+    std::env::split_paths(&path)
+        .flat_map(|dir| [dir.join("node.exe"), dir.join("node")])
+        .find(|candidate| candidate.is_file())
+        .expect("the tests run with Node on PATH")
+}
+
+/// A service that says it started and what its token is, writes the token
+/// beside itself for the test to look for, and listens until the test
+/// process is gone.
+const TALKING_SERVICE: &str = r"
+import { writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { watchOwner } from './common.mjs'
+
+watchOwner(process.cwd(), () => process.exit(0))
+writeFileSync('token.txt', process.env.HELM_SERVICE_TOKEN)
+console.log('the service is up')
+console.error(`my token is ${process.env.HELM_SERVICE_TOKEN}`)
+createServer((request, response) => response.end('ok'))
+  .listen(Number(process.env.HELM_SERVICE_PORT), '127.0.0.1')
+";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_a_service_run_on_the_node_it_was_handed_prints_reaches_its_plugins_log_without_its_token()
+ {
+    let mut world = HostWorld::start_with(TestDirs::new(), Some(node_on_path())).await;
+    let folder = world.dirs.plugin_folder(
+        "talking plugin",
+        r#"{ "apiVersion": 1, "id": "talker", "name": "Talker",
+            "service": { "node": "service.mjs", "start": "enable" } }"#,
+        &[
+            ("service.mjs", TALKING_SERVICE),
+            (
+                "common.mjs",
+                include_str!("../../../test/fake-agents/common.mjs"),
+            ),
+        ],
+    );
+    world.add(&folder).await;
+
+    let deadline = Instant::now() + PATIENCE;
+    let log = loop {
+        let log = world
+            .client()
+            .request::<PluginsLog>(&PluginPathRequest {
+                path: text(&folder),
+            })
+            .await
+            .unwrap();
+        if log.iter().any(|line| line.text.starts_with("my token is")) {
+            break log;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the service said nothing: {log:#?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    let token = std::fs::read_to_string(folder.join("token.txt")).unwrap();
+    assert_eq!(token.len(), 64, "a run's token");
+    assert!(
+        log.iter()
+            .any(|line| line.stream == PluginLogStream::Out && line.text == "the service is up")
+    );
+    assert!(
+        log.iter().any(|line| line.stream == PluginLogStream::Err
+            && line.text == "my token is [service token]")
+    );
+    assert!(
+        log.iter()
+            .any(|line| line.stream == PluginLogStream::Host && line.text.starts_with("started")),
+        "{log:#?}"
+    );
+    assert!(
+        log.iter().all(|line| !line.text.contains(&token)),
+        "{log:#?}"
+    );
+
+    let service = world.list().await[0].service.clone().unwrap();
+    assert!(
+        matches!(
+            service.state,
+            PluginServiceState::Starting | PluginServiceState::Running
+        ),
+        "{service:?}"
+    );
+    let metrics = world.client().request::<PluginsMetrics>(&()).await.unwrap();
+    assert_eq!(metrics.len(), 1);
+    assert_eq!(metrics[0].plugin, "talker");
+
+    world.switch(&folder, false).await;
     world.stop().await;
 }
 
@@ -832,6 +1197,7 @@ impl RegistryWorld {
             background: Arc::clone(&background) as Arc<dyn BackgroundRuntime>,
             secrets: Arc::new(NoSecrets),
             services: Arc::new(floti_host::plugins::net::service::NoServices),
+            logs: Default::default(),
             publish: Box::new(move |list| into.lock().unwrap().push(list.clone())),
         });
         registry.start().unwrap();

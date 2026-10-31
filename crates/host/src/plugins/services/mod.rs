@@ -16,10 +16,14 @@
 //! `Helm-Service-Token`. The token is never logged, listed or put in an
 //! error, and nothing that holds it prints it in `Debug`.
 //!
+//! What a service prints goes to its plugin's log ([`output`]), with the
+//! token taken out of every line, and never to the host's own log.
+//!
 //! - [`supervisor`]: one read's service: start, readiness, restarts, stop.
 //! - [`launcher`]: starting the process and ending its tree.
 
 pub mod launcher;
+pub mod output;
 pub mod supervisor;
 
 #[cfg(test)]
@@ -30,17 +34,19 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use floti_protocol::channels::plugins::PluginServiceStart;
+use floti_protocol::channels::plugins::{PluginLogStream, PluginServiceStart};
 
 use self::launcher::{ProcessLauncher, ServiceLauncher};
 use self::supervisor::Supervisor;
 use super::call::{CallContext, PluginCallError};
+use super::log::PluginLogs;
 use super::net::service::{EndpointFuture, PluginServices, ServicePlugin, ServiceStatus};
 use super::secrets::SecretsAccess;
 
-/// Where a service's lines about itself go: the plugin's id, then the line.
-/// Never given the token or the service's environment.
-pub type ServiceLog = Arc<dyn Fn(&str, &str) + Send + Sync>;
+/// Where a service's lines go: the plugin's id, where the line came from
+/// (what it printed, or the host's note about it), then the line. Never
+/// given the token or the service's environment.
+pub type ServiceLog = Arc<dyn Fn(&str, PluginLogStream, &str) + Send + Sync>;
 
 /// The environment a service inherits before its own is added.
 pub type Inherited = Arc<dyn Fn() -> Vec<(OsString, OsString)> + Send + Sync>;
@@ -56,16 +62,24 @@ pub struct ServicesConfig {
 }
 
 impl ServicesConfig {
-    /// The host's: real processes over its own environment, logging to its
-    /// standard error.
-    pub fn new(node: Option<PathBuf>, secrets: Arc<dyn SecretsAccess>) -> Self {
+    /// The host's: real processes over its own environment, every line in
+    /// its plugin's log in `logs`, and the host's notes about a service on
+    /// its standard error too. What a service prints stays out of that.
+    pub fn new(
+        node: Option<PathBuf>,
+        secrets: Arc<dyn SecretsAccess>,
+        logs: Arc<PluginLogs>,
+    ) -> Self {
         Self {
             node,
             secrets,
             launcher: Arc::new(ProcessLauncher),
             inherited: Arc::new(|| std::env::vars_os().collect()),
-            log: Arc::new(|plugin, line| {
-                eprintln!("floti host: plugin {plugin}'s service: {line}");
+            log: Arc::new(move |plugin, stream, line| {
+                if stream == PluginLogStream::Host {
+                    eprintln!("floti host: plugin {plugin}'s service: {line}");
+                }
+                logs.push(plugin, stream, line.to_owned());
             }),
         }
     }

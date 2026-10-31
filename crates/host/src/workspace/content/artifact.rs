@@ -239,10 +239,7 @@ impl Artifacts {
         let is_entry = target.display().to_string().to_lowercase()
             == entry.file.display().to_string().to_lowercase();
         let bootstrap = (is_entry && (ext == ".html" || ext == ".htm")).then_some(entry.links);
-        let content_type = MIME
-            .iter()
-            .find(|(known, _)| *known == ext)
-            .map_or("application/octet-stream", |(_, mime)| mime);
+        let content_type = content_type_of(&target);
         Ok(Resolved {
             target,
             bootstrap,
@@ -323,6 +320,15 @@ impl Resolved {
             body,
         }
     }
+}
+
+/// What a served file is, from its extension; anything not in [`MIME`] is
+/// bytes. Plugin pages are typed by the same table.
+pub(crate) fn content_type_of(path: &Path) -> &'static str {
+    let ext = extension(path);
+    MIME.iter()
+        .find(|(known, _)| *known == ext)
+        .map_or("application/octet-stream", |(_, mime)| mime)
 }
 
 fn extension(path: &Path) -> String {

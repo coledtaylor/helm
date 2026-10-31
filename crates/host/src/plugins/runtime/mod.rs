@@ -26,7 +26,7 @@
 mod isolate;
 mod modules;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
@@ -44,6 +44,7 @@ use super::background::{
     BackgroundEvent, BackgroundLaunch, BackgroundRuntime, ToolAnswer, ToolCall, ToolFuture,
 };
 use super::call::{CallResult, CancelToken, PluginCallError};
+use super::log::PluginLogs as Logs;
 use super::registry::WeakRegistry;
 
 /// How much heap one isolate may use before it is ended as a crash.
@@ -63,9 +64,6 @@ pub const TOOL_ANSWER_MAX_CHARS: usize = 1_000_000;
 
 /// How long stopping an isolate waits for its thread to end.
 const STOP_WAIT: Duration = Duration::from_secs(10);
-
-/// How many log lines are kept for each plugin.
-const LOG_LINES: usize = 1000;
 
 const NOT_RUNNING: &str = "The plugin's background script is not running.";
 const STOPPED_BEFORE: &str = "The plugin stopped before it answered.";
@@ -207,34 +205,6 @@ fn tool_answer(ok: bool, text: String) -> ToolAnswer {
     Ok(serde_json::Value::String(text))
 }
 
-/// Every plugin's log lines.
-#[derive(Default)]
-struct Logs {
-    lines: Mutex<HashMap<String, VecDeque<PluginLogLine>>>,
-}
-
-impl Logs {
-    fn push(&self, plugin: &str, stream: PluginLogStream, text: String) {
-        let mut lines = lock(&self.lines);
-        let kept = lines.entry(plugin.to_owned()).or_default();
-        if kept.len() == LOG_LINES {
-            kept.pop_front();
-        }
-        kept.push_back(PluginLogLine {
-            at: crate::config_console::time::now_iso(),
-            stream,
-            text,
-        });
-    }
-
-    fn of(&self, plugin: &str) -> Vec<PluginLogLine> {
-        lock(&self.lines)
-            .get(plugin)
-            .map(|kept| kept.iter().cloned().collect())
-            .unwrap_or_default()
-    }
-}
-
 impl IsolateRuntime {
     /// A runtime whose calls are answered on the Tokio runtime it is made in.
     ///
@@ -242,13 +212,23 @@ impl IsolateRuntime {
     ///
     /// Outside a Tokio runtime.
     pub fn new() -> Self {
+        Self::with_logs(Arc::default())
+    }
+
+    /// A runtime that writes each plugin's log lines into `logs`, beside
+    /// what else the host keeps there.
+    ///
+    /// # Panics
+    ///
+    /// Outside a Tokio runtime.
+    pub fn with_logs(logs: Arc<Logs>) -> Self {
         let (channels, _) = broadcast::channel(256);
         Self {
             inner: Arc::new(Inner {
                 host: tokio::runtime::Handle::current(),
                 registry: OnceLock::new(),
                 workers: Mutex::new(HashMap::new()),
-                logs: Arc::default(),
+                logs,
                 channels,
                 next_tool: AtomicU32::new(1),
                 tool_wait_ms: AtomicU64::new(millis(TOOL_WAIT)),

@@ -619,6 +619,7 @@ impl RegistryWorld {
             background: Arc::clone(&background) as Arc<dyn BackgroundRuntime>,
             secrets: Arc::clone(&secrets) as Arc<dyn SecretsAccess>,
             services: Arc::new(floti_host::plugins::net::service::NoServices),
+            logs: Default::default(),
             publish: Box::new(|_| ()),
         });
         register_methods(
@@ -896,10 +897,6 @@ async fn a_plugin_channel_not_served_yet_is_answered_naming_it_and_its_feature_a
         ("plugins:session", "plugin pages"),
         ("plugins:ui", "plugin pages"),
         ("plugins:deliver", "plugin pages"),
-        ("plugins:file", "plugin pages"),
-        ("plugins:setTools", "plugin tool families"),
-        ("plugins:log", "plugin logs and metrics"),
-        ("plugins:metrics", "plugin logs and metrics"),
     ];
     for (channel, feature) in later {
         let error = client

@@ -28,14 +28,13 @@ use floti_protocol::channels::sessions::{
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::time::MissedTickBehavior;
 
-use super::{Feature, FeatureContext};
+use super::{Caller, Feature, FeatureContext};
 use crate::agent::AgentBackend;
 use crate::history::index::HistoryIndex;
 use crate::history::{Indexed, archive, index_history, read_indexed};
 use crate::server::events::Events;
 use crate::server::hosted::Hosted;
 use crate::server::records::ExitNotice;
-use crate::session::ClientId;
 use crate::store::Store;
 use crate::usage::{SystemDay, UsageReader};
 
@@ -117,7 +116,7 @@ impl Drop for History {
 }
 
 impl Feature for History {
-    fn requests<'a>(&'a self, _client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, _caller: Caller, router: &mut Router<'a>) {
         let shared = &*self.shared;
         router
             .handle::<ReadHistorySummary>(|()| Ok(shared.last().summary.clone()))

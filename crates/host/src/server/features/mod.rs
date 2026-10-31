@@ -47,6 +47,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use super::HostRun;
 use super::events::Events;
 use super::hosted::Hosted;
+use crate::devices::Role;
 use crate::platform::folders::Folders;
 use crate::session::{ClientId, Session, SessionOutput};
 pub(crate) use agent_browser::BrowserRelay;
@@ -64,11 +65,30 @@ pub(crate) struct FeatureContext {
     pub workspace: Arc<WorkspaceContext>,
 }
 
+/// Who a request comes from: the client, and the role its device is paired
+/// with, which says what it may change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Caller {
+    pub client: ClientId,
+    pub role: Role,
+}
+
+impl Caller {
+    /// `client`, on an admin device: what the host's own lists of what it
+    /// serves, and a feature's tests, ask as.
+    pub fn admin(client: ClientId) -> Self {
+        Self {
+            client,
+            role: Role::Admin,
+        }
+    }
+}
+
 /// One feature of the host.
 pub(crate) trait Feature: Send + Sync {
     /// Registers a handler for each request channel it serves, answering
-    /// `client`.
-    fn requests<'a>(&'a self, client: ClientId, router: &mut Router<'a>);
+    /// `caller`.
+    fn requests<'a>(&'a self, caller: Caller, router: &mut Router<'a>);
 
     /// Registers each terminal stream it serves.
     fn streams<'a>(&'a self, streams: &mut Streams<'a>) {
@@ -231,10 +251,10 @@ impl Features {
         &self.resources
     }
 
-    /// Registers every feature's request handlers for `client`.
-    pub fn requests<'a>(&'a self, client: ClientId, router: &mut Router<'a>) {
+    /// Registers every feature's request handlers for `caller`.
+    pub fn requests<'a>(&'a self, caller: Caller, router: &mut Router<'a>) {
         for feature in &self.features {
-            feature.requests(client, router);
+            feature.requests(caller, router);
         }
     }
 

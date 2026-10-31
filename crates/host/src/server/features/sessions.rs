@@ -48,7 +48,7 @@ use floti_protocol::channels::sessions::{
 };
 use tokio::sync::broadcast::{self, error::RecvError};
 
-use super::{Feature, FeatureContext, Streams, TerminalAttachment};
+use super::{Caller, Feature, FeatureContext, Streams, TerminalAttachment};
 use crate::server::events::Events;
 use crate::server::hosted::{Hosted, label_of, session_id};
 use crate::server::records::ExitNotice;
@@ -290,7 +290,7 @@ impl Sessions {
 }
 
 impl Feature for Sessions {
-    fn requests<'a>(&'a self, client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, Caller { client, .. }: Caller, router: &mut Router<'a>) {
         let hosted = &self.hosted;
         let terminals = hosted.terminals();
         router

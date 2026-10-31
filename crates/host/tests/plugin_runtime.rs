@@ -95,6 +95,7 @@ impl World {
             background: Arc::new(runtime.clone()) as Arc<dyn BackgroundRuntime>,
             secrets: Arc::new(NoSecrets),
             services: Arc::new(floti_host::plugins::net::service::NoServices),
+            logs: Default::default(),
             publish: Box::new(move |list| into.lock().unwrap().push(list.clone())),
         });
         runtime.connect(&registry);

@@ -13,7 +13,8 @@
 //! - [`engine`]: the V8 platform, started once per process, and the base
 //!   isolate with the web's data types every plugin script runs in.
 //! - [`manifest`]: the manifest, read by the SDK's validator in that isolate.
-//!   This host runs apiVersion 2 plugins.
+//!   This host reads apiVersion 1 and 2 plugins: a version 2 background
+//!   script runs in its engine, a version 1 background page in a client.
 //! - [`loader`]: a folder read: the manifest, the files it names, the icon.
 //! - [`store`]: the folders and settings in `floti.db`, today's schema.
 //! - [`settings`]: whether a value fits a setting, and the values shown.
@@ -31,6 +32,11 @@
 //!   ways to run a program and reach the network.
 //! - [`services`]: a plugin's service, started on the host's Node or as any
 //!   program when it is needed, and ended with the plugin.
+//! - [`log`]: each plugin's log lines, as Settings shows them.
+//! - [`watch`]: each enabled plugin's folder, watched for the files its
+//!   manifest names, so an edit reads it again.
+//! - [`pages`]: the files of a plugin's pages, a piece at a time, for the
+//!   client that draws them.
 //! - [`registry`]: every registered folder and what it is doing.
 
 pub mod background;
@@ -39,13 +45,16 @@ pub mod engine;
 pub mod exec;
 pub mod info;
 pub mod loader;
+pub mod log;
 pub mod manifest;
 pub mod net;
+pub mod pages;
 pub mod registry;
 pub mod runtime;
 pub mod secrets;
 pub mod services;
 pub mod settings;
 pub mod store;
+pub mod watch;
 
 pub use registry::{PluginCall, Registry, RegistryParts, WeakRegistry};

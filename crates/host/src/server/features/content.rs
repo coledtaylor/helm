@@ -24,8 +24,7 @@ use floti_protocol::channels::workspace::{
 };
 
 use super::config::off_the_workers;
-use super::{Feature, FeatureContext};
-use crate::session::ClientId;
+use super::{Caller, Feature, FeatureContext};
 use crate::workspace::content::ContentService;
 use crate::workspace::render::{editor_highlight, render_config};
 
@@ -45,7 +44,7 @@ impl Content {
 }
 
 impl Feature for Content {
-    fn requests<'a>(&'a self, _client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, _caller: Caller, router: &mut Router<'a>) {
         let content = &self.service;
         router
             .handle::<ListContentScopes>(|()| off_the_workers(|| content.scopes()))

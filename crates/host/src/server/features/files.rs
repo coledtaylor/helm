@@ -20,7 +20,7 @@ use floti_protocol::channels::workspace::{
 };
 
 use super::config::off_the_workers;
-use super::{Feature, FeatureContext};
+use super::{Caller, Feature, FeatureContext};
 use crate::session::ClientId;
 use crate::workspace::files::FilesService;
 
@@ -45,7 +45,7 @@ impl Files {
 }
 
 impl Feature for Files {
-    fn requests<'a>(&'a self, client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, Caller { client, .. }: Caller, router: &mut Router<'a>) {
         let service = &self.service;
         router
             .handle::<ReadFilesDir>(|request| {

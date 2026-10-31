@@ -163,6 +163,14 @@ impl DeviceRegistry {
             .map_or(Standing::Unknown, Device::standing))
     }
 
+    /// The device `key` is, read from the file as it is now.
+    pub fn device(&self, key: &PublicKey) -> Result<Option<Device>> {
+        Ok(self
+            .devices()?
+            .into_iter()
+            .find(|device| device.key == *key))
+    }
+
     /// Whether an unrevoked device is an admin, read from the file as it is
     /// now. While none is, the host waits for its first admin.
     pub fn has_admin(&self) -> Result<bool> {

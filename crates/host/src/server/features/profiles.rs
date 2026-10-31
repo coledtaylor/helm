@@ -20,10 +20,9 @@ use floti_protocol::channels::sessions::{
     ProfileSave, ProfilesChanged,
 };
 
-use super::{Feature, FeatureContext};
+use super::{Caller, Feature, FeatureContext};
 use crate::server::events::Events;
 use crate::server::hosted::Hosted;
-use crate::session::ClientId;
 use crate::workspace::profiles::{self, store};
 
 pub(crate) struct Profiles {
@@ -54,7 +53,7 @@ impl Profiles {
 }
 
 impl Feature for Profiles {
-    fn requests<'a>(&'a self, _client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, _caller: Caller, router: &mut Router<'a>) {
         router
             .handle::<ProfileList>(|()| {
                 store::list(self.hosted.ledger().store().connection()).map_err(text)

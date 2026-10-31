@@ -15,14 +15,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use floti_protocol::channels::plugins::{PluginErrorCode, PluginServiceKind, PluginServiceState};
+use floti_protocol::channels::plugins::{
+    PluginErrorCode, PluginLogStream, PluginServiceKind, PluginServiceState,
+};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use url::Url;
 
 use super::Deps;
-use super::launcher::{EndTree, ServiceCommand};
+use super::launcher::{EndTree, ServiceCommand, ServiceOutput};
+use super::output::pump;
 use crate::plugins::call::PluginCallError;
 use crate::plugins::exec::program::{Missing, find_program, launch, plain, program_env};
 use crate::plugins::loader::{Inside, resolve_inside};
@@ -269,7 +272,22 @@ impl Supervisor {
 
 impl Inner {
     fn note(&self, line: &str) {
-        (self.deps.log)(&self.plugin, line);
+        (self.deps.log)(&self.plugin, PluginLogStream::Host, line);
+    }
+
+    /// Reads what one run prints into the plugin's log, `token` taken out,
+    /// until the stream ends with the process.
+    fn read_output(&self, output: Vec<(PluginLogStream, ServiceOutput)>, token: &str) {
+        for (stream, reader) in output {
+            let log = Arc::clone(&self.deps.log);
+            let plugin = self.plugin.clone();
+            self.deps.runtime.spawn(pump(
+                reader,
+                stream,
+                token.to_owned(),
+                Box::new(move |stream, line| log(&plugin, stream, &line)),
+            ));
+        }
     }
 
     fn tell(&self, after: After) {
@@ -412,6 +430,7 @@ impl Inner {
             }
         };
         drop(command);
+        self.read_output(child.output, &token);
         let mut run = Run {
             pid: child.pid,
             port,

@@ -16,7 +16,7 @@ use floti_protocol::message::Request;
 use floti_protocol::{CapabilitySet, Message};
 use tokio::sync::broadcast;
 
-use super::super::Features;
+use super::super::{Caller, Features};
 use crate::agent::AgentBackend;
 use crate::server::events::{Publication, Start};
 use crate::server::hosted::Hosted;
@@ -56,7 +56,8 @@ impl World {
 
     fn ask<C: RequestChannel>(&self, request: &C::Request) -> Result<C::Response, String> {
         let mut router = Router::new(&CATALOGUE, CapabilitySet::default());
-        self.features.requests(ClientId(1), &mut router);
+        self.features
+            .requests(Caller::admin(ClientId(1)), &mut router);
         let answer = router.dispatch(&Request {
             id: 7,
             channel: C::NAME.to_owned(),

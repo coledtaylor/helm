@@ -29,7 +29,7 @@ use floti_protocol::channels::agent_browser::{
 use floti_protocol::{ClientChannels, Payload};
 use tokio::sync::oneshot;
 
-use super::Feature;
+use super::{Caller, Feature};
 use crate::server::events::Events;
 use crate::session::ClientId;
 
@@ -173,7 +173,7 @@ impl Drop for Forget<'_> {
 }
 
 impl Feature for Arc<BrowserRelay> {
-    fn requests<'a>(&'a self, client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, Caller { client, .. }: Caller, router: &mut Router<'a>) {
         router.handle::<AgentBrowserAnswer>(move |answer| self.answered(client, answer));
     }
 

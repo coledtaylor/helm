@@ -42,28 +42,17 @@ fn entry_covers(entry: &str, channel: &str) -> bool {
 }
 
 /// Every channel not served yet, by the feature that will serve it.
-pub const NOT_YET_SERVED: &[Later] = &[
-    Later {
-        feature: "plugin pages",
-        channels: &[
-            "plugins:call",
-            "plugins:cancel",
-            "plugins:answer",
-            "plugins:session",
-            "plugins:ui",
-            "plugins:deliver",
-            "plugins:file",
-        ],
-    },
-    Later {
-        feature: "plugin logs and metrics",
-        channels: &["plugins:log", "plugins:metrics"],
-    },
-    Later {
-        feature: "plugin tool families",
-        channels: &["plugins:setTools"],
-    },
-];
+pub const NOT_YET_SERVED: &[Later] = &[Later {
+    feature: "plugin pages",
+    channels: &[
+        "plugins:call",
+        "plugins:cancel",
+        "plugins:answer",
+        "plugins:session",
+        "plugins:ui",
+        "plugins:deliver",
+    ],
+}];
 
 /// The entry that lists `channel`, when it is not served yet.
 pub fn later(channel: &str) -> Option<&'static Later> {
@@ -177,14 +166,14 @@ mod tests {
     fn the_list_names_each_served_channel_left_on_it() {
         let catalogue = Catalogue::protocol();
         let mut served = all_unlisted(&catalogue);
-        served.insert("plugins:log");
-        served.insert("plugins:setTools");
+        served.insert("plugins:call");
+        served.insert("plugins:ui");
         let drift = drift(&catalogue, &served);
         assert_eq!(
             drift.served_but_listed,
             vec![
-                ("plugins:log", "plugin logs and metrics"),
-                ("plugins:setTools", "plugin tool families")
+                ("plugins:call", "plugin pages"),
+                ("plugins:ui", "plugin pages")
             ]
         );
         assert!(
@@ -192,8 +181,8 @@ mod tests {
             "{drift}"
         );
         let said = drift.to_string();
-        assert!(said.contains("`plugins:log` is served"), "{said}");
-        assert!(said.contains("`plugins:setTools` is served"), "{said}");
+        assert!(said.contains("`plugins:call` is served"), "{said}");
+        assert!(said.contains("`plugins:ui` is served"), "{said}");
     }
 
     #[test]
@@ -224,13 +213,7 @@ mod tests {
     #[test]
     fn every_entry_is_labelled_with_the_feature_that_will_serve_it() {
         let features: BTreeSet<&str> = NOT_YET_SERVED.iter().map(|later| later.feature).collect();
-        for permanent in [
-            "plugin pages",
-            "plugin logs and metrics",
-            "plugin tool families",
-        ] {
-            assert!(features.contains(permanent), "{permanent} is missing");
-        }
+        assert!(features.contains("plugin pages"), "plugin pages is missing");
         assert!(
             NOT_YET_SERVED
                 .iter()
@@ -240,10 +223,10 @@ mod tests {
 
     #[test]
     fn a_refusal_names_the_channel_and_its_feature() {
-        let later = later("plugins:setTools").unwrap();
+        let later = later("plugins:call").unwrap();
         assert_eq!(
-            refusal("plugins:setTools", later),
-            "This host does not serve `plugins:setTools` yet: it comes with the plugin tool families."
+            refusal("plugins:call", later),
+            "This host does not serve `plugins:call` yet: it comes with the plugin pages."
         );
     }
 }

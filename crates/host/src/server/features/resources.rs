@@ -46,7 +46,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 
-use super::{Feature, FeatureContext};
+use super::{Caller, Feature, FeatureContext};
 use crate::platform::process_table::{self, ProcessSnapshot, ProcessTable};
 use crate::resources::session_resources;
 use crate::server::events::Events;
@@ -362,7 +362,7 @@ impl Resources {
 }
 
 impl Feature for Resources {
-    fn requests<'a>(&'a self, client: ClientId, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, Caller { client, .. }: Caller, router: &mut Router<'a>) {
         router.handle::<SessionsWatch>(move |request| {
             self.passes.watch(client, request.watching);
             Ok(())

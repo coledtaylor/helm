@@ -16,7 +16,7 @@ use floti_protocol::channels::workspace::{
 use floti_protocol::message::Request;
 use floti_protocol::{Capability, CapabilitySet, Message};
 
-use super::super::Features;
+use super::super::{Caller, Features};
 use crate::agent::AgentBackend;
 use crate::config_console::{hash_content, normalize};
 use crate::server::hosted::Hosted;
@@ -104,7 +104,8 @@ impl World {
 
     fn ask<C: RequestChannel>(&self, request: &C::Request) -> Result<C::Response, String> {
         let mut router = Router::new(&CATALOGUE, CapabilitySet::from_names(["files"]));
-        self.features.requests(ClientId(1), &mut router);
+        self.features
+            .requests(Caller::admin(ClientId(1)), &mut router);
         let answer = router.dispatch(&Request {
             id: 7,
             channel: C::NAME.to_owned(),
@@ -129,7 +130,9 @@ fn file(scope: &str, path: &Path) -> ScopedFile {
 async fn every_content_channel_is_served_from_the_content_feature() {
     let world = World::new();
     let mut router = Router::new(&CATALOGUE, CapabilitySet::from_names(["files"]));
-    world.features.requests(ClientId(1), &mut router);
+    world
+        .features
+        .requests(Caller::admin(ClientId(1)), &mut router);
     let handled: Vec<&str> = router.handled().collect();
     for channel in [
         "content:scopes",

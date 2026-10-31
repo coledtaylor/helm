@@ -10,6 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use floti_protocol::channels::plugins::PluginLogStream;
+use tokio::io::AsyncRead;
+
 use crate::platform::launcher::Program;
 use crate::platform::process_tree::{self, Ending, ProcessTree};
 
@@ -38,9 +41,15 @@ impl std::fmt::Debug for ServiceCommand {
 /// Ends a started service and everything it started.
 pub type EndTree = Box<dyn FnOnce() + Send>;
 
+/// One of a service's standard streams, read to its end.
+pub type ServiceOutput = Pin<Box<dyn AsyncRead + Send>>;
+
 /// A service's process, started.
 pub struct ServiceChild {
     pub pid: Option<u32>,
+    /// What it prints, by stream: its plugin's log reads them, with its
+    /// token taken out.
+    pub output: Vec<(PluginLogStream, ServiceOutput)>,
     /// Resolves once it has exited, with its exit code when it had one.
     pub exited: Pin<Box<dyn Future<Output = Option<i32>> + Send>>,
     /// Ends it and its whole tree. Does nothing once it has exited.
@@ -68,8 +77,8 @@ pub trait ServiceLauncher: Send + Sync {
     }
 }
 
-/// The real thing: a child process with no console and nothing on its
-/// standard streams, the leader of its own tree.
+/// The real thing: a child process with no console, its output read for
+/// its plugin's log, the leader of its own tree.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProcessLauncher;
 
@@ -81,11 +90,11 @@ impl ServiceLauncher for ProcessLauncher {
             .current_dir(&command.folder)
             .env_clear()
             .envs(command.env.iter().map(|(name, value)| (name, value)))
-            // What a service writes is its own: it may print its
-            // environment, and the host's log never carries the token.
+            // What it prints goes to its plugin's log, never the host's,
+            // with its token taken out: it may print its environment.
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         process_tree::Native.prepare_root(&mut std_command);
         let mut child = tokio::process::Command::from(std_command)
             .kill_on_drop(false)
@@ -93,6 +102,13 @@ impl ServiceLauncher for ProcessLauncher {
         let pid = child.id();
         if let Some(pid) = pid {
             process_tree::Native.tie_tree(pid);
+        }
+        let mut output: Vec<(PluginLogStream, ServiceOutput)> = Vec::new();
+        if let Some(stdout) = child.stdout.take() {
+            output.push((PluginLogStream::Out, Box::pin(stdout)));
+        }
+        if let Some(stderr) = child.stderr.take() {
+            output.push((PluginLogStream::Err, Box::pin(stderr)));
         }
         let settled = Arc::new(AtomicBool::new(false));
         let exited = {
@@ -117,6 +133,11 @@ impl ServiceLauncher for ProcessLauncher {
                 let _ = process_tree::Native.end_tree(pid, Ending::Forced);
             }
         });
-        Ok(ServiceChild { pid, exited, end })
+        Ok(ServiceChild {
+            pid,
+            output,
+            exited,
+            end,
+        })
     }
 }

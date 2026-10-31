@@ -235,6 +235,11 @@ async fn s3_a_new_device_with_the_right_code_is_answered_and_paired_as_the_first
         InitiatorStep::Pending(_) => panic!("the host's answer did not finish the handshake"),
     }
     assert_eq!(fx.role_of(&desk.public()), None, "paired before its hello");
+    assert_eq!(
+        admitted.as_ref().map(|admitted| admitted.role).ok(),
+        Some(Role::Admin),
+        "its requests are an admin's"
+    );
     assert_eq!(say_hello(admitted), Some(Role::Admin));
     let devices = fx.admission.devices.devices().unwrap();
     let enrolled = devices.iter().find(|device| device.key == desk.public());
@@ -395,9 +400,26 @@ async fn a_paired_device_carrying_the_code_is_let_in_on_its_pairing_and_the_code
         .admit(&enrolling(&fx.device, &fx.host(), &fx.code()).1)
         .await;
     assert_eq!(refusal(&admitted), None);
-    assert!(admitted.is_ok_and(|admitted| admitted.enrolling.is_none()));
+    assert!(
+        admitted
+            .is_ok_and(|admitted| admitted.enrolling.is_none() && admitted.role == Role::Operator),
+        "it is let in as the operator it is paired as"
+    );
     assert_eq!(fx.role_of(&fx.device.public()), Some(Role::Operator));
     assert!(fx.admission.enrolment.waiting());
+}
+
+#[tokio::test]
+async fn a_paired_device_is_let_in_with_the_role_it_is_paired_with() {
+    for role in [Role::Viewer, Role::Operator, Role::Admin] {
+        let fx = fixture_with(role);
+        let (admitted, _) = fx.admit(&fx.first_message()).await;
+        assert_eq!(
+            admitted.map(|admitted| admitted.role).ok(),
+            Some(role),
+            "{role:?}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

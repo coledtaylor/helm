@@ -143,6 +143,7 @@ impl World {
             background: Arc::new(NoBackground),
             secrets: Arc::clone(&secrets) as Arc<dyn SecretsAccess>,
             services: Arc::new(floti_host::plugins::net::service::NoServices),
+            logs: Default::default(),
             publish: Box::new(|_| ()),
         });
         register_methods(
