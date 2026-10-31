@@ -744,8 +744,11 @@ function startApp(options: AppOptions = {}): void {
    * 400ms of a child process and runs only while somebody is looking at it.
    * Wiring one off the other's timer is the change `resources.ts` exists to
    * argue against.
+   *
+   * With sessions in the local host, the host runs the pass over its own
+   * sessions' processes and this reads it.
    */
-  const resources = createResourcesService({ sessions, window: () => win })
+  const resources = desktopHost?.resources ?? createResourcesService({ sessions, window: () => win })
   // A session ending is a tree that has gone with it, so the pass is re-run at
   // once rather than leaving a dead session's children on screen for an
   // interval. A no-op when nothing is watching.
@@ -984,6 +987,7 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.config.shutdown()
         desktopHost.workspace.shutdown()
         desktopHost.files.shutdown()
+        desktopHost.resources.stop()
         desktopHost.sessions.shutdown()
         desktopHost.pterm.shutdown()
         void desktopHost.link.stop().finally(() => {

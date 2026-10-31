@@ -216,7 +216,7 @@ export function sessionToolsWorld({
       } finally {
         resources.watch(false)
       }
-      return resources.snapshots()
+      return await resources.snapshots()
     }
   }
 }

@@ -1,7 +1,7 @@
 import type { BrowserWindow } from 'electron'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ProcessSnapshot, SessionRecord, SessionResources } from '@helm/core'
-import { createResourcesService, type ResourcesService } from './resources'
+import { createResourcesService, type LocalResourcesService, type ResourcesService } from './resources'
 import type { SessionHost } from './sessions'
 
 vi.mock('electron', async () => (await import('../../test/electron')).electronFake())
@@ -58,7 +58,7 @@ const MACHINE: ProcessSnapshot = {
 const services: ResourcesService[] = []
 
 interface Harness {
-  service: ResourcesService
+  service: LocalResourcesService
   read: ReturnType<typeof vi.fn<() => Promise<ProcessSnapshot>>>
   /** Every `sessions:resources` push, in order. */
   pushes: SessionResources[][]

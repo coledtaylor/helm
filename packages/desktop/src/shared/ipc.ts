@@ -932,6 +932,12 @@ export interface IpcRequests {
    * Answers with whatever the last pass produced. The pass runs only while
    * something is watching (`sessions:watch`), so this is empty rather than
    * stale before the first one.
+   *
+   * With "Run sessions in the local host" on, the host runs the pass over its
+   * sessions and this answers the host's last set: it waits for Helm's first
+   * connect rather than answering empty, and rejects with the sentence saying
+   * the host could not be reached, so the pane paints Unknown, never
+   * "nothing there".
    */
   'sessions:resources': { request: void; response: SessionResources[] }
   /**

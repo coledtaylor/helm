@@ -56,9 +56,12 @@ export function useLiveSessions(): LiveSessionsState {
     // nothing until something moves, so a pane that waited for the next push
     // would be blank for as long as nobody did anything.
     void helm.invoke('sessions:overview').then(setOverview)
+    // A read that failed (the local host could not be reached) keeps the map
+    // empty, so every hosted row paints Unknown rather than "nothing there".
     void helm
       .invoke('sessions:resources')
       .then((next) => setResources(new Map(next.map((snapshot) => [snapshot.id, snapshot]))))
+      .catch(() => undefined)
 
     return () => {
       for (const off of offs) off()

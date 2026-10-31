@@ -162,6 +162,37 @@ test('a session in the host takes input, takes the pane’s size, is drawn again
   expect(await invoke<unknown[]>(window, 'session:list')).toEqual([])
 })
 
+test('the sessions pane shows a host session’s process tree and listening ports as the host read them', async ({
+  helm,
+  world
+}) => {
+  const { window } = helm
+  const id = await startSession(window, 'alpha')
+  const pane = window.getByRole('region', { name: 'First pane' })
+  await expect.poll(() => terminalText(window, id)).toContain('Claude Code v2.1.999 (fake)')
+  await typeLine(pane, '/child')
+  let child = 0
+  await expect
+    .poll(async () => {
+      child = Number(/child (\d+)/.exec(await terminalText(window, id))?.[1] ?? 0)
+      return child
+    })
+    .toBeGreaterThan(0)
+  const run = await claudeRunIn(world, world.projects.alpha)
+
+  await window.locator('[data-open-sessions]').click()
+  await window.getByRole('region', { name: 'In Helm' }).locator('[data-session-hosted="true"]').click()
+
+  // The agent and the child it started, from the host's pass.
+  const tree = window.getByRole('region', { name: 'Process tree' })
+  await expect(tree.locator(`[data-tree-pid="${String(run.pid)}"]`)).toBeVisible()
+  await expect(tree.locator(`[data-tree-pid="${String(child)}"]`)).toBeVisible()
+  // The host looked and the child listens on nothing: said so, not Unknown.
+  await expect(window.getByRole('region', { name: 'Listening ports' })).toContainText(
+    'Nothing in this session’s process tree is listening.'
+  )
+})
+
 test('a project’s terminal on the host takes input and is drawn again after a reload', async ({ helm, world }) => {
   const { window } = helm
   const pane = window.getByRole('region', { name: 'First pane' })

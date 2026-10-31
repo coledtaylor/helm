@@ -54,4 +54,19 @@ describe('useLiveSessions', () => {
       { channel: 'sessions:watch', payload: { watching: false } }
     ])
   })
+
+  it('keeps no trees when the read fails because the local host could not be reached, so hosted rows paint Unknown', async () => {
+    bridge.answer('sessions:overview', () => ({ sessions: [live(4100, 1)], readAtMs: 5 }))
+    bridge.answer('sessions:resources', () => {
+      throw new Error('No local host answered on its socket.')
+    })
+
+    const { result } = renderHook(() => useLiveSessions())
+    await waitFor(() => expect(result.current.sessions.map((s) => s.pid)).toEqual([4100]))
+    expect(result.current.resources.size).toBe(0)
+
+    // A set the host sends once it is reached again is taken as before.
+    act(() => bridge.emit('sessions:resources', [held(1)]))
+    expect([...result.current.resources.keys()]).toEqual([1])
+  })
 })

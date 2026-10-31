@@ -465,7 +465,9 @@ export function registerIpc(ctx: IpcContext): void {
     'sessions:overview': () => ctx.activity.overview(),
     // Whatever the last pass produced. Never a fresh enumeration: the pass runs
     // only while something is watching, and a channel that forced one would let
-    // a renderer spawn a powershell.exe per invoke.
+    // a renderer spawn a powershell.exe per invoke. With sessions in the local
+    // host, the host's last set once Helm has reached it, or a rejection
+    // saying it could not be.
     'sessions:resources': () => ctx.resources.snapshots(),
     'session:rename': (request) => ctx.sessions.rename(request),
 
