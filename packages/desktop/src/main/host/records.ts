@@ -15,6 +15,7 @@ import type {
   SavedPaneLayout,
   SessionActivityState,
   SessionRecord,
+  SessionResources,
   SessionsOverview,
   UsageSnapshot,
   WriteConfigResult
@@ -125,6 +126,41 @@ function liveFromHost(session: P.LiveSession): LiveSession {
 
 export function overviewFromHost(overview: P.SessionsOverview): SessionsOverview {
   return { sessions: overview.sessions.map(liveFromHost), readAtMs: overview.readAtMs }
+}
+
+/**
+ * What each hosted session is holding, field by field. Every nullable field
+ * is carried as it came: the host's "could not look" (null) and "nothing
+ * there" ([]) stay apart all the way to the pane.
+ */
+export function resourcesFromHost(sets: readonly P.SessionResources[]): SessionResources[] {
+  return sets.map((set) => ({
+    id: set.id,
+    rootPid: set.rootPid,
+    processes:
+      set.processes === null
+        ? null
+        : set.processes.map((process) => ({
+            pid: process.pid,
+            parentPid: process.parentPid,
+            name: process.name,
+            commandLine: process.commandLine,
+            depth: process.depth,
+            ports: process.ports === null ? null : [...process.ports]
+          })),
+    rootSeen: set.rootSeen,
+    ports:
+      set.ports === null
+        ? null
+        : set.ports.map((port) => ({
+            port: port.port,
+            pid: port.pid,
+            process: port.process,
+            addresses: [...port.addresses]
+          })),
+    opaque: set.opaque,
+    atMs: set.atMs
+  }))
 }
 
 /** What the history index holds; "the record could be read" is no `error` at all. */

@@ -21,6 +21,7 @@ import { startLocalHost, type HostChild, type LocalHost } from './launcher'
 import { createHostLink, type HostLink } from './link'
 import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
 import { createHostProfiles, type HostProfiles } from './profiles'
+import { createHostResources, type HostResources } from './resources'
 import type { HostSettingsPatch } from './protocol'
 import { createHostPtermHost } from './pterm'
 import { createHostSessions, hostSettingsFor, type Emit, type HostSessions } from './sessions'
@@ -54,6 +55,8 @@ export interface DesktopHost extends HostSessions {
   workspace: HostWorkspace
   /** The Files view, notes and artifacts, read and written in the host while sessions run there. */
   files: HostFiles
+  /** What each hosted session is holding, from the host's processes-and-ports pass. */
+  resources: HostResources
 }
 
 export interface DesktopHostDeps {
@@ -191,6 +194,7 @@ export function createDesktopHost({
     log
   })
   const files = createHostFiles({ link, emit: send, log })
+  const resources = createHostResources({ link, emit: send, log })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
-  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history, config, workspace, files }
+  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history, config, workspace, files, resources }
 }

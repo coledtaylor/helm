@@ -58,8 +58,13 @@ import type { SessionHost } from './sessions'
 const POLL_MS = 4_000
 
 export interface ResourcesService {
-  /** The most recent pass, per hosted session. Empty before the first one. */
-  snapshots: () => SessionResources[]
+  /**
+   * The most recent pass, per hosted session. Empty before the first one.
+   *
+   * A promise where the pass is somebody else's (`host/resources.ts`): it
+   * waits for the host's answer and rejects when the host cannot be reached.
+   */
+  snapshots: () => SessionResources[] | Promise<SessionResources[]>
   /**
    * Turn the pass on or off.
    *
@@ -86,6 +91,11 @@ export interface ResourcesService {
   stop: () => void
 }
 
+/** Helm's own pass, whose last result is in hand: it answers at once. */
+export interface LocalResourcesService extends ResourcesService {
+  snapshots: () => SessionResources[]
+}
+
 export interface ResourcesDeps {
   sessions: SessionHost
   window: () => BrowserWindow | null
@@ -97,7 +107,7 @@ export function createResourcesService({
   sessions,
   window,
   read = () => readProcessSnapshot()
-}: ResourcesDeps): ResourcesService {
+}: ResourcesDeps): LocalResourcesService {
   let watchers = 0
   let timer: NodeJS.Timeout | null = null
   /** The pass currently running, so a second caller joins it rather than starting one. */
