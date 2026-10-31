@@ -1111,13 +1111,16 @@ async fn s15_a_host_a_desktop_started_keeps_running_while_a_client_is_attached_a
     client
         .event_on::<SessionRecord>(1, "the session's exit", |row| row.id == session.id)
         .await;
-    assert_all_end(&pids).await;
 
     // Nothing runs, but a client is attached: the host still answers it.
     assert_eq!(client.request::<SessionList>(&()).await.unwrap(), vec![]);
 
     drop(client);
     assert_exits_idle(host);
+    // Checked once the host has gone: on macOS and Linux what it started
+    // includes the guard that ends its sessions if it crashes, which lives
+    // exactly as long as the host.
+    assert_all_end(&pids).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

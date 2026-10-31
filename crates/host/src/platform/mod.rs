@@ -23,3 +23,4 @@ pub mod process_tree;
 pub mod secret_seal;
 pub mod socket;
 pub mod startup;
+pub mod tray;

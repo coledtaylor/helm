@@ -69,13 +69,16 @@ pub mod testkit;
 pub use error::{Error, Result};
 
 use std::ffi::OsString;
+use std::sync::Arc;
 
 use floti_protocol::channels::host::HostStopReason;
+use tokio::sync::{mpsc, watch};
 
 use platform::folders::UserEnv;
 use platform::startup::{self, StopSignals};
+use platform::tray::{self, NotificationArea};
 use server::idle::{FIRST_CLIENT_WAIT, until_idle};
-use server::{Host, HostConfig};
+use server::{Host, HostConfig, Occupancy, Stopper};
 
 /// The exit status of a `floti host` that would not start because another
 /// host has its data folder or socket: one that is still ending its sessions
@@ -109,7 +112,9 @@ pub struct DesktopCommand {
 /// is attached. Nothing else about the desktop ends it: a desktop that quits
 /// on purpose says first what becomes of its sessions (`host:quit`), and one
 /// that crashes or is killed ends nothing, so its next start finds its
-/// sessions still running.
+/// sessions still running. While it runs something with no client attached,
+/// it shows in the notification area, with its session count, Open (that
+/// desktop again) and Stop host ([`platform::tray`]).
 ///
 /// It refuses to start from an SSH session or as root or a Windows service
 /// account before it opens anything, and refuses when another host already
@@ -129,7 +134,9 @@ pub fn run_host(options: HostOptions) -> Result<()> {
         let host = Host::start(config)?;
         say(&format!("Floti host is listening at {}.", host.endpoint()));
         let stopper = host.stopper();
-        if options.desktop.is_some() {
+        let mut area = None;
+        if let Some(desktop) = options.desktop {
+            area = notification_area(desktop, host.occupancy(), stopper.clone());
             let occupancy = host.occupancy();
             let stopper = stopper.clone();
             tokio::spawn(async move {
@@ -144,7 +151,13 @@ pub fn run_host(options: HostOptions) -> Result<()> {
             say(&format!("Floti host is stopping: {what}."));
             stopper.stop(HostStopReason::Stop);
         });
-        host.run_until_stopped().await
+        let stopped = host.run_until_stopped().await;
+        if let Some(area) = area
+            && let Err(err) = area.hide()
+        {
+            eprintln!("floti host: the notification area: {err}");
+        }
+        stopped
     });
     drop(runtime);
     let reason = reason?;
@@ -153,6 +166,40 @@ pub fn run_host(options: HostOptions) -> Result<()> {
         HostStopReason::Update => "Floti host stopped for an update.",
     });
     Ok(())
+}
+
+/// Shows a host a desktop started in the notification area, as
+/// [`tray::run`] decides, for as long as the host runs. `None` where the OS
+/// has no notification area Floti draws in, or it could not be reached: the
+/// host runs on as it would have.
+fn notification_area(
+    desktop: DesktopCommand,
+    occupancy: watch::Receiver<Occupancy>,
+    stopper: Stopper,
+) -> Option<Arc<tray::Native>> {
+    let (picked, picks) = mpsc::unbounded_channel();
+    let area = match tray::Native::start(move |item| {
+        let _ = picked.send(item);
+    }) {
+        Ok(area) => Arc::new(area),
+        Err(Error::Unsupported { .. }) => return None,
+        Err(err) => {
+            eprintln!("floti host: it shows no icon in the notification area: {err}");
+            return None;
+        }
+    };
+    tokio::spawn(tray::run(
+        Arc::clone(&area),
+        desktop,
+        occupancy,
+        picks,
+        move || {
+            if stopper.stop(HostStopReason::Stop) {
+                say("Floti host is stopping: it was stopped from the notification area.");
+            }
+        },
+    ));
+    Some(area)
 }
 
 /// A line on the console, where there is one. A host started at sign-in may
