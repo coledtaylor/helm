@@ -14,6 +14,36 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.4.1-preview.3
+
+A preview, not a release: nothing offers it as an update.
+
+**Sessions in the local host**
+
+With Settings > Sessions > "Run sessions in the local host" on, Helm's
+window now asks the host directly for everything except what belongs to the
+window itself: the Browser tab, the clipboard, the window, notifications and
+the update check.
+
+- The sessions pane shows the processes and ports of sessions in the host,
+  or Unknown where the host could not look.
+- Plugins run through the host: their panels, tabs and background pages,
+  their settings, `fetch`, programs and services, and their tools in
+  sessions. The first time Helm starts with the switch on, it copies your
+  plugins to the host with their switches and settings. Secrets are not
+  copied: type them again in Settings > Secrets.
+- A plugin's service runs on a copy of Node that comes with Helm, so a
+  plugin with a service works without Node installed.
+- Still to come: a config file's versions saved with the switch off are
+  listed only with it off.
+
+**Plugins**
+
+- A page can tell whether it is drawn on the computer its plugin runs on
+  (`helm.onHostComputer`), and the plugin SDK 1.4.0 has the field. The
+  authoring guide says how to keep a page quick when it is not: load data
+  once and filter it in the page.
+
 ## 2.4.1-preview.2
 
 A preview, not a release: nothing offers it as an update.
