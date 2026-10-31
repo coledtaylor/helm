@@ -16,6 +16,7 @@ compile_error!("the Floti host runs on Windows, macOS and Linux");
 pub mod folders;
 pub mod launcher;
 pub mod links;
+pub mod node_runtime;
 pub mod private_files;
 pub mod process_table;
 pub mod process_tree;

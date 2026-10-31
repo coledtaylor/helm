@@ -9,11 +9,12 @@ use std::collections::BTreeMap;
 
 use floti_protocol::channels::plugins::{
     PluginAgentInfo, PluginBackgroundInfo, PluginBackgroundState, PluginExecInfo, PluginInfo,
-    PluginPanelInfo, PluginSecretInfo, PluginServiceInfo, PluginServiceState, PluginSettingValue,
-    PluginStatusItem, PluginTabInfo, PluginToolInfo,
+    PluginPanelInfo, PluginSecretInfo, PluginServiceInfo, PluginSettingValue, PluginStatusItem,
+    PluginTabInfo, PluginToolInfo,
 };
 
 use super::loader::{LoadFailure, LoadedPlugin};
+use super::net::service::ServiceStatus;
 use super::secrets::SecretsAccess;
 use super::store::PluginFolder;
 
@@ -32,6 +33,8 @@ pub struct Live<'a> {
     pub badge: Option<u32>,
     pub background: PluginBackgroundState,
     pub background_error: Option<&'a str>,
+    /// What the read's service is doing, when it has one open.
+    pub service: Option<ServiceStatus>,
 }
 
 /// A page's address on the plugin's origin, each segment of its entry
@@ -169,15 +172,19 @@ pub fn loaded(
                 args: spec.args.clone(),
             })
             .collect(),
-        service: manifest.service.as_ref().map(|service| PluginServiceInfo {
-            kind: service.kind,
-            command: service.command.clone(),
-            start: service.start,
-            state: PluginServiceState::Stopped,
-            pid: None,
-            port: None,
-            restarts: 0,
-            error: None,
+        service: manifest.service.as_ref().map(|service| {
+            // A read that is not running has its service stopped.
+            let now = live.service.clone().unwrap_or_default();
+            PluginServiceInfo {
+                kind: service.kind,
+                command: service.command.clone(),
+                start: service.start,
+                state: now.state,
+                pid: now.pid,
+                port: now.port,
+                restarts: now.restarts,
+                error: now.error,
+            }
         }),
         runs_programs: !manifest.exec.is_empty() || manifest.service.is_some(),
         agent: manifest.agent.as_ref().map(|agent| PluginAgentInfo {

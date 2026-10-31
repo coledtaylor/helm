@@ -1460,6 +1460,7 @@ impl Wire {
             run: HostRun {
                 mode: AppMode::Dev,
                 home: Some(dirs.home.clone()),
+                node: None,
             },
         });
         let mut client = TestClient::connect(&endpoint, CAPABILITIES).await;

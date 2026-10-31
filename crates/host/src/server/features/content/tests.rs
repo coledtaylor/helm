@@ -56,6 +56,7 @@ impl World {
             HostRun {
                 mode: floti_protocol::channels::workspace::AppMode::Dev,
                 home: Some(dirs.home.clone()),
+                node: None,
             },
         )
         .unwrap();

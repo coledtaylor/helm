@@ -21,8 +21,8 @@ use floti_protocol::channels::plugins::{
 
 use super::{Feature, FeatureContext};
 use crate::plugins::net::Net;
-use crate::plugins::net::service::NoServices;
 use crate::plugins::runtime::IsolateRuntime;
+use crate::plugins::services::{ProcessServices, ServicesConfig};
 use crate::plugins::{Registry, RegistryParts};
 use crate::session::ClientId;
 
@@ -40,10 +40,17 @@ impl Plugins {
         let events = Arc::clone(&context.events);
         let secrets = secrets::Secrets::new(context)?;
         let runtime = IsolateRuntime::new();
+        // Started only when a plugin needs one, on the Node this host ships
+        // (or the one FLOTI_NODE names), and ended with the registry.
+        let services = Arc::new(ProcessServices::new(ServicesConfig::new(
+            context.workspace.run.node.clone(),
+            secrets.store(),
+        )));
         let registry = Registry::new(RegistryParts {
             store: context.hosted.ledger().shared_store(),
             background: Arc::new(runtime.clone()),
             secrets: secrets.store(),
+            services: Arc::clone(&services) as _,
             publish: Box::new(move |list| {
                 // A list nobody could be sent is not a reason to fail the
                 // change that made it: the next one carries it.
@@ -55,7 +62,7 @@ impl Plugins {
         crate::plugins::exec::register_methods(registry.methods(), secrets.store());
         crate::plugins::net::register_methods(
             registry.methods(),
-            Arc::new(Net::new(secrets.store(), Arc::new(NoServices))),
+            Arc::new(Net::new(secrets.store(), services)),
         );
         registry.start()?;
         context

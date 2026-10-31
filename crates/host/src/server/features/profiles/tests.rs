@@ -47,6 +47,7 @@ impl World {
             HostRun {
                 mode: AppMode::Dev,
                 home: Some(dirs.home.clone()),
+                node: None,
             },
         )
         .unwrap();

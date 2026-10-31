@@ -91,6 +91,7 @@ fn start_host(dirs: &TestDirs, endpoint: &Endpoint) -> RunningHost {
         run: HostRun {
             mode: AppMode::Dev,
             home: Some(dirs.home.clone()),
+            node: None,
         },
     })
 }
@@ -830,6 +831,7 @@ impl RegistryWorld {
             store: Arc::new(Mutex::new(Store::open(&dirs.data).unwrap())),
             background: Arc::clone(&background) as Arc<dyn BackgroundRuntime>,
             secrets: Arc::new(NoSecrets),
+            services: Arc::new(floti_host::plugins::net::service::NoServices),
             publish: Box::new(move |list| into.lock().unwrap().push(list.clone())),
         });
         registry.start().unwrap();

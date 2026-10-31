@@ -55,7 +55,7 @@ pub const NOT_YET_SERVED: &[Later] = &[
         ],
     },
     Later {
-        feature: "plugin services",
+        feature: "plugin logs and metrics",
         channels: &["plugins:log", "plugins:metrics"],
     },
     Later {
@@ -182,7 +182,7 @@ mod tests {
         assert_eq!(
             drift.served_but_listed,
             vec![
-                ("plugins:log", "plugin services"),
+                ("plugins:log", "plugin logs and metrics"),
                 ("plugins:setTools", "plugin tool families")
             ]
         );
@@ -223,7 +223,11 @@ mod tests {
     #[test]
     fn every_entry_is_labelled_with_the_feature_that_will_serve_it() {
         let features: BTreeSet<&str> = NOT_YET_SERVED.iter().map(|later| later.feature).collect();
-        for permanent in ["plugin pages", "plugin services", "plugin tool families"] {
+        for permanent in [
+            "plugin pages",
+            "plugin logs and metrics",
+            "plugin tool families",
+        ] {
             assert!(features.contains(permanent), "{permanent} is missing");
         }
         assert!(

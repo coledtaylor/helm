@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use floti_host::agent::AgentBackend;
 use floti_host::agent::claude_code::ClaudeCodeSettings;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
+use floti_host::platform::node_runtime::NODE_VAR;
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree, descendants};
 use floti_host::platform::socket::{self, Endpoint, LocalSocket, Native as NativeSocket};
 use floti_host::platform::startup;
@@ -27,6 +28,9 @@ use floti_host::{Error, fake_agent};
 use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
+use floti_protocol::channels::plugins::{
+    PluginAddRequest, PluginServiceState, PluginsAdd, PluginsList,
+};
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, HistoryRefresh, LaunchSessionRequest, ProfileDelete, ProfileExport,
     ProfileImport, ProfileList, ProfilePin, ProfileSave, ProfilesChanged, PtermOpen,
@@ -1374,6 +1378,91 @@ async fn a_killed_floti_host_takes_every_process_its_sessions_and_terminals_star
             );
         }
     }
+    drop(client);
+
+    kill_host(&mut host, &started).await;
+}
+
+/// The owner watch every fake uses, put beside a plugin's service script.
+const FAKE_COMMON: &str = include_str!("../../../test/fake-agents/common.mjs");
+
+/// A plugin service that listens on the port it is told and starts a child
+/// of its own; both exit once the test process is gone.
+const LISTENING_SERVICE: &str = r"
+import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
+import { childScript, watchOwner } from './common.mjs'
+
+watchOwner(process.cwd(), () => process.exit(0))
+spawn(process.execPath, ['-e', childScript(process.cwd())], { stdio: 'ignore' })
+createServer((request, response) => response.end('ok'))
+  .listen(Number(process.env.HELM_SERVICE_PORT), '127.0.0.1')
+";
+
+/// The Node running these tests: the first `node` on `PATH`.
+fn node_on_path() -> PathBuf {
+    let path = std::env::var_os("PATH").expect("PATH is set");
+    std::env::split_paths(&path)
+        .flat_map(|dir| [dir.join("node.exe"), dir.join("node")])
+        .find(|candidate| candidate.is_file())
+        .expect("the tests run with Node on PATH")
+}
+
+/// A host that is killed takes a plugin's service with it, as a stop does:
+/// the service, run on the Node `FLOTI_NODE` names, and what it started.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_killed_floti_host_takes_a_plugins_service_run_on_the_node_floti_node_names_with_it() {
+    let dirs = TestDirs::new();
+    let mut host = HostProcess::spawn(floti_host_command(&dirs).env(NODE_VAR, node_on_path()));
+    let mut client = TestClient::connect(&binary_endpoint(&dirs), &[]).await;
+    let manifest = json!({
+        "apiVersion": 2,
+        "id": "eager",
+        "name": "Eager",
+        "service": { "node": "service.mjs", "start": "enable" },
+    });
+    let folder = dirs.plugin_folder(
+        "plugin eager",
+        &manifest.to_string(),
+        &[
+            ("service.mjs", LISTENING_SERVICE),
+            ("common.mjs", FAKE_COMMON),
+        ],
+    );
+    client
+        .request::<PluginsAdd>(&PluginAddRequest {
+            path: folder.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+
+    // It starts with the plugin, with no fetch, and listens.
+    let deadline = Instant::now() + PATIENCE;
+    let service = loop {
+        let listed = client.request::<PluginsList>(&()).await.unwrap();
+        let service = listed
+            .into_iter()
+            .find_map(|plugin| plugin.service)
+            .expect("the plugin declares a service");
+        if service.state == PluginServiceState::Running {
+            break service;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the service never ran: {service:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let pid = service.pid.expect("a running service has a pid");
+    let started = started_by(&host);
+    assert!(
+        started.contains(&pid),
+        "{pid} is not among what the host started: {started:?}"
+    );
+    assert!(
+        started.len() >= 2,
+        "the service's own child is among them: {started:?}"
+    );
     drop(client);
 
     kill_host(&mut host, &started).await;

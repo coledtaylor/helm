@@ -29,6 +29,8 @@
 //!   `floti.secrets.state`.
 //! - [`exec`] and [`net`]: `floti.exec` and `floti.fetch`, a plugin's only
 //!   ways to run a program and reach the network.
+//! - [`services`]: a plugin's service, started on the host's Node or as any
+//!   program when it is needed, and ended with the plugin.
 //! - [`registry`]: every registered folder and what it is doing.
 
 pub mod background;
@@ -42,6 +44,7 @@ pub mod net;
 pub mod registry;
 pub mod runtime;
 pub mod secrets;
+pub mod services;
 pub mod settings;
 pub mod store;
 

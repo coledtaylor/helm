@@ -235,6 +235,7 @@ impl HostWorld {
             run: HostRun {
                 mode: AppMode::Dev,
                 home: Some(dirs.home.clone()),
+                node: None,
             },
         });
         let client = TestClient::connect(&endpoint, &[]).await;

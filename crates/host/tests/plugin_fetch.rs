@@ -444,6 +444,7 @@ impl World {
             store: Arc::clone(&store),
             background: Arc::new(NoBackground),
             secrets: Arc::clone(&secrets) as Arc<dyn SecretsAccess>,
+            services: Arc::new(NoServices),
             publish: Box::new(|_| ()),
         });
         register_methods(

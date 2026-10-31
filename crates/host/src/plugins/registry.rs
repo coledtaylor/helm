@@ -44,6 +44,7 @@ use super::call::{
 use super::info::{self, Live};
 use super::loader::{self, LoadFailure, LoadResult, LoadedPlugin};
 use super::manifest::{MANIFEST_FILE, Manifest};
+use super::net::service::{PluginServices, ServicePlugin};
 use super::secrets::SecretsAccess;
 use super::settings;
 use super::store::{self, PluginFolder};
@@ -59,6 +60,8 @@ pub struct RegistryParts {
     pub store: Arc<Mutex<Store>>,
     pub background: Arc<dyn BackgroundRuntime>,
     pub secrets: Arc<dyn SecretsAccess>,
+    /// Each read's service, for a plugin that declares one.
+    pub services: Arc<dyn PluginServices>,
     /// Sends every subscriber the whole list.
     pub publish: Publish,
 }
@@ -101,6 +104,7 @@ struct Inner {
     store: Arc<Mutex<Store>>,
     background: Arc<dyn BackgroundRuntime>,
     secrets: Arc<dyn SecretsAccess>,
+    services: Arc<dyn PluginServices>,
     publish: Publish,
     methods: Methods,
     state: Mutex<State>,
@@ -207,10 +211,17 @@ impl Entry {
     }
 }
 
-/// What has to happen to backgrounds once the state's lock is let go.
+/// What has to happen to backgrounds and services once the state's lock is
+/// let go.
 enum Effect {
     Stop(String),
     Start(BackgroundLaunch),
+    /// The read (plugin, revision) stopped: its service ends.
+    CloseService(String, u64),
+    OpenService(ServicePlugin),
+    /// The read's calls in flight end. After its service has closed, so a
+    /// call waiting for the service is answered as the service answers it.
+    Cancel(CancelToken),
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -229,6 +240,7 @@ impl Registry {
             store: parts.store,
             background: parts.background,
             secrets: parts.secrets,
+            services: parts.services,
             publish: parts.publish,
             methods: Methods::default(),
             state: Mutex::new(State::default()),
@@ -524,7 +536,9 @@ impl Registry {
                 call.method
             )));
         };
+        // An answer that is there wins over a cancel that came with it.
         tokio::select! {
+            biased;
             answer = running => answer,
             () = cancel.cancelled() => Err(PluginCallError::aborted()),
         }
@@ -695,6 +709,9 @@ impl Inner {
                     badge: entry.badge,
                     background: entry.background,
                     background_error: entry.background_error.as_deref(),
+                    service: entry
+                        .loaded_id()
+                        .and_then(|id| self.services.status(id, entry.revision)),
                 };
                 match &entry.load {
                     Load::Failed(failure) => info::failed(&live, failure),
@@ -754,14 +771,21 @@ impl Inner {
     /// Everything the entry's last read had running: its calls, its
     /// background, what it painted.
     fn stop_runtime(&self, entry: &mut Entry) -> Vec<Effect> {
-        entry.runtime.cancel();
         entry.status = None;
         entry.badge = None;
         let had_background = entry.background != PluginBackgroundState::Stopped;
-        match entry.loaded_id() {
-            Some(id) if had_background => vec![Effect::Stop(id.to_owned())],
-            _ => Vec::new(),
+        let mut effects = Vec::new();
+        if let Load::Loaded(plugin) = &entry.load {
+            let id = &plugin.manifest.id;
+            if had_background {
+                effects.push(Effect::Stop(id.clone()));
+            }
+            if plugin.manifest.service.is_some() {
+                effects.push(Effect::CloseService(id.clone(), entry.revision));
+            }
         }
+        effects.push(Effect::Cancel(entry.runtime.clone()));
+        effects
     }
 
     /// Reads (or reads again) the folder of the entry at `at`.
@@ -811,6 +835,23 @@ impl Inner {
                 reporter: self.reporter(&plugin.manifest.id, revision),
             }));
         }
+        if let Some(plugin) = entry.live().cloned()
+            && let Some(spec) = plugin.manifest.service.clone()
+        {
+            let myself = self.myself.clone();
+            effects.push(Effect::OpenService(ServicePlugin {
+                plugin: plugin.manifest.id.clone(),
+                revision,
+                folder: plugin.dir.clone(),
+                spec,
+                secrets: plugin.manifest.secrets.clone(),
+                changed: Arc::new(move || {
+                    if let Some(inner) = myself.upgrade() {
+                        inner.changed_soon();
+                    }
+                }),
+            }));
+        }
         effects
     }
 
@@ -824,11 +865,14 @@ impl Inner {
         })
     }
 
-    /// Starts and stops backgrounds, outside the state's lock.
+    /// Starts and stops backgrounds and services, outside the state's lock.
     fn run(&self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
                 Effect::Stop(plugin) => self.background.stop(&plugin),
+                Effect::CloseService(plugin, revision) => self.services.close(&plugin, revision),
+                Effect::OpenService(service) => self.services.open(service),
+                Effect::Cancel(runtime) => runtime.cancel(),
                 Effect::Start(launch) => {
                     let (plugin, revision) = (launch.plugin.clone(), launch.revision);
                     let now = self.background.start(launch);

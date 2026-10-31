@@ -121,7 +121,10 @@ impl Net {
             .map_err(|_| PluginCallError::invalid(format!("{} is not a URL", request.url)))?;
         let origin = target.origin().ascii_serialization();
         let limit = self.timeout;
+        // An answer that is there wins over a cancel that came with it: a
+        // service stopped under a waiting call says so.
         tokio::select! {
+            biased;
             answer = tokio::time::timeout(limit, self.follow(context, request, target)) => {
                 answer.unwrap_or_else(|_| Err(PluginCallError::new(
                     PluginErrorCode::Timeout,

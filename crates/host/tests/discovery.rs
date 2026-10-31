@@ -50,6 +50,7 @@ fn config(dirs: &TestDirs, endpoint: &Endpoint) -> HostConfig {
         run: HostRun {
             mode: AppMode::Dev,
             home: Some(dirs.home.clone()),
+            node: None,
         },
     }
 }

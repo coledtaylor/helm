@@ -74,6 +74,7 @@ use crate::agent::{AgentBackend, PlainCommandBackend, sweep_launch_folders};
 use crate::devices::DeviceRegistry;
 use crate::keys::{load_or_create_key_pair, read_key_pair};
 use crate::platform::folders::{self, Folders, UserEnv};
+use crate::platform::node_runtime;
 use crate::platform::private_files::sweep_stale_temps;
 use crate::platform::process_tree::{self, ProcessTree};
 use crate::platform::socket::{self, Endpoint, LocalListener, LocalSocket};
@@ -194,14 +195,19 @@ pub struct HostRun {
     /// and where `roots:suggest` looks for a `.harness` folder. Nothing in
     /// it is written.
     pub home: Option<PathBuf>,
+    /// The Node binary plugin services of the `node` kind run on, or `None`
+    /// when this host has none ([`node_runtime::runtime`]).
+    pub node: Option<PathBuf>,
 }
 
 impl HostRun {
     /// A host on the OS's own folders is the installed one; a host whose
     /// data folder was moved (`FLOTI_DATA_DIR`) runs on data of its own, as
-    /// a development run does.
+    /// a development run does. Its Node is `FLOTI_NODE`, else the one
+    /// shipped beside this executable.
     pub fn from_env(env: &UserEnv) -> Self {
         let moved = env.var(folders::DATA_DIR_VAR).is_some();
+        let exe = std::env::current_exe().ok();
         Self {
             mode: if moved {
                 AppMode::Dev
@@ -209,16 +215,19 @@ impl HostRun {
                 AppMode::Installed
             },
             home: env.home.clone(),
+            node: node_runtime::runtime(env, exe.as_deref(), &node_runtime::Native),
         }
     }
 }
 
-/// A development run with no home folder to show: what a test's host is.
+/// A development run with no home folder to show and no Node: what a test's
+/// host is.
 impl Default for HostRun {
     fn default() -> Self {
         Self {
             mode: AppMode::Dev,
             home: None,
+            node: None,
         }
     }
 }
