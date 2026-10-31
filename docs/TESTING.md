@@ -233,7 +233,7 @@ pnpm vitest run <file>             # one file, while building
 pnpm test:posix                    # the POSIX code's tests: under Linux in WSL on Windows, natively elsewhere
 pnpm test:posix <file> ...         # the same, for these files
 pnpm test:e2e                      # builds, then runs every workflow
-pnpm --filter @helm/desktop exec playwright test -c e2e panes   # one spec, after a build
+pnpm --filter @helm/desktop exec node scripts/playwright.mjs test -c e2e panes   # one spec, after a build; the wrapper keeps Playwright's cache out of the temp folder
 cargo nextest run --workspace      # every crate's tests; CI adds --profile ci
 cargo nextest run -p floti-protocol   # the protocol crate, its ipc.ts coverage and generated-file check included
 cargo nextest run -p floti-host    # the host, with the fake agents (Node on PATH)

@@ -102,7 +102,7 @@ jobs:
 
       - name: Launch Helm with the fake claude and capture each view
         id: capture
-        run: pnpm --filter @helm/desktop exec playwright test -c scripts/screenshots
+        run: pnpm --filter @helm/desktop exec node scripts/playwright.mjs test -c scripts/screenshots
 
       # Whatever the capture wrote, even from a run that failed partway; there
       # is nothing to upload when the build or its check stopped the job first.
