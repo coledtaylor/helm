@@ -30,6 +30,21 @@ sessions in the local host" is on: both commands first run
 electron-builder carries it beside the app, at `resources\floti.exe` on Windows
 and `Contents/Resources/floti` on macOS, where the app looks for it.
 
+Beside `floti` goes the Node runtime the local host runs plugin services on.
+`scripts/node-runtime.json` pins its version (a Node 24 LTS release) and, for
+win32-x64, darwin-arm64 and linux-x64, the archive from nodejs.org and its
+SHA-256 from that release's `SHASUMS256.txt`. `stage-floti.mjs` downloads the
+archive into `<cargo target>/node-runtime/`, or reuses one already there, and
+checks its SHA-256 before extracting anything: a mismatch, or a platform the
+pin file does not list, fails the build. It then extracts only Node's binary
+and `LICENSE`, with the system tar (Windows' own `tar.exe`, which reads zip),
+into a fresh folder there, and stages them as `dist-host/node/`. The app
+carries them at `resources\node\node.exe` on Windows and
+`Contents/Resources/node/bin/node` on macOS, each with Node's `LICENSE` beside
+it. Node is fetched at build time only; the app never downloads it. To move to
+a newer Node, change the version, archive names and checksums in the pin file
+together.
+
 ### The Mac build is ad-hoc signed
 
 Apple Silicon runs no arm64 binary without a code signature, and Helm has no

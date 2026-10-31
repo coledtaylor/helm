@@ -209,6 +209,17 @@ function appProblems(app, origin) {
       fail('Contents/Resources/floti is not executable, so sessions cannot run in the local host')
     }
   }
+  // The pinned Node the local host runs plugin services on, staged beside it.
+  const node = join(resources, 'node', 'bin', 'node')
+  if (!existsSync(node)) fail('Contents/Resources/node/bin/node is missing, so no plugin service can run in the local host')
+  else {
+    try {
+      accessSync(node, constants.X_OK)
+    } catch {
+      fail('Contents/Resources/node/bin/node is not executable, so no plugin service can run in the local host')
+    }
+  }
+  if (!existsSync(join(resources, 'node', 'LICENSE'))) fail("Contents/Resources/node/LICENSE, Node's license, is missing")
   return problems
 }
 

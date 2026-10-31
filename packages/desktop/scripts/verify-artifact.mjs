@@ -59,7 +59,12 @@ const REQUIRED = [
   // koffi, for the window's small corners (src/main/corners.ts). Not fatal when
   // missing - the corners stay at Windows' default - which is why it is checked
   // here rather than left for somebody to notice.
-  'resources\\app.asar.unpacked\\node_modules\\@koromix\\koffi-win32-x64\\win32_x64\\koffi.node'
+  'resources\\app.asar.unpacked\\node_modules\\@koromix\\koffi-win32-x64\\win32_x64\\koffi.node',
+  // The local host, and the pinned Node it runs plugin services on, staged by
+  // scripts/stage-floti.mjs.
+  'resources\\floti.exe',
+  'resources\\node\\node.exe',
+  'resources\\node\\LICENSE'
 ]
 
 /**
