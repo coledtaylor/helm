@@ -27,6 +27,11 @@
 //! batch, and every call in it is started before anything is pushed
 //! ([`Registry::hold_pushes`]).
 //!
+//! What a plugin's pages hear (its settings, its secrets' states, a command,
+//! the sessions it may see, a `BroadcastChannel` post) goes to every client
+//! through the `deliver` it was built with, and into its background script
+//! when that runs in the host's engine.
+//!
 //! Locks are taken in one order: publishing, then held, then the state, then
 //! the store.
 
@@ -36,16 +41,19 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use floti_protocol::Payload;
 use floti_protocol::channels::plugins::{
-    PluginAddResult, PluginBackgroundState, PluginErrorCode, PluginFile, PluginInfo, PluginLogLine,
-    PluginLogStream, PluginMetrics, PluginPageSecretState, PluginSecretState, PluginSettingSpec,
-    PluginSettingValue, PluginStatusItem, PluginStatusTone, PluginSurfaceKind,
+    PLUGIN_CHANNEL_POST, PluginAddResult, PluginBackgroundState, PluginChannelMessage,
+    PluginCommandEvent, PluginDelivery, PluginDeliveryTarget, PluginErrorCode, PluginFile,
+    PluginInfo, PluginLogLine, PluginLogStream, PluginMetrics, PluginPageSecretState,
+    PluginSecretState, PluginSession, PluginSettingSpec, PluginSettingValue, PluginStatusItem,
+    PluginStatusTone, PluginSurfaceKind,
 };
 
 use super::background::{
     BackgroundEvent, BackgroundLaunch, BackgroundReporter, BackgroundRuntime, ToolAnswer, ToolCall,
 };
 use super::call::{
-    CallContext, CallResult, CancelToken, Methods, PluginCallError, answer, nothing,
+    CallContext, CallOrigin, CallResult, CancelToken, Methods, PluginCallError, answer, argument,
+    nothing,
 };
 use super::info::{self, Live};
 use super::loader::{self, LoadFailure, LoadResult, LoadedPlugin};
@@ -75,10 +83,20 @@ pub struct RegistryParts {
     pub logs: Arc<PluginLogs>,
     /// Sends every subscriber the whole list.
     pub publish: Publish,
+    /// Hands an event to the plugin's pages on every client that frames
+    /// them.
+    pub deliver: Deliver,
 }
 
 /// How the registry sends every subscriber the whole list.
 pub type Publish = Box<dyn Fn(&Vec<PluginInfo>) + Send + Sync>;
+
+/// How the registry hands an event to a plugin's pages on every client.
+pub type Deliver = Box<dyn Fn(&PluginDelivery) + Send + Sync>;
+
+/// The token a post from a background script in the host's engine carries:
+/// no page's channel has it, so every page's channel of that name hears it.
+pub const BACKGROUND_CHANNEL_TOKEN: &str = "host-background";
 
 /// One bridge call, as the page or background that made it sent it.
 pub struct PluginCall {
@@ -88,6 +106,7 @@ pub struct PluginCall {
     pub surface: PluginSurfaceKind,
     pub method: String,
     pub args: Vec<Payload>,
+    pub origin: CallOrigin,
     /// The caller's abort.
     pub cancel: CancelToken,
 }
@@ -120,6 +139,7 @@ struct Inner {
     /// The runtime folder watches settle on, once they are asked for.
     watching: OnceLock<tokio::runtime::Handle>,
     publish: Publish,
+    deliver: Deliver,
     methods: Methods,
     state: Mutex<State>,
     /// Held while a list is made and sent, so subscribers see lists in the
@@ -276,6 +296,7 @@ impl Registry {
             logs: parts.logs,
             watching: OnceLock::new(),
             publish: parts.publish,
+            deliver: parts.deliver,
             methods: Methods::default(),
             state: Mutex::new(State::default()),
             publishing: Mutex::new(()),
@@ -584,8 +605,13 @@ impl Registry {
             if entry.host_background().is_some() {
                 inner
                     .background
-                    .deliver(plugin, BackgroundEvent::Settings(values));
+                    .deliver(plugin, BackgroundEvent::Settings(values.clone()));
             }
+            (inner.deliver)(&PluginDelivery::Settings {
+                plugin: plugin.to_owned(),
+                data: values,
+                to: PluginDeliveryTarget::All,
+            });
             Ok((Vec::new(), true))
         })
     }
@@ -609,16 +635,20 @@ impl Registry {
                 manifest.name
             ));
         }
-        if manifest.host_background().is_none() {
-            return Err(format!(
-                "{}'s background page runs in the client that frames it, which runs \"{id}\"",
-                manifest.name
-            ));
-        }
+        let in_host = manifest.host_background().is_some();
         drop(state);
-        self.inner
-            .background
-            .deliver(plugin, BackgroundEvent::Command { id: id.to_owned() });
+        if in_host {
+            self.inner
+                .background
+                .deliver(plugin, BackgroundEvent::Command { id: id.to_owned() });
+        } else {
+            // A background page: the client that frames it runs the command.
+            (self.inner.deliver)(&PluginDelivery::Command {
+                plugin: plugin.to_owned(),
+                data: PluginCommandEvent { id: id.to_owned() },
+                to: PluginDeliveryTarget::Background,
+            });
+        }
         Ok(())
     }
 
@@ -639,7 +669,7 @@ impl Registry {
         if self.inner.stopped.load(Ordering::SeqCst) {
             return Err(PluginCallError::unavailable("the host is shutting down"));
         }
-        let context = {
+        let (context, bridge) = {
             let state = lock(&self.inner.state);
             let entry = by_id(&state, &call.plugin)
                 .filter(|entry| entry.live().is_some())
@@ -647,19 +677,21 @@ impl Registry {
             let plugin = entry.live().expect("filtered to live entries");
             let cancel = entry.runtime.child();
             cancel.follow(&call.cancel);
-            CallContext {
+            let context = CallContext {
                 plugin: call.plugin.clone(),
                 revision: entry.revision,
                 manifest: Arc::new(plugin.manifest.clone()),
                 folder: plugin.dir.clone(),
                 surface: call.surface,
+                origin: call.origin,
                 cancel,
-            }
+            };
+            (context, plugin.manifest.bridge())
         };
         let cancel = context.cancel.clone();
         let Some(running) = self.inner.methods.start(&call.method, context, call.args) else {
             return Err(PluginCallError::invalid(format!(
-                "floti.{} is not part of the bridge",
+                "{bridge}.{} is not part of the bridge",
                 call.method
             )));
         };
@@ -725,6 +757,7 @@ impl Registry {
     pub fn secrets_changed(&self) {
         let deliveries: Vec<(
             String,
+            bool,
             std::collections::BTreeMap<String, PluginPageSecretState>,
         )> = {
             let state = lock(&self.inner.state);
@@ -732,10 +765,7 @@ impl Registry {
                 .entries
                 .iter()
                 .filter_map(Entry::live)
-                .filter(|plugin| {
-                    plugin.manifest.host_background().is_some()
-                        && !plugin.manifest.secrets.is_empty()
-                })
+                .filter(|plugin| !plugin.manifest.secrets.is_empty())
                 .map(|plugin| {
                     let id = plugin.manifest.id.clone();
                     let states = plugin
@@ -753,16 +783,73 @@ impl Registry {
                             (key.clone(), state)
                         })
                         .collect();
-                    (id, states)
+                    (id, plugin.manifest.host_background().is_some(), states)
                 })
                 .collect()
         };
-        for (plugin, states) in deliveries {
-            self.inner
-                .background
-                .deliver(&plugin, BackgroundEvent::Secrets(states));
+        for (plugin, in_host, states) in deliveries {
+            if in_host {
+                self.inner
+                    .background
+                    .deliver(&plugin, BackgroundEvent::Secrets(states.clone()));
+            }
+            (self.inner.deliver)(&PluginDelivery::Secrets {
+                plugin,
+                data: states,
+                to: PluginDeliveryTarget::All,
+            });
         }
         self.inner.changed_soon();
+    }
+
+    /// The sessions plugins may see moved: every plugin whose manifest lists
+    /// them hears the whole list, on its pages and in its background.
+    pub fn sessions_changed(&self, sessions: &[PluginSession]) {
+        let listening: Vec<(String, bool)> = {
+            let state = lock(&self.inner.state);
+            state
+                .entries
+                .iter()
+                .filter_map(Entry::live)
+                .filter(|plugin| plugin.manifest.sessions.list)
+                .map(|plugin| {
+                    (
+                        plugin.manifest.id.clone(),
+                        plugin.manifest.host_background().is_some(),
+                    )
+                })
+                .collect()
+        };
+        for (plugin, in_host) in listening {
+            if in_host {
+                self.inner
+                    .background
+                    .deliver(&plugin, BackgroundEvent::Sessions(sessions.to_vec()));
+            }
+            (self.inner.deliver)(&PluginDelivery::Sessions {
+                plugin,
+                data: sessions.to_vec(),
+                to: PluginDeliveryTarget::All,
+            });
+        }
+    }
+
+    /// `plugin`'s background script, in the host's engine, posted `message`
+    /// on its channel `name`: every page of the plugin, on every client,
+    /// hears it.
+    pub fn background_posted(&self, plugin: &str, name: &str, message: Payload) {
+        let live = by_id(&lock(&self.inner.state), plugin).is_some();
+        if live {
+            (self.inner.deliver)(&PluginDelivery::Channel {
+                plugin: plugin.to_owned(),
+                data: PluginChannelMessage {
+                    name: name.to_owned(),
+                    message,
+                    token: BACKGROUND_CHANNEL_TOKEN.to_owned(),
+                },
+                to: PluginDeliveryTarget::All,
+            });
+        }
     }
 
     /// Stops everything every plugin has running, and refuses calls from now
@@ -1157,6 +1244,32 @@ fn register_standard(methods: &Methods, registry: &Weak<Inner>) {
         let inner = weak.upgrade().ok_or_else(gone)?;
         let badge = read_badge(args)?;
         inner.painted(context, |entry| entry.badge = badge);
+        Ok(nothing())
+    });
+
+    // A page's BroadcastChannel post: to every page of the plugin on every
+    // client, and into its background script when the host's engine runs
+    // one. The bridge's own method, not one a plugin calls.
+    let weak = registry.clone();
+    methods.register_sync(PLUGIN_CHANNEL_POST, move |context, args| {
+        let inner = weak.upgrade().ok_or_else(gone)?;
+        let name: String = argument(args, 0, "a channel post names its channel")?;
+        let token: String = argument(args, 2, "a channel post carries its channel's token")?;
+        let message = args.get(1).cloned().unwrap_or(Payload::Null);
+        if context.manifest.host_background().is_some() {
+            inner
+                .background
+                .channel_post(&context.plugin, &name, message.clone());
+        }
+        (inner.deliver)(&PluginDelivery::Channel {
+            plugin: context.plugin.clone(),
+            data: PluginChannelMessage {
+                name,
+                message,
+                token,
+            },
+            to: PluginDeliveryTarget::All,
+        });
         Ok(nothing())
     });
 }

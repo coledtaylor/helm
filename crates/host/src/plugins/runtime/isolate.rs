@@ -29,7 +29,7 @@ use super::{
 };
 use crate::plugins::PluginCall;
 use crate::plugins::background::BackgroundReporter;
-use crate::plugins::call::{CallResult, CancelToken, PluginCallError};
+use crate::plugins::call::{CallOrigin, CallResult, CancelToken, PluginCallError};
 use crate::plugins::engine::{self, ConsoleLevel, ConsoleSink, IsolateOptions};
 
 /// The globals the background surface adds to the base isolate's.
@@ -381,6 +381,7 @@ async fn op_floti_bg_call(
             surface: PluginSurfaceKind::Background,
             method,
             args,
+            origin: CallOrigin::Host,
             cancel,
         };
         setup.outbox.push(Job { call, reply }).then_some(answer)

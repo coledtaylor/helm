@@ -41,18 +41,9 @@ fn entry_covers(entry: &str, channel: &str) -> bool {
     }
 }
 
-/// Every channel not served yet, by the feature that will serve it.
-pub const NOT_YET_SERVED: &[Later] = &[Later {
-    feature: "plugin pages",
-    channels: &[
-        "plugins:call",
-        "plugins:cancel",
-        "plugins:answer",
-        "plugins:session",
-        "plugins:ui",
-        "plugins:deliver",
-    ],
-}];
+/// Every channel not served yet, by the feature that will serve it. Empty:
+/// the host serves every channel the protocol declares.
+pub const NOT_YET_SERVED: &[Later] = &[];
 
 /// The entry that lists `channel`, when it is not served yet.
 pub fn later(channel: &str) -> Option<&'static Later> {
@@ -152,23 +143,29 @@ mod tests {
         channels.iter().copied().collect()
     }
 
-    /// Every protocol channel the list does not cover, as if all were
-    /// served.
-    fn all_unlisted(catalogue: &Catalogue) -> BTreeSet<&'static str> {
+    /// A list of channels one feature will serve, as a test writes it.
+    const PLUGIN_PAGES: Later = Later {
+        feature: "plugin pages",
+        channels: &["plugins:call", "plugins:ui"],
+    };
+
+    /// Every protocol channel `list` does not cover, as if all were served.
+    fn all_unlisted(catalogue: &Catalogue, list: &[Later]) -> BTreeSet<&'static str> {
         catalogue
             .channels()
             .map(|decl| decl.name())
-            .filter(|name| later(name).is_none())
+            .filter(|name| !list.iter().any(|later| later.covers(name)))
             .collect()
     }
 
     #[test]
     fn the_list_names_each_served_channel_left_on_it() {
         let catalogue = Catalogue::protocol();
-        let mut served = all_unlisted(&catalogue);
+        let list = [PLUGIN_PAGES];
+        let mut served = all_unlisted(&catalogue, &list);
         served.insert("plugins:call");
         served.insert("plugins:ui");
-        let drift = drift(&catalogue, &served);
+        let drift = drift_against(&catalogue, &served, &list);
         assert_eq!(
             drift.served_but_listed,
             vec![
@@ -188,7 +185,7 @@ mod tests {
     #[test]
     fn the_list_names_each_unserved_channel_missing_from_it() {
         let catalogue = Catalogue::protocol();
-        let mut served = all_unlisted(&catalogue);
+        let mut served = all_unlisted(&catalogue, NOT_YET_SERVED);
         served.remove("session:list");
         served.remove("host:stop");
         let drift = drift(&catalogue, &served);
@@ -212,8 +209,6 @@ mod tests {
 
     #[test]
     fn every_entry_is_labelled_with_the_feature_that_will_serve_it() {
-        let features: BTreeSet<&str> = NOT_YET_SERVED.iter().map(|later| later.feature).collect();
-        assert!(features.contains("plugin pages"), "plugin pages is missing");
         assert!(
             NOT_YET_SERVED
                 .iter()
@@ -222,10 +217,21 @@ mod tests {
     }
 
     #[test]
+    fn the_host_serves_every_channel_the_protocol_declares() {
+        let catalogue = Catalogue::protocol();
+        assert!(
+            catalogue
+                .channels()
+                .all(|decl| later(decl.name()).is_none()),
+            "nothing is left on the list"
+        );
+    }
+
+    #[test]
     fn a_refusal_names_the_channel_and_its_feature() {
-        let later = later("plugins:call").unwrap();
+        assert!(PLUGIN_PAGES.covers("plugins:call"));
         assert_eq!(
-            refusal("plugins:call", later),
+            refusal("plugins:call", &PLUGIN_PAGES),
             "This host does not serve `plugins:call` yet: it comes with the plugin pages."
         );
     }

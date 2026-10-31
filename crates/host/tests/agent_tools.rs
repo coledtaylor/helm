@@ -1890,6 +1890,19 @@ async fn s3_s4_a_plugin_server_offered_by_helms_window_is_listed_as_offered_allo
         (call.plugin.as_str(), call.tool.as_str()),
         ("notes", "find")
     );
+    // The caller the plugin is told of: the id the host minted for the
+    // session, never its row id or token, its name and its folder.
+    let caller = call.caller.clone().expect("the call names its caller");
+    assert_eq!(
+        (caller.label.as_str(), caller.folder.as_str()),
+        (alpha.record.name.as_str(), alpha.record.cwd.as_str())
+    );
+    assert!(
+        !caller.id.is_empty()
+            && caller.id != alpha.record.id.to_string()
+            && caller.id != alpha.token,
+        "{caller:?}"
+    );
     assert_eq!(
         from_payload::<Value>(&call.arguments).unwrap(),
         json!({ "query": "release" })

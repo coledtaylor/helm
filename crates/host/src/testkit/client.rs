@@ -169,6 +169,15 @@ impl TestClient {
         channel: &str,
         payload: Payload,
     ) -> Result<Payload, ErrorReply> {
+        let id = self.send_request(channel, payload).await;
+        self.answer_to(id, channel).await
+    }
+
+    /// Makes a request on `channel` with `payload` without waiting for its
+    /// answer, which [`answer_to`](Self::answer_to) waits for by the id this
+    /// returns: for a request answered later, while the test does something
+    /// else.
+    pub async fn send_request(&mut self, channel: &str, payload: Payload) -> u64 {
         let id = self.next_request;
         self.next_request += 1;
         self.send(&Message::Request(Request {
@@ -177,6 +186,11 @@ impl TestClient {
             payload,
         }))
         .await;
+        id
+    }
+
+    /// Waits for the answer to request `id`, made on `channel`.
+    pub async fn answer_to(&mut self, id: u64, channel: &str) -> Result<Payload, ErrorReply> {
         let found = self
             .wait_for(
                 &format!("an answer to `{channel}`"),
@@ -243,6 +257,29 @@ impl TestClient {
                 !left.is_zero() && self.pump(left).await,
                 "the host did not close stream {stream} within {PATIENCE:?}"
             );
+        }
+    }
+
+    /// The first event on `subscription` that `wanted` accepts, decoded,
+    /// leaving every other message for later; panics naming `what` when none
+    /// comes within [`PATIENCE`].
+    pub async fn event_on<T: serde::de::DeserializeOwned>(
+        &mut self,
+        subscription: u64,
+        what: &str,
+        wanted: impl Fn(&T) -> bool,
+    ) -> T {
+        let found = self
+            .wait_for(what, |message| match message {
+                Message::Event(event) if event.subscription == subscription => {
+                    from_payload::<T>(&event.payload).is_ok_and(|event| wanted(&event))
+                }
+                _ => false,
+            })
+            .await;
+        match found {
+            Message::Event(event) => from_payload(&event.payload).expect("decoded once already"),
+            _ => unreachable!(),
         }
     }
 

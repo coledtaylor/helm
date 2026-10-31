@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use floti_host::platform::launcher::{self, ProgramLauncher};
 use floti_host::platform::process_tree::{self, ProcessTree};
 use floti_host::plugins::background::NoBackground;
+use floti_host::plugins::call::CallOrigin;
 use floti_host::plugins::call::{CancelToken, ExecResult, PluginCallError};
 use floti_host::plugins::exec::{
     EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS, read_request, register_methods,
@@ -145,6 +146,7 @@ impl World {
             services: Arc::new(floti_host::plugins::net::service::NoServices),
             logs: Default::default(),
             publish: Box::new(|_| ()),
+            deliver: Box::new(|_| ()),
         });
         register_methods(
             registry.methods(),
@@ -180,6 +182,7 @@ impl World {
         let call = PluginCall {
             plugin: plugin.to_owned(),
             surface: PluginSurfaceKind::Background,
+            origin: CallOrigin::Host,
             method: "exec".into(),
             args,
             cancel,

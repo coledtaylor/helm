@@ -17,7 +17,8 @@
 //! - [`templates`]: harness templates.
 //! - [`content`]: notes and documents, and the renderer.
 //! - [`files`]: the Files view.
-//! - [`plugins`]: registered plugin folders and `plugins:changed`.
+//! - [`plugins`]: registered plugin folders and `plugins:changed`, and the
+//!   calls, asks and deliveries of the plugin pages clients frame.
 //! - [`agent_browser`]: the agent browser tools' calls, carried to a client
 //!   with a browser pane, and its answers.
 //! - [`agent_plugin`]: the plugin tool servers a client offers, their calls
@@ -193,7 +194,11 @@ impl Features {
         let sessions = sessions::Sessions::new(&context)?;
         let activity = sessions.activity();
         let browser = Arc::new(BrowserRelay::new(&context.events));
-        let plugin_tools = Arc::new(PluginRelay::new(&context.events));
+        let plugin_sessions = Arc::new(plugins::PluginSessions::new(&context.hosted));
+        let plugin_tools = Arc::new(
+            PluginRelay::new(&context.events)
+                .naming_callers(plugins::tool_caller(Arc::downgrade(&plugin_sessions))),
+        );
         let features: Vec<Box<dyn Feature>> = vec![
             Box::new(sessions),
             Box::new(history::History::new(&context)?),
@@ -205,7 +210,11 @@ impl Features {
             Box::new(templates::Templates::new(&context)?),
             Box::new(content::Content::new(&context)?),
             Box::new(files::Files::new(&context)?),
-            Box::new(plugins::Plugins::new(&context)?),
+            Box::new(plugins::Plugins::new(
+                &context,
+                activity.clone(),
+                plugin_sessions,
+            )?),
             Box::new(Arc::clone(&browser)),
             Box::new(Arc::clone(&plugin_tools)),
         ];

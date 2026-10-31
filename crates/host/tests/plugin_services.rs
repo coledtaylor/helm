@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use floti_host::platform::process_tree::{self, ProcessTree};
 use floti_host::plugins::background::NoBackground;
+use floti_host::plugins::call::CallOrigin;
 use floti_host::plugins::call::{
     CancelToken, FetchRedirect, PluginCallError, PluginFetchRequest, PluginFetchResponse,
 };
@@ -127,6 +128,7 @@ impl World {
             services: Arc::clone(&services) as _,
             logs: Default::default(),
             publish: Box::new(|_| ()),
+            deliver: Box::new(|_| ()),
         });
         register_methods(
             registry.methods(),
@@ -176,6 +178,7 @@ impl World {
         let call = PluginCall {
             plugin: plugin.to_owned(),
             surface: PluginSurfaceKind::Background,
+            origin: CallOrigin::Host,
             method: "fetch".into(),
             args: vec![
                 Payload::serialized(&PluginFetchRequest {

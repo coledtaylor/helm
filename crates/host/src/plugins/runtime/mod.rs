@@ -413,6 +413,11 @@ impl BackgroundRuntime for IsolateRuntime {
         self.send(plugin, Inbound::Event { name, data });
     }
 
+    fn channel_post(&self, plugin: &str, name: &str, message: Payload) {
+        // A plugin with no script running has no channel to hear it.
+        let _ = self.post_to_channel(plugin, name, message);
+    }
+
     fn call_tool(&self, call: ToolCall, cancel: CancelToken) -> ToolFuture {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move { inner.call_tool(call, cancel).await })

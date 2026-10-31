@@ -6,8 +6,9 @@
 //! one to its sessions as one more agent tool family
 //! ([`super::super::plugin_tools`]) and carries every call to the client that
 //! offered it, which answers it with its plugin's background page. The call
-//! names the session whose token made it; the client tells its plugin an id
-//! of its own for that session, never the token.
+//! names the session whose token made it, and the caller the plugin is told
+//! of: the id the host minted for that session (the one `sessions.list`
+//! shows), its name and its folder, never the token.
 //!
 //! **What a session is given.** A client's servers are offered while it is
 //! attached and listening on `agentPlugin:call`. An offer replaces the last:
@@ -26,9 +27,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use floti_protocol::channel::{Router, from_payload};
 use floti_protocol::channels::agent_plugin::{
-    AgentPluginAnswer, AgentPluginCallCancel, AgentPluginCalls, AgentPluginCancels,
-    AgentPluginOffer, AgentPluginOutcome, AgentPluginServer, AgentPluginServers,
-    AgentPluginToolAnswer, AgentPluginToolCall,
+    AgentPluginAnswer, AgentPluginCallCancel, AgentPluginCaller, AgentPluginCalls,
+    AgentPluginCancels, AgentPluginOffer, AgentPluginOutcome, AgentPluginServer,
+    AgentPluginServers, AgentPluginToolAnswer, AgentPluginToolCall,
 };
 use floti_protocol::{ClientChannels, EventChannel, Payload};
 use tokio::sync::oneshot;
@@ -69,7 +70,12 @@ pub(crate) struct Offered {
 pub(crate) struct PluginRelay {
     events: Arc<Events>,
     state: Mutex<Relay>,
+    /// The caller a call from a session names, by the session's row id.
+    caller: CallerOf,
 }
+
+/// How the relay names the session a call comes from to the plugin.
+type CallerOf = Box<dyn Fn(u64) -> Option<AgentPluginCaller> + Send + Sync>;
 
 #[derive(Default)]
 struct Relay {
@@ -110,7 +116,17 @@ impl PluginRelay {
         Self {
             events: Arc::clone(events),
             state: Mutex::new(Relay::default()),
+            caller: Box::new(|_| None),
         }
+    }
+
+    /// The relay, naming the session each call comes from with `caller`.
+    pub fn naming_callers(
+        mut self,
+        caller: impl Fn(u64) -> Option<AgentPluginCaller> + Send + Sync + 'static,
+    ) -> Self {
+        self.caller = Box::new(caller);
+        self
     }
 
     /// Every server now: each a listening client offers, the first client
@@ -154,6 +170,8 @@ impl PluginRelay {
         tool: &str,
         arguments: Payload,
     ) -> AgentPluginOutcome {
+        // Read before the relay's lock: it reads the session's row.
+        let caller = (self.caller)(session);
         let (call, client, answered) = {
             let mut state = self.state();
             let Some((client, _)) = state.answering(plugin) else {
@@ -173,7 +191,7 @@ impl PluginRelay {
             let call = AgentPluginToolCall {
                 call_id,
                 session,
-                caller: None,
+                caller,
                 plugin: plugin.to_owned(),
                 tool: tool.to_owned(),
                 arguments,

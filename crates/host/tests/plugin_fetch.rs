@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use floti_host::plugins::background::NoBackground;
+use floti_host::plugins::call::CallOrigin;
 use floti_host::plugins::call::{
     CallContext, CancelToken, FetchRedirect, PluginCallError, PluginFetchRequest,
     PluginFetchResponse,
@@ -447,6 +448,7 @@ impl World {
             services: Arc::new(NoServices),
             logs: Default::default(),
             publish: Box::new(|_| ()),
+            deliver: Box::new(|_| ()),
         });
         register_methods(
             registry.methods(),
@@ -486,6 +488,7 @@ impl World {
         let call = PluginCall {
             plugin: plugin.to_owned(),
             surface: PluginSurfaceKind::Background,
+            origin: CallOrigin::Host,
             method: "fetch".into(),
             args,
             cancel,

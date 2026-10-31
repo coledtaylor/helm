@@ -4,8 +4,8 @@
 //! The channels and `secrets:changed` are tested as a client sees them:
 //! through client connections to a running host over a test's own
 //! `floti.db`. What a plugin reaches (`floti.secrets.state` and a value
-//! revealed for one use) is tested against the registry and the store, since
-//! no channel carries a bridge call yet.
+//! revealed for one use) is tested against the registry and the store,
+//! where it is decided.
 //!
 //! Every host here seals with a key file in its test data folder, or has no
 //! store at all, as the testkit arranges: no test touches the user's own
@@ -21,13 +21,14 @@ use floti_host::platform::socket::Endpoint;
 use floti_host::plugins::background::{
     BackgroundEvent, BackgroundLaunch, BackgroundRuntime, NoBackground, ToolCall, ToolFuture,
 };
+use floti_host::plugins::call::CallOrigin;
 use floti_host::plugins::call::{CancelToken, PluginCallError};
 use floti_host::plugins::secrets::store::CANNOT_SEAL;
 use floti_host::plugins::secrets::{SecretStore, SecretUse, SecretsAccess, register_methods, seal};
 use floti_host::plugins::{PluginCall, Registry, RegistryParts};
 use floti_host::server::{Host, HostConfig, HostRun, backends, unserved};
 use floti_host::store::Store;
-use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs, names_unserved_channel};
+use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_protocol::channel::{EventChannel, from_payload};
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::plugins::{
@@ -621,6 +622,7 @@ impl RegistryWorld {
             services: Arc::new(floti_host::plugins::net::service::NoServices),
             logs: Default::default(),
             publish: Box::new(|_| ()),
+            deliver: Box::new(|_| ()),
         });
         register_methods(
             registry.methods(),
@@ -641,6 +643,7 @@ impl RegistryWorld {
             .call(PluginCall {
                 plugin: plugin.into(),
                 surface: PluginSurfaceKind::Background,
+                origin: CallOrigin::Host,
                 method: "secrets.state".into(),
                 args: vec![key],
                 cancel: CancelToken::new(),
@@ -883,32 +886,11 @@ async fn a_stored_value_that_cannot_be_unsealed_on_this_computer_fails_the_call_
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_plugin_channel_not_served_yet_is_answered_naming_it_and_its_feature_and_every_other_plugin_and_secrets_channel_is_served()
- {
+async fn every_plugin_and_secrets_channel_is_served() {
     let dirs = TestDirs::new();
     let endpoint = dirs.endpoint();
     let (host, served) = RunningHost::start_with(config(&dirs, &endpoint), Host::served_channels);
     let mut client = TestClient::connect(&endpoint, &[]).await;
-
-    let later = [
-        ("plugins:call", "plugin pages"),
-        ("plugins:cancel", "plugin pages"),
-        ("plugins:answer", "plugin pages"),
-        ("plugins:session", "plugin pages"),
-        ("plugins:ui", "plugin pages"),
-        ("plugins:deliver", "plugin pages"),
-    ];
-    for (channel, feature) in later {
-        let error = client
-            .request_on(channel, Payload::Map(Vec::new()))
-            .await
-            .unwrap_err();
-        assert!(
-            names_unserved_channel(&error, channel),
-            "{channel}: {error:?}"
-        );
-        assert!(error.message.contains(feature), "{channel}: {error:?}");
-    }
 
     let catalogue = Catalogue::protocol();
     for decl in catalogue.channels() {
@@ -916,13 +898,11 @@ async fn a_plugin_channel_not_served_yet_is_answered_naming_it_and_its_feature_a
         if !(name.starts_with("plugins:") || name.starts_with("secrets:")) {
             continue;
         }
-        let listed = later.iter().any(|(channel, _)| *channel == name);
-        assert_eq!(
-            unserved::later(name).is_some(),
-            listed,
-            "{name} is listed as not served yet exactly when it is one of the later ones"
+        assert!(
+            unserved::later(name).is_none(),
+            "{name} is listed as not served yet"
         );
-        if !listed && !floti_host_internal(name) {
+        if !floti_host_internal(name) {
             assert!(served.contains(name), "{name} is not served");
         }
     }

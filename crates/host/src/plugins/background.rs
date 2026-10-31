@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use floti_protocol::Payload;
 use floti_protocol::channels::plugins::{
     PluginBackgroundState, PluginPageSecretState, PluginSession, PluginSettingValue,
 };
@@ -104,6 +105,13 @@ pub trait BackgroundRuntime: Send + Sync {
     fn stop(&self, plugin: &str);
 
     fn deliver(&self, plugin: &str, event: BackgroundEvent);
+
+    /// A page of `plugin` posted `message` on its channel `name`: every one
+    /// of its background's channels of that name hears it. A runtime with no
+    /// channels hears nothing.
+    fn channel_post(&self, plugin: &str, name: &str, message: Payload) {
+        let _ = (plugin, name, message);
+    }
 
     /// Answers a tool call, or stops when `cancel` is cancelled.
     fn call_tool(&self, call: ToolCall, cancel: CancelToken) -> ToolFuture;

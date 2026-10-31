@@ -303,6 +303,13 @@ impl Events {
         self.published.subscribe()
     }
 
+    /// Every publication from now on, for something inside the host that
+    /// follows what clients are told. It is no client: nothing is addressed
+    /// to it.
+    pub fn observe(&self) -> broadcast::Receiver<Publication> {
+        self.published.subscribe()
+    }
+
     /// `client` has gone: nothing more is addressed to it, and its numbers
     /// are forgotten.
     pub fn leave(&self, client: ClientId) {

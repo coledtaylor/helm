@@ -27,6 +27,11 @@
 //! A client leaving detaches it from every session it was attached to and
 //! ends nothing: the sessions run on for the next client.
 //!
+//! Most requests are answered as they are read. One a feature answers later
+//! (a plugin page's call waiting on the network, a program or the user) is
+//! answered when it settles, while the connection reads on; its answer is
+//! dropped with the connection, and the feature hears the client left.
+//!
 //! Of the events published, a connection delivers those for every
 //! subscriber and those addressed to its own client, never another's.
 //!
@@ -40,7 +45,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use floti_protocol::channel::{RequestChannel, Router};
+use floti_protocol::channel::{RequestChannel, Routed, Router};
 use floti_protocol::channels::host::{HostStop, HostStopReason};
 use floti_protocol::message::{
     ErrorCode, ErrorReply, Event, Request, Snapshot, StreamClose, StreamCredit, StreamData,
@@ -55,7 +60,7 @@ use floti_protocol::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{broadcast, mpsc, watch};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME};
 use super::events::{Publication, Start};
@@ -211,6 +216,7 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
         streams: HashMap::new(),
         closing: BTreeSet::new(),
         stop_after_flush: None,
+        later: Vec::new(),
     };
     if connection.received(&rest).is_err() {
         return;
@@ -335,7 +341,13 @@ struct Connection {
     /// A stop a client asked for, reserved when it was answered and carried
     /// out once the answer has been sent.
     stop_after_flush: Option<ReservedStop>,
+    /// Answers routed to be worked out, not yet handed to the loop that
+    /// waits on them.
+    later: Vec<LaterAnswer>,
 }
+
+/// An answer a feature is still working out: the message it comes to.
+type LaterAnswer = std::pin::Pin<Box<dyn std::future::Future<Output = Message> + Send>>;
 
 /// Why the connection ends.
 enum End {
@@ -420,7 +432,13 @@ impl Connection {
         let (output_tx, mut output_rx) = mpsc::unbounded_channel::<(u64, SessionOutput)>();
         let mut events = self.features.events().listen(self.client);
         let mut buf = vec![0; READ_CHUNK];
+        // Answers still being worked out. Dropped with the connection, which
+        // drops their work with them.
+        let mut later = JoinSet::new();
         loop {
+            for answer in self.later.drain(..) {
+                later.spawn(answer);
+            }
             if self.flush().await.is_err() {
                 return;
             }
@@ -435,6 +453,14 @@ impl Connection {
                 },
                 Some((stream, output)) = output_rx.recv() => {
                     self.session_output(stream, output);
+                    Ok(())
+                }
+                Some(answered) = later.join_next(), if !later.is_empty() => {
+                    // An answer whose work panicked is lost; the client's
+                    // request is the one that waits.
+                    if let Ok(answer) = answered {
+                        self.outbox.push(answer);
+                    }
                     Ok(())
                 }
                 published = events.recv() => {
@@ -484,10 +510,10 @@ impl Connection {
         output_tx: &mpsc::UnboundedSender<(u64, SessionOutput)>,
     ) {
         match message {
-            Message::Request(request) => {
-                let answer = self.answer(channels, &request);
-                self.outbox.push(answer);
-            }
+            Message::Request(request) => match self.answer(channels, &request) {
+                Routed::Now(answer) => self.outbox.push(answer),
+                Routed::Later(answer) => self.later.push(answer),
+            },
             Message::Subscribe(subscribe) => {
                 self.subscribe(channels, &subscribe);
                 self.features.subscriptions_changed(self.client, channels);
@@ -511,15 +537,15 @@ impl Connection {
     }
 
     /// The answer to one request: an error naming the channel when it is not
-    /// served yet, otherwise the features'.
-    fn answer(&mut self, channels: &ClientChannels<'static>, request: &Request) -> Message {
+    /// served yet, otherwise the features', now or once its work is done.
+    fn answer(&mut self, channels: &ClientChannels<'static>, request: &Request) -> Routed {
         if let Some(later) = unserved::later(&request.channel) {
-            return Message::Error(ErrorReply {
+            return Routed::Now(Message::Error(ErrorReply {
                 id: request.id,
                 channel: request.channel.clone(),
                 code: ErrorCode::Unavailable,
                 message: unserved::refusal(&request.channel, later),
-            });
+            }));
         }
         let mut stop = None;
         let caller = Caller {
@@ -527,11 +553,11 @@ impl Connection {
             role: self.role,
         };
         let answer =
-            router(&self.features, channels.capabilities(), caller, &mut stop).dispatch(request);
+            router(&self.features, channels.capabilities(), caller, &mut stop).route(request);
         // Taken before the answer is queued, so nothing asked once the client
         // has its answer replaces it. A later stop finds it taken and is
-        // answered all the same.
-        if matches!(answer, Message::Response(_))
+        // answered all the same. `host:stop` is answered at once.
+        if matches!(answer, Routed::Now(Message::Response(_)))
             && let Some(reserved) = stop.and_then(|reason| self.stopper.reserve(reason))
         {
             self.stop_after_flush = Some(reserved);

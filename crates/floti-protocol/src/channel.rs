@@ -10,6 +10,8 @@
 //! move onto the protocol is mechanical.
 
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
+use std::pin::Pin;
 
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Serialize;
@@ -413,7 +415,27 @@ pub fn decode_request<C: RequestChannel>(request: &Request) -> Result<C::Request
     })
 }
 
-type Handler<'a> = Box<dyn FnMut(&Payload) -> Result<Payload, String> + 'a>;
+/// An answer still being worked out: what a handler served with
+/// [`Router::handle_later`] gives back for the connection to wait on, while
+/// it goes on reading the client's other requests.
+pub type Later<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'static>>;
+
+/// What a handler came to: its answer now, or one to wait for.
+enum Handled {
+    Now(Result<Payload, String>),
+    Later(Later<Payload>),
+}
+
+type Handler<'a> = Box<dyn FnMut(&Payload) -> Handled + 'a>;
+
+/// What [`Router::route`] came to for one request.
+pub enum Routed {
+    /// The response or error reply, now.
+    Now(Message),
+    /// The response or error reply once the future resolves. Dropping it
+    /// drops the handler's work with it.
+    Later(Pin<Box<dyn Future<Output = Message> + Send + 'static>>),
+}
 
 /// Answers one client's requests from typed handlers. Every request gets
 /// exactly one message back, a response or an error reply, so a bad request
@@ -448,9 +470,39 @@ impl<'a> Router<'a> {
         self.handlers.insert(
             C::NAME,
             Box::new(move |payload| {
-                let request = from_payload::<C::Request>(payload)?;
-                let response = handler(request)?;
-                to_payload(&response).map_err(|error| error.to_string())
+                Handled::Now(from_payload::<C::Request>(payload).and_then(|request| {
+                    let response = handler(request)?;
+                    to_payload(&response).map_err(|error| error.to_string())
+                }))
+            }),
+        );
+        self
+    }
+
+    /// Serves channel `C` with a handler whose answer can take a while: it
+    /// refuses at once with `Err`, or gives back the answer to wait for,
+    /// whose `Err` is a sentence for the client too. Route a request on it
+    /// with [`route`](Self::route).
+    pub fn handle_later<C: RequestChannel>(
+        &mut self,
+        mut handler: impl FnMut(C::Request) -> Result<Later<C::Response>, String> + 'a,
+    ) -> &mut Self {
+        assert!(
+            self.catalogue.get(C::NAME).is_some(),
+            "channel `{}` is not in the catalogue",
+            C::NAME
+        );
+        self.handlers.insert(
+            C::NAME,
+            Box::new(move |payload| {
+                let answer = match from_payload::<C::Request>(payload).and_then(&mut handler) {
+                    Ok(answer) => answer,
+                    Err(why) => return Handled::Now(Err(why)),
+                };
+                Handled::Later(Box::pin(async move {
+                    let response = answer.await?;
+                    to_payload(&response).map_err(|error| error.to_string())
+                }))
             }),
         );
         self
@@ -461,34 +513,59 @@ impl<'a> Router<'a> {
         self.handlers.keys().copied()
     }
 
+    /// The answer to `request`, for a router whose handlers all answer at
+    /// once. A request on a channel served with
+    /// [`handle_later`](Self::handle_later) is answered with an error saying
+    /// so: route it with [`route`](Self::route).
     pub fn dispatch(&mut self, request: &Request) -> Message {
+        match self.route(request) {
+            Routed::Now(message) => message,
+            Routed::Later(_) => Message::Error(ErrorReply {
+                id: request.id,
+                channel: request.channel.clone(),
+                code: ErrorCode::Failed,
+                message: format!("`{}` is answered later: route it.", request.channel),
+            }),
+        }
+    }
+
+    /// The answer to `request`: now, or once its handler's work is done.
+    pub fn route(&mut self, request: &Request) -> Routed {
         let decl = match self
             .catalogue
             .check_request_from(request, &self.capabilities)
         {
             Ok(decl) => decl,
-            Err(reply) => return Message::Error(reply),
-        };
-        let error = |code, message| {
-            Message::Error(ErrorReply {
-                id: request.id,
-                channel: request.channel.clone(),
-                code,
-                message,
-            })
+            Err(reply) => return Routed::Now(Message::Error(reply)),
         };
         let Some(handler) = self.handlers.get_mut(decl.name()) else {
-            return error(
-                ErrorCode::Unavailable,
-                format!("This host does not serve `{}`.", decl.name()),
-            );
-        };
-        match handler(&request.payload) {
-            Ok(payload) => Message::Response(Response {
+            return Routed::Now(Message::Error(ErrorReply {
                 id: request.id,
-                payload,
-            }),
-            Err(why) => error(ErrorCode::Failed, why),
+                channel: request.channel.clone(),
+                code: ErrorCode::Unavailable,
+                message: format!("This host does not serve `{}`.", decl.name()),
+            }));
+        };
+        let id = request.id;
+        let channel = request.channel.clone();
+        match handler(&request.payload) {
+            Handled::Now(answer) => Routed::Now(answer_message(id, channel, answer)),
+            Handled::Later(answer) => Routed::Later(Box::pin(async move {
+                answer_message(id, channel, answer.await)
+            })),
         }
+    }
+}
+
+/// The message answering request `id` on `channel` with `answer`.
+fn answer_message(id: u64, channel: String, answer: Result<Payload, String>) -> Message {
+    match answer {
+        Ok(payload) => Message::Response(Response { id, payload }),
+        Err(message) => Message::Error(ErrorReply {
+            id,
+            channel,
+            code: ErrorCode::Failed,
+            message,
+        }),
     }
 }

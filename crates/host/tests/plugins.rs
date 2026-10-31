@@ -18,6 +18,7 @@ use floti_host::platform::socket::Endpoint;
 use floti_host::plugins::background::{
     BackgroundEvent, BackgroundLaunch, BackgroundRuntime, NoBackground, ToolCall, ToolFuture,
 };
+use floti_host::plugins::call::CallOrigin;
 use floti_host::plugins::call::{CancelToken, PluginCallError};
 use floti_host::plugins::secrets::NoSecrets;
 use floti_host::plugins::store as plugin_store;
@@ -1199,6 +1200,7 @@ impl RegistryWorld {
             services: Arc::new(floti_host::plugins::net::service::NoServices),
             logs: Default::default(),
             publish: Box::new(move |list| into.lock().unwrap().push(list.clone())),
+            deliver: Box::new(|_| ()),
         });
         registry.start().unwrap();
         Self {
@@ -1228,6 +1230,7 @@ impl RegistryWorld {
             .call(PluginCall {
                 plugin: plugin.into(),
                 surface: PluginSurfaceKind::Background,
+                origin: CallOrigin::Host,
                 method: method.into(),
                 args,
                 cancel: CancelToken::new(),

@@ -104,6 +104,16 @@ impl Manifest {
             .flatten()
     }
 
+    /// What its pages call the bridge, which sentences about a call name:
+    /// `helm` for version 1, `floti` for version 2.
+    pub fn bridge(&self) -> &'static str {
+        if self.api_version == PAGE_BACKGROUND_API_VERSION {
+            "helm"
+        } else {
+            "floti"
+        }
+    }
+
     /// The scheme its pages are served on: `helm-plugin` for the bridge
     /// called `helm` (version 1), `floti-plugin` for `floti` (version 2).
     pub fn page_scheme(&self) -> &'static str {

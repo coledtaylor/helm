@@ -2,6 +2,7 @@
 //! a subscription to state starts with a snapshot and resyncs after a gap.
 //! The channels here are test-only stubs.
 
+use floti_protocol::channel::Routed;
 use floti_protocol::channel::{decode_request, from_payload, to_payload};
 use floti_protocol::message::{ErrorCode, ErrorReply, Request, Subscribe};
 use floti_protocol::{
@@ -158,6 +159,101 @@ fn a_request_that_does_not_fit_its_channel_or_names_no_channel_gets_an_error_nam
     let mut client = FrameDecoder::new();
     client.push(&frames(&replies));
     assert_eq!(client.drain().unwrap(), replies);
+}
+
+/// The message a routed request comes to, once its work is done. The
+/// handlers here are done when they are first polled.
+fn settled(routed: Routed) -> Message {
+    match routed {
+        Routed::Now(message) => message,
+        Routed::Later(mut answer) => {
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            match answer.as_mut().poll(&mut context) {
+                std::task::Poll::Ready(message) => message,
+                std::task::Poll::Pending => panic!("the answer was not ready"),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_request_answered_later_is_routed_as_a_future_of_its_response_or_its_sentence_and_refused_at_once_when_it_does_not_fit()
+ {
+    let catalogue = catalogue();
+    let mut router = Router::new(&catalogue, CapabilitySet::empty());
+    router.handle_later::<Rename>(|request| {
+        if request.id == 0 {
+            return Err("there is no session 0".to_owned());
+        }
+        Ok(Box::pin(async move {
+            match request.label {
+                Some(label) => Ok(format!("renamed {} to {label}", request.id)),
+                None => Err(format!("session {} needs a label", request.id)),
+            }
+        }))
+    });
+    let rename = |id: u64, session: u32, label: Option<&str>| Request {
+        id,
+        channel: "test:rename".into(),
+        payload: payload(&RenameRequest {
+            id: session,
+            label: label.map(str::to_owned),
+        }),
+    };
+
+    let routed = router.route(&rename(1, 9, Some("api")));
+    assert!(matches!(routed, Routed::Later(_)), "answered later");
+    let Message::Response(response) = settled(routed) else {
+        panic!("expected a response")
+    };
+    assert_eq!(response.id, 1);
+    assert_eq!(
+        from_payload::<String>(&response.payload).unwrap(),
+        "renamed 9 to api"
+    );
+
+    let Message::Error(failed) = settled(router.route(&rename(2, 9, None))) else {
+        panic!("expected an error")
+    };
+    assert_eq!(
+        (
+            failed.id,
+            failed.channel.as_str(),
+            failed.code,
+            failed.message.as_str()
+        ),
+        (
+            2,
+            "test:rename",
+            ErrorCode::Failed,
+            "session 9 needs a label"
+        )
+    );
+
+    let refused = router.route(&rename(3, 0, Some("api")));
+    let Routed::Now(Message::Error(refused)) = refused else {
+        panic!("a refusal is answered at once")
+    };
+    assert_eq!(
+        (refused.id, refused.message.as_str()),
+        (3, "there is no session 0")
+    );
+
+    let ill_typed = Request {
+        id: 4,
+        channel: "test:rename".into(),
+        payload: payload(&"not a rename"),
+    };
+    let Routed::Now(Message::Error(ill_typed)) = router.route(&ill_typed) else {
+        panic!("a request that does not fit is refused at once")
+    };
+    assert_eq!(ill_typed.code, ErrorCode::BadPayload);
+
+    // Dispatching one says it has to be routed.
+    let Message::Error(dispatched) = router.dispatch(&rename(5, 9, Some("api"))) else {
+        panic!("expected an error")
+    };
+    assert!(dispatched.message.contains("route it"), "{dispatched:?}");
 }
 
 #[test]

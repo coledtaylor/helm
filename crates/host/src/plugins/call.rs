@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 use super::manifest::Manifest;
+use crate::devices::Role;
+use crate::session::ClientId;
 
 /// A bridge call that failed for a reason the plugin is told.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +153,16 @@ impl fmt::Debug for CancelToken {
     }
 }
 
+/// Where a call came from: a page a client frames, relayed by that client,
+/// or a background script in the host's own engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallOrigin {
+    /// The host's engine.
+    Host,
+    /// A page `client` frames, on a device paired as `role`.
+    Client { client: ClientId, role: Role },
+}
+
 /// What a method knows about the call it is answering.
 #[derive(Debug, Clone)]
 pub struct CallContext {
@@ -163,6 +175,7 @@ pub struct CallContext {
     /// The plugin folder, links resolved.
     pub folder: PathBuf,
     pub surface: PluginSurfaceKind,
+    pub origin: CallOrigin,
     /// Cancelled when the caller aborts, or when the plugin is turned off,
     /// reloaded or removed.
     pub cancel: CancelToken,

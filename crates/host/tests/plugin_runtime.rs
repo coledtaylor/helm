@@ -97,6 +97,7 @@ impl World {
             services: Arc::new(floti_host::plugins::net::service::NoServices),
             logs: Default::default(),
             publish: Box::new(move |list| into.lock().unwrap().push(list.clone())),
+            deliver: Box::new(|_| ()),
         });
         runtime.connect(&registry);
         // A fetch that never answers on its own: a call in flight until the
