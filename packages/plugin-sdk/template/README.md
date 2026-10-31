@@ -20,6 +20,14 @@ appears on the rail.
 Helm watches the manifest and the folders its pages are in. Save a file and
 the plugin reloads.
 
+## Where it runs
+
+The plugin runs on one computer, and its pages can be drawn on another.
+`helm.onHostComputer` says whether this page is on the plugin's computer; hide
+what only makes sense there, such as revealing a file. From another computer
+every `service:` request is a network round trip, so load the data once and
+filter it in the page rather than calling the service on every keystroke.
+
 ## Check it
 
 ```

@@ -115,6 +115,15 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
   const tab = await pluginFrame(ui, 'dist/tabs/item.html')
   expect(await tab.evaluate(() => (window as unknown as PluginWindow).helm.context.params)).toEqual({ id: '2' })
 
+  // Every page is drawn on the computer the plugin runs on, with sessions in
+  // the local host or not.
+  const onHostComputer = 'window.helm.onHostComputer'
+  expect([await panel.evaluate(onHostComputer), await tab.evaluate(onHostComputer), await inBackground(helm, onHostComputer)]).toEqual([
+    true,
+    true,
+    true
+  ])
+
   // A post on a BroadcastChannel reaches the plugin's other pages and its
   // background page, and every other channel of that name in the tab, but not
   // the channel that posted it.

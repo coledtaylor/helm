@@ -74,6 +74,11 @@ const HEADERS = {
  * with sessions running there (`host/plugins.ts`).
  */
 export interface PluginPageSource {
+  /**
+   * Whether that host runs on this computer, so its pages are told they are
+   * drawn where the plugin's service, programs and data are.
+   */
+  readonly onHostComputer: boolean
   /** Whether the plugin is on, so its pages and runtime are served. */
   serves(id: string): Promise<boolean>
   /** A file by its path on the plugin's origin: 403 outside its folder, 404 not there. */
@@ -146,7 +151,7 @@ export function servePluginRequest(
   } catch {
     return new Response('Not found', { status: 404 })
   }
-  return page(target, bytes, () => runtime.boot(id), 'application/octet-stream')
+  return page(target, bytes, () => ownBoot(runtime.boot(id)), 'application/octet-stream')
 }
 
 /**
@@ -174,7 +179,7 @@ export async function servePluginRequestFrom(
     if (file.status !== 200) {
       return new Response(new Uint8Array(file.body), { status: file.status, headers: { 'content-type': file.contentType } })
     }
-    return page(path, file.body, () => hostBoot(runtime.boot(id)), file.contentType)
+    return page(path, file.body, () => hostBoot(runtime.boot(id), source.onHostComputer), file.contentType)
   } catch (error) {
     return new Response(error instanceof Error ? error.message : String(error), {
       status: 503,
@@ -184,13 +189,22 @@ export async function servePluginRequestFrom(
 }
 
 /**
- * The boot facts of a page drawn from the local host's files: the runtime's,
- * and that the page's `BroadcastChannel`s are relayed through the host, so a
- * message reaches the plugin's pages on every client and its background page.
- * A page Helm serves from its own folders keeps the browser's own.
+ * The boot facts of a page Helm serves from its own folders: the runtime's,
+ * and that it is drawn on the computer the plugin runs on, which is this one.
  */
-export function hostBoot(boot: string): string {
-  return JSON.stringify({ ...(JSON.parse(boot) as Record<string, unknown>), channels: 'host' })
+function ownBoot(boot: string): string {
+  return JSON.stringify({ ...(JSON.parse(boot) as Record<string, unknown>), onHostComputer: true })
+}
+
+/**
+ * The boot facts of a page drawn from a host's files: the runtime's, that the
+ * page's `BroadcastChannel`s are relayed through the host, so a message
+ * reaches the plugin's pages on every client and its background page, and
+ * whether that host runs on this computer. A page Helm serves from its own
+ * folders keeps the browser's own channels.
+ */
+export function hostBoot(boot: string, onHostComputer: boolean): string {
+  return JSON.stringify({ ...(JSON.parse(boot) as Record<string, unknown>), channels: 'host', onHostComputer })
 }
 
 function asset(body: string, type: string): Response {

@@ -439,6 +439,15 @@ export interface HelmBridge {
   readonly theme: HelmTheme
   /** Whether the surface is on screen. Always false for the background page. */
   readonly visible: boolean
+  /**
+   * Whether this page is drawn on the computer the plugin runs on: where its
+   * service, its programs and its background page run, and where its data
+   * lives. True in Helm on that computer. A page drawn on another computer
+   * hides what only makes sense on the plugin's, such as revealing a file,
+   * which would open a window there. Read synchronously, from the page's
+   * first script; it never changes for the life of the page.
+   */
+  readonly onHostComputer: boolean
 
   /**
    * `fetch`, sent by Helm. Only to the origins in `network`, and to the

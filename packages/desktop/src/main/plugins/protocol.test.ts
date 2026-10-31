@@ -142,10 +142,11 @@ describe('injectRuntime', () => {
 describe('servePluginRequestFrom: pages from the local host’s files', () => {
   const text = (body: string): Uint8Array => new TextEncoder().encode(body)
   /** The host, as the scheme meets it: one plugin on, its files by path, and every path it was asked for. */
-  const host = (): PluginPageSource & { asked: string[] } => {
+  const host = (onHostComputer = true): PluginPageSource & { asked: string[] } => {
     const asked: string[] = []
     return {
       asked,
+      onHostComputer,
       serves: (id) => Promise.resolve(id === 'sample'),
       file: (id, path) => {
         asked.push(`${id}:${path}`)
@@ -178,15 +179,27 @@ describe('servePluginRequestFrom: pages from the local host’s files', () => {
     expect(await js.text()).toBe('console.log(1)')
   })
 
+  const bootOf = (html: string): unknown => {
+    const attribute = /data-helm-boot='([^']*)'/.exec(html)?.[1] ?? ''
+    return JSON.parse(attribute.replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&amp;/g, '&'))
+  }
+
   it('tells a page drawn from the host’s files that its channels are relayed through the host, and one Helm serves itself nothing of it', async () => {
-    const bootOf = (html: string): unknown => {
-      const attribute = /data-helm-boot='([^']*)'/.exec(html)?.[1] ?? ''
-      return JSON.parse(attribute.replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&amp;/g, '&'))
-    }
     const hosted = await servePluginRequestFrom('helm-plugin://sample/dist/main%20page.html', host(), runtime)
-    expect(bootOf(await hosted.text())).toEqual({ theme: { kind: 'dark' }, plugin: 'sample', quote: "it's <b>&", channels: 'host' })
+    expect(bootOf(await hosted.text())).toEqual({
+      theme: { kind: 'dark' },
+      plugin: 'sample',
+      quote: "it's <b>&",
+      channels: 'host',
+      onHostComputer: true
+    })
     const own = serve('helm-plugin://sample/dist/main%20page.html')
-    expect(bootOf(await own.text())).toEqual({ theme: { kind: 'dark' }, plugin: 'sample', quote: "it's <b>&" })
+    expect(bootOf(await own.text())).toEqual({ theme: { kind: 'dark' }, plugin: 'sample', quote: "it's <b>&", onHostComputer: true })
+  })
+
+  it('tells a page drawn from a host on another computer that it is not on the host’s computer', async () => {
+    const remote = await servePluginRequestFrom('helm-plugin://sample/dist/main%20page.html', host(false), runtime)
+    expect(bootOf(await remote.text())).toMatchObject({ channels: 'host', onHostComputer: false })
   })
 
   it('serves the runtime only on the origin of a plugin the host has on', async () => {
@@ -209,6 +222,7 @@ describe('servePluginRequestFrom: pages from the local host’s files', () => {
   it('says why when the host cannot be reached, in the page’s own place', async () => {
     const sentence = 'Helm could not reach the local host; turn it off.'
     const source: PluginPageSource = {
+      onHostComputer: true,
       serves: () => Promise.reject(new Error(sentence)),
       file: () => Promise.reject(new Error(sentence))
     }

@@ -293,6 +293,7 @@ SyntaxError and stops the whole file.
 | `context` | `{ plugin, surface, name, params }`: where this page is running. `surface` is `panel`, `tab` or `background`; `name` is the panel's or tab's key. It never changes for the life of the page. |
 | `theme` | The current theme. See [Theme and styling](#theme-and-styling). |
 | `visible` | Whether the surface is on screen. Always false for the background page. |
+| `onHostComputer` | Whether this page is drawn on the computer the plugin runs on. See [Where a page runs](#where-a-page-runs). |
 | `fetch(input, init?)` | `fetch`, sent by Helm. See [Network](#network). |
 | `exec(name, args?, options?)` | Runs a program from `exec`. See [Programs](#programs). |
 | `open(url)` | Opens an `https` address in Helm's Browser tab, from a click. See [Opening a link](#opening-a-link). |
@@ -320,6 +321,28 @@ Events:
 | `command` | `{ id }`: a command with no tab was chosen. |
 | `action` | `{ id }`: a panel header action was pressed. Panels only. |
 | `sessions` | Every session, as `sessions.list()` answers, after one started, ended, was renamed or changed what it is doing. Needs `"list"` in `sessions`. |
+
+### Where a page runs
+
+A plugin runs on one computer: its [service](#services), its
+[programs](#programs) and its background page run there, and its data lives
+there. Its panels and tabs can be drawn on another. `helm.onHostComputer` says
+whether this page is drawn on the plugin's computer. It is `true` in Helm on
+that computer, is there from the page's first script, and never changes for
+the life of the page.
+
+A page drawn elsewhere hides what only makes sense on the plugin's computer.
+Revealing a file runs a program there, so from another computer it would open
+a window nobody is looking at:
+
+```js
+revealButton.hidden = !helm.onHostComputer
+revealButton.addEventListener('click', () => helm.exec('explorer', [`/select,${file}`]))
+```
+
+Every call that runs on the plugin's computer - `fetch` to the service,
+`exec`, settings, secrets and sessions - is a network round trip from a page
+drawn elsewhere. See [The plugin's own service](#the-plugins-own-service).
 
 ### Errors
 
@@ -392,6 +415,19 @@ Helm gave it, with its token. It needs no `network` entry:
 
 ```js
 const health = await (await helm.fetch('service:/health')).json()
+```
+
+A page drawn on another computer than the plugin's (`helm.onHostComputer` is
+false) pays a network round trip for every `service:` request, and for every
+other bridge call that runs on the plugin's computer. Load the data once, then
+filter and sort it in the page; never call the service on every keystroke. A
+page that does so feels the same from anywhere:
+
+```js
+const items = await (await helm.fetch('service:/items')).json()
+search.addEventListener('input', () => {
+  render(items.filter((item) => item.title.includes(search.value)))
+})
 ```
 
 ## Secrets
@@ -486,6 +522,9 @@ One long-running process, started and stopped by Helm:
   until the plugin is reloaded.
 - It is stopped, with everything it started, when the plugin is turned off,
   reloaded or removed, and when Helm quits.
+- It runs on the plugin's computer, and a page drawn on another one pays a
+  network round trip for each request to it: load data once and filter it in
+  the page. See [The plugin's own service](#the-plugins-own-service).
 
 ```js
 // service/main.mjs

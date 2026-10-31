@@ -66,6 +66,7 @@ export function installBridge(): FakeBridge {
     get visible() {
       return visible
     },
+    onHostComputer: true,
     settings: {
       get() {
         const { promise, call } = pending<Record<string, SettingValue>>()

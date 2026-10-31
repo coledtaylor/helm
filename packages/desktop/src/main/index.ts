@@ -463,6 +463,8 @@ function startApp(options: AppOptions = {}): void {
     // Asked only once a page loads, which is after the desktop host below exists.
     registerHostPluginProtocol(
       {
+        // The local host is the one Helm started, on this computer.
+        onHostComputer: true,
         serves: (id) => (desktopHost === null ? Promise.resolve(false) : desktopHost.plugins.serves(id)),
         file: (id, path) =>
           desktopHost === null

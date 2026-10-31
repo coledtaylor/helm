@@ -121,6 +121,36 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 10; i += 1) await Promise.resolve()
 }
 
+describe('onHostComputer', () => {
+  it('is true on a page whose boot says so, from the first script, before Helm has connected, and stays true', () => {
+    const { win, helm } = page(PANEL, JSON.stringify({ theme: THEME, onHostComputer: true }))
+    expect(helm.onHostComputer).toBe(true)
+    connect(win, { visible: true, context: { ...PANEL, params: { id: 2 } } })
+    expect(helm.onHostComputer).toBe(true)
+  })
+
+  it('is false on a page drawn from a host on another computer, before and after connecting', () => {
+    const { win, helm } = page(PANEL, JSON.stringify({ theme: THEME, channels: 'host', onHostComputer: false }))
+    expect(helm.onHostComputer).toBe(false)
+    connect(win)
+    expect(helm.onHostComputer).toBe(false)
+  })
+
+  it('reads as true from a boot that does not say, or no boot at all', () => {
+    expect(page(PANEL, JSON.stringify({ theme: THEME })).helm.onHostComputer).toBe(true)
+    expect(page(PANEL, null).helm.onHostComputer).toBe(true)
+    expect(page(PANEL, 'not json').helm.onHostComputer).toBe(true)
+  })
+
+  it('cannot be changed by the page', () => {
+    const { helm } = page(PANEL, JSON.stringify({ theme: THEME, onHostComputer: false }))
+    expect(() => {
+      ;(helm as { onHostComputer: boolean }).onHostComputer = true
+    }).toThrow()
+    expect(helm.onHostComputer).toBe(false)
+  })
+})
+
 describe('installing', () => {
   it('reads its context from the frame name before anything is said, and says HELLO to its parent', () => {
     const { helm, hellos } = page({ plugin: 'sample', surface: 'tab', name: 'item', params: { id: '2' } })

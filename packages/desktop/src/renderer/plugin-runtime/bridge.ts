@@ -282,6 +282,9 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     get visible() {
       return visible
     },
+    get onHostComputer() {
+      return boot.onHostComputer
+    },
 
     async fetch(input, init) {
       const request = new Request(input, init)
@@ -452,19 +455,29 @@ function abortError(message = 'The operation was aborted.'): DOMException {
   return new DOMException(message, 'AbortError')
 }
 
-/** What the page's script tag carries: its first theme, and whether its channels are relayed through the local host. */
+/**
+ * What the page's script tag carries: its first theme, whether its channels
+ * are relayed through the local host, and whether this page is drawn on the
+ * computer the plugin runs on. A boot that does not say is a page Helm serves
+ * on its own computer.
+ */
 interface Boot {
   theme: HelmTheme | null
   channels: 'host' | null
+  onHostComputer: boolean
 }
 
 function readBoot(text: string | null): Boot {
-  if (text === null) return { theme: null, channels: null }
+  if (text === null) return { theme: null, channels: null, onHostComputer: true }
   try {
-    const boot = JSON.parse(text) as { theme?: HelmTheme; channels?: unknown }
-    return { theme: boot.theme ?? null, channels: boot.channels === 'host' ? 'host' : null }
+    const boot = JSON.parse(text) as { theme?: HelmTheme; channels?: unknown; onHostComputer?: unknown }
+    return {
+      theme: boot.theme ?? null,
+      channels: boot.channels === 'host' ? 'host' : null,
+      onHostComputer: boot.onHostComputer !== false
+    }
   } catch {
-    return { theme: null, channels: null }
+    return { theme: null, channels: null, onHostComputer: true }
   }
 }
 
