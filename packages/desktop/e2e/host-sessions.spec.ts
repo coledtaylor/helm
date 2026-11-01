@@ -758,7 +758,9 @@ test('after Helm is killed outright, its sessions run on in the host, and the ne
   const host = hosts[0]!
   const bridges = floti.filter((pid) => pid !== host)
 
-  process.kill(await mainPid(helm))
+  // Outright: on macOS and Linux a plain kill's SIGTERM is a request to quit,
+  // which Electron honours as a clean quit.
+  process.kill(await mainPid(helm), 'SIGKILL')
   // The bridges end with the Helm whose pipes they were; the host and the
   // session it runs do not.
   await expect.poll(() => bridges.filter(processAlive)).toEqual([])
