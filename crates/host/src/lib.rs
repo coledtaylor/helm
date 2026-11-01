@@ -118,20 +118,23 @@ pub struct DesktopCommand {
 ///
 /// It refuses to start from an SSH session or as root or a Windows service
 /// account before it opens anything, and refuses when another host already
-/// has its data folder or socket ([`Error::AlreadyRunning`]).
+/// has its data folder or socket ([`Error::AlreadyRunning`]). Whatever stops
+/// it before it listens, it says why on the console ([`not_started`]).
 pub fn run_host(options: HostOptions) -> Result<()> {
     let env = UserEnv::from_process();
     if let Some(refusal) = startup::launch_refusal(&env, startup::account()) {
-        return Err(Error::Refused(refusal));
+        return not_started(Err(Error::Refused(refusal)));
     }
-    let config = HostConfig::from_env(&env)?;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| Error::io("start the host's runtime", err))?;
+    let config = not_started(HostConfig::from_env(&env))?;
+    let runtime = not_started(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| Error::io("start the host's runtime", err)),
+    )?;
     let reason = runtime.block_on(async {
-        let mut signals = StopSignals::register()?;
-        let host = Host::start(config)?;
+        let mut signals = not_started(StopSignals::register())?;
+        let host = not_started(Host::start(config))?;
         say(&format!("Floti host is listening at {}.", host.endpoint()));
         let stopper = host.stopper();
         let mut area = None;
@@ -200,6 +203,16 @@ fn notification_area(
         },
     ));
     Some(area)
+}
+
+/// Says why the host did not start, on the console beside the line it
+/// prints once it listens, where the desktop that started it reads it and
+/// shows it. Standard error says it too, but nobody need be reading that.
+fn not_started<T>(result: Result<T>) -> Result<T> {
+    if let Err(err) = &result {
+        say(&format!("Floti host did not start: {err}"));
+    }
+    result
 }
 
 /// A line on the console, where there is one. A host started at sign-in may

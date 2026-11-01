@@ -26,7 +26,8 @@ import { HostRefusedError, connectHost, type HostConnection } from './client'
  *
  * Helm never opens the enrolment file or a key: the bridge reads them, and
  * says what went wrong as an exit status. Nothing either program prints is
- * logged or shown, so no code or key can reach Helm's log through here.
+ * logged, and the one line shown is a host's reason for not starting, which
+ * it writes to be shown and which names no code or key.
  *
  * Everything that differs by OS for this (the program's name, how paths
  * join, and where the socket can live) is in this module and nowhere else.
@@ -45,6 +46,9 @@ export const BRIDGE_EXIT = {
 
 /** The line `floti host` prints once it listens, the first on its standard output. */
 const LISTENING = /^Floti host is listening at (.+)\.$/
+
+/** The line `floti host` prints on its standard output when it stops before it listens: why, in one sentence. */
+const DID_NOT_START = /^Floti host did not start: (.+)$/
 
 /** How long a host Helm started has to say it is listening, and how long a start waits out a host still exiting. */
 export const HOST_START_DEADLINE_MS = 30_000
@@ -382,7 +386,9 @@ export async function startLocalHost(places: HostPlaces, deps: LauncherDeps): Pr
       // folders; one that answers and only refuses Helm is not waited for.
       host = await startHost(binary, hostArgs, hostOptions, deps, first === BRIDGE_EXIT.unreachable)
     } catch (error) {
-      if (first === BRIDGE_EXIT.notPinned && error instanceof HostEndedEarly && 'exit' in unpaired) {
+      // Only a host that found one already running leaves "not paired" the
+      // reason; one that stopped for a reason of its own says that.
+      if (first === BRIDGE_EXIT.notPinned && error instanceof HostFoldersHeld && 'exit' in unpaired) {
         throw bridgeFailure(unpaired.exit, binary, false)
       }
       throw error
@@ -549,17 +555,27 @@ async function startHostOnce(
     await exited
   }
 
+  // Why it did not start, when it says so, and whether it has said all it
+  // will: a process's exit can be seen before the last of its output.
+  let reason: string | null = null
+  let outputEnded: Promise<void> = Promise.resolve()
   const listening = new Promise<'listening'>((resolve) => {
     const stdout = child.stdout
     if (stdout === null) return
     let pending = ''
+    /** Reads one line; true once it is the listening line. */
+    const read = (line: string): boolean => {
+      if (LISTENING.test(line)) return true
+      reason = DID_NOT_START.exec(line)?.[1] ?? reason
+      return false
+    }
     const onData = (chunk: Buffer | string): void => {
       pending += chunk.toString()
       let newline = pending.indexOf('\n')
       while (newline !== -1) {
         const line = pending.slice(0, newline).replace(/\r$/, '')
         pending = pending.slice(newline + 1)
-        if (LISTENING.test(line)) {
+        if (read(line)) {
           // What it says after that is only drained until Helm lets go.
           stdout.off('data', onData)
           stdout.resume()
@@ -570,6 +586,15 @@ async function startHostOnce(
       }
     }
     stdout.on('data', onData)
+    outputEnded = new Promise((ended) => {
+      const done = (): void => {
+        if (pending !== '') read(pending.replace(/\r$/, ''))
+        pending = ''
+        ended()
+      }
+      stdout.once('end', done)
+      stdout.once('close', done)
+    })
   })
   let timer: unknown = null
   const deadline = new Promise<'late'>((resolve) => {
@@ -577,8 +602,8 @@ async function startHostOnce(
   })
 
   const outcome = await Promise.race([listening, deadline, exited])
-  deps.clearTimeout(timer)
   if (outcome === 'listening') {
+    deps.clearTimeout(timer)
     deps.log('host: the local host Helm started is listening')
     return { release, abandon }
   }
@@ -586,9 +611,15 @@ async function startHostOnce(
     await abandon()
     throw failure(`The local host did not say it was listening within ${HOST_START_DEADLINE_MS / 1000} seconds`)
   }
+  // It has exited. Its reason is read once its output has ended, which a
+  // program it left running could hold open: past the deadline, it has none.
+  await Promise.race([outputEnded, deadline])
+  deps.clearTimeout(timer)
   if (outcome.error !== undefined) throw couldNotRun(binary, outcome.error)
   if (outcome.code === HOST_ALREADY_RUNNING_EXIT) throw new HostFoldersHeld()
   deps.log(`host: the local host Helm started stopped before it was ready (${describeExit(outcome)})`)
+  const why = reason as string | null
+  if (why !== null) throw new HostEndedEarly(`The local host did not start: ${clause(why)}; ${TURN_OFF}`)
   throw new HostEndedEarly(
     `${
       outcome.code === null
