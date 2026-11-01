@@ -64,7 +64,7 @@ export function electronFake(): Record<string, unknown> {
       openPath: () => Promise.resolve(''),
       showItemInFolder: noop
     },
-    clipboard: { writeText: noop, readText: () => '' },
+    clipboard: { writeText: noop, readText: () => '', availableFormats: () => [] },
     net: {
       request: () => {
         throw new Error('electronFake: no network in tests')

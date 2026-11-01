@@ -164,7 +164,7 @@ export async function mountShell(
       onInput: (data) => helm.send('pterm:input', { id, data }),
       onResize: (cols, rows) => helm.send('pterm:resize', { id, cols, rows }),
       readClipboard: () => helm.invoke('clipboard:read'),
-      writeClipboard: (text) => helm.invoke('clipboard:write', text),
+      writeClipboard: async (text) => (await helm.invoke('clipboard:write', text)).outcome,
       openLink: (url) => void helm.invoke('shell:openExternal', { url })
     },
     terminalPrefs()

@@ -1795,9 +1795,11 @@ export function App(): JSX.Element {
   const openInEditor = useCallback((path: string, line: number | null) => {
     void helm.invoke('files:openInEditor', { path, line })
   }, [])
-  const copyPath = useCallback((path: string) => {
-    void helm.invoke('clipboard:write', path)
-  }, [])
+  /** True unless the clipboard refused it; a copy a later one replaced counts as done. */
+  const copyPath = useCallback(
+    async (path: string) => (await helm.invoke('clipboard:write', path)).outcome !== 'refused',
+    []
+  )
 
   /**
    * Ctrl+P: a file in the project the Files view is on, which follows the

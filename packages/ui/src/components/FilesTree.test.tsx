@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContentDirEntry, ContentDirListing, FilesStatus } from '@helm/core'
 import { FilesRootPicker, FilesStatusNote, FilesTree, type FilesTreeProps } from './FilesTree'
+import { COPY_REFUSED } from '../lib/copyFeedback'
 
 const ROOT = 'C:\\p'
 
@@ -49,7 +50,7 @@ function renderTree(overrides: Partial<FilesTreeProps> = {}) {
     onToggleDir: vi.fn(),
     onOpen: vi.fn(),
     onReveal: vi.fn(),
-    onCopyPath: vi.fn(),
+    onCopyPath: vi.fn(() => Promise.resolve(true)),
     onOpenInEditor: vi.fn(),
     onGoToFile: vi.fn(),
     ...overrides
@@ -87,7 +88,7 @@ describe('FilesTree: revealing the file in front', () => {
       onToggleDir={vi.fn()}
       onOpen={vi.fn()}
       onReveal={vi.fn()}
-      onCopyPath={vi.fn()}
+      onCopyPath={vi.fn(() => Promise.resolve(true))}
       onOpenInEditor={null}
       onGoToFile={vi.fn()}
       {...over}
@@ -152,7 +153,7 @@ describe('FilesTree', () => {
     expect(within(row('node_modules')).getByRole('button', { name: /node_modules/ }).hasAttribute('aria-expanded')).toBe(false)
   })
 
-  it('marks the file in front and offers VS Code, Explorer and the path on every row', () => {
+  it('marks the file in front and offers VS Code, Explorer and the path on every row', async () => {
     const props = renderTree()
     expect(within(row('src/b.ts')).getByRole('button', { name: /b\.ts/ }).getAttribute('aria-current')).toBe('true')
 
@@ -163,8 +164,17 @@ describe('FilesTree', () => {
     expect(props.onOpenInEditor).toHaveBeenCalledWith(`${ROOT}\\src\\a.ts`)
     expect(props.onReveal).toHaveBeenCalledWith(`${ROOT}\\src\\a.ts`)
     expect(props.onCopyPath).toHaveBeenCalledWith(`${ROOT}\\src\\a.ts`)
-    expect(actions.getByRole('button', { name: 'Path copied' })).toBeTruthy()
+    expect(await actions.findByRole('button', { name: 'Path copied' })).toBeTruthy()
     expect(within(row('src')).getByRole('button', { name: 'Open folder in VS Code' })).toBeTruthy()
+  })
+
+  it('warns on the row when the clipboard refused its path, and keeps the warning up off hover', async () => {
+    renderTree({ onCopyPath: vi.fn(() => Promise.resolve(false)) })
+    const actions = within(row('src/a.ts'))
+    fireEvent.click(actions.getByRole('button', { name: 'Copy path' }))
+    const warning = await actions.findByRole('button', { name: COPY_REFUSED })
+    expect(warning.parentElement?.classList.contains('flex')).toBe(true)
+    expect(actions.queryByRole('button', { name: 'Path copied' })).toBeNull()
   })
 
   it('offers no VS Code where there is none, and Go to file opens Ctrl+P', () => {

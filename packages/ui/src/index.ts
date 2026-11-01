@@ -187,6 +187,15 @@ export { RestorePane, type RestorePaneProps } from './components/RestorePane'
 export { WelcomePane, type WelcomePaneProps } from './components/WelcomePane'
 export * from './components/icons'
 export { cn } from './lib/cn'
+export {
+  COPIED_SHOWN_MS,
+  COPY_REFUSED,
+  copyPathLabel,
+  PASTE_REFUSED,
+  REFUSED_SHOWN_MS,
+  useCopyFeedback,
+  type CopyState
+} from './lib/copyFeedback'
 // Whether a dialog is up, for anything that has to get out of its way - the
 // browser pane's `WebContentsView` first. `Overlay` is the only writer.
 export { overlayOpen, subscribeOverlay, useOverlayOpen } from './lib/overlay'

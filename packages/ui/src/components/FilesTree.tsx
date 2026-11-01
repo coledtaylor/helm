@@ -3,9 +3,10 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ContentDirEntry, ContentDirListing, ContentScope, FilesStatus, GitFileState } from '@helm/core'
 import { changedDirectories, GIT_STATE_LABEL, GIT_STATE_LETTER } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { copyPathLabel, useCopyFeedback } from '../lib/copyFeedback'
 import { shortcutLabel } from '../lib/platform'
 import { ROW_SELECTED_GROUP } from '../lib/rows'
-import { CaretIcon, CheckIcon, CodeIcon, CopyIcon, DocIcon, FolderIcon, HarnessIcon, LinkIcon, SearchIcon } from './icons'
+import { CaretIcon, CheckIcon, CodeIcon, CopyIcon, DocIcon, FolderIcon, HarnessIcon, LinkIcon, SearchIcon, WarnIcon } from './icons'
 import { Menu } from './Menu'
 
 /**
@@ -41,7 +42,8 @@ export interface FilesTreeProps {
   /** A file to open: `keep` false for a single click, which opens a preview. */
   onOpen: (path: string, keep: boolean) => void
   onReveal: (path: string) => void
-  onCopyPath: (path: string) => void
+  /** Resolves false when the clipboard refused it. */
+  onCopyPath: (path: string) => Promise<boolean>
   /** Null where VS Code is not installed: the button is then not offered. */
   onOpenInEditor: ((path: string) => void) | null
   onGoToFile: () => void
@@ -395,19 +397,21 @@ function RowActions({
   path: string
   directory: boolean
   onReveal: (path: string) => void
-  onCopyPath: (path: string) => void
+  onCopyPath: (path: string) => Promise<boolean>
   onOpenInEditor: ((path: string) => void) | null
 }): JSX.Element {
-  const [copied, setCopied] = useState(false)
-  useEffect(() => {
-    if (!copied) return undefined
-    const timer = setTimeout(() => setCopied(false), 1200)
-    return () => clearTimeout(timer)
-  }, [copied])
+  const [copy, pressCopy] = useCopyFeedback(() => onCopyPath(path))
 
   const what = directory ? 'folder' : 'file'
   return (
-    <span className="hidden shrink-0 items-center pr-1 group-hover:flex group-has-[:focus-visible]:flex">
+    // A refusal keeps the row's actions up, so the warning stays after the
+    // pointer leaves.
+    <span
+      className={cn(
+        'hidden shrink-0 items-center pr-1 group-hover:flex group-has-[:focus-visible]:flex',
+        copy === 'refused' && 'flex'
+      )}
+    >
       {onOpenInEditor !== null && (
         <RowAction label={`Open ${what} in VS Code`} onClick={() => onOpenInEditor(path)}>
           <CodeIcon width={12} height={12} />
@@ -416,14 +420,14 @@ function RowActions({
       <RowAction label="Reveal in Explorer" onClick={() => onReveal(path)}>
         <FolderIcon width={12} height={12} />
       </RowAction>
-      <RowAction
-        label={copied ? 'Path copied' : 'Copy path'}
-        onClick={() => {
-          onCopyPath(path)
-          setCopied(true)
-        }}
-      >
-        {copied ? <CheckIcon width={12} height={12} className="text-success" /> : <CopyIcon width={12} height={12} />}
+      <RowAction label={copyPathLabel(copy)} onClick={pressCopy}>
+        {copy === 'copied' ? (
+          <CheckIcon width={12} height={12} className="text-success" />
+        ) : copy === 'refused' ? (
+          <WarnIcon width={12} height={12} className="text-danger" />
+        ) : (
+          <CopyIcon width={12} height={12} />
+        )}
       </RowAction>
     </span>
   )

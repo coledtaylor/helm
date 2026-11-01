@@ -57,8 +57,8 @@ function answer(req: ProbeOp): unknown {
         {
           onInput: ignored,
           onResize: ignored,
-          readClipboard: () => Promise.resolve(''),
-          writeClipboard: () => Promise.resolve(),
+          readClipboard: () => Promise.resolve({ text: '' }),
+          writeClipboard: () => Promise.resolve('copied'),
           openLink: ignored
         }
       )
@@ -101,7 +101,7 @@ helm.on('term:create', (opts) => {
     },
     onResize: (cols, rows) => helm.send('pty:resize', { cols, rows }),
     readClipboard: () => helm.invoke('clipboard:read'),
-    writeClipboard: (text) => helm.invoke('clipboard:write', text),
+    writeClipboard: async (text) => (await helm.invoke('clipboard:write', text)).outcome,
     openLink: (url) => void helm.invoke('shell:openExternal', { url }),
     onKeyDown: (at) => latency.keyDown(at)
   })

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { EditorHighlight, FileChangeState, FileView as FileViewData } from '@helm/core'
 import { changedLineSet, describeFileChanges } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { COPY_REFUSED, copyPathLabel, useCopyFeedback } from '../lib/copyFeedback'
 import { languageName } from '../lib/languages'
 import { formatBytes } from '../lib/time'
 import { CodeEditor, type CodeEditorHandle, type EditorLineMarks, type EditorStatus } from './CodeEditor'
@@ -298,17 +299,18 @@ export function FileActions({
   /** Null where VS Code is not installed; the button says so rather than vanishing. */
   onOpenInEditor: (() => void) | null
   onReveal: (path: string) => void
-  onCopyPath: (path: string) => void
+  /** Resolves false when the clipboard refused it. */
+  onCopyPath: (path: string) => Promise<boolean>
 }): JSX.Element {
-  const [copied, setCopied] = useState(false)
-  useEffect(() => {
-    if (!copied) return undefined
-    const timer = setTimeout(() => setCopied(false), 1200)
-    return () => clearTimeout(timer)
-  }, [copied])
+  const [copy, pressCopy] = useCopyFeedback(() => onCopyPath(path))
 
   return (
     <div className="mr-1 flex items-center gap-0.5" data-file-actions>
+      {copy === 'refused' && (
+        <span role="status" className="mr-1 truncate text-[12px] text-danger" title={COPY_REFUSED}>
+          Not copied
+        </span>
+      )}
       <button
         type="button"
         onClick={onOpenInEditor ?? undefined}
@@ -325,14 +327,14 @@ export function FileActions({
       <IconAction label="Reveal in Explorer" onClick={() => onReveal(path)}>
         <FolderIcon width={14} height={14} />
       </IconAction>
-      <IconAction
-        label={copied ? 'Path copied' : 'Copy path'}
-        onClick={() => {
-          onCopyPath(path)
-          setCopied(true)
-        }}
-      >
-        {copied ? <CheckIcon width={14} height={14} className="text-success" /> : <CopyIcon width={14} height={14} />}
+      <IconAction label={copyPathLabel(copy)} onClick={pressCopy}>
+        {copy === 'copied' ? (
+          <CheckIcon width={14} height={14} className="text-success" />
+        ) : copy === 'refused' ? (
+          <WarnIcon width={14} height={14} className="text-danger" />
+        ) : (
+          <CopyIcon width={14} height={14} />
+        )}
       </IconAction>
     </div>
   )

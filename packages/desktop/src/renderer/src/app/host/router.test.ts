@@ -62,9 +62,9 @@ describe('where the window’s calls go', () => {
   it('with the setting off, every call is the preload’s bridge', async () => {
     const r = routerFor(Promise.resolve(false))
     bridge.answer('history:summary', () => SUMMARY)
-    bridge.answer('clipboard:read', () => 'copied')
+    bridge.answer('clipboard:read', () => ({ text: 'copied' }))
     expect(await r.helm.invoke('history:summary')).toEqual(SUMMARY)
-    expect(await r.helm.invoke('clipboard:read')).toBe('copied')
+    expect(await r.helm.invoke('clipboard:read')).toEqual({ text: 'copied' })
     r.helm.send('sessions:watch', { watching: true })
     expect(bridge.sent('sessions:watch')).toEqual([{ watching: true }])
     const seen: number[] = []
@@ -76,10 +76,10 @@ describe('where the window’s calls go', () => {
 
   it('with the setting on, a channel an adapter takes reaches the host, and a client-only one stays on the preload’s bridge', async () => {
     const r = routerFor(Promise.resolve(true))
-    bridge.answer('clipboard:read', () => 'copied')
+    bridge.answer('clipboard:read', () => ({ text: 'copied' }))
     expect(await r.helm.invoke('history:summary')).toMatchObject({ sessions: 9 })
     expect(bridge.invoked('history:summary')).toEqual([])
-    expect(await r.helm.invoke('clipboard:read')).toBe('copied')
+    expect(await r.helm.invoke('clipboard:read')).toEqual({ text: 'copied' })
     r.helm.send('sessions:watch', { watching: false })
     expect(r.host.asked).toEqual(['history:summary', 'sessions:watch false'])
     expect(bridge.sent('sessions:watch')).toEqual([])
@@ -102,8 +102,8 @@ describe('where the window’s calls go', () => {
 
   it('sends a client-only or host-internal channel to the preload’s bridge at once, without waiting for main’s answer', async () => {
     const r = routerFor(new Promise<boolean>(() => undefined))
-    bridge.answer('clipboard:read', () => 'copied')
-    expect(await r.helm.invoke('clipboard:read')).toBe('copied')
+    bridge.answer('clipboard:read', () => ({ text: 'copied' }))
+    expect(await r.helm.invoke('clipboard:read')).toEqual({ text: 'copied' })
     r.helm.send('plugins:toolResult', { id: 't1', ok: true, text: 'done' })
     expect(bridge.sent('plugins:toolResult')).toEqual([{ id: 't1', ok: true, text: 'done' }])
     expect(r.asked()).toBe(0)
@@ -143,7 +143,7 @@ describe('where the window’s calls go', () => {
       createRouter({
         own: bridge,
         inHost: () => Promise.resolve(true),
-        adapters: [{ requests: { 'clipboard:read': () => Promise.resolve('') } }],
+        adapters: [{ requests: { 'clipboard:read': () => Promise.resolve({ text: '' }) } }],
         clientOnly: isClientOnly,
         hostInternal: isHostInternal
       })

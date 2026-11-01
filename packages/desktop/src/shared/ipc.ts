@@ -216,6 +216,16 @@ export interface UpdateCheck {
   checkedAt: string
 }
 
+/**
+ * How a clipboard write ended: on the clipboard, refused after every retry, or
+ * replaced by a later write while it was still retrying - which nobody needs
+ * telling about.
+ */
+export type ClipboardWriteOutcome = 'copied' | 'refused' | 'superseded'
+
+/** The clipboard's text, or that it stayed refused after every retry. */
+export type ClipboardRead = { text: string } | { refused: true }
+
 export interface ScanRequest {
   /** Read git state during the scan. A first paint skips it and refreshes after. */
   includeGit?: boolean
@@ -1355,9 +1365,13 @@ export interface IpcRequests {
 
   /** The terminal pane's clipboard, routed through Electron rather than the
    * async DOM Clipboard API, which needs a permission prompt and a focused
-   * document - neither of which a hosted TUI can rely on. */
-  'clipboard:read': { request: void; response: string }
-  'clipboard:write': { request: string; response: void }
+   * document - neither of which a hosted TUI can rely on.
+   *
+   * Both say whether the clipboard let them through (`main/clipboard.ts`): on
+   * Windows a program holding it open refuses everyone else, and the surface
+   * that copied or pasted says it could not. */
+  'clipboard:read': { request: void; response: ClipboardRead }
+  'clipboard:write': { request: string; response: { outcome: ClipboardWriteOutcome } }
 
   /**
    * The browser pane.

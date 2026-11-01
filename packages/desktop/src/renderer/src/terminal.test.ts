@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { DEFAULT_SETTINGS } from '@helm/core/types'
+import { COPY_REFUSED, PASTE_REFUSED } from '@helm/ui'
+import type { ClipboardRead, ClipboardWriteOutcome } from '../../shared/ipc'
+import { CLIPBOARD_NOTICE_MS } from './clipboardNotice'
 import { applyPrefs, createTerminal, terminalFontStack, type TerminalHooks, type TerminalPrefs } from './terminal'
 import { applyTerminalSettings } from './app/termprefs'
 import { FakeResizeObserver, FitAddon, layout, Terminal } from './app/terminal.testkit'
@@ -30,8 +33,8 @@ function hooks(): TerminalHooks & { onResize: Mock<(cols: number, rows: number) 
   return {
     onInput: vi.fn(),
     onResize: vi.fn<(cols: number, rows: number) => void>(),
-    readClipboard: () => Promise.resolve(''),
-    writeClipboard: () => Promise.resolve(),
+    readClipboard: () => Promise.resolve({ text: '' }),
+    writeClipboard: () => Promise.resolve('copied' as const),
     openLink: vi.fn()
   }
 }
@@ -142,13 +145,13 @@ describe('terminalFontStack', () => {
 describe('a terminal’s keys', () => {
   async function terminalOn(platform: 'MacIntel' | 'Win32'): Promise<{
     term: Terminal
-    h: ReturnType<typeof hooks> & { writeClipboard: Mock<(text: string) => Promise<void>> }
+    h: ReturnType<typeof hooks> & { writeClipboard: Mock<(text: string) => Promise<ClipboardWriteOutcome>> }
   }> {
     runningOn(platform)
     const h = {
       ...hooks(),
-      readClipboard: () => Promise.resolve('pasted'),
-      writeClipboard: vi.fn<(text: string) => Promise<void>>(() => Promise.resolve())
+      readClipboard: () => Promise.resolve({ text: 'pasted' }),
+      writeClipboard: vi.fn<(text: string) => Promise<ClipboardWriteOutcome>>(() => Promise.resolve('copied'))
     }
     createTerminal(container(), { cols: 80, rows: 24, fit: false }, h)
     await Promise.resolve()
@@ -175,9 +178,7 @@ describe('a terminal’s keys', () => {
     expect(term.press({ key: 'c', code: 'KeyC', metaKey: true })).toBe(false)
     expect(h.writeClipboard).toHaveBeenCalledTimes(1)
     expect(term.press({ key: 'v', code: 'KeyV', metaKey: true })).toBe(false)
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(term.pasted).toEqual(['pasted'])
+    await vi.waitFor(() => expect(term.pasted).toEqual(['pasted']))
   })
 
   it('on Windows Ctrl+C interrupts without a selection and copies with one, as today', async () => {
@@ -189,6 +190,83 @@ describe('a terminal’s keys', () => {
     // Cmd is the Windows key there, and not the clipboard's.
     term.selection = 'again'
     expect(term.press({ key: 'c', code: 'KeyC', metaKey: true })).toBe(true)
+  })
+})
+
+describe('a clipboard that refuses', () => {
+  /** A Windows terminal whose clipboard answers as given, on stepped time. */
+  function terminalWith(clipboard: {
+    read?: ClipboardRead
+    write?: ClipboardWriteOutcome
+  }): { term: Terminal; box: HTMLDivElement; notice: () => HTMLElement | null } {
+    vi.useFakeTimers()
+    runningOn('Win32')
+    const box = container()
+    createTerminal(box, { cols: 80, rows: 24, fit: false }, {
+      ...hooks(),
+      readClipboard: () => Promise.resolve(clipboard.read ?? { text: '' }),
+      writeClipboard: () => Promise.resolve(clipboard.write ?? 'copied')
+    })
+    return { term: latest(), box, notice: () => box.querySelector<HTMLElement>('[role="status"]') }
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('says in the pane that a copy was refused, and the notice leaves by itself', async () => {
+    const { term, notice } = terminalWith({ write: 'refused' })
+    term.selection = 'some output'
+    expect(term.press({ key: 'c', code: 'KeyC', ctrlKey: true })).toBe(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(notice()?.textContent).toBe(COPY_REFUSED)
+
+    await vi.advanceTimersByTimeAsync(CLIPBOARD_NOTICE_MS - 1)
+    expect(notice()).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(notice()).toBeNull()
+  })
+
+  it('keeps one notice for a second refusal, and starts its time again', async () => {
+    const { term, box, notice } = terminalWith({ write: 'refused' })
+    term.selection = 'one'
+    term.press({ key: 'c', code: 'KeyC', ctrlKey: true, shiftKey: true })
+    await vi.advanceTimersByTimeAsync(CLIPBOARD_NOTICE_MS - 1)
+    term.selection = 'two'
+    term.press({ key: 'c', code: 'KeyC', ctrlKey: true, shiftKey: true })
+    await vi.advanceTimersByTimeAsync(CLIPBOARD_NOTICE_MS - 1)
+    expect(box.querySelectorAll('[role="status"]')).toHaveLength(1)
+    expect(notice()).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(notice()).toBeNull()
+  })
+
+  it('says nothing for a copy that landed, or one a later copy replaced', async () => {
+    for (const write of ['copied', 'superseded'] as const) {
+      const { term, notice } = terminalWith({ write })
+      term.selection = 'some output'
+      term.press({ key: 'c', code: 'KeyC', ctrlKey: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(notice()).toBeNull()
+      document.body.replaceChildren()
+    }
+  })
+
+  it('says a refused paste in the pane and pastes nothing', async () => {
+    const { term, notice } = terminalWith({ read: { refused: true } })
+    expect(term.press({ key: 'v', code: 'KeyV', ctrlKey: true })).toBe(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(notice()?.textContent).toBe(PASTE_REFUSED)
+    expect(term.pasted).toEqual([])
+  })
+
+  it('pastes what it read once, and says nothing', async () => {
+    const { term, notice } = terminalWith({ read: { text: 'pasted' } })
+    term.press({ key: 'v', code: 'KeyV', ctrlKey: true })
+    term.press({ key: 'v', code: 'KeyV', ctrlKey: true, shiftKey: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(term.pasted).toEqual(['pasted', 'pasted'])
+    expect(notice()).toBeNull()
   })
 })
 

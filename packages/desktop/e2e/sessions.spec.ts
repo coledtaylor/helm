@@ -179,6 +179,38 @@ async function pointAt(pane: Locator, sessionId: number, text: string): Promise<
   return { x: screen.x + (column + 0.5) * cell.width, y: screen.y + (row + 0.5) * cell.height }
 }
 
+test('a word copied from a session goes to the clipboard, and pastes back into the session once', async ({
+  helm,
+  world
+}) => {
+  const { app, window } = helm
+  const clipboard = (): Promise<string> => app.evaluate(({ clipboard: board }) => board.readText())
+  // The clipboard's keys: Cmd on a Mac, where every Ctrl chord is the program's.
+  const key = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const word = 'clip-4821'
+
+  const id = await startSession(window, 'alpha')
+  const pane = window.getByRole('region', { name: 'First pane' })
+  const run = await claudeRunIn(world, world.projects.alpha)
+  const received = (): string[] => fakeClaudeLogs(world).find((log) => log.pid === run.pid)?.received ?? []
+
+  await typeLine(pane, `copy ${word} please`)
+  await expect.poll(() => terminalText(window, id)).toContain(`You said: copy ${word} please`)
+
+  // A double-click selects the word, as in any terminal, and the copy key copies it.
+  const at = await pointAt(pane, id, `${word} please`)
+  await window.mouse.dblclick(at.x, at.y)
+  await window.keyboard.press(`${key}+c`)
+  await expect.poll(clipboard).toBe(word)
+  await expect(pane.locator('[data-clipboard-notice]')).toHaveCount(0)
+
+  // Pasted at the prompt and sent: the session hears the word once.
+  await window.keyboard.press(`${key}+v`)
+  await expect.poll(() => terminalText(window, id)).toContain(`> ${word}`)
+  await window.keyboard.press('Enter')
+  await expect.poll(received).toEqual([`copy ${word} please`, word])
+})
+
 async function ctrlClick(window: Page, at: { x: number; y: number }): Promise<void> {
   await window.mouse.move(at.x, at.y)
   await window.keyboard.down('ControlOrMeta')

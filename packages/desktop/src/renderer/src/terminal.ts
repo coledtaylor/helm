@@ -5,7 +5,9 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import '@xterm/xterm/css/xterm.css'
 import { isMac } from '@helm/ui'
+import type { ClipboardRead, ClipboardWriteOutcome } from '../../shared/ipc'
 import type { TermCreateOptions } from '../../shared/protocol'
+import { copyToClipboard, readForPaste } from './clipboardNotice'
 import { attachLinks } from './terminalLinks'
 
 /**
@@ -204,8 +206,9 @@ export interface TerminalHooks {
   /** Host -> pty. Everything the user types funnels through here. */
   onInput: (data: string) => void
   onResize: (cols: number, rows: number) => void
-  readClipboard: () => Promise<string>
-  writeClipboard: (text: string) => Promise<void>
+  /** `clipboard:read` and `clipboard:write`: a refusal is said in the pane. */
+  readClipboard: () => Promise<ClipboardRead>
+  writeClipboard: (text: string) => Promise<ClipboardWriteOutcome>
   /** A link the user Ctrl+clicked: an http or https URL. See `attachLinks`. */
   openLink: (url: string) => void
   /** Fired on every keydown that xterm will translate, for latency timing. */
@@ -318,7 +321,7 @@ export function createTerminal(
     observer.observe(container)
   }
 
-  attachKeyBindings(term, hooks)
+  attachKeyBindings(term, container, hooks)
   const links = attachLinks(term, container, hooks.openLink)
 
   // Diagnostic only: records what a wheel event actually looked like by the
@@ -372,14 +375,18 @@ export function createTerminal(
  * keystroke drops a stale selection - otherwise a selection made minutes ago
  * would silently swallow the next Ctrl-C.
  */
-function attachKeyBindings(term: Terminal, hooks: TerminalHooks): void {
+function attachKeyBindings(term: Terminal, container: HTMLElement, hooks: TerminalHooks): void {
   const mac = isMac()
+  // The selection is read before the first await: the Ctrl+C branch clears it
+  // straight after calling this.
   const copy = async (): Promise<void> => {
     const text = term.getSelection()
-    if (text) await hooks.writeClipboard(text)
+    if (text) await copyToClipboard(container, text, hooks.writeClipboard)
   }
+  // One read, one `term.paste`: main retries a refused read itself, so a
+  // paste that got through late still goes in once.
   const paste = async (): Promise<void> => {
-    const text = await hooks.readClipboard()
+    const text = await readForPaste(container, hooks.readClipboard)
     if (text) term.paste(text)
   }
 

@@ -389,7 +389,7 @@ over the window, or Electron's own guards on a page.
 
 | spec | workflows |
 |---|---|
-| `sessions` | a session from start to end; renaming a tab and closing it with confirmation; quitting ends every session and what it started; a link Ctrl+clicked in a session that has the mouse |
+| `sessions` | a session from start to end; renaming a tab and closing it with confirmation; quitting ends every session and what it started; a word copied from a session and pasted back into it once; a link Ctrl+clicked in a session that has the mouse |
 | `panes` | two panes, the waiting one marked |
 | `settings` | a setting survives a restart; the gear opens Settings and Ctrl+Tab walks every tab |
 | `history` | an ended session is in history and resumes where it ran |
