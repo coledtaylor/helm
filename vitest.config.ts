@@ -1,5 +1,6 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { configDefaults, defineConfig } from 'vitest/config'
+import { TEST_TIMEOUT } from './test/patience'
 
 const SDK_SVELTE = 'packages/plugin-sdk/test/svelte.test.ts'
 
@@ -28,7 +29,7 @@ export default defineConfig({
     // On a developer's machine the suite keeps to a quarter of the cores, so
     // the desktop stays usable while it runs; on CI it has the runner.
     ...(process.env.CI ? {} : { maxWorkers: '25%' }),
-    testTimeout: 30_000,
+    testTimeout: TEST_TIMEOUT,
     // One folder per run that every temp folder its tests make lands in,
     // removed when the run ends, crashed workers included (test/run-root.ts).
     // Every project extends this config, so every project runs it.

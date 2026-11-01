@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { describe, expect, inject, it, vi } from 'vitest'
 import config from '../../../vitest.config'
-import { PATIENCE } from '../../../test/patience'
+import { PATIENCE, TEST_TIMEOUT } from '../../../test/patience'
 import { holdRunRoot, RUN_ROOT, RUN_ROOT_PREFIX } from '../../../test/run-root'
 import type { CrashReport } from './crash-run/crash.fixture'
+import crashRunConfig from './crash-run/vitest.config'
 import { electronFake } from './electron'
 import { repoRoot } from './world'
 
@@ -76,7 +77,17 @@ describe("a vitest run's root", () => {
     expect(tmpdir()).toBe(outer)
   })
 
-  it('is removed with the world and the fake agent in it when a worker crashes', { timeout: PATIENCE * 3 }, async () => {
+  it("gives the crash fixture's run the suite's test timeout", () => {
+    expect(config.test?.testTimeout).toBe(TEST_TIMEOUT)
+    expect(crashRunConfig.test?.testTimeout).toBe(TEST_TIMEOUT)
+  })
+
+  // The crashed run's one test may take its whole timeout; the run starting
+  // and ending around it, and the fake claude exiting after it, each get a
+  // patience.
+  const crashTimeout = TEST_TIMEOUT + PATIENCE * 2
+
+  it('is removed with the world and the fake agent in it when a worker crashes', { timeout: crashTimeout }, async () => {
     const report = join(mkdtempSync(join(tmpdir(), 'crash report ')), 'report.json')
     const env: NodeJS.ProcessEnv = { ...process.env, HELM_CRASH_REPORT: report }
     // This worker's own variables would make the run below think it is one.

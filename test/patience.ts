@@ -9,3 +9,12 @@
  * the suite runs on. A wait that needs longer is waiting on the wrong thing.
  */
 export const PATIENCE = 20_000
+
+/**
+ * How long one test in the vitest tier may take: a whole patience for its
+ * wait, with room for the setup around it (a world, a pty, a store). Every
+ * vitest run of the suite's sets it, the crash fixture's own run
+ * (`packages/desktop/test/crash-run/vitest.config.ts`) included: vitest's own
+ * 5 s is less than making a world takes on a slow runner.
+ */
+export const TEST_TIMEOUT = 30_000
