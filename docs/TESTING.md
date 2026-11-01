@@ -395,7 +395,7 @@ over the window, or Electron's own guards on a page.
 | `history` | an ended session is in history and resumes where it ran |
 | `profiles` | a profile made in the form starts with its overlay when saved |
 | `launcher` | Ctrl+N, a folder typed, a profile and mode picked there; a conversation reopened in the pane beside; a new harness and a new profile each end in a session |
-| `restore` | the main process killed outright, then started again: the sessions come back in their panes, folders, profile and mode, a `/clear`ed one in the conversation it moved to; not now reopens nothing and is not asked again; ticked to resume without asking, the next crash is put back unasked |
+| `restore` | with sessions in Helm itself, the main process killed outright, then started again: the sessions come back in their panes, folders, profile and mode, a `/clear`ed one in the conversation it moved to; not now reopens nothing and is not asked again; ticked to resume without asking, the next crash is put back unasked |
 | `config` | an edit saved to disk and undone byte for byte |
 | `content` | a wikilink followed; an HTML artifact framed with no reach |
 | `files` | a file opened from the tree beside its session, its changed lines counted, its line numbers to the bottom, and the view following the session's next edit; Ctrl+P, and the hand-offs to VS Code, Explorer and the clipboard |
@@ -412,6 +412,11 @@ over the window, or Electron's own guards on a page.
   own store before it starts: the projects folder scanned, the fake `claude`
   chosen, first run done, the update check off. Nothing reaches the network, a
   real `~/.claude` or the installed app.
+- **Every spec runs twice**: in the `helm` project with "Run sessions in the
+  local host" off, and in `in the local host` with it on (`sessionsInHost` in
+  `e2e/helm.ts`). A test whose subject exists on one side only, such as
+  `restore`'s crash that ends the sessions, skips the other through that
+  fixture, with a reason naming the test that covers it there.
 - **`e2e/helm.ts`** has the `test` fixture (`world`, `helm`, `relaunch`) and
   the helpers: `startSession`, `typeLine`, `terminalText`, `claudeRunIn`,
   `processAlive`.

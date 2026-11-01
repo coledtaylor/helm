@@ -48,6 +48,14 @@ const test = base.extend({
   }
 })
 
+// Restoring is for sessions a crash ended, which only happens while they run
+// in Helm itself: with sessions in the local host a crash ends nothing, and
+// host-sessions covers what the next start does then.
+test.skip(
+  ({ sessionsInHost }) => sessionsInHost,
+  'with sessions in the local host a crash ends nothing, so nothing is offered back: host-sessions covers it in "after Helm is killed outright, its sessions run on in the host, and the next start reattaches to that host and shows them, offering no restore"'
+)
+
 /** The window's routed bridge (`inspect.ts`): host features over the window's own connection. */
 type Bridge = { __helmRouted: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
 const invoke = <T>(window: Page, channel: string): Promise<T> =>

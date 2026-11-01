@@ -66,9 +66,14 @@ test('quitting Helm ends every session and everything a session started', async 
 })
 
 test('with the local host setting never changed, sessions run in Helm itself: no host process starts and no host folder is made', async ({
+  sessionsInHost,
   helm,
   world
 }) => {
+  test.skip(
+    sessionsInHost,
+    'its subject is the setting left at its default, off: host-sessions covers a session with it on in "a session in the host takes input, takes the pane’s size, is drawn again after a reload, and closes with confirmation"'
+  )
   const { window } = helm
   const settings = await window.evaluate(() =>
     (window as unknown as { helm: { invoke: (channel: string) => Promise<{ sessionsInHost: boolean }> } }).helm.invoke(
@@ -115,7 +120,7 @@ test('with the local host setting never changed, sessions run in Helm itself: no
   expect(existsSync(join(world.dataDir, 'host-client'))).toBe(false)
 })
 
-test('a session tab is renamed, then closed with confirmation', async ({ helm, world }) => {
+test('a session tab is renamed, then closed with confirmation', async ({ sessionsInHost, helm, world }) => {
   const { window } = helm
   await startSession(window, 'alpha')
   const pane = window.getByRole('region', { name: 'First pane' })
@@ -141,8 +146,11 @@ test('a session tab is renamed, then closed with confirmation', async ({ helm, w
   await typeLine(pane, 'after')
   await expect.poll(received).toEqual(['before', 'after'])
 
-  // Closing the live tab asks first, by its new name; Cancel keeps the tab and the process.
-  const dialog = window.getByRole('alertdialog', { name: '“review” is still running.' })
+  // Closing the live tab asks first, by its new name, and names the host it
+  // runs on when that is the local host; Cancel keeps the tab and the process.
+  const dialog = window.getByRole('alertdialog', {
+    name: sessionsInHost ? '“review” is still running on this PC’s host.' : '“review” is still running.'
+  })
   await pane.getByRole('button', { name: 'Close review' }).click()
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: 'Cancel' }).click()

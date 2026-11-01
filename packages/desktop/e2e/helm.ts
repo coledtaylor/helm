@@ -56,8 +56,8 @@ export function removeHostShims(world: World): void {
  * launched once; a test that restarts it calls `relaunch`.
  *
  * `sessionsInHost` seeds "Run sessions in the local host" on: the
- * `in the local host` project in `playwright.config.ts` runs the specs it
- * names again that way.
+ * `in the local host` project in `playwright.config.ts` runs every spec again
+ * that way.
  */
 export const test = base.extend<{
   sessionsInHost: boolean
