@@ -25,6 +25,7 @@ import { readClaudeStatus } from './setup'
 import { checkForUpdate, RELEASES_PAGE } from './update'
 import { appMode, dataDir, dbFile } from './paths'
 import type { PluginHost } from './plugins/host'
+import type { OwnDataCopy } from './host/own-data'
 import type { HostPlugins } from './host/plugins'
 import { activePty, windowsBuildNumber } from './pty'
 import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
@@ -216,6 +217,12 @@ interface IpcContextBase {
    * stopping it once the user has agreed. Absent otherwise.
    */
   localHost?: LocalHostControl | undefined
+  /**
+   * The copy of Helm's own database into the local host, while sessions run
+   * in it (`host/own-data.ts`): its state answers `ownData:state`. Absent
+   * otherwise, when nothing is copied and the state is `idle`.
+   */
+  ownData?: OwnDataCopy | undefined
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
@@ -412,6 +419,7 @@ export function registerIpc(ctx: IpcContext): void {
     'app:info': async () => ({ ...ownAppInfo(), claudeVersion: await readClaudeVersion() }),
 
     'ownApp:info': () => ownAppInfo(),
+    'ownData:state': () => ctx.ownData?.state() ?? { state: 'idle' },
     'windowSessions:lostLayout': () => services.lost.layout,
     'windowSessions:hostSessionCount': () => ctx.localHost?.sessionCount() ?? noLocalHost(),
     'windowSessions:stopHost': () => ctx.localHost?.stop() ?? noLocalHost(),

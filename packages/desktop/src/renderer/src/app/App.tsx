@@ -165,6 +165,7 @@ import {
   ConsoleIcon,
   TitleBar,
   VersionBanner,
+  OwnDataBanner,
   WelcomePane,
   type LaunchChoice,
   type PaneDropZone,
@@ -208,6 +209,7 @@ import { useThemes } from './useThemes'
 import { useBrowsers } from './useBrowsers'
 import { useShells } from './useShells'
 import { useUpdate } from './useUpdate'
+import { useOwnDataCopy } from './useOwnDataCopy'
 import { useUsage } from './useUsage'
 import { usePlugins } from './usePlugins'
 import { PluginFrame, PluginsUnavailable } from './PluginFrame'
@@ -463,6 +465,7 @@ export function App(): JSX.Element {
   const configState = useConfig()
   const usage = useUsage()
   const check = useUpdate()
+  const ownData = useOwnDataCopy()
   const themes = useThemes()
   /*
    * Every live session on the machine, and what Helm's own are holding. Held
@@ -3715,15 +3718,20 @@ export function App(): JSX.Element {
       rail={rail}
       sidebar={sidebar}
       banner={
-        versionWarning && setup.status ? (
-          <VersionBanner
-            version={setup.status.version}
-            range={setup.status.testedRange}
-            error={setup.status.error}
-            onDismiss={setup.dismissBanner}
-            onLocate={setup.locateClaude}
-          />
-        ) : null
+        <>
+          {versionWarning && setup.status ? (
+            <VersionBanner
+              version={setup.status.version}
+              range={setup.status.testedRange}
+              error={setup.status.error}
+              onDismiss={setup.dismissBanner}
+              onLocate={setup.locateClaude}
+            />
+          ) : null}
+          {ownData.unfinished !== null ? (
+            <OwnDataBanner reason={ownData.unfinished} onDismiss={ownData.dismiss} />
+          ) : null}
+        </>
       }
       statusBar={
         <StatusBar

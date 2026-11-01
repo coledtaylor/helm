@@ -98,6 +98,10 @@ pub const CLIENT_ONLY: &[Outside] = &[
         "the client's own build, data folder and runtime versions",
     ),
     outside(
+        "ownData:*",
+        "where the copy of the client's own database into the host stands: only the client's main process reads that database, and it sends the rows over carry:*",
+    ),
+    outside(
         "profileDialog:*",
         "the client's own dialogs for deleting, exporting and importing a profile, and the file it writes or reads on its machine; the profile itself is the host's",
     ),

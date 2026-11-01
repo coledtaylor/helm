@@ -657,6 +657,29 @@ export type HostLinkOpened =
 /** What Helm's own build says of itself; `app:info` adds the `claude` version wherever sessions run. */
 export type OwnAppInfo = Omit<AppInfo, 'claudeVersion'>
 
+/** How many rows of each kind a copy of Helm's own data added to the local host. */
+export interface OwnDataCopied {
+  conversations: number
+  messages: number
+  usageRows: number
+  sessionNames: number
+  configVersions: number
+}
+
+/**
+ * Where the copy of what only Helm's own database holds (archived
+ * conversations, their usage, History's names, config versions) into the
+ * local host stands. `idle` until Helm has reached the host, and always with
+ * sessions in Helm; `finished` once the host says it holds them, whichever
+ * start copied them; `unfinished` when a copy stopped part way, which the
+ * next start tries again.
+ */
+export type OwnDataCopyState =
+  | { state: 'idle' }
+  | { state: 'copying' }
+  | { state: 'finished' }
+  | { state: 'unfinished'; copied: OwnDataCopied; reason: string }
+
 /** The profile file the user chose to import, read on their own machine. */
 export type ProfileFileChosen =
   | { cancelled: true }
@@ -690,6 +713,11 @@ export interface IpcRequests {
   'ownSettings:write': { request: Partial<AppSettings>; response: AppSettings }
   /** Helm's own build, data folder and runtime versions. */
   'ownApp:info': { request: void; response: OwnAppInfo }
+  /**
+   * Where the copy of Helm's own database into the local host stands, which
+   * main runs and keeps; changes arrive on `ownData:changed`.
+   */
+  'ownData:state': { request: void; response: OwnDataCopyState }
 
   /** Helm's own question before a profile is deleted. */
   'profileDialog:confirmDelete': { request: { name: string }; response: { confirmed: boolean } }
@@ -1760,6 +1788,8 @@ export interface IpcEvents {
   'windowSessions:activate': { id: number }
   /** With sessions in the local host, what the hidden plugin host window reports of the background pages it runs. */
   'pluginBackground:changed': PluginBackgroundReport[]
+  /** With sessions in the local host, where the copy of Helm's own database into it stands, after each change. */
+  'ownData:changed': OwnDataCopyState
   /** With sessions in the local host, a background page's ask for the window, from the hidden window through main. */
   'pluginWindow:asked': PluginUiRequest
   /** With sessions in the local host, the window closed a secret dialog the hidden window handed it. */
@@ -1984,6 +2014,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'ownSettings:read': true,
   'ownSettings:write': true,
   'ownApp:info': true,
+  'ownData:state': true,
   'profileDialog:confirmDelete': true,
   'profileDialog:export': true,
   'profileDialog:import': true,
@@ -2161,6 +2192,7 @@ export const EVENT_CHANNELS = Object.keys({
   'windowSessions:quitConfirm': true,
   'windowSessions:activate': true,
   'pluginBackground:changed': true,
+  'ownData:changed': true,
   'pluginWindow:asked': true,
   'pluginWindow:answered': true,
   'profiles:changed': true,

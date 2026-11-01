@@ -18,6 +18,7 @@ import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { createHostFiles, type HostFiles } from './files'
 import { openPageBridge, startLocalHost, type HostChild, type HostPlaces, type LocalHost, type SpawnOptions } from './launcher'
 import { createHostLink, type HostLink } from './link'
+import { createOwnDataCopy, type OwnDataCopy } from './own-data'
 import { createPageLinks, type PageLinks } from './page-link'
 import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
 import { createHostPlugins, type HostPlugins } from './plugins'
@@ -52,6 +53,8 @@ export interface DesktopHost extends HostSessions {
   files: HostFiles
   /** What each hosted session is holding, from the host's processes-and-ports pass. */
   resources: HostResources
+  /** What only Helm's own database holds, copied into the host once; its state is the window's notice. */
+  ownData: OwnDataCopy
 }
 
 export interface DesktopHostDeps {
@@ -233,6 +236,9 @@ export function createDesktopHost({
   const files = createHostFiles({ link, emit: toNoWindow, log })
   // Kept for the session tools' detail; the window reads its own.
   const resources = createHostResources({ link, emit: toNoWindow, log })
+  // Read from helm.db and sent; the host records that it finished.
+  const ownData = createOwnDataCopy({ link, store: services.store, log })
+  ownData.onChange((state) => send('ownData:changed', state))
   return {
     ...hosted,
     link,
@@ -242,6 +248,7 @@ export function createDesktopHost({
     plugins: hostPlugins,
     workspace,
     files,
-    resources
+    resources,
+    ownData
   }
 }

@@ -120,6 +120,7 @@ export {
   type SettingsSectionsProps
 } from './components/SettingsSections'
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
+export { OwnDataBanner, type OwnDataBannerProps } from './components/OwnDataBanner'
 export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'
 export {

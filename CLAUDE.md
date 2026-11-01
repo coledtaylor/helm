@@ -110,6 +110,13 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   asking main. `e2e/boundary.spec.ts` fails naming any channel that crossed.
   Main then builds no terminal, config console, content or template service
   and runs no scan of its own; those are the host's.
+- The host never opens `helm.db` or learns Helm's data folder. What only
+  `helm.db` holds (archived conversations whose transcript is gone, their
+  usage, History's names, config versions) main reads through core's
+  read-only pages (`store/copy.ts`) and sends on `carry:*`, in batches, until
+  the host records in `floti.db` that the copy finished
+  (`main/host/own-data.ts`). The host's merge keeps what it already holds,
+  and a copy that stops part way is sent again at the next connect.
 - A host channel added to `shared/ipc.ts` is also declared in
   `crates/floti-protocol`, or listed there as client-only or host-internal
   with a reason (`channels/boundary.rs`), and the generated files are
@@ -420,7 +427,9 @@ app's folder, on any OS.
   from it, each through `writeConfigFile` (or its host equivalent), which
   snapshots the file first and aborts if it cannot. The transcript archive
   copies into `helm.db`, or the host's `floti.db` with "Run sessions in the
-  local host" on, and never writes there. What a launch needs (agent
+  local host" on, and never writes there. Copying `helm.db`'s archive into
+  `floti.db` writes neither the agent's config nor `helm.db`, and logs
+  counts, never a message. What a launch needs (agent
   tools, settings, composed instructions, overlays) is a per-launch file under
   the data directory, never a write into the agent's config.
 - Session state comes from each backend's own signals, read only; an agent

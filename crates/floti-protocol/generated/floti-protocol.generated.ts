@@ -3624,6 +3624,7 @@ export const CLIENT_ONLY: readonly OutsideEntry[] = [
   { channels: "hostLink:*", reason: "a Helm page's own connection to the host, whose protocol frames the desktop's main process pipes to a bridge and never reads" },
   { channels: "ownSettings:*", reason: "the settings the client keeps for itself: its window, theme, terminal and browser preferences, the programs it picked, which its main process tells the host, and its tabs, panes and splits, which are kept per device and never reach the host" },
   { channels: "ownApp:info", reason: "the client's own build, data folder and runtime versions" },
+  { channels: "ownData:*", reason: "where the copy of the client's own database into the host stands: only the client's main process reads that database, and it sends the rows over carry:*" },
   { channels: "profileDialog:*", reason: "the client's own dialogs for deleting, exporting and importing a profile, and the file it writes or reads on its machine; the profile itself is the host's" },
   { channels: "windowSessions:*", reason: "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, the count before it stops the host, and the pane layout its last run saved; every client sees every session, and which have a tab is each device's own" },
   { channels: "pluginBackground:*", reason: "what the client's hidden plugin window saw of the background pages it runs under plugin API v1, which its main process alone hears and tells its window" },

@@ -846,7 +846,7 @@ function startApp(options: AppOptions = {}): void {
     ...(templates !== undefined ? { templates } : {}),
     themes,
     plugins,
-    ...(desktopHost !== null ? { hostPlugins: desktopHost.plugins } : {}),
+    ...(desktopHost !== null ? { hostPlugins: desktopHost.plugins, ownData: desktopHost.ownData } : {}),
     ...(pluginBackground !== undefined ? { pluginBackground: () => pluginBackground.contents() } : {}),
     sessionsInHost: desktopHost !== null,
     ...(desktopHost !== null
