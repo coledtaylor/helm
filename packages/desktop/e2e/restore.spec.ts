@@ -73,11 +73,13 @@ async function layoutNames(window: Page, ids: number[]): Promise<void> {
 /**
  * Kills the app the way a crash does, waits for its sessions to go with it, and
  * starts it again. The main process's own pid: `app.process()` is the
- * launcher Playwright started, and killing that leaves Helm running.
+ * launcher Playwright started, and killing that leaves Helm running. SIGKILL:
+ * on macOS and Linux Electron takes a plain kill's SIGTERM as a request to
+ * quit, and quits cleanly, ending its sessions (Windows has no such signal).
  */
 async function crashAndRestart(helm: Helm, world: World): Promise<Helm> {
   const running = fakeClaudeLogs(world).filter((log) => log.exitCode === null && processAlive(log.pid))
-  process.kill(await helm.app.evaluate(() => process.pid))
+  process.kill(await helm.app.evaluate(() => process.pid), 'SIGKILL')
   await expect.poll(() => running.filter((log) => processAlive(log.pid)).map((log) => log.pid)).toEqual([])
   const next = await launchHelm(world)
   // The fixture closes whichever app `helm` is at the end.
