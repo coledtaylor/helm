@@ -56,7 +56,7 @@ test('Ctrl+N starts a session in a folder found by typing, with the profile and 
   const { window } = helm
   await expect(window.getByRole('button', { name: 'Start a session in alpha' })).toBeAttached()
 
-  await window.keyboard.press('Control+N')
+  await window.keyboard.press('ControlOrMeta+N')
   const launcher = window.getByRole('dialog', { name: 'New session' })
   await expect(launcher.getByRole('combobox', { name: 'Folder' })).toBeFocused()
   await window.keyboard.type('alp')
@@ -99,7 +99,7 @@ test('a conversation that ended reopens from the launcher, in the pane beside', 
   await expect(window.getByRole('tab', { name: 'beta, ended' })).toBeVisible()
 
   // Opened on the folder in front, whose conversation sits under it.
-  await window.getByRole('button', { name: 'New session (Ctrl+N)' }).click()
+  await window.getByRole('button', { name: `New session (${process.platform === 'darwin' ? '⌘N' : 'Ctrl+N'})` }).click()
   const launcher = window.getByRole('dialog', { name: 'New session' })
   const folders = launcher.getByRole('listbox', { name: 'Folders' })
   await expect(folders.getByRole('option', { name: 'beta' })).toHaveAttribute('aria-selected', 'true')
@@ -108,7 +108,7 @@ test('a conversation that ended reopens from the launcher, in the pane beside', 
   await window.keyboard.press('ArrowDown')
   await expect(conversation).toHaveAttribute('aria-selected', 'true')
   await expect(launcher.locator('[data-launch-sentence]')).toContainText('Reopens “sketch the migration” with claude --resume in')
-  await window.keyboard.press('Control+Enter')
+  await window.keyboard.press('ControlOrMeta+Enter')
 
   const second = window.getByRole('region', { name: 'Second pane' })
   await expect(second.getByRole('tab', { name: /^sketch the migration/ })).toBeVisible()

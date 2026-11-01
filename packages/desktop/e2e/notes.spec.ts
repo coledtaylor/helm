@@ -110,7 +110,7 @@ test('Ctrl+Shift+F finds a note by what it says and opens it with the words mark
   const { window } = helm
   await openNotes(window)
 
-  await window.keyboard.press('Control+Shift+F')
+  await window.keyboard.press('ControlOrMeta+Shift+F')
   await window.getByRole('combobox', { name: 'Text to find' }).fill('followed the')
   const hit = window.getByRole('option', { name: 'notes/second.md line 3: You followed the link.' })
   await expect(hit).toBeVisible()

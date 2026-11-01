@@ -95,12 +95,12 @@ test('after a crash, the sessions come back where they were, in their own folder
   await expect.poll(() => terminalText(window, alphaId)).toContain('You said: draft the schema')
 
   // Beside it, from the launcher, with a profile and a mode picked there.
-  await window.keyboard.press('Control+N')
+  await window.keyboard.press('ControlOrMeta+N')
   const launcher = window.getByRole('dialog', { name: 'New session' })
   await window.keyboard.type('beta')
   await launcher.getByRole('combobox', { name: 'Profile' }).selectOption({ label: 'kit' })
   await launcher.getByRole('combobox', { name: 'Permissions' }).selectOption({ label: 'Plan' })
-  await launcher.getByRole('combobox', { name: 'Folder' }).press('Control+Enter')
+  await launcher.getByRole('combobox', { name: 'Folder' }).press('ControlOrMeta+Enter')
   const second = window.getByRole('region', { name: 'Second pane' })
   await expect(second.getByRole('tab', { name: 'beta, ready' })).toBeVisible()
   const betaId = await sessionIdOf(window, 'beta, ready')
