@@ -178,11 +178,28 @@ function gitProject(dir: string, branch: string): string {
 }
 
 /**
+ * The file in a local host's data folder that makes a `floti` built with the
+ * `testkit` feature, as `pnpm test:e2e` builds it, seal plugin secrets with a
+ * key file beside it (`crates/host/src/plugins/secrets/seal.rs`). A test never
+ * touches the user's Keychain, Secret Service or other credential store.
+ */
+export const HOST_TEST_SEAL_MARKER = 'floti-test-secret-seal'
+
+/** Where the host Helm starts for a world keeps its data. */
+export const hostDataOf = (world: World): string => join(world.dataDir, 'host', 'data')
+
+/**
  * The settings a world starts with: its projects folder scanned, its fake
  * `claude` chosen, first run done, and the update check off so nothing goes to
  * the network. Written through the app's own store, before the app opens it.
+ * With "Run sessions in the local host" on, the host's data folder is marked
+ * to seal inside itself, so no host a test starts reaches a credential store.
  */
 export function seedSettings(world: World, patch: Partial<AppSettings> = {}): void {
+  if (patch.sessionsInHost === true) {
+    mkdirSync(hostDataOf(world), { recursive: true })
+    writeFileSync(join(hostDataOf(world), HOST_TEST_SEAL_MARKER), 'key-file')
+  }
   const store = openStore({ file: join(world.dataDir, 'helm.db') })
   try {
     writeSettings(store, {

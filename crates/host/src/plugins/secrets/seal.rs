@@ -1,10 +1,11 @@
 //! What a host seals plugin secrets with: this OS's store for this user.
 //!
 //! A test never touches the user's credential store. Only in a build with
-//! the testkit (the crate's own tests), a data folder the testkit marked
-//! ([`TEST_SEAL_MARKER`], which every `TestDirs` writes) seals with a key file
-//! inside that folder instead, or, when the marker says so, has no store at
-//! all. A production build has none of this code, so no folder can make it
+//! the testkit (the crate's own tests, and the `floti` `pnpm test:e2e`
+//! builds), a data folder a test marked ([`TEST_SEAL_MARKER`], which every
+//! `TestDirs` writes, as does the desktop's test world for its local host)
+//! seals with a key file inside that folder instead, or, when the marker says
+//! so, has no store at all. A production build has none of this code, so no folder can make it
 //! seal anything but the OS's way.
 
 use std::path::Path;

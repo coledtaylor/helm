@@ -1,8 +1,9 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Frame, Locator, Page } from '@playwright/test'
 import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'
 import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
+import { HOST_TEST_SEAL_MARKER, hostDataOf } from '../test/world'
 import { claudeRunIn, expect, startSession, terminalText, test as base, typeLine, type Helm } from './helm'
 import { startBrowserFixture } from './browser-fixture'
 import { TOKEN, installSample, pluginFrame, startServer, type SampleFixture } from './plugin-fixture'
@@ -69,7 +70,9 @@ async function storeToken(ui: Page, url: string): Promise<void> {
 
 test('a plugin: its background page, a secret it asks for, its panel, badge, status and a tab of its own', async ({
   helm,
-  sample
+  sample,
+  world,
+  sessionsInHost
 }) => {
   const ui = helm.window
 
@@ -102,6 +105,10 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
   await expect(statusItem(ui)).toHaveText('2 unread')
   await expect(ui.locator('[data-rail-badge]')).toHaveText('2')
   await expect(panel.locator('[data-sample-service]')).toContainText('Hello from the service')
+
+  // With sessions in the local host, the host sealed the value with the key
+  // file its test data folder names, never this user's credential store.
+  expect(existsSync(join(hostDataOf(world), `${HOST_TEST_SEAL_MARKER}.key`))).toBe(sessionsInHost)
 
   // The value went to the server in place of the placeholder, and nothing
   // else ever arrived in that header.
