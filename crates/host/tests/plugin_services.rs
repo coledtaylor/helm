@@ -232,20 +232,36 @@ impl World {
     /// Stops every plugin, ending its service, and closes the store. The
     /// folders are handed back, for the test to drop once it has seen what
     /// the services started end: a process still exiting may hold its folder.
-    fn stop(self) -> TestDirs {
+    ///
+    /// A service's change is sent to the list from a task of its own, which
+    /// holds the registry, and with it the store, while it runs; one may
+    /// still be running when the test's last handle goes. So the store is
+    /// taken once nothing else holds it, as the host waits for it, for at
+    /// most [`PATIENCE`].
+    async fn stop(self) -> TestDirs {
         let Self {
             registry,
-            store,
+            mut store,
             dirs,
             ..
         } = self;
         registry.shutdown();
         drop(registry);
-        let store = Arc::try_unwrap(store)
-            .unwrap_or_else(|_| panic!("nothing else holds the store"))
-            .into_inner()
-            .unwrap();
-        store.close().unwrap();
+        let deadline = tokio::time::Instant::now() + PATIENCE;
+        let store = loop {
+            match Arc::try_unwrap(store) {
+                Ok(only) => break only,
+                Err(held) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "the store was still held {PATIENCE:?} after the registry was dropped"
+                    );
+                    store = held;
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        };
+        store.into_inner().unwrap().close().unwrap();
         dirs
     }
 }
@@ -325,7 +341,7 @@ async fn s1_s2_a_node_service_starts_only_on_the_first_fetch_on_the_node_it_was_
     assert_eq!(again["token"], said["token"]);
     assert_eq!(runs(&folder), vec![service]);
 
-    let _dirs = world.stop();
+    let _dirs = world.stop().await;
     all_ended(&[service, pid(&said, "child")]).await;
 }
 
@@ -342,7 +358,7 @@ async fn s3_an_enable_service_starts_when_the_plugin_is_read_with_no_fetch() {
     assert_eq!(runs(&folder), vec![shown.pid.unwrap()]);
     assert!(shown.port.is_some());
 
-    let _dirs = world.stop();
+    let _dirs = world.stop().await;
     all_ended(&runs(&folder)).await;
 }
 
@@ -377,7 +393,7 @@ async fn s4_switching_off_reloading_removing_and_stopping_each_end_the_service_a
     world.registry.remove(&text(&folders[2]), &[]).unwrap();
     all_ended(&trees[2]).await;
 
-    let _dirs = world.stop();
+    let _dirs = world.stop().await;
     all_ended(&trees[3]).await;
     // Each ran once, and none was started again.
     for folder in &folders {
@@ -400,7 +416,7 @@ async fn s4_a_fetch_waiting_for_a_service_that_is_switched_off_is_refused_as_una
     let refused = waiting.await.unwrap().unwrap_err();
     assert_eq!(refused.code, PluginErrorCode::Unavailable, "{refused:?}");
     all_ended(&runs(&folder)).await;
-    let _dirs = world.stop();
+    let _dirs = world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -412,7 +428,7 @@ async fn s6_the_token_is_in_no_log_line_and_not_in_the_plugin_list() {
     let listed = format!("{:?}", world.registry.list());
     let sent = serde_json::to_string(&world.registry.list()).unwrap();
     let logs = Arc::clone(&world.logs);
-    let _dirs = world.stop();
+    let _dirs = world.stop().await;
     let logs = logs.lock().unwrap().clone();
     for line in &logs {
         assert!(!line.contains(&token), "the token is in {line}");
@@ -446,5 +462,5 @@ async fn s8_a_command_service_runs_its_program_under_the_same_port_token_and_sto
     all_ended(&tree).await;
     let ran: BTreeSet<u32> = runs(&folder).into_iter().collect();
     assert_eq!(ran, BTreeSet::from([tree[0]]));
-    let _dirs = world.stop();
+    let _dirs = world.stop().await;
 }
