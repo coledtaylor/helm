@@ -32,6 +32,7 @@ export {
   readSessionNames,
   readUsagePage,
   DEFAULT_COPY_BUDGET,
+  MAX_COPIED_TEXT_BYTES,
   type ConfigSnapshotPage,
   type ConversationCursor,
   type ConversationKey,

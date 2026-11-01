@@ -24,8 +24,10 @@ import { expect, test as base } from './helm'
  */
 
 const KEPT = sessionUuid(0x11)
-/** Sorts after `KEPT`, so a copy that fails on it has already sent `KEPT` whole. */
-const TOO_LARGE = sessionUuid(0x99)
+/** Holds one message longer than a protocol frame, which is sent cut short. */
+const TOO_LARGE = sessionUuid(0x55)
+/** Sorts after the others, so a copy the host refuses at it has already sent them whole. */
+const REFUSED = sessionUuid(0x99)
 const PROMPT = 'draft the migration'
 const REPLY = 'The migration adds two columns to the ledger.'
 const NAME = 'Migration plan'
@@ -187,18 +189,26 @@ test('History, the archived conversation and the config console show what only h
 })
 
 /**
- * The same, with one more conversation holding a message past the protocol's
- * frame: the host is never sent it, and the copy stops after the conversation
- * before it went whole.
+ * The same, with two more conversations: one holding a message past the
+ * protocol's frame, which goes cut short, and one holding a message whose role
+ * the host does not know, which it refuses, so the copy stops after the
+ * conversations before it went whole.
  */
-const tooLarge = test.extend({
+const refused = test.extend({
   world: async ({ world }, use) => {
-    archive(world, TOO_LARGE, ['x'.repeat(17 * 1024 * 1024)], Date.now() - 30 * 60 * 1000)
+    archive(world, TOO_LARGE, ['x'.repeat(17 * 1024 * 1024)], Date.now() - 40 * 60 * 1000)
+    archive(world, REFUSED, ['a row only a later build could have written'], Date.now() - 30 * 60 * 1000)
+    const store = openStore({ file: helmDb(world) })
+    try {
+      store.raw.prepare("UPDATE transcript_messages SET role = 'system' WHERE session_id = ?").run(REFUSED)
+    } finally {
+      store.close()
+    }
     await use(world)
   }
 })
 
-tooLarge('a copy that did not finish says so, and the next start finishes it without copying anything twice', async ({
+refused('a copy that did not finish says so, and the next start finishes it without copying anything twice', async ({
   world,
   sessionsInHost,
   helm,
@@ -207,18 +217,23 @@ tooLarge('a copy that did not finish says so, and the next start finishes it wit
   test.skip(!sessionsInHost, 'the copy runs only with sessions in the local host')
 
   await expect.poll(async () => (await copyState(helm.window)).state).toBe('unfinished')
+  // The conversation with a message past one frame went, cut short, before the refusal.
+  expect(await copyState(helm.window)).toMatchObject({
+    copied: { conversations: 2 },
+    reason: expect.stringContaining('the local host refused a batch of conversations')
+  })
   const banner = helm.window.locator('[data-own-data-banner]')
   await expect(banner).toContainText('did not finish')
   await expect(banner).toContainText('It will be tried again when Helm next starts.')
   await helm.window.screenshot({ path: testInfo.outputPath('own-data-banner.png') })
   await showsTheArchivedConversation(helm.window)
 
-  // The conversation that could not be sent goes from Helm's database
-  // between starts, so the next attempt can finish.
+  // The conversation the host refused goes from Helm's database between
+  // starts, so the next attempt can finish.
   const store = openStore({ file: helmDb(world) })
   try {
-    store.raw.prepare('DELETE FROM transcript_messages WHERE session_id = ?').run(TOO_LARGE)
-    store.raw.prepare('DELETE FROM transcript_sessions WHERE session_id = ?').run(TOO_LARGE)
+    store.raw.prepare('DELETE FROM transcript_messages WHERE session_id = ?').run(REFUSED)
+    store.raw.prepare('DELETE FROM transcript_sessions WHERE session_id = ?').run(REFUSED)
   } finally {
     store.close()
   }

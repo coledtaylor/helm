@@ -4,14 +4,17 @@ import {
   archiveTranscriptFile,
   indexUsageFile,
   insertConfigSnapshot,
+  MAX_COPIED_TEXT_BYTES,
   openStore,
   renameHistorySession,
   type Store
 } from '@helm/core'
 import { FakeConnection, fakeLink, reconnectingLink } from '../../../test/host-connection'
+import { encodeFrame } from '../../shared/host/frame'
 import type { OwnDataCopyState } from '../../shared/ipc'
 import { HostConnectionEnded, HostRequestError } from './client'
 import { createOwnDataCopy } from './own-data'
+import { MAX_FRAME_LEN } from './protocol'
 import type * as P from './protocol'
 
 /** Every message's text says this, so a log line carrying any of it is caught. */
@@ -272,6 +275,38 @@ describe('copying Helm’s own data into the local host', () => {
 
     expect(channels(second.connection)).toEqual([])
     expect(channels(first.connection).at(-1)).toBe('carry:finish')
+  })
+
+  it('finishes past a message too long for one frame, sending it cut short and every batch inside a frame', async () => {
+    archive('dddd', 1)
+    store.raw
+      .prepare("UPDATE transcript_messages SET body = ?, compressed = 0 WHERE session_id = 'dddd'")
+      .run(Buffer.from(`${PRIVATE} ${'x'.repeat(MAX_FRAME_LEN + 1024)}`))
+    const { connection } = host()
+    const link = fakeLink(connection)
+    // Core's own budget, as Helm copies with it.
+    const logged: string[] = []
+    const copy = createOwnDataCopy({ link, store, log: (line) => logged.push(line) })
+
+    await link.connect()
+    await copy.settled()
+
+    expect(copy.state()).toEqual({ state: 'finished' })
+    for (const request of connection.sent) {
+      // The frame encoder the connection writes with refuses anything past the limit.
+      expect(() =>
+        encodeFrame({ type: 'request', id: 1, channel: request.channel, payload: request.payload } as P.Message)
+      ).not.toThrow()
+    }
+    const parts = (connection.payloads('carry:conversations') as P.CarriedConversations[]).flatMap((batch) => batch.parts)
+    const cut =
+      parts.filter((part) => part.conversation.sessionId === 'dddd').flatMap((part) => part.messages)[0]?.text ?? ''
+    expect(Buffer.byteLength(cut, 'utf8')).toBeLessThanOrEqual(MAX_COPIED_TEXT_BYTES)
+    expect(cut).toMatch(/\[Cut short when Helm copied it into the local host: .*\]$/)
+    expect(logged.at(-1)).toBe(
+      "host: copied Helm's own data into the local host: 4 conversations (11 messages), 5 usage rows, 2 session names " +
+        'and 3 config versions; 1 messages too long for one batch were sent cut short'
+    )
   })
 
   it('leaves Helm’s database exactly as it was, whether the copy finished or stopped', async () => {

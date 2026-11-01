@@ -35,6 +35,9 @@ import type { HostLink } from './link'
  * next start, sends everything again, and the host's merge adds only what it
  * lacks. Its state is kept here for the window's notice.
  *
+ * No row can stop every copy: core cuts a message too long for one frame and
+ * leaves out a config version too long for one, and the log counts both.
+ *
  * What is sent is the user's own conversation text: the log says how many
  * rows of each kind were copied, and why a copy stopped, never what any of it
  * said.
@@ -110,6 +113,12 @@ export function createOwnDataCopy(deps: OwnDataCopyDeps): OwnDataCopy {
         `${counts.sessionNames} session names and ${counts.configSnapshots} config versions to offer`
     )
     const copied: OwnDataCopied = { ...NOTHING_COPIED }
+    // Rows too long for one frame (core's `MAX_COPIED_TEXT_BYTES`): messages
+    // sent cut short and config versions left in Helm's database.
+    const tooLong = { cut: 0, skipped: 0 }
+    const tooLongSaid = (): string =>
+      (tooLong.cut > 0 ? `; ${tooLong.cut} messages too long for one batch were sent cut short` : '') +
+      (tooLong.skipped > 0 ? `; ${tooLong.skipped} config versions too long for one batch were left out` : '')
     // What the batch in flight carries, for the sentence if it is refused.
     let what = 'the copy'
     try {
@@ -121,6 +130,7 @@ export function createOwnDataCopy(deps: OwnDataCopyDeps): OwnDataCopy {
       what = 'a batch of config versions'
       for (let after: number | null = null, first = true; first || after !== null; first = false) {
         const page = readConfigSnapshotPage(store, after, budget)
+        tooLong.skipped += page.skipped
         if (page.rows.length > 0) {
           const versions = page.rows.map(({ id: _id, ...version }) => version)
           copied.configVersions += (await connection.request('carry:versions', { versions })).added
@@ -154,6 +164,7 @@ export function createOwnDataCopy(deps: OwnDataCopyDeps): OwnDataCopy {
             const merged = await connection.request('carry:conversations', { parts: page.parts })
             copied.conversations += merged.added
             copied.messages += merged.messages
+            tooLong.cut += page.cut
           }
           cursor = page.next
         } while (cursor !== null)
@@ -165,11 +176,13 @@ export function createOwnDataCopy(deps: OwnDataCopyDeps): OwnDataCopy {
       const reason = stoppedBecause(error, what)
       // Not recorded as finished, so the next connect sends it all again
       // and the host adds only what it lacks.
-      log(`host: copying Helm's own data into the local host did not finish after ${tally(copied)} (${reason})`)
+      log(
+        `host: copying Helm's own data into the local host did not finish after ${tally(copied)}${tooLongSaid()} (${reason})`
+      )
       set({ state: 'unfinished', copied, reason })
       return
     }
-    log(`host: copied Helm's own data into the local host: ${tally(copied)}`)
+    log(`host: copied Helm's own data into the local host: ${tally(copied)}${tooLongSaid()}`)
     set({ state: 'finished' })
   }
 

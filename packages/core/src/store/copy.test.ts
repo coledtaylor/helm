@@ -8,6 +8,7 @@ import type { UsageRow } from '../usage/transcripts'
 import { archiveTranscriptFile, evictToCeiling, readArchivedConversation } from './archive'
 import { insertConfigSnapshot } from './config'
 import {
+  MAX_COPIED_TEXT_BYTES,
   countCopyableData,
   readConfigSnapshotPage,
   readConversationKeys,
@@ -15,6 +16,7 @@ import {
   readSessionNames,
   readUsagePage,
   type ConversationCursor,
+  type ConversationPage,
   type ConversationPageOptions,
   type ConversationPart
 } from './copy'
@@ -183,6 +185,50 @@ describe('reading conversations to copy', () => {
     expect(pages.map((page) => page.flatMap((p) => p.messages).length)).toEqual([1, 1])
   })
 
+  it('sends a message too long for one frame cut short, saying so, and counts it', () => {
+    // Multi-byte characters, so a cut that ended inside one would show.
+    const long = 'é'.repeat(5_000)
+    archive('long', [SHORT, long, SHORT])
+    const maxTextBytes = 4_001
+    const pages: ConversationPage[] = []
+    let cursor: ConversationCursor | null = null
+    do {
+      const page = readConversationPage(store, cursor, { budget: { maxBytes: 1 << 20, maxRows: 100, maxTextBytes } })
+      pages.push(page)
+      cursor = page.next
+    } while (cursor !== null)
+
+    const messages = pages.flatMap((page) => page.parts.flatMap((p) => p.messages))
+    expect(messages.map((m) => m.text.length > SHORT.length)).toEqual([false, true, false])
+    const cut = messages[1]?.text ?? ''
+    expect(Buffer.byteLength(cut, 'utf8')).toBeLessThanOrEqual(maxTextBytes)
+    expect(cut).not.toContain('�')
+    expect(cut.startsWith('é'.repeat(100))).toBe(true)
+    expect(cut).toMatch(/\[Cut short when Helm copied it into the local host: the message held 0\.0 MiB, more than one batch carries\.\]$/)
+    expect(pages.reduce((n, page) => n + page.cut, 0)).toBe(1)
+    // What Helm keeps is untouched.
+    expect(readArchivedConversation(store, 'long')?.messages[1]?.text).toBe(long)
+  })
+
+  it('keeps every page inside one protocol frame however long a message is', () => {
+    archive('huge', ['x'.repeat(MAX_COPIED_TEXT_BYTES + 1024), SHORT])
+    archive('next', [SHORT])
+    const pages: ConversationPage[] = []
+    let cursor: ConversationCursor | null = null
+    do {
+      const page = readConversationPage(store, cursor)
+      pages.push(page)
+      cursor = page.next
+    } while (cursor !== null)
+
+    const text = (page: ConversationPage): number =>
+      page.parts.flatMap((p) => p.messages).reduce((n, m) => n + Buffer.byteLength(m.text, 'utf8'), 0)
+    for (const page of pages) expect(text(page)).toBeLessThanOrEqual(MAX_COPIED_TEXT_BYTES)
+    const messages = pages.flatMap((page) => page.parts.flatMap((p) => p.messages))
+    expect(messages.map((m) => m.text.length > SHORT.length)).toEqual([true, false, false])
+    expect(pages.reduce((n, page) => n + page.cut, 0)).toBe(1)
+  })
+
   it('gives an evicted conversation as its row alone, with every figure it kept', () => {
     archive('old', [LONG, SHORT], 0)
     archive('new', [SHORT], 10_000)
@@ -208,7 +254,7 @@ describe('reading conversations to copy', () => {
   })
 
   it('reads nothing from an empty archive', () => {
-    expect(readConversationPage(store, null)).toEqual({ parts: [], next: null })
+    expect(readConversationPage(store, null)).toEqual({ parts: [], next: null, cut: 0 })
     expect(readConversationKeys(store)).toEqual([])
   })
 })
@@ -260,10 +306,34 @@ describe('reading the rest to copy', () => {
     expect(readConfigSnapshotPage(store, null, { maxBytes: 1, maxRows: 10 }).rows).toHaveLength(1)
   })
 
+  it('leaves out a config file version too long for one batch, counts it and reads on past it', () => {
+    for (const content of ['{}', 'x'.repeat(64), '# notes\n']) {
+      insertConfigSnapshot(store, {
+        scopePath: join(dir, 'project'),
+        filePath: 'CLAUDE.md',
+        content,
+        contentHash: sha(Buffer.from(content)),
+        reason: 'edit'
+      })
+    }
+    const budget = { maxBytes: 1 << 20, maxRows: 1, maxTextBytes: 32 }
+    const pages: Array<{ contents: string[]; skipped: number }> = []
+    for (let after: number | null = null, first = true; first || after !== null; first = false) {
+      const page = readConfigSnapshotPage(store, after, budget)
+      pages.push({ contents: page.rows.map((row) => row.content), skipped: page.skipped })
+      after = page.next
+    }
+    expect(pages).toEqual([
+      { contents: ['{}'], skipped: 0 },
+      { contents: [], skipped: 1 },
+      { contents: ['# notes\n'], skipped: 0 }
+    ])
+  })
+
   it('reads empty tables as empty', () => {
     expect(readUsagePage(store, null)).toEqual({ rows: [], next: null })
     expect(readSessionNames(store)).toEqual([])
-    expect(readConfigSnapshotPage(store, null)).toEqual({ rows: [], next: null })
+    expect(readConfigSnapshotPage(store, null)).toEqual({ rows: [], next: null, skipped: 0 })
     expect(countCopyableData(store)).toEqual({
       archivedConversations: 0,
       evictedConversations: 0,

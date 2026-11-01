@@ -38,14 +38,54 @@ export interface CopyBudget {
   maxBytes: number
   /** Rows of any kind, a conversation's own row counted as one. */
   maxRows: number
+  /**
+   * Bytes of text one row may carry, as UTF-8; `MAX_COPIED_TEXT_BYTES` when
+   * absent. A page always carries its first row however large, so this is
+   * what keeps any page inside one protocol frame.
+   */
+  maxTextBytes?: number
 }
 
 /**
- * About 4 MiB of text or 2,000 rows: well under the protocol's 16 MiB frame
- * once JSON-escaped, and small enough that the receiver's transaction for one
- * page does not keep its other requests waiting.
+ * About 4 MiB of text or 2,000 rows: well under the protocol's 16 MiB frame,
+ * whose strings are UTF-8 as they are (CBOR), and small enough that the
+ * receiver's transaction for one page does not keep its other requests waiting.
  */
 export const DEFAULT_COPY_BUDGET: CopyBudget = { maxBytes: 4 * 1024 * 1024, maxRows: 2000 }
+
+/**
+ * The most text one row carries: 8 MiB. A page holds at most the larger of
+ * this and its budget's `maxBytes`, plus its rows' short fields, so it always
+ * fits the protocol's 16 MiB frame.
+ *
+ * A message longer than this is sent cut short, ending with a line saying so,
+ * rather than stopping every copy at it: the rest of the conversation, and of
+ * the archive, is worth more than the end of one message. A config file
+ * version longer than this is left out and counted instead, because restoring
+ * part of a file would write a file that never existed.
+ */
+export const MAX_COPIED_TEXT_BYTES = 8 * 1024 * 1024
+
+/** The first whole characters of `text` that fit in `limit` UTF-8 bytes. */
+function utf8Prefix(text: string, limit: number): string {
+  const bytes = Buffer.from(text, 'utf8')
+  if (bytes.length <= limit) return text
+  let end = Math.max(0, limit)
+  // Never end inside a character: back off continuation bytes (10xxxxxx).
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--
+  return bytes.subarray(0, end).toString('utf8')
+}
+
+const MIB = 1024 * 1024
+
+/**
+ * `text` cut to at most `limit` UTF-8 bytes, ending with a line that says it
+ * was cut and how long it was; the text itself is never described.
+ */
+function cutShort(text: string, size: number, limit: number): string {
+  const note = `\n\n[Cut short when Helm copied it into the local host: the message held ${(size / MIB).toFixed(1)} MiB, more than one batch carries.]`
+  return utf8Prefix(text, limit - Buffer.byteLength(note, 'utf8')) + note
+}
 
 /** How many rows each table holds, for the line that says what was copied. */
 export interface CopyCounts {
@@ -141,6 +181,8 @@ export interface ConversationPage {
   parts: ConversationPart[]
   /** Null once every conversation has been read. */
   next: ConversationCursor | null
+  /** Messages on this page sent cut short (`MAX_COPIED_TEXT_BYTES`). */
+  cut: number
 }
 
 export interface ConversationPageOptions {
@@ -205,6 +247,7 @@ export function readConversationPage(
   options: ConversationPageOptions = {}
 ): ConversationPage {
   const budget = options.budget ?? DEFAULT_COPY_BUDGET
+  const maxText = budget.maxTextBytes ?? MAX_COPIED_TEXT_BYTES
   const only = options.only
 
   const sessionAt = store.raw.prepare(
@@ -225,6 +268,7 @@ export function readConversationPage(
     const parts: ConversationPart[] = []
     let rows = 0
     let bytes = 0
+    let cut = 0
     const full = (): boolean => rows >= budget.maxRows || bytes >= budget.maxBytes
 
     const start = { at: Number.MIN_SAFE_INTEGER, id: 0, part: 0 }
@@ -247,7 +291,7 @@ export function readConversationPage(
         continue
       }
       // A new conversation starts only while the page has room for it.
-      if (parts.length > 0 && full()) return { parts, next: { sessionId: done, within: null } }
+      if (parts.length > 0 && full()) return { parts, next: { sessionId: done, within: null }, cut }
 
       const conversation = toConversation(session)
       const messages: ArchiveMessage[] = []
@@ -266,15 +310,21 @@ export function readConversationPage(
         ) as CopyMessageRow[]
         let taken = 0
         for (const row of found) {
-          const text = decodeBody(row.body, row.compressed === 1)
-          const size = Buffer.byteLength(text, 'utf8')
-          // Always at least one message per page, however large, or a page
-          // could never make progress past it.
+          let text = decodeBody(row.body, row.compressed === 1)
+          let size = Buffer.byteLength(text, 'utf8')
+          const tooLong = size > maxText
+          if (tooLong) {
+            text = cutShort(text, size, maxText)
+            size = Buffer.byteLength(text, 'utf8')
+          }
+          // Always at least one message per page, or a page could never make
+          // progress past it; `maxText` bounds how large that one is.
           const anything = parts.length > 0 || messages.length > 0
           if (taken === room || (anything && bytes + size > budget.maxBytes)) {
             finished = false
             break
           }
+          if (tooLong) cut++
           messages.push({ uuid: row.uuid, role: row.role, at: row.at, text })
           bytes += size
           rows++
@@ -288,7 +338,8 @@ export function readConversationPage(
       if (!finished) {
         return {
           parts,
-          next: { sessionId: session.session_id, within: { ...last, part: from.part + 1 } }
+          next: { sessionId: session.session_id, within: { ...last, part: from.part + 1 } },
+          cut
         }
       }
 
@@ -297,7 +348,7 @@ export function readConversationPage(
       session = sessionAfter.get(done) as SessionRow | undefined
     }
 
-    return { parts, next: null }
+    return { parts, next: null, cut }
   })
   return read()
 }
@@ -396,6 +447,8 @@ export interface ConfigSnapshotPage {
   rows: CopiedConfigSnapshot[]
   /** The id to pass back for the next page; null once every row was read. */
   next: number | null
+  /** Versions on this page left out as longer than `MAX_COPIED_TEXT_BYTES`. */
+  skipped: number
 }
 
 /** The next config file versions in id order, after `afterId` (null for the first page). */
@@ -418,14 +471,23 @@ export function readConfigSnapshotPage(
     created_at: string
   }>
 
+  const maxText = budget.maxTextBytes ?? MAX_COPIED_TEXT_BYTES
   const rows: CopiedConfigSnapshot[] = []
   let bytes = 0
+  let skipped = 0
+  /** The last row this page took or left out, which the next page starts after. */
+  let read: number | null = null
   let more = false
-  for (const row of found) {
+  for (const [index, row] of found.entries()) {
     const size = Buffer.byteLength(row.content, 'utf8')
-    if (rows.length >= budget.maxRows || (rows.length > 0 && bytes + size > budget.maxBytes)) {
+    if (index >= Math.max(1, budget.maxRows) || (rows.length > 0 && bytes + size > budget.maxBytes)) {
       more = true
       break
+    }
+    read = row.id
+    if (size > maxText) {
+      skipped++
+      continue
     }
     rows.push({
       id: row.id,
@@ -438,5 +500,5 @@ export function readConfigSnapshotPage(
     })
     bytes += size
   }
-  return { rows, next: more ? (rows[rows.length - 1]?.id ?? null) : null }
+  return { rows, next: more ? read : null, skipped }
 }
