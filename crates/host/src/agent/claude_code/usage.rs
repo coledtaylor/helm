@@ -25,6 +25,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::time::parse_instant;
+use crate::usage::KeptUsage;
 
 /// The day the price table was last checked against Anthropic's published
 /// pricing. Change it only when the rates have been re-read.
@@ -172,12 +173,14 @@ pub(super) fn claude_config_file(config_dir: &Path) -> PathBuf {
     }
 }
 
-/// One reading of Claude Code's usage, labelled with `backend`.
+/// One reading of Claude Code's usage, labelled with `backend`, its spend
+/// also counting each `kept` message no transcript on disk holds.
 pub(super) fn read(
     backend: &BackendId,
     config_dir: &Path,
     now_ms: u64,
     today_start_ms: u64,
+    kept: &[KeptUsage],
 ) -> UsageSnapshot {
     let file = claude_config_file(config_dir);
     let mut snapshot = read_limits(&file);
@@ -192,6 +195,7 @@ pub(super) fn read(
     snapshot.spend = spend(
         &config_dir.join("projects"),
         Windows::new(now_ms, today_start_ms, session_reset),
+        kept,
     );
     snapshot
 }
@@ -533,6 +537,21 @@ struct UsageRow {
     cache_read: u64,
 }
 
+impl From<&KeptUsage> for UsageRow {
+    fn from(kept: &KeptUsage) -> Self {
+        Self {
+            uuid: kept.uuid.clone(),
+            at: kept.at,
+            model: kept.model.clone(),
+            input: kept.input,
+            output: kept.output,
+            cache_write_5m: kept.cache_write_5m,
+            cache_write_1h: kept.cache_write_1h,
+            cache_read: kept.cache_read,
+        }
+    }
+}
+
 #[derive(Default)]
 struct Sum {
     tokens: [u64; 4],
@@ -609,7 +628,7 @@ fn rows_of(file: &Path) -> Option<Arc<Vec<UsageRow>>> {
     Some(rows)
 }
 
-fn spend(projects: &Path, windows: Windows) -> Option<UsageSpend> {
+fn spend(projects: &Path, windows: Windows, kept: &[KeptUsage]) -> Option<UsageSpend> {
     let started = Instant::now();
     let mut files = Vec::new();
     match std::fs::read_dir(projects) {
@@ -626,28 +645,33 @@ fn spend(projects: &Path, windows: Windows) -> Option<UsageSpend> {
     let (mut session, mut today, mut week) = (Sum::default(), Sum::default(), Sum::default());
     let mut seen = HashSet::new();
     let mut unpriced = BTreeSet::new();
-    for file in &files {
-        for row in rows_of(file)?.iter() {
-            if row.at > windows.now || row.at < windows.earliest() {
-                continue;
-            }
-            if !seen.insert(row.uuid.clone()) {
-                continue;
-            }
-            let rate = price_for(&row.model, row.at);
-            if rate.is_none() {
-                unpriced.insert(row.model.clone());
-            }
-            if row.at >= windows.session_from {
-                session.add(row, rate);
-            }
-            if row.at >= windows.today_from {
-                today.add(row, rate);
-            }
-            if row.at >= windows.week_from {
-                week.add(row, rate);
-            }
+    let mut count = |row: &UsageRow| {
+        if row.at > windows.now || row.at < windows.earliest() {
+            return;
         }
+        if !seen.insert(row.uuid.clone()) {
+            return;
+        }
+        let rate = price_for(&row.model, row.at);
+        if rate.is_none() {
+            unpriced.insert(row.model.clone());
+        }
+        if row.at >= windows.session_from {
+            session.add(row, rate);
+        }
+        if row.at >= windows.today_from {
+            today.add(row, rate);
+        }
+        if row.at >= windows.week_from {
+            week.add(row, rate);
+        }
+    };
+    for file in &files {
+        rows_of(file)?.iter().for_each(&mut count);
+    }
+    // After every transcript, so a message on disk is counted from disk.
+    for row in kept {
+        count(&UsageRow::from(row));
     }
     Some(UsageSpend {
         session: session.cost(),

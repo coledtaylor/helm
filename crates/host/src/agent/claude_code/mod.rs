@@ -519,7 +519,22 @@ impl PromptRecord for ClaudeCodeBackend {
 
 impl UsageSource for ClaudeCodeBackend {
     fn usage(&self, now_ms: u64, today_start_ms: u64) -> UsageSnapshot {
-        usage::read(&self.id, &self.settings.config_dir, now_ms, today_start_ms)
+        self.usage_keeping(now_ms, today_start_ms, &[])
+    }
+
+    fn usage_keeping(
+        &self,
+        now_ms: u64,
+        today_start_ms: u64,
+        kept: &[crate::usage::KeptUsage],
+    ) -> UsageSnapshot {
+        usage::read(
+            &self.id,
+            &self.settings.config_dir,
+            now_ms,
+            today_start_ms,
+            kept,
+        )
     }
 }
 

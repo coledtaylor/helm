@@ -36,7 +36,7 @@ use crate::server::events::Events;
 use crate::server::hosted::Hosted;
 use crate::server::records::ExitNotice;
 use crate::store::Store;
-use crate::usage::{SystemDay, UsageReader};
+use crate::usage::{SystemDay, UsageReader, read_kept};
 
 /// How often history and the archive are indexed without being asked.
 const PASS_EVERY: Duration = Duration::from_secs(15);
@@ -80,7 +80,10 @@ impl History {
             .or_else(|| hosted.backends().first())
             .map_or_else(BackendId::claude_code, |backend| backend.id().clone());
         let indexed = read_indexed(hosted.ledger().store().connection(), &backend)?;
-        let usage = UsageReader::new(hosted.backends(), Box::new(SystemDay));
+        let kept_from = Arc::clone(&hosted);
+        let usage = UsageReader::new(hosted.backends(), Box::new(SystemDay)).keeping(Box::new(
+            move |since| read_kept(kept_from.ledger().store().connection(), since),
+        ));
         let (readings, _) = usage.read();
 
         context
@@ -106,6 +109,36 @@ impl History {
         every(&shared, USAGE_EVERY, Shared::read_usage);
         tokio::spawn(pass_on_exits(exits, Arc::downgrade(&shared)));
         Ok(Self { shared })
+    }
+
+    /// Tells the feature something else wrote what it serves.
+    pub fn handle(&self) -> HistoryHandle {
+        HistoryHandle(Arc::downgrade(&self.shared))
+    }
+}
+
+/// For a feature that writes what History, the archive or usage read: tells
+/// every subscriber the new state. Holds the feature weakly.
+#[derive(Clone)]
+pub(crate) struct HistoryHandle(Weak<Shared>);
+
+impl HistoryHandle {
+    /// The archive, or History's names, changed in the store: sends the
+    /// archive's state when it moved, and History's state when it moved or
+    /// `names` says a name changed.
+    pub fn stored_changed(&self, names: bool) -> crate::Result<()> {
+        match self.0.upgrade() {
+            Some(shared) => shared.republish(names),
+            None => Ok(()),
+        }
+    }
+
+    /// The usage the store keeps changed: takes a reading now.
+    pub fn usage_changed(&self) -> crate::Result<()> {
+        match self.0.upgrade() {
+            Some(shared) => shared.read_usage(),
+            None => Ok(()),
+        }
     }
 }
 
@@ -204,6 +237,22 @@ impl Shared {
                 .map_err(|err| err.to_string())?;
         }
         Ok(renamed)
+    }
+
+    /// Sends what the store holds now, as a pass would, without reading the
+    /// agent's files.
+    fn republish(&self, names: bool) -> crate::Result<()> {
+        let indexed = read_indexed(self.store().connection(), &self.backend)?;
+        let mut last = self.last();
+        if names || indexed.summary != last.summary {
+            self.events
+                .set_state::<HistoryChanged, _>(&indexed.summary)?;
+        }
+        if indexed.stats != last.stats {
+            self.events.set_state::<ArchiveChanged, _>(&indexed.stats)?;
+        }
+        last.clone_from(&indexed);
+        Ok(())
     }
 
     fn read_usage(&self) -> crate::Result<()> {

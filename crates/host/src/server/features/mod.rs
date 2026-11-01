@@ -23,9 +23,11 @@
 //!   with a browser pane, and its answers.
 //! - [`agent_plugin`]: the plugin tool servers a client offers, their calls
 //!   carried to it, and its answers.
+//! - [`carry`]: a client's own data, merged into the host's store once.
 
 mod agent_browser;
 mod agent_plugin;
+mod carry;
 mod config;
 mod content;
 mod discovery;
@@ -199,9 +201,12 @@ impl Features {
             PluginRelay::new(&context.events)
                 .naming_callers(plugins::tool_caller(Arc::downgrade(&plugin_sessions))),
         );
+        let history = history::History::new(&context)?;
+        let carry = carry::Carry::new(&context, history.handle());
         let features: Vec<Box<dyn Feature>> = vec![
             Box::new(sessions),
-            Box::new(history::History::new(&context)?),
+            Box::new(history),
+            Box::new(carry),
             Box::new(config::Config::new(&context)?),
             Box::new(resources),
             Box::new(workspace::Workspace::new(&context)?),

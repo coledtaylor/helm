@@ -385,6 +385,149 @@ template: string | null, };
 export type Capability = "terminal" | "files" | "pluginPages" | "browser";
 
 /**
+ * One config file as it was before a write, with its bytes.
+ */
+export type CarriedConfigVersion = { 
+/**
+ * The scope's base folder.
+ */
+scopePath: string, 
+/**
+ * Relative to `scope_path`, forward-slashed.
+ */
+filePath: string, content: string, 
+/**
+ * sha256 of `content`.
+ */
+contentHash: string, 
+/**
+ * Why the write was made, as stored; one this build does not know is
+ * kept as it is.
+ */
+reason: string, 
+/**
+ * ISO 8601.
+ */
+createdAt: string, };
+
+export type CarriedConfigVersions = { versions: Array<CarriedConfigVersion>, };
+
+/**
+ * An archived conversation's row as the client kept it.
+ */
+export type CarriedConversation = { sessionId: string, 
+/**
+ * The transcript it was read from, usually gone.
+ */
+sourceFile: string, state: ArchiveSessionState, firstAt: number | null, lastAt: number | null, messageCount: number, rawBytes: number, storedBytes: number, 
+/**
+ * ISO 8601.
+ */
+capturedAt: string, 
+/**
+ * ISO 8601, or null.
+ */
+evictedAt: string | null, };
+
+/**
+ * One conversation's messages, or part of them.
+ */
+export type CarriedConversationPart = { 
+/**
+ * The conversation's row, the same on every part.
+ */
+conversation: CarriedConversation, 
+/**
+ * 0 for its first part.
+ */
+part: number, 
+/**
+ * In the order they happened. Empty for a dropped conversation.
+ */
+messages: Array<ArchiveMessage>, 
+/**
+ * True on the part that ends the conversation.
+ */
+last: boolean, };
+
+export type CarriedConversations = { parts: Array<CarriedConversationPart>, };
+
+/**
+ * What one batch of conversations did.
+ */
+export type CarriedConversationsMerged = { 
+/**
+ * Conversations whose last part arrived and whose row was written.
+ */
+added: number, 
+/**
+ * Parts skipped because the host already holds their conversation.
+ */
+kept: number, 
+/**
+ * Messages written.
+ */
+messages: number, 
+/**
+ * Conversations the archive's size limit dropped after the batch, the
+ * host's own included.
+ */
+evicted: number, };
+
+/**
+ * A name somebody gave a session in History.
+ */
+export type CarriedSessionName = { sessionId: string, name: string, 
+/**
+ * ISO 8601.
+ */
+renamedAt: string, };
+
+export type CarriedSessionNames = { names: Array<CarriedSessionName>, };
+
+/**
+ * One assistant message's token usage.
+ */
+export type CarriedUsageRow = { 
+/**
+ * The message's own uuid, from its transcript.
+ */
+uuid: string, 
+/**
+ * Epoch ms.
+ */
+at: number, model: string, input: number, output: number, cacheWrite5m: number, cacheWrite1h: number, cacheRead: number, };
+
+export type CarriedUsageRows = { rows: Array<CarriedUsageRow>, };
+
+/**
+ * What one batch did.
+ */
+export type CarryMerged = { 
+/**
+ * Rows the host did not have, and now has.
+ */
+added: number, 
+/**
+ * Rows the host already had, kept as they were.
+ */
+kept: number, };
+
+/**
+ * Conversations by the id their agent gave them.
+ */
+export type CarrySessionIds = { sessionIds: Array<string>, };
+
+/**
+ * Whether the copy has run to the end on this host.
+ */
+export type CarryStatus = { 
+/**
+ * ISO 8601 time it finished, or null while it has not.
+ */
+finishedAt: string | null, };
+
+/**
  * What a project's `.claude/` folder holds, counted the way Claude Code
  * resolves it.
  */
@@ -3145,6 +3288,13 @@ export interface RequestChannels {
   "app:info": { request: null; response: AppInfo; capability: null };
   "archive:conversation": { request: HistorySessionRef; response: ArchivedConversation | null; capability: null };
   "archive:stats": { request: null; response: ArchiveStats; capability: null };
+  "carry:conversations": { request: CarriedConversations; response: CarriedConversationsMerged; capability: null };
+  "carry:finish": { request: null; response: CarryStatus; capability: null };
+  "carry:missing": { request: CarrySessionIds; response: CarrySessionIds; capability: null };
+  "carry:names": { request: CarriedSessionNames; response: CarryMerged; capability: null };
+  "carry:status": { request: null; response: CarryStatus; capability: null };
+  "carry:usage": { request: CarriedUsageRows; response: CarryMerged; capability: null };
+  "carry:versions": { request: CarriedConfigVersions; response: CarryMerged; capability: null };
   "config:create": { request: CreateConfigRequest; response: CreateConfigResult; capability: null };
   "config:delete": { request: DeleteConfigRequest; response: DeleteConfigResult; capability: null };
   "config:doctor": { request: null; response: DoctorReport; capability: null };
@@ -3304,6 +3454,13 @@ export const CHANNELS = [
   { name: "archive:changed", kind: "event", capability: null },
   { name: "archive:conversation", kind: "request", capability: null },
   { name: "archive:stats", kind: "request", capability: null },
+  { name: "carry:conversations", kind: "request", capability: null },
+  { name: "carry:finish", kind: "request", capability: null },
+  { name: "carry:missing", kind: "request", capability: null },
+  { name: "carry:names", kind: "request", capability: null },
+  { name: "carry:status", kind: "request", capability: null },
+  { name: "carry:usage", kind: "request", capability: null },
+  { name: "carry:versions", kind: "request", capability: null },
   { name: "config:create", kind: "request", capability: null },
   { name: "config:delete", kind: "request", capability: null },
   { name: "config:doctor", kind: "request", capability: null },

@@ -2098,6 +2098,56 @@ fn usage_reads_the_plan_windows_and_token_counts_with_dollars_as_an_estimate() {
 }
 
 #[test]
+fn kept_usage_of_a_conversation_whose_transcript_is_gone_counts_and_a_message_on_disk_counts_from_disk()
+ {
+    let world = World::new();
+    let now = now_ms();
+    usage_file(&world, now - 60_000, now);
+    let project = world.folder("work");
+    write(
+        &world
+            .config
+            .join("projects")
+            .join("w")
+            .join("7b3d1c20-4a55-4f18-9c21-8e0c5a6d1f01.jsonl"),
+        transcript_row("assistant", "a1", &project, now - 110_000, json!("ok")),
+    );
+    let kept = |uuid: &str, at: u64, input: u64| crate::usage::KeptUsage {
+        uuid: uuid.to_owned(),
+        at,
+        model: "claude-opus-5".to_owned(),
+        input,
+        output: 100,
+        cache_write_5m: 0,
+        cache_write_1h: 0,
+        cache_read: 0,
+    };
+    let rows = [
+        // The same message as on disk, with other figures: disk wins.
+        kept("a1", now - 110_000, 999_999),
+        // A conversation whose transcript is gone, two days ago.
+        kept("gone", now - 2 * 86_400_000, 2000),
+        // Older than every window.
+        kept("old", now - 9 * 86_400_000, 5000),
+    ];
+    let spend = world
+        .backend
+        .read_usage_keeping(now, now - 3_600_000, &rows)
+        .known()
+        .unwrap()
+        .spend
+        .expect("the transcripts were readable");
+    assert_eq!(
+        (spend.session.messages, spend.session.tokens.input),
+        (1, 1000)
+    );
+    assert_eq!((spend.today.messages, spend.today.tokens.input), (1, 1000));
+    assert_eq!((spend.week.messages, spend.week.tokens.input), (2, 3000));
+    // claude-opus-5 at $5 in and $25 out per million.
+    assert!((spend.week.dollars - (3000.0 * 5.0 + 200.0 * 25.0) / 1e6).abs() < 1e-12);
+}
+
+#[test]
 fn a_stale_reading_of_a_running_window_is_a_lower_bound_and_a_rolled_over_one_paints_nothing() {
     let world = World::new();
     let now = now_ms();

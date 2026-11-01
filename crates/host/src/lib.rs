@@ -48,6 +48,7 @@
 pub mod agent;
 pub mod agent_tools;
 pub mod bridge;
+pub mod carry;
 pub mod client;
 pub mod config_console;
 pub mod devices;

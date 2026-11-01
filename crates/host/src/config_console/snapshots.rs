@@ -93,7 +93,9 @@ fn meta(row: &Row<'_>) -> rusqlite::Result<ConfigSnapshotMeta> {
     })
 }
 
-/// One file's versions, newest first, without their bytes.
+/// One file's versions, newest first, without their bytes. Newest by when
+/// each was taken, not by id: versions Helm took before the host ran its
+/// sessions are copied in later and take later ids.
 pub fn list(
     conn: &Connection,
     scope_path: &str,
@@ -103,7 +105,7 @@ pub fn list(
         .prepare(
             "SELECT id, project_path, file_path, content_hash, length(content) AS bytes, reason, created_at
              FROM config_snapshots WHERE project_path = ?1 AND file_path = ?2
-             ORDER BY id DESC LIMIT ?3",
+             ORDER BY created_at DESC, id DESC LIMIT ?3",
         )
         .map_err(|err| format!("Floti could not read the snapshot history: {err}"))?;
     statement

@@ -890,6 +890,360 @@
         }
       ]
     },
+    "CarriedConfigVersion": {
+      "description": "One config file as it was before a write, with its bytes.",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "contentHash": {
+          "description": "sha256 of `content`.",
+          "type": "string"
+        },
+        "createdAt": {
+          "description": "ISO 8601.",
+          "type": "string"
+        },
+        "filePath": {
+          "description": "Relative to `scope_path`, forward-slashed.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the write was made, as stored; one this build does not know is\nkept as it is.",
+          "type": "string"
+        },
+        "scopePath": {
+          "description": "The scope's base folder.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scopePath",
+        "filePath",
+        "content",
+        "contentHash",
+        "reason",
+        "createdAt"
+      ],
+      "type": "object"
+    },
+    "CarriedConfigVersions": {
+      "properties": {
+        "versions": {
+          "items": {
+            "$ref": "#/$defs/CarriedConfigVersion"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "versions"
+      ],
+      "type": "object"
+    },
+    "CarriedConversation": {
+      "description": "An archived conversation's row as the client kept it.",
+      "properties": {
+        "capturedAt": {
+          "description": "ISO 8601.",
+          "type": "string"
+        },
+        "evictedAt": {
+          "description": "ISO 8601, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "firstAt": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastAt": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "messageCount": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rawBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "sourceFile": {
+          "description": "The transcript it was read from, usually gone.",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ArchiveSessionState"
+        },
+        "storedBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sessionId",
+        "sourceFile",
+        "state",
+        "messageCount",
+        "rawBytes",
+        "storedBytes",
+        "capturedAt"
+      ],
+      "type": "object"
+    },
+    "CarriedConversationPart": {
+      "description": "One conversation's messages, or part of them.",
+      "properties": {
+        "conversation": {
+          "$ref": "#/$defs/CarriedConversation",
+          "description": "The conversation's row, the same on every part."
+        },
+        "last": {
+          "description": "True on the part that ends the conversation.",
+          "type": "boolean"
+        },
+        "messages": {
+          "description": "In the order they happened. Empty for a dropped conversation.",
+          "items": {
+            "$ref": "#/$defs/ArchiveMessage"
+          },
+          "type": "array"
+        },
+        "part": {
+          "description": "0 for its first part.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "conversation",
+        "part",
+        "messages",
+        "last"
+      ],
+      "type": "object"
+    },
+    "CarriedConversations": {
+      "properties": {
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/CarriedConversationPart"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "parts"
+      ],
+      "type": "object"
+    },
+    "CarriedConversationsMerged": {
+      "description": "What one batch of conversations did.",
+      "properties": {
+        "added": {
+          "description": "Conversations whose last part arrived and whose row was written.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "evicted": {
+          "description": "Conversations the archive's size limit dropped after the batch, the\nhost's own included.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kept": {
+          "description": "Parts skipped because the host already holds their conversation.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages": {
+          "description": "Messages written.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "added",
+        "kept",
+        "messages",
+        "evicted"
+      ],
+      "type": "object"
+    },
+    "CarriedSessionName": {
+      "description": "A name somebody gave a session in History.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "renamedAt": {
+          "description": "ISO 8601.",
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "name",
+        "renamedAt"
+      ],
+      "type": "object"
+    },
+    "CarriedSessionNames": {
+      "properties": {
+        "names": {
+          "items": {
+            "$ref": "#/$defs/CarriedSessionName"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "names"
+      ],
+      "type": "object"
+    },
+    "CarriedUsageRow": {
+      "description": "One assistant message's token usage.",
+      "properties": {
+        "at": {
+          "description": "Epoch ms.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cacheRead": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cacheWrite1h": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cacheWrite5m": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "output": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uuid": {
+          "description": "The message's own uuid, from its transcript.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uuid",
+        "at",
+        "model",
+        "input",
+        "output",
+        "cacheWrite5m",
+        "cacheWrite1h",
+        "cacheRead"
+      ],
+      "type": "object"
+    },
+    "CarriedUsageRows": {
+      "properties": {
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/CarriedUsageRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "type": "object"
+    },
+    "CarryMerged": {
+      "description": "What one batch did.",
+      "properties": {
+        "added": {
+          "description": "Rows the host did not have, and now has.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kept": {
+          "description": "Rows the host already had, kept as they were.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "added",
+        "kept"
+      ],
+      "type": "object"
+    },
+    "CarrySessionIds": {
+      "description": "Conversations by the id their agent gave them.",
+      "properties": {
+        "sessionIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessionIds"
+      ],
+      "type": "object"
+    },
+    "CarryStatus": {
+      "description": "Whether the copy has run to the end on this host.",
+      "properties": {
+        "finishedAt": {
+          "description": "ISO 8601 time it finished, or null while it has not.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ClaudeInventory": {
       "description": "What a project's `.claude/` folder holds, counted the way Claude Code\nresolves it.",
       "properties": {
@@ -9649,6 +10003,83 @@
       },
       "response": {
         "$ref": "#/$defs/ArchiveStats"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "carry:conversations",
+      "request": {
+        "$ref": "#/$defs/CarriedConversations"
+      },
+      "response": {
+        "$ref": "#/$defs/CarriedConversationsMerged"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "carry:finish",
+      "request": {
+        "type": "null"
+      },
+      "response": {
+        "$ref": "#/$defs/CarryStatus"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "carry:missing",
+      "request": {
+        "$ref": "#/$defs/CarrySessionIds"
+      },
+      "response": {
+        "$ref": "#/$defs/CarrySessionIds"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "carry:names",
+      "request": {
+        "$ref": "#/$defs/CarriedSessionNames"
+      },
+      "response": {
+        "$ref": "#/$defs/CarryMerged"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "carry:status",
+      "request": {
+        "type": "null"
+      },
+      "response": {
+        "$ref": "#/$defs/CarryStatus"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "carry:usage",
+      "request": {
+        "$ref": "#/$defs/CarriedUsageRows"
+      },
+      "response": {
+        "$ref": "#/$defs/CarryMerged"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "carry:versions",
+      "request": {
+        "$ref": "#/$defs/CarriedConfigVersions"
+      },
+      "response": {
+        "$ref": "#/$defs/CarryMerged"
       }
     },
     {

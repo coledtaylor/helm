@@ -164,35 +164,11 @@ pub fn archive_transcript(conn: &Connection, input: &ArchiveInput<'_>) -> Result
         if evicted {
             result.skipped_evicted = !input.messages.is_empty();
         } else {
-            let mut insert = tx.prepare(
-                "INSERT INTO transcript_messages
-                   (uuid, session_id, role, at, body, compressed, raw_bytes, stored_bytes)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(uuid) DO NOTHING",
-            )?;
-            let mut index = tx.prepare("INSERT INTO transcript_fts(rowid, text) VALUES (?, ?)")?;
-            for message in input.messages {
-                let raw_bytes = message.text.len() as u64;
-                let (body, compressed) = encode_body(&message.text);
-                let written = insert.execute(params![
-                    message.uuid,
-                    session,
-                    role_name(message.role),
-                    to_i64(message.at),
-                    body.as_ref(),
-                    compressed,
-                    to_i64(raw_bytes),
-                    to_i64(body.len() as u64),
-                ])?;
-                if written == 0 {
-                    continue;
-                }
-                // Written beside the row and in its transaction, so a message
-                // and its search entry cannot disagree.
-                index.execute(params![tx.last_insert_rowid(), message.text])?;
-                result.messages += 1;
-                result.stored_bytes += body.len() as u64;
-            }
+            let encoded: Vec<StoredMessage<'_>> =
+                input.messages.iter().map(StoredMessage::encode).collect();
+            let (messages, stored_bytes) = insert_messages(&tx, &session, &encoded)?;
+            result.messages = messages;
+            result.stored_bytes = stored_bytes;
             if result.messages > 0 {
                 tx.execute(
                     "INSERT INTO transcript_sessions
@@ -227,6 +203,68 @@ pub fn archive_transcript(conn: &Connection, input: &ArchiveInput<'_>) -> Result
     run(&mut result).map_err(sql("archive a transcript"))?;
     tx.commit().map_err(sql("finish an archive pass"))?;
     Ok(result)
+}
+
+/// A message as it is stored: its body compressed when that makes it
+/// shorter. Encoded before the store is taken, so the compression does not
+/// hold anybody else's request.
+pub(crate) struct StoredMessage<'a> {
+    pub message: &'a ArchiveMessage,
+    body: Cow<'a, [u8]>,
+    compressed: bool,
+}
+
+impl<'a> StoredMessage<'a> {
+    pub fn encode(message: &'a ArchiveMessage) -> Self {
+        let (body, compressed) = encode_body(&message.text);
+        Self {
+            message,
+            body,
+            compressed,
+        }
+    }
+}
+
+/// Writes `messages` under `session` (lower-cased) inside the caller's
+/// transaction, each with its search entry. A message already stored, under
+/// any conversation, is left as it is. Answers how many were written and the
+/// bytes they take.
+pub(crate) fn insert_messages(
+    tx: &Connection,
+    session: &str,
+    messages: &[StoredMessage<'_>],
+) -> rusqlite::Result<(u64, u64)> {
+    let mut insert = tx.prepare(
+        "INSERT INTO transcript_messages
+           (uuid, session_id, role, at, body, compressed, raw_bytes, stored_bytes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(uuid) DO NOTHING",
+    )?;
+    let mut index = tx.prepare("INSERT INTO transcript_fts(rowid, text) VALUES (?, ?)")?;
+    let (mut written, mut stored_bytes) = (0, 0);
+    for stored in messages {
+        let message = stored.message;
+        let raw_bytes = message.text.len() as u64;
+        let inserted = insert.execute(params![
+            message.uuid,
+            session,
+            role_name(message.role),
+            to_i64(message.at),
+            stored.body.as_ref(),
+            stored.compressed,
+            to_i64(raw_bytes),
+            to_i64(stored.body.len() as u64),
+        ])?;
+        if inserted == 0 {
+            continue;
+        }
+        // Written beside the row and in its transaction, so a message and its
+        // search entry cannot disagree.
+        index.execute(params![tx.last_insert_rowid(), message.text])?;
+        written += 1;
+        stored_bytes += stored.body.len() as u64;
+    }
+    Ok((written, stored_bytes))
 }
 
 /// Stored bytes of every conversation still archived: what the ceiling is
@@ -399,7 +437,8 @@ pub fn search_query(search: &str) -> Option<String> {
 /// The archived conversations whose messages match `search`, each with the
 /// first matching message's text, keyed by lower-cased id. At most `limit`
 /// conversations. A search FTS5 refuses whatever the quoting matches
-/// nothing rather than failing.
+/// nothing rather than failing. Only a conversation with a row is searched:
+/// the messages of one a copy has not finished are not shown yet.
 pub fn search_archive(
     conn: &Connection,
     search: &str,
@@ -413,6 +452,7 @@ pub fn search_archive(
         "SELECT m.session_id, m.body, m.compressed
          FROM transcript_fts f
          JOIN transcript_messages m ON m.id = f.rowid
+         JOIN transcript_sessions s ON s.session_id = m.session_id
          WHERE transcript_fts MATCH ?
          ORDER BY rank
          LIMIT ?",

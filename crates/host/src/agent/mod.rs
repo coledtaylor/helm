@@ -226,6 +226,20 @@ pub trait UsageSource: Send + Sync {
     /// The latest reading. `today_start_ms` is local midnight, from the
     /// caller's clock and timezone, for the "today" estimate.
     fn usage(&self, now_ms: u64, today_start_ms: u64) -> UsageSnapshot;
+
+    /// The latest reading, its spend also counting `kept`: usage the host
+    /// keeps for messages whose transcripts may be gone. A message the
+    /// agent's own files hold is counted from them. An agent whose spend is
+    /// not summed from messages ignores `kept`.
+    fn usage_keeping(
+        &self,
+        now_ms: u64,
+        today_start_ms: u64,
+        kept: &[crate::usage::KeptUsage],
+    ) -> UsageSnapshot {
+        let _ = kept;
+        self.usage(now_ms, today_start_ms)
+    }
 }
 
 /// The agent's config files.
@@ -594,6 +608,12 @@ pub trait BackendAnswers {
     fn read_status(&self, session: &SessionRef) -> Knowable<Option<SessionActivity>>;
     fn read_conversations(&self) -> Knowable<Vec<Conversation>>;
     fn read_usage(&self, now_ms: u64, today_start_ms: u64) -> Knowable<UsageSnapshot>;
+    fn read_usage_keeping(
+        &self,
+        now_ms: u64,
+        today_start_ms: u64,
+        kept: &[crate::usage::KeptUsage],
+    ) -> Knowable<UsageSnapshot>;
     fn read_config_files(&self, project: Option<&Path>) -> Knowable<Vec<ConfigFile>>;
     fn read_sign_in(&self) -> Knowable<SignIn>;
 }
@@ -613,6 +633,17 @@ impl<B: AgentBackend + ?Sized> BackendAnswers for B {
     fn read_usage(&self, now_ms: u64, today_start_ms: u64) -> Knowable<UsageSnapshot> {
         self.usage().map_or(Knowable::Unknown, |source| {
             Knowable::Known(source.usage(now_ms, today_start_ms))
+        })
+    }
+
+    fn read_usage_keeping(
+        &self,
+        now_ms: u64,
+        today_start_ms: u64,
+        kept: &[crate::usage::KeptUsage],
+    ) -> Knowable<UsageSnapshot> {
+        self.usage().map_or(Knowable::Unknown, |source| {
+            Knowable::Known(source.usage_keeping(now_ms, today_start_ms, kept))
         })
     }
 
