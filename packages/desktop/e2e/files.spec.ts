@@ -105,7 +105,7 @@ test('Ctrl+P opens a file by a few letters, and a file goes to VS Code, Explorer
   await window.getByRole('listbox', { name: 'Projects' }).getByRole('option', { name: 'alpha', exact: true }).click()
   await expect(window.getByRole('group', { name: 'Project files' }).getByRole('button', { name: /^src\b/ })).toBeVisible()
 
-  await window.keyboard.press('Control+p')
+  await window.keyboard.press('ControlOrMeta+p')
   await window.getByRole('combobox', { name: 'File name' }).fill('app')
   await expect(window.getByRole('option', { name: 'src/app.ts' })).toBeVisible()
   await window.keyboard.press('Enter')

@@ -30,7 +30,7 @@ test('a terminal tab runs a plain shell in the chosen folder, one per tab, endin
 
   // From the launcher: Alt+Enter on a folder opens a terminal there, not a session.
   await expect(window.getByRole('button', { name: 'Start a session in alpha' })).toBeAttached()
-  await window.keyboard.press('Control+N')
+  await window.keyboard.press('ControlOrMeta+N')
   const launcher = window.getByRole('dialog', { name: 'New session' })
   await expect(launcher.getByRole('combobox', { name: 'Folder' })).toBeFocused()
   await window.keyboard.type('alp')

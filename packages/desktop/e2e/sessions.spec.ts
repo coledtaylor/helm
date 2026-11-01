@@ -181,10 +181,10 @@ async function pointAt(pane: Locator, sessionId: number, text: string): Promise<
 
 async function ctrlClick(window: Page, at: { x: number; y: number }): Promise<void> {
   await window.mouse.move(at.x, at.y)
-  await window.keyboard.down('Control')
+  await window.keyboard.down('ControlOrMeta')
   await window.mouse.down()
   await window.mouse.up()
-  await window.keyboard.up('Control')
+  await window.keyboard.up('ControlOrMeta')
 }
 
 test('a link in a session opens on Ctrl+click, once, wherever focus was, and a plain click stays the session’s', async ({

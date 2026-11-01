@@ -230,7 +230,7 @@ test("Helm's shortcuts work from inside a plugin page, and its commands run from
   // Focus is in the plugin's process: the key reaches Helm only because the
   // page forwards what it did not handle.
   await panel.locator('[data-sample-item="1"]').focus()
-  await ui.keyboard.press('Control+Shift+P')
+  await ui.keyboard.press('ControlOrMeta+Shift+P')
   const palette = ui.getByRole('dialog', { name: 'Run a command' })
   await expect(palette).toBeVisible()
   await expect(palette.getByRole('option')).toHaveText([/New item/, /Refresh items/])
@@ -247,7 +247,7 @@ test("Helm's shortcuts work from inside a plugin page, and its commands run from
 
   // A command with no tab is the background page's.
   await inBackground(helm, `(() => { window.__commands = []; helm.on('command', ({ id }) => window.__commands.push(id)); return true })()`)
-  await ui.keyboard.press('Control+Shift+P')
+  await ui.keyboard.press('ControlOrMeta+Shift+P')
   await expect(palette).toBeVisible()
   await ui.keyboard.type('refresh')
   await ui.keyboard.press('Enter')
@@ -420,7 +420,7 @@ test('Settings > Plugins: an unsupported apiVersion is said plainly, and turning
   // own, opened from the command palette.
   await expect.poll(() => backgroundRunning(helm)).toBe(true)
   await openPanel(ui)
-  await ui.keyboard.press('Control+Shift+P')
+  await ui.keyboard.press('ControlOrMeta+Shift+P')
   await ui.keyboard.type('new item')
   await ui.keyboard.press('Enter')
   await pluginFrame(ui, 'dist/tabs/item.html')
@@ -626,7 +626,7 @@ stripTest('a plugin with a page strip opens its tabs as pages in one tab, which 
   expect(await second.evaluate(() => (window as unknown as { marker?: string }).marker)).toBe('kept')
 
   // Reordered as the Browser tab's pages are.
-  await pages(ui).getByRole('tab', { name: /Second item/ }).press('Control+Shift+ArrowRight')
+  await pages(ui).getByRole('tab', { name: /Second item/ }).press('ControlOrMeta+Shift+ArrowRight')
   await expect(pages(ui).getByRole('tab')).toHaveText(['Welcome', 'Second item'])
 
   // Written down with the panes, and back after a restart.
@@ -642,9 +642,9 @@ stripTest('a plugin with a page strip opens its tabs as pages in one tab, which 
 
   // Ctrl+W closes the page in front, and the last page takes the tab with it.
   await pages(ui).getByRole('tab', { name: /Second item/ }).click()
-  await ui.keyboard.press('Control+w')
+  await ui.keyboard.press('ControlOrMeta+w')
   await expect(pages(ui).getByRole('tab')).toHaveText(['Welcome'])
-  await ui.keyboard.press('Control+w')
+  await ui.keyboard.press('ControlOrMeta+w')
   await expect(pages(ui)).toHaveCount(0)
   await expect(ui.getByRole('tab', { name: /^Sample$/ })).toHaveCount(0)
 })

@@ -83,18 +83,24 @@ const focusPage = (helm: Helm, prefix: string): Promise<void> =>
  * where Chromium takes Escape out of fullscreen. Playwright's keyboard goes
  * round both, so a test of either could not use it.
  */
+/**
+ * The modifier the browser's keys are pressed with: Cmd on macOS, as every Mac
+ * browser has them, and Ctrl elsewhere (`shared/browserKeys.ts`).
+ */
+const PRIMARY = process.platform === 'darwin' ? 'meta' : 'control'
+
 const pressInPage = (
   helm: Helm,
   prefix: string,
   keyCode: string,
-  modifiers: Array<'control' | 'shift'> = []
+  modifiers: Array<'control' | 'meta' | 'shift'> = []
 ): Promise<void> =>
   helm.app.evaluate(
     ({ webContents }, { at, key, mods }) => {
       const wc = webContents.getAllWebContents().find((candidate) => candidate.getURL().startsWith(at))
       if (wc === undefined) throw new Error(`no page at ${at}`)
       wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods })
-      if (key.length === 1 && !mods.includes('control')) wc.sendInputEvent({ type: 'char', keyCode: key, modifiers: mods })
+      if (key.length === 1 && !mods.includes('control') && !mods.includes('meta')) wc.sendInputEvent({ type: 'char', keyCode: key, modifiers: mods })
       wc.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: mods })
     },
     { at: prefix, key: keyCode, mods: modifiers }
@@ -135,7 +141,7 @@ test('browsing: a page loads in a browser tab, and back and forward move through
   await expect(page).toHaveTitle('Helm fixture two')
 
   // Ctrl+T: another page in the same Browser tab, with the caret in its address bar.
-  await address(ui).press('Control+t')
+  await address(ui).press('ControlOrMeta+t')
   await expect(pages(ui).getByRole('tab')).toHaveText(['Helm fixture two', 'New tab'])
   await expect(pages(ui).getByRole('tab', { name: 'New tab' })).toHaveAttribute('aria-selected', 'true')
   await expect(address(ui)).toBeFocused()
@@ -365,16 +371,16 @@ test("the keyboard: the browser's keys work with the caret in the page, and ever
 
   // Typed into the page, each of these is the browser's: Main takes it before
   // the page sees it and the window answers.
-  await pressInPage(helm, url, 'f', ['control'])
+  await pressInPage(helm, url, 'f', [PRIMARY])
   const find = ui.getByRole('textbox', { name: 'Find in page' })
   await expect(find).toBeFocused()
   await find.press('Escape')
   await expect.poll(() => pageFocused(helm, url)).toBe(true)
 
-  await pressInPage(helm, url, 'l', ['control'])
+  await pressInPage(helm, url, 'l', [PRIMARY])
   await expect(address(ui)).toBeFocused()
 
-  await pressInPage(helm, url, 't', ['control'])
+  await pressInPage(helm, url, 't', [PRIMARY])
   await expect(pages(ui).getByRole('tab')).toHaveText(['Helm fixture tools', 'New tab'])
   await expect(address(ui)).toBeFocused()
 
@@ -385,11 +391,11 @@ test("the keyboard: the browser's keys work with the caret in the page, and ever
   await expect.poll(keys).toEqual(['a', 'Control+a'])
 
   await pages(ui).getByRole('tab', { name: /Helm fixture tools/ }).click()
-  await pressInPage(helm, url, 'w', ['control'])
+  await pressInPage(helm, url, 'w', [PRIMARY])
   await expect(pages(ui).getByRole('tab')).toHaveText(['New tab'])
 
   // Ctrl+Shift+T, from the window's side this time, brings it back where it was.
-  await address(ui).press('Control+Shift+T')
+  await address(ui).press('ControlOrMeta+Shift+T')
   await expect(pages(ui).getByRole('tab')).toHaveText(['Helm fixture tools', 'New tab'])
   await expect(pages(ui).getByRole('tab', { name: /Helm fixture tools/ })).toHaveAttribute('aria-selected', 'true')
   await expect(await pageAt(helm, url)).toHaveTitle('Helm fixture tools')
