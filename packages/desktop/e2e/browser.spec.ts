@@ -251,7 +251,7 @@ test('refusals: a file address, a certificate off loopback, and an address beyon
   await expect(problem(ui, 'http and https')).toBeVisible()
   await expect(address(ui)).toHaveValue(`${fixture.http}/`)
 
-  // One self-signed certificate: accepted on loopback, refused on 127.0.0.2,
+  // One self-signed certificate: accepted on loopback, refused on another name,
   // with nothing to click through.
   await go(ui, `${fixture.httpsLoopback}/two`)
   await expect(ui.getByRole('tab', { name: /Helm fixture two/ })).toBeVisible()
