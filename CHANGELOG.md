@@ -14,6 +14,39 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.4.1-preview.4
+
+A preview, not a release: nothing offers it as an update.
+
+**Sessions in the local host**
+
+With Settings > Sessions > "Run sessions in the local host" on, the host now
+keeps running when Helm closes, and you choose what quitting does to your
+sessions.
+
+- Settings > Sessions > "When you quit Helm": End the sessions it started
+  (the default) or Keep them running. With End, quitting asks first, saying
+  how many sessions end, with End and quit, Keep running and quit, and
+  Cancel.
+- If Helm crashes or is ended from Task Manager, no session ends. The next
+  start puts them back in their tabs, showing their screens as they are.
+- Closing a session's tab asks first. Right-click a tab for "Close tab, keep
+  running": the session keeps going and the sessions pane lists it under
+  "Not open here", with Open and End.
+- The status bar says what quitting does, and clicking it opens the setting.
+- Settings > Sessions > Stop host ends every session in the host, after
+  saying how many.
+- On Windows, while the host runs sessions with no Helm window open, an icon
+  in the notification area shows how many, with Open Helm and Stop host. The
+  host exits on its own once it has no session and no window.
+- Tabs, panes and split sizes are kept by Helm on this computer, not by the
+  host.
+- Installing an update while sessions run in the host says how many it ends
+  and stops the host first; Cancel leaves them running. Updating from
+  2.4.1-preview.3 asks nothing, because its host ends with Helm.
+
+With the switch off, Helm behaves as before: its sessions end when it quits.
+
 ## 2.4.1-preview.3
 
 A preview, not a release: nothing offers it as an update.
