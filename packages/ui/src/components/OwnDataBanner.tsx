@@ -28,9 +28,10 @@ export function OwnDataBanner({ reason, onDismiss }: OwnDataBannerProps): JSX.El
       )}
     >
       <WarnIcon width={13} height={13} className="shrink-0" />
+      {/* What happens next before why, so a narrow window cuts the reason, which the tooltip still has. */}
       <span className="min-w-0 flex-1 truncate" title={reason}>
-        Copying Helm’s history, usage and config versions into the local host did not finish ({reason}). It will be
-        tried again when Helm next starts.
+        Copying Helm’s history, usage and config versions into the local host did not finish. It will be tried again
+        when Helm next starts. <span className="text-warn/80">({reason.replace(/\.$/, '')})</span>
       </span>
       <button
         type="button"

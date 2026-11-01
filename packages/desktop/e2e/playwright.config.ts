@@ -26,10 +26,11 @@ export default defineConfig<{ sessionsInHost: boolean }>({
     { name: 'helm' },
     // The workspace, the Files view and plugins again with "Run sessions in
     // the local host" on, where discovery, setup, templates, notes, files and
-    // the plugins registry are the host's (`e2e/helm.ts`, `sessionsInHost`).
+    // the plugins registry are the host's (`e2e/helm.ts`, `sessionsInHost`),
+    // and Helm's own data again where it was copied into the host.
     {
       name: 'in the local host',
-      testMatch: ['launcher.spec.ts', 'profiles.spec.ts', 'files.spec.ts', 'notes.spec.ts', 'plugins.spec.ts'],
+      testMatch: ['launcher.spec.ts', 'profiles.spec.ts', 'files.spec.ts', 'notes.spec.ts', 'plugins.spec.ts', 'own-data.spec.ts'],
       use: { sessionsInHost: true }
     }
   ],
