@@ -24,6 +24,27 @@ export {
   readConfigSnapshots,
   type NewConfigSnapshot
 } from './config'
+export {
+  countCopyableData,
+  readConfigSnapshotPage,
+  readConversationKeys,
+  readConversationPage,
+  readSessionNames,
+  readUsagePage,
+  DEFAULT_COPY_BUDGET,
+  type ConfigSnapshotPage,
+  type ConversationCursor,
+  type ConversationKey,
+  type ConversationPage,
+  type ConversationPageOptions,
+  type ConversationPart,
+  type CopiedConfigSnapshot,
+  type CopiedConversation,
+  type CopiedSessionName,
+  type CopyBudget,
+  type CopyCounts,
+  type UsagePage
+} from './copy'
 export { openStore, type HelmDatabase, type OpenStoreOptions, type Store } from './db'
 export {
   historyCursor,

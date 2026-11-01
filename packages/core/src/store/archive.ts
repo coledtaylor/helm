@@ -54,7 +54,8 @@ function encodeBody(text: string): Encoded {
   return { body: packed, compressed: true, rawBytes: raw.length, storedBytes: packed.length }
 }
 
-function decodeBody(body: Buffer | Uint8Array, compressed: boolean): string {
+/** A stored body as text. Shared with `copy.ts`, which reads bodies to send them. */
+export function decodeBody(body: Buffer | Uint8Array, compressed: boolean): string {
   const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body)
   if (!compressed) return buffer.toString('utf8')
   try {
