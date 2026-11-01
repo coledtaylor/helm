@@ -232,6 +232,11 @@ export function nodeOnPath(deps: Pick<LauncherDeps, 'platform' | 'env'> & Partia
  * own, named from the data directory, in the user's runtime folder or temp
  * folder, which on both is the user's own. Windows names a pipe from the
  * folder instead, so any folder does.
+ *
+ * The name is short because macOS's temp folder already takes about half the
+ * limit (`/var/folders/<2>/<28>/T/`), and a test run's own folder sits inside
+ * it: twelve hex characters of the hash still tell one data directory from
+ * another.
  */
 function runtimeFolder(dataDir: string, deps: Pick<LauncherDeps, 'platform' | 'env' | 'tmpdir'>): string {
   const paths = pathsFor(deps.platform)
@@ -240,7 +245,7 @@ function runtimeFolder(dataDir: string, deps: Pick<LauncherDeps, 'platform' | 'e
   if (Buffer.byteLength(paths.join(inside, 'floti.sock')) <= SOCKET_PATH_MAX) return inside
   const runtime = deps.env['XDG_RUNTIME_DIR']
   const base = runtime !== undefined && paths.isAbsolute(runtime) ? runtime : deps.tmpdir()
-  const name = `helm-floti-${createHash('sha256').update(dataDir).digest('hex').slice(0, 16)}`
+  const name = `floti-${createHash('sha256').update(dataDir).digest('hex').slice(0, 12)}`
   return paths.join(base, name)
 }
 

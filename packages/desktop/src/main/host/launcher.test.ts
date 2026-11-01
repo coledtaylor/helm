@@ -316,7 +316,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
         env: {},
         tmpdir: () => '/var/folders/ab/cdefgh/T'
       })['FLOTI_RUNTIME_DIR']!
-      expect(mac).toMatch(/^\/var\/folders\/ab\/cdefgh\/T\/helm-floti-[0-9a-f]{16}$/)
+      expect(mac).toMatch(/^\/var\/folders\/ab\/cdefgh\/T\/floti-[0-9a-f]{12}$/)
       expect(Buffer.byteLength(`${mac}/floti.sock`)).toBeLessThanOrEqual(SOCKET_PATH_MAX)
       const linux = hostEnvironment(deep, {
         platform: 'linux',
@@ -328,8 +328,18 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
         { ...deep, dataDir: `${deep.dataDir}-2` },
         { platform: 'linux', env: {}, tmpdir: () => '/tmp' }
       )['FLOTI_RUNTIME_DIR']
-      expect(other).toMatch(/^\/tmp\/helm-floti-[0-9a-f]{16}$/)
-      expect(other!.slice(-16)).not.toBe(mac.slice(-16))
+      expect(other).toMatch(/^\/tmp\/floti-[0-9a-f]{12}$/)
+      expect(other!.slice(-12)).not.toBe(mac.slice(-12))
+
+      // A Mac's own temp folder, as long as macOS makes it, with a test run's
+      // folder inside it, as every test's `tmpdir()` is: the socket still fits.
+      const nested = '/var/folders/76/wrkg31yx61g_4sqkvq4bnt_40000gn/T/helm-test-run-AbC123'
+      const run = hostEnvironment(
+        { ...WIN_PLACES, dataDir: `${nested}/helm world-XyZ789/app/helm-data` },
+        { platform: 'darwin', env: {}, tmpdir: () => nested }
+      )['FLOTI_RUNTIME_DIR']!
+      expect(run.startsWith(`${nested}/`)).toBe(true)
+      expect(Buffer.byteLength(`${run}/floti.sock`)).toBeLessThanOrEqual(SOCKET_PATH_MAX)
     })
   })
 
