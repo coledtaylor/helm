@@ -198,7 +198,8 @@ describe('joinSessionRegistry', () => {
     const found = joinSessionRegistry(entries, {
       claudeSessionId: mine,
       ptyPid: 999,
-      pinned: null
+      pinned: null,
+      startedAtMs: null
     })
     expect(found?.pid).toBe(11)
   })
@@ -210,7 +211,8 @@ describe('joinSessionRegistry', () => {
     const found = joinSessionRegistry(entries, {
       claudeSessionId: null,
       ptyPid: 11,
-      pinned: null
+      pinned: null,
+      startedAtMs: null
     })
     expect(found?.pid).toBe(11)
   })
@@ -222,7 +224,8 @@ describe('joinSessionRegistry', () => {
     const found = joinSessionRegistry(entries, {
       claudeSessionId: mine,
       ptyPid: 23496,
-      pinned: null
+      pinned: null,
+      startedAtMs: null
     })
     expect(found?.pid).toBe(4068)
   })
@@ -235,7 +238,8 @@ describe('joinSessionRegistry', () => {
     const found = joinSessionRegistry(entries, {
       claudeSessionId: mine,
       ptyPid: 23496,
-      pinned: { pid: 4068, procStart: '1343174' }
+      pinned: { pid: 4068, procStart: '1343174' },
+      startedAtMs: null
     })
     expect(found?.sessionId).toBe('a-different-one')
   })
@@ -247,9 +251,32 @@ describe('joinSessionRegistry', () => {
     const found = joinSessionRegistry(entries, {
       claudeSessionId: mine,
       ptyPid: null,
-      pinned: { pid: 4068, procStart: '1343174' }
+      pinned: { pid: 4068, procStart: '1343174' },
+      startedAtMs: null
     })
     expect(found).toBeNull()
+  })
+
+  it('does not take a record that started before the session for its own', () => {
+    // A crashed run leaves its record, and its pid can be alive again as
+    // another program. Resuming that conversation must not join the leftover,
+    // which carries the same id: the pin would then hold the session to it.
+    const launchedAt = 1_800_000_000_000
+    const leftover = entry({ pid: 4068, sessionId: mine, startedAt: launchedAt - 60_000, activity: 'busy' })
+    const resumed = entry({ pid: 5120, sessionId: mine, startedAt: launchedAt + 400, activity: 'idle' })
+    const join = { claudeSessionId: mine, ptyPid: 4068, pinned: null, startedAtMs: launchedAt }
+
+    // Before the resumed CLI has registered, nothing is the session's.
+    expect(joinSessionRegistry([leftover], join)).toBeNull()
+    // Once it has, it is, wherever the leftover sorts.
+    expect(joinSessionRegistry([leftover, resumed], join)?.pid).toBe(5120)
+    // A record stamped a moment before the row, within a clock step, is still its own.
+    const stamped = entry({ pid: 5120, sessionId: mine, startedAt: launchedAt - 1_000 })
+    expect(joinSessionRegistry([stamped], join)?.pid).toBe(5120)
+    // A record with no start time, or a session with none, is no guard.
+    const unstamped = entry({ pid: 5120, sessionId: mine, startedAt: null })
+    expect(joinSessionRegistry([unstamped], join)?.pid).toBe(5120)
+    expect(joinSessionRegistry([leftover], { ...join, startedAtMs: null })?.pid).toBe(4068)
   })
 
   it('answers null rather than guessing when nothing matches', () => {
@@ -257,11 +284,12 @@ describe('joinSessionRegistry', () => {
       joinSessionRegistry([entry({ pid: 10, sessionId: 'other' })], {
         claudeSessionId: mine,
         ptyPid: 11,
-        pinned: null
+        pinned: null,
+        startedAtMs: null
       })
     ).toBeNull()
     expect(
-      joinSessionRegistry([], { claudeSessionId: null, ptyPid: null, pinned: null })
+      joinSessionRegistry([], { claudeSessionId: null, ptyPid: null, pinned: null, startedAtMs: null })
     ).toBeNull()
   })
 })

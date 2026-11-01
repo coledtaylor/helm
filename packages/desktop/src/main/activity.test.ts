@@ -1,10 +1,9 @@
-import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, uptime } from 'node:os'
 import { join } from 'node:path'
 import type { BrowserWindow } from 'electron'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { SessionActivityState, SessionRecord } from '@helm/core'
+import type { RegistryWorld, SessionActivityState, SessionRecord } from '@helm/core'
 import { DISPOSE_TIMEOUT_MS, hostInWorld, processAlive, type HostedWorld } from '../../test/hosted'
 import type { ActivityService } from './activity'
 import type { SessionHost } from './sessions'
@@ -126,8 +125,16 @@ describe('activity service', () => {
       webContents: { send: (channel: string, payload: unknown) => sent.push({ channel, payload }) }
     } as unknown as BrowserWindow
 
-    /** A process that has come and gone, so its pid answers as dead. */
-    const deadPid = spawnSync(process.execPath, ['-e', '']).pid as number
+    /**
+     * A process that has come and gone. The machine is real but for this pid,
+     * which it answers as gone: a pid that really exited can be handed to the
+     * next process at once (Windows does), so no test can keep one dead.
+     */
+    const deadPid = 4_000_000
+    const world: RegistryWorld = {
+      probe: (pid) => (pid !== deadPid && processAlive(pid) ? 'alive' : 'gone'),
+      bootAtMs: Date.now() - uptime() * 1000
+    }
     const hosted: SessionRecord = {
       id: 7,
       name: 'shop',
@@ -144,7 +151,7 @@ describe('activity service', () => {
       durationMs: null,
       exitCode: null
     }
-    const ptyPid = deadPid + 1_000_000
+    const ptyPid = deadPid + 1
     const host = {
       list: () => [hosted],
       pid: () => ptyPid,
@@ -195,7 +202,12 @@ describe('activity service', () => {
       mkdirSync(dir, { recursive: true })
       for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text)
       const { createActivityService } = await import('./activity')
-      activity = createActivityService({ sessions: host, window: () => window, claudeHome: home })
+      activity = createActivityService({
+        sessions: host,
+        window: () => window,
+        claudeHome: home,
+        registryWorld: world
+      })
       activity.stop()
     })
 
@@ -209,8 +221,6 @@ describe('activity service', () => {
       )
 
     it('drops a dead process’s record and a pre-boot one, lists the rest, and leaves every file as it found it', () => {
-      expect(processAlive(deadPid)).toBe(false)
-      expect(processAlive(ptyPid)).toBe(false)
       expect(processAlive(process.ppid)).toBe(true)
       const before = snapshot()
       expect(Object.keys(before).sort()).toEqual(Object.keys(files).sort())

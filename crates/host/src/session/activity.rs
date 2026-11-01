@@ -87,6 +87,7 @@ impl ActivityTracker {
                     conversation_id: session.conversation_id.clone(),
                     pty_pid: Some(session.pty_pid),
                     pinned: self.pins.get(&session.id).cloned(),
+                    started_at_ms: session.started_at_ms,
                 },
             );
             let Some(found) = found else {
@@ -334,6 +335,36 @@ mod tests {
         assert!(!pass.overview.sessions[0].registered);
         // Unclaimed, it is listed as a session the host does not run.
         assert_eq!(pass.overview.sessions[1].host_session_id, None);
+    }
+
+    #[test]
+    fn a_resumed_conversation_is_not_held_to_the_record_a_crashed_run_left() {
+        // The crashed run's record has the conversation's id, and its pid is
+        // alive again as another program, so it is read as live.
+        let mut session = hosted(7, 900, "c-1");
+        session.started_at_ms = Some(1_800_000_000_000);
+        let mut leftover = record("4068.json", 4068, "c-1", Some(SessionActivity::Busy));
+        leftover.started_at_ms = Some(1_800_000_000_000 - 60_000);
+        let mut resumed = record("5120.json", 5120, "c-1", Some(SessionActivity::Idle));
+        resumed.started_at_ms = Some(1_800_000_000_000 + 400);
+
+        let mut tracker = ActivityTracker::default();
+        // Before the resumed agent registers, the session has no record.
+        let pass = tracker.pass(
+            std::slice::from_ref(&session),
+            &[(claude(), Knowable::Known(vec![leftover.clone()]))],
+            1,
+        );
+        assert_eq!(pass.states[0].activity, None);
+        assert!(!pass.overview.sessions[0].registered);
+        // Once it has, the session follows it, not the leftover.
+        let pass = tracker.pass(
+            &[session],
+            &[(claude(), Knowable::Known(vec![leftover, resumed]))],
+            2,
+        );
+        assert_eq!(pass.states[0].activity, Some(SessionActivity::Idle));
+        assert_eq!(pass.overview.sessions[0].pid, 5120);
     }
 
     #[test]

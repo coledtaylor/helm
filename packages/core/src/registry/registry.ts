@@ -237,7 +237,24 @@ export interface RegistryJoin {
   ptyPid: number | null
   /** Learned from a previous join and authoritative once it is set. */
   pinned: { pid: number; procStart: string | null } | null
+  /**
+   * When Helm started the session, ms since epoch, or null if it cannot say.
+   *
+   * Before the pin is learned, a record that started before the session did
+   * cannot be its process. That keeps a resumed conversation off the record a
+   * crashed run left behind: it carries the same conversation id, and its pid
+   * can be alive again as another program, so liveness alone keeps it.
+   */
+  startedAtMs: number | null
 }
+
+/**
+ * How far a record's start may sit before its session's and still be the
+ * session's own. Both are this machine's wall clock and the CLI stamps its
+ * record after it was spawned, so this only absorbs a small step of that clock
+ * and a row written just after the spawn; a record a crashed run left is older.
+ */
+export const LAUNCH_CLOCK_SLACK_MS = 2_000
 
 /**
  * The record belonging to one of Helm's sessions, or null.
@@ -245,13 +262,14 @@ export interface RegistryJoin {
  * In order, first match wins: the pinned process, then the conversation id,
  * then the pty's pid. The last is the only route open to a CLI with no
  * `--session-id` flag, and it works for a direct spawn, which is what such a
- * CLI's users have.
+ * CLI's users have. Neither of the last two takes a record that started before
+ * the session did.
  */
 export function joinSessionRegistry(
   entries: readonly SessionRegistryEntry[],
   join: RegistryJoin
 ): SessionRegistryEntry | null {
-  const { pinned, claudeSessionId, ptyPid } = join
+  const { pinned, claudeSessionId, ptyPid, startedAtMs } = join
 
   if (pinned !== null) {
     // `procStart` compared including the null case: two records for one pid
@@ -265,13 +283,18 @@ export function joinSessionRegistry(
     return found ?? null
   }
 
+  const sinceLaunch = entries.filter(
+    (e) =>
+      startedAtMs === null || e.startedAt === null || e.startedAt >= startedAtMs - LAUNCH_CLOCK_SLACK_MS
+  )
+
   if (claudeSessionId !== null) {
-    const found = entries.find((e) => e.sessionId === claudeSessionId)
+    const found = sinceLaunch.find((e) => e.sessionId === claudeSessionId)
     if (found) return found
   }
 
   if (ptyPid !== null) {
-    const found = entries.find((e) => e.pid === ptyPid)
+    const found = sinceLaunch.find((e) => e.pid === ptyPid)
     if (found) return found
   }
 

@@ -453,7 +453,20 @@ pub struct RecordJoin {
     pub pty_pid: Option<u32>,
     /// The process its records came from last time, authoritative once set.
     pub pinned: Option<RecordPin>,
+    /// When the host started it, epoch ms. Before the pin is learned, a
+    /// record that started before the session did cannot be its process:
+    /// that keeps a resumed conversation off the record a crashed run left,
+    /// which carries the same conversation id and whose pid can be alive
+    /// again as another program.
+    pub started_at_ms: Option<u64>,
 }
+
+/// How far a record's start may sit before its session's and still be the
+/// session's own. Both are this machine's wall clock and the agent stamps its
+/// record after it was spawned, so this only absorbs a small step of that
+/// clock and a row written just after the spawn; a record a crashed run left
+/// is older.
+pub const LAUNCH_CLOCK_SLACK_MS: u64 = 2_000;
 
 /// The process a session's records have been coming from: learned once from
 /// the conversation id and then followed, because a cleared conversation
@@ -466,6 +479,7 @@ pub struct RecordPin {
 
 /// The record belonging to one of the host's sessions, or `None`. First match
 /// wins: the pinned process, then the conversation id, then the pty's pid.
+/// Neither of the last two takes a record that started before the session.
 pub fn join_record<'a>(records: &'a [LiveRecord], join: &RecordJoin) -> Option<&'a LiveRecord> {
     if let Some(pin) = &join.pinned {
         // A missing start time on either side is the absence of the guard,
@@ -478,15 +492,26 @@ pub fn join_record<'a>(records: &'a [LiveRecord], join: &RecordJoin) -> Option<&
                 }
         });
     }
+    let since_launch = |record: &&LiveRecord| match (join.started_at_ms, record.started_at_ms) {
+        (Some(launched), Some(started)) => {
+            started >= launched.saturating_sub(LAUNCH_CLOCK_SLACK_MS)
+        }
+        _ => true,
+    };
     if let Some(id) = &join.conversation_id
         && let Some(found) = records
             .iter()
+            .filter(since_launch)
             .find(|record| record.conversation_id.as_ref() == Some(id))
     {
         return Some(found);
     }
-    join.pty_pid
-        .and_then(|pid| records.iter().find(|record| record.pid == pid))
+    join.pty_pid.and_then(|pid| {
+        records
+            .iter()
+            .filter(since_launch)
+            .find(|record| record.pid == pid)
+    })
 }
 
 /// One conversation in an agent's history.

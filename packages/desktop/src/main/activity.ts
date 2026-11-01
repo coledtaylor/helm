@@ -6,6 +6,7 @@ import {
   sessionLabel,
   sessionRegistryDir,
   type LiveSession,
+  type RegistryWorld,
   type SessionActivityState,
   type SessionRegistryEntry,
   type SessionsOverview
@@ -77,6 +78,12 @@ export interface ActivityDeps {
   claudeHome?: string | undefined
   /** After a pass that moved anything, for what else reads `overview` - plugins listing sessions. */
   onChange?: (() => void) | undefined
+  /**
+   * Which pids are alive and when the machine booted. The real machine unless
+   * a test says otherwise: a pid that exited can be handed to another process
+   * at any moment, so no test can keep one dead.
+   */
+  registryWorld?: RegistryWorld | undefined
 }
 
 /**
@@ -96,7 +103,8 @@ export function createActivityService({
   sessions,
   window,
   claudeHome,
-  onChange
+  onChange,
+  registryWorld
 }: ActivityDeps): ActivityService {
   const dir = sessionRegistryDir(claudeHome ?? homeDir())
   const pins = new Map<number, Pin>()
@@ -139,7 +147,7 @@ export function createActivityService({
      * per session on the machine, not per session in history. That is a
      * five-thousandth of the 750ms interval.
      */
-    entries = readSessionRegistry(dir)
+    entries = readSessionRegistry(dir, registryWorld)
 
     const states: SessionActivityState[] = []
     const listed: LiveSession[] = []
@@ -155,7 +163,8 @@ export function createActivityService({
       const found = joinSessionRegistry(entries, {
         claudeSessionId: record.claudeSessionId,
         ptyPid,
-        pinned: pins.get(record.id) ?? null
+        pinned: pins.get(record.id) ?? null,
+        startedAtMs: Date.parse(record.startedAt) || null
       })
 
       if (found === null) {

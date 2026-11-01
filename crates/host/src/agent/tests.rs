@@ -262,6 +262,7 @@ fn a_session_joins_its_pinned_process_then_its_conversation_then_its_pty() {
                 conversation_id: conversation.map(str::to_owned),
                 pty_pid: pty,
                 pinned,
+                started_at_ms: None,
             },
         )
         .map(|record| record.pid)
@@ -288,4 +289,38 @@ fn a_session_joins_its_pinned_process_then_its_conversation_then_its_pty() {
     // A start time missing on either side is no guard, not a mismatch.
     assert_eq!(join(None, None, pin(20, Some("t20"))), Some(20));
     assert_eq!(join(None, None, pin(30, None)), Some(30));
+}
+
+#[test]
+fn a_record_that_started_before_its_session_is_not_joined_unless_within_a_clock_step() {
+    const LAUNCHED: u64 = 1_800_000_000_000;
+    let started = |pid, at: Option<u64>| LiveRecord {
+        started_at_ms: at,
+        ..live(pid, "resumed", None)
+    };
+    let join = |records: &[LiveRecord], launched: Option<u64>| {
+        join_record(
+            records,
+            &RecordJoin {
+                conversation_id: Some("resumed".into()),
+                pty_pid: Some(10),
+                pinned: None,
+                started_at_ms: launched,
+            },
+        )
+        .map(|record| record.pid)
+    };
+
+    // A crashed run's leftover is refused by the conversation and by the pty.
+    let leftover = started(10, Some(LAUNCHED - 60_000));
+    assert_eq!(join(std::slice::from_ref(&leftover), Some(LAUNCHED)), None);
+    // The session's own is taken wherever the leftover sorts.
+    let own = started(20, Some(LAUNCHED + 400));
+    assert_eq!(join(&[leftover.clone(), own], Some(LAUNCHED)), Some(20));
+    // A small step of the clock is still the session's own.
+    let stepped = started(20, Some(LAUNCHED - LAUNCH_CLOCK_SLACK_MS));
+    assert_eq!(join(&[stepped], Some(LAUNCHED)), Some(20));
+    // A missing start on either side is no guard.
+    assert_eq!(join(&[started(20, None)], Some(LAUNCHED)), Some(20));
+    assert_eq!(join(&[leftover], None), Some(10));
 }
