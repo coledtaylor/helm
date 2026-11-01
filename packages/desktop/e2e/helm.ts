@@ -141,6 +141,37 @@ export async function typeLine(pane: Locator, text: string): Promise<void> {
   await pane.page().keyboard.press('Enter')
 }
 
+/**
+ * Moves Helm's window clear of the system cursor before a test holds a divider
+ * down, without moving the cursor: it is the person's at the machine.
+ *
+ * Playwright's mouse is not the system's. Whenever what is under the resting
+ * cursor changes (a browser page standing down, say), Windows sends the window
+ * a move at that cursor with no button held, and a divider takes a buttonless
+ * move as a release made outside the window (`PaneGrid.tsx`), so a press the
+ * test holds would end wherever the cursor happened to rest over the window.
+ * The window keeps its size, so what the test measures is unchanged, and goes
+ * to whichever side of the cursor has more room, past the screen's edge if it
+ * must.
+ */
+export async function keepClearOfCursor(helm: Helm): Promise<void> {
+  await helm.app.evaluate(({ BrowserWindow, screen }) => {
+    const win = BrowserWindow.getAllWindows().find((candidate) => candidate.isVisible())
+    if (win === undefined) throw new Error('no visible Helm window')
+    const cursor = screen.getCursorScreenPoint()
+    const under = (b: Electron.Rectangle): boolean =>
+      cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height
+    const bounds = win.getBounds()
+    if (!under(bounds)) return
+    const area = screen.getDisplayNearestPoint(cursor).workArea
+    const margin = 16
+    const leftRoom = cursor.x - area.x
+    const rightRoom = area.x + area.width - cursor.x
+    win.setBounds({ ...bounds, x: leftRoom >= rightRoom ? cursor.x - margin - bounds.width : cursor.x + margin })
+    if (under(win.getBounds())) throw new Error(`the window could not be moved clear of the cursor at ${String(cursor.x)},${String(cursor.y)}`)
+  })
+}
+
 /** The pid of Helm's main process: `app.process()` is the launcher Playwright started. */
 export const mainPid = (helm: Helm): Promise<number> => helm.app.evaluate(() => process.pid)
 

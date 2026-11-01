@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import type { AppSettings, SavedPaneNode } from '@helm/core'
-import { expect, startSession, test, typeLine } from './helm'
+import { expect, keepClearOfCursor, startSession, test, typeLine } from './helm'
 
 type Zone = 'left' | 'right' | 'top' | 'bottom' | 'center'
 
@@ -114,6 +114,7 @@ test('a divider is dragged to resize the panes either side, and the arrangement 
   await dropOn(window.getByRole('tab', { name: 'Settings' }), pane(window, 'First pane'), 'right')
   await expect(pane(window, 'Second pane').getByRole('tab')).toHaveText(['Settings'])
 
+  await keepClearOfCursor(helm)
   const before = (await pane(window, 'First pane').boundingBox())!
   const divider = (await window.locator('[data-sash]').boundingBox())!
   await window.mouse.move(divider.x + divider.width / 2, divider.y + divider.height / 2)

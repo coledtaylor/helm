@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { COOKIE, POPUP_CODE, startBrowserFixture, type BrowserFixture } from './browser-fixture'
-import { expect, test, type Helm } from './helm'
+import { expect, keepClearOfCursor, test, type Helm } from './helm'
 
 /**
  * The browser pane: a page loads, the page is held to Helm's posture, and what
@@ -564,6 +564,7 @@ test('resizing: the page stands down while a divider is held, so the drag toward
   await ui.getByRole('region', { name: 'First pane' }).getByRole('tab', { name: 'Browser' }).click()
   await expect.poll(() => viewsShown(helm)).toEqual([true])
 
+  await keepClearOfCursor(helm)
   const before = (await first.boundingBox())!
   const divider = (await ui.locator('[data-sash]').boundingBox())!
   const y = divider.y + divider.height / 2
