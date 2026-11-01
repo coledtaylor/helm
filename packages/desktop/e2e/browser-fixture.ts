@@ -10,13 +10,23 @@ import { selfSignedCertificate } from '../test/self-signed'
  *   - `http`, plain HTTP on 127.0.0.1 - the dev server the pane exists for;
  *   - `httpsLoopback`, HTTPS on 127.0.0.1 with a certificate minted at start,
  *     which the loopback exception must accept;
- *   - `httpsNamed`, the same certificate on 127.0.0.2, which is still this
- *     machine on Windows but is **not** loopback by Helm's rule, so the
- *     exception must not apply;
- *   - `httpNamed`, plain HTTP on 127.0.0.2: reachable, and refused by "This
- *     machine only". A test that proved the refusal by trying the internet
- *     would be a test that made a network request every time it ran.
+ *   - `httpsNamed`, the same certificate, reached as `named.localhost`,
+ *     which is still this machine but is **not** loopback by Helm's rule, so
+ *     the exception must not apply;
+ *   - `httpNamed`, plain HTTP reached as `named.localhost`: reachable, and
+ *     refused by "This machine only". A test that proved the refusal by trying
+ *     the internet would be a test that made a network request every time it
+ *     ran.
+ *
+ * Chromium resolves a name under `localhost` to this machine itself, on every
+ * OS and without asking DNS, and Helm's rule counts only the spellings a dev
+ * server prints (`isLoopbackUrl`). An address such as 127.0.0.2 would do as
+ * well on Windows and Linux, but macOS has only 127.0.0.1 on its loopback
+ * interface, so nothing can listen there.
  */
+/** A name for this machine that Helm's loopback rule does not count. */
+const NAMED_HOST = 'named.localhost'
+
 export interface BrowserFixture {
   http: string
   httpsLoopback: string
@@ -170,14 +180,14 @@ export async function startBrowserFixture(): Promise<BrowserFixture> {
 
   const httpPort = await listen(http, '127.0.0.1')
   const httpsLoopbackPort = await listen(httpsLoopback, '127.0.0.1')
-  const httpsNamedPort = await listen(httpsNamed, '127.0.0.2')
-  const httpNamedPort = await listen(httpNamed, '127.0.0.2')
-  httpNamedOrigin = `http://127.0.0.2:${String(httpNamedPort)}`
+  const httpsNamedPort = await listen(httpsNamed, '127.0.0.1')
+  const httpNamedPort = await listen(httpNamed, '127.0.0.1')
+  httpNamedOrigin = `http://${NAMED_HOST}:${String(httpNamedPort)}`
 
   return {
     http: `http://127.0.0.1:${String(httpPort)}`,
     httpsLoopback: `https://127.0.0.1:${String(httpsLoopbackPort)}`,
-    httpsNamed: `https://127.0.0.2:${String(httpsNamedPort)}`,
+    httpsNamed: `https://${NAMED_HOST}:${String(httpsNamedPort)}`,
     httpNamed: httpNamedOrigin,
     requests,
     cookies,
