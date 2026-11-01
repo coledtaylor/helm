@@ -14,6 +14,36 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.4.1-preview.5
+
+A preview, not a release: nothing offers it as an update.
+
+**Sessions in the local host**
+
+- Turning on "Run sessions in the local host" now brings over what only Helm
+  kept: archived conversations whose transcript is gone and their usage, the
+  names given in History, and saved config versions. It happens the first
+  time Helm connects to the host; if it stops part way, Helm says so and
+  carries on at the next connect.
+- If the local host does not start, Helm says why, instead of saying it is
+  not paired.
+
+**Copy and paste**
+
+- A copy or paste the system refuses, because another program holds the
+  clipboard, is tried again. If it still fails, Helm says so where you
+  copied: in the terminal's pane, or "Not copied" in the Files view.
+
+**Browser**
+
+- Clicking the address bar just after pressing Enter keeps the address list
+  open.
+
+**Sessions**
+
+- A resumed conversation no longer shows the state left behind by an earlier
+  run that crashed.
+
 ## 2.4.1-preview.4
 
 A preview, not a release: nothing offers it as an update.
