@@ -166,6 +166,29 @@ describe('BrowserPane - the address bar', () => {
     expect(screen.queryByRole('list')).toBeNull()
   })
 
+  it('stays open when the bar is clicked again just after Enter, however long it is then left', async () => {
+    vi.useFakeTimers()
+    try {
+      const props = renderPane()
+      act(() => address().focus())
+      fireEvent.keyDown(address(), { key: 'Enter' })
+      expect(props.onNavigate).toHaveBeenCalledWith('http://localhost:3000/')
+      expect(document.activeElement).not.toBe(address())
+
+      // Back in the bar before anything the Enter set going has run out.
+      act(() => address().focus())
+      fireEvent.click(address())
+      expect(screen.getByRole('list')).toBeTruthy()
+      act(() => {
+        vi.advanceTimersByTime(60_000)
+      })
+      expect(screen.getByRole('list')).toBeTruthy()
+      expect(lastCall<boolean>(props.onCovering)).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("goes where Enter says, and then shows the page's own address again", async () => {
     const user = userEvent.setup()
     const props = renderPane()

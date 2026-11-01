@@ -447,10 +447,11 @@ export function BrowserPane({
             // somebody makes when they want it. A probe that drove the click and
             // nothing else is what caught this.
             onClick={() => setSuggesting(true)}
-            onBlur={() => {
-              // After the click on a suggestion has had its chance to land.
-              setTimeout(() => setSuggesting(false), 120)
-            }}
+            // At once, not after a delay. A suggestion is chosen on a mouse-down
+            // that keeps the caret here, so it never needed the list to outlive
+            // the blur, and a delayed close outlived the blur Enter makes: back in
+            // the bar within it, the list opened, then shut under the click.
+            onBlur={() => setSuggesting(false)}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 setDraft(null)
@@ -504,8 +505,9 @@ export function BrowserPane({
                   <button
                     type="button"
                     data-browser-recent-url={url}
-                    // `onMouseDown` rather than `onClick`: the input's blur
-                    // fires first and would unmount this before a click landed.
+                    // `onMouseDown` rather than `onClick`, with the default
+                    // prevented: the bar keeps the caret, so its blur never
+                    // closes the list before the choice is made.
                     onMouseDown={(event) => {
                       event.preventDefault()
                       setDraft(null)
