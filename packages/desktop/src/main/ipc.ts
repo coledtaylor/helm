@@ -28,6 +28,7 @@ import type { PluginHost } from './plugins/host'
 import type { OwnDataCopy } from './host/own-data'
 import type { HostPlugins } from './host/plugins'
 import { activePty, windowsBuildNumber } from './pty'
+import { createClipboardText } from './clipboard'
 import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
 import { updateSettings, type Services } from './services'
 import { localWorkspace, type WorkspaceService } from './workspace'
@@ -296,6 +297,8 @@ export function registerIpc(ctx: IpcContext): void {
     )
   const historyReads: HistoryReads =
     ctx.historyReads !== undefined ? ctx.historyReads : localHistoryReads(services.store, ctx)
+  // One for the app, so a later copy supersedes one still retrying.
+  const clipboardText = createClipboardText(clipboard)
 
   // With sessions in the local host main builds none of these, and registers
   // none of the channels that would reach them; asked anyway, each refuses.
@@ -732,10 +735,8 @@ export function registerIpc(ctx: IpcContext): void {
       return { opened: true }
     },
 
-    'clipboard:read': () => clipboard.readText(),
-    'clipboard:write': (text) => {
-      clipboard.writeText(text)
-    },
+    'clipboard:read': () => clipboardText.read(),
+    'clipboard:write': async (text) => ({ outcome: await clipboardText.write(text) }),
 
     /*
      * Plugins. Every decision - what a manifest allows, whose secret may go

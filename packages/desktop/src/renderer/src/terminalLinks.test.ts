@@ -48,8 +48,8 @@ function pane(): Pane {
     {
       onInput: vi.fn(),
       onResize: vi.fn(),
-      readClipboard: () => Promise.resolve(''),
-      writeClipboard: () => Promise.resolve(),
+      readClipboard: () => Promise.resolve({ text: '' }),
+      writeClipboard: () => Promise.resolve('copied' as const),
       openLink: (url) => opened.push(url)
     }
   )

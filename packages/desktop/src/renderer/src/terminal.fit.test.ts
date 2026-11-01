@@ -104,8 +104,8 @@ describe('a session terminal’s fit', () => {
       {
         onInput: vi.fn(),
         onResize,
-        readClipboard: () => Promise.resolve(''),
-        writeClipboard: () => Promise.resolve(),
+        readClipboard: () => Promise.resolve({ text: '' }),
+        writeClipboard: () => Promise.resolve('copied' as const),
         openLink: vi.fn()
       }
     )

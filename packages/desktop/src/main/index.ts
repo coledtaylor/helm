@@ -26,6 +26,7 @@ import { delimiter, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, pushTheme, registerIpc } from './ipc'
+import { createClipboardText } from './clipboard'
 import { appMode, dataDir, initDataDir, mcpConfigDir, templatesDir, themesDir } from './paths'
 import { createThemeService } from './themes'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
@@ -1221,8 +1222,9 @@ function startSpike(): void {
       // pty may have exited
     }
   })
-  ipcMain.handle('clipboard:read', () => clipboard.readText())
-  ipcMain.handle('clipboard:write', (_e, text: string) => clipboard.writeText(text))
+  const clipboardText = createClipboardText(clipboard)
+  ipcMain.handle('clipboard:read', () => clipboardText.read())
+  ipcMain.handle('clipboard:write', async (_e, text: string) => ({ outcome: await clipboardText.write(text) }))
 }
 
 /**

@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { COPIED_SHOWN_MS, COPY_REFUSED, REFUSED_SHOWN_MS } from '../lib/copyFeedback'
 import type { FileView as FileViewData } from '@helm/core'
 import { installLayoutStandIns } from './CodeEditor.testkit'
 import { FileActions, FileCrumb, FileView, revealRange, type FileViewProps } from './FileView'
@@ -108,10 +109,10 @@ describe('FileCrumb', () => {
 })
 
 describe('FileActions', () => {
-  it('hands the file to VS Code, Explorer and the clipboard', () => {
+  it('hands the file to VS Code, Explorer and the clipboard', async () => {
     const onOpenInEditor = vi.fn()
     const onReveal = vi.fn()
-    const onCopyPath = vi.fn()
+    const onCopyPath = vi.fn(() => Promise.resolve(true))
     render(<FileActions path={'C:\\p\\a.ts'} onOpenInEditor={onOpenInEditor} onReveal={onReveal} onCopyPath={onCopyPath} />)
     fireEvent.click(screen.getByRole('button', { name: 'Open in VS Code' }))
     fireEvent.click(screen.getByRole('button', { name: 'Reveal in Explorer' }))
@@ -119,11 +120,33 @@ describe('FileActions', () => {
     expect(onOpenInEditor).toHaveBeenCalled()
     expect(onReveal).toHaveBeenCalledWith('C:\\p\\a.ts')
     expect(onCopyPath).toHaveBeenCalledWith('C:\\p\\a.ts')
-    expect(screen.getByRole('button', { name: 'Path copied' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Path copied' })).toBeTruthy()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('says so beside the button when the clipboard refused the path, then offers it again', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<FileActions path={'C:\\p\\a.ts'} onOpenInEditor={null} onReveal={vi.fn()} onCopyPath={() => Promise.resolve(false)} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Copy path' }))
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      expect(screen.getByRole('status').textContent).toBe('Not copied')
+      expect(screen.getByRole('button', { name: COPY_REFUSED })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Path copied' })).toBeNull()
+
+      // Up long enough to read: longer than a copy that worked.
+      await act(() => vi.advanceTimersByTimeAsync(COPIED_SHOWN_MS))
+      expect(screen.getByRole('status')).toBeTruthy()
+      await act(() => vi.advanceTimersByTimeAsync(REFUSED_SHOWN_MS - COPIED_SHOWN_MS))
+      expect(screen.queryByRole('status')).toBeNull()
+      expect(screen.getByRole('button', { name: 'Copy path' })).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps the VS Code button, disabled and saying why, where VS Code is not installed', () => {
-    render(<FileActions path={'C:\\p\\a.ts'} onOpenInEditor={null} onReveal={vi.fn()} onCopyPath={vi.fn()} />)
+    render(<FileActions path={'C:\\p\\a.ts'} onOpenInEditor={null} onReveal={vi.fn()} onCopyPath={vi.fn(() => Promise.resolve(true))} />)
     const button = screen.getByRole('button', { name: 'Open in VS Code' }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
     expect(button.title).toBe('VS Code is not installed on this machine')
