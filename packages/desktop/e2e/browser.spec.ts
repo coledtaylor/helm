@@ -517,9 +517,21 @@ test('permissions: a page may write the clipboard and take the whole screen, and
     await helm.app.evaluate(({ clipboard: board }, text) => board.writeText(text), kept)
   }
 
+  // macOS animates into full screen, and a key pressed before that has
+  // finished is lost; the window says when it has.
+  const entered = (): Promise<boolean> =>
+    helm.app.evaluate(() => (globalThis as { enteredFullScreen?: boolean }).enteredFullScreen === true)
+  await helm.app.evaluate(({ BrowserWindow }) => {
+    const record = globalThis as { enteredFullScreen?: boolean }
+    record.enteredFullScreen = false
+    BrowserWindow.getAllWindows()[0]!.once('enter-full-screen', () => {
+      record.enteredFullScreen = true
+    })
+  })
   await focusPage(helm, url)
   await page.getByRole('button', { name: 'Go full screen' }).click()
   await expect(status).toHaveText('fullscreen')
+  await expect.poll(entered).toBe(true)
   // The whole window, the strip of the title bar included.
   await expect
     .poll(async () => {
