@@ -185,8 +185,6 @@ test('a word copied from a session goes to the clipboard, and pastes back into t
 }) => {
   const { app, window } = helm
   const clipboard = (): Promise<string> => app.evaluate(({ clipboard: board }) => board.readText())
-  // The clipboard's keys: Cmd on a Mac, where every Ctrl chord is the program's.
-  const key = process.platform === 'darwin' ? 'Meta' : 'Control'
   const word = 'clip-4821'
 
   const id = await startSession(window, 'alpha')
@@ -200,12 +198,13 @@ test('a word copied from a session goes to the clipboard, and pastes back into t
   // A double-click selects the word, as in any terminal, and the copy key copies it.
   const at = await pointAt(pane, id, `${word} please`)
   await window.mouse.dblclick(at.x, at.y)
-  await window.keyboard.press(`${key}+c`)
+  // Cmd on a Mac, where every Ctrl chord is the program's.
+  await window.keyboard.press('ControlOrMeta+c')
   await expect.poll(clipboard).toBe(word)
   await expect(pane.locator('[data-clipboard-notice]')).toHaveCount(0)
 
   // Pasted at the prompt and sent: the session hears the word once.
-  await window.keyboard.press(`${key}+v`)
+  await window.keyboard.press('ControlOrMeta+v')
   await expect.poll(() => terminalText(window, id)).toContain(`> ${word}`)
   await window.keyboard.press('Enter')
   await expect.poll(received).toEqual([`copy ${word} please`, word])
