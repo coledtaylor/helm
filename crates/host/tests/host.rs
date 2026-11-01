@@ -696,6 +696,15 @@ fn s5_floti_host_started_from_ssh_refuses_in_one_sentence_and_opens_nothing() {
         "{stderr}"
     );
     assert_eq!(lines[0].matches(". ").count(), 0, "one sentence: {stderr}");
+    // The same sentence on standard output, where the desktop that started
+    // it reads why it did not start.
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        format!(
+            "Floti host did not start: {}",
+            lines[0].trim_start_matches("floti host: ")
+        )
+    );
     assert!(
         !untouched.exists(),
         "the refused host made {}",

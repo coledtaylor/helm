@@ -132,6 +132,26 @@ const listens: Program = (child) => {
   child.stdout.write('Floti host said something after, with key 0123abcd.\n')
 }
 
+const SOCKET_TOO_LONG = 'could not listen on /var/folders/x/T/floti-1f2e/floti.sock: path must be shorter than SUN_LEN'
+const FROM_SSH = 'The Floti host starts at your sign-in, not from an SSH session, so it was not started.'
+
+/**
+ * A host that did not start: it says other things first, and its reason last,
+ * on standard output. As with a real process, the exit can be seen before the
+ * last of its output has been read.
+ */
+const saysWhyItDidNotStart =
+  (reason: string): Program =>
+  (child) => {
+    child.stdout.write('Floti host said something first, with key 0123abcd.\n')
+    queueMicrotask(() => {
+      child.exitCode = 1
+      child.emit('exit', 1, null)
+      child.stdout.end(`Floti host did not start: ${reason}\n`)
+      child.stderr.end()
+    })
+  }
+
 /** A host that finds another still holding its folders, and exits saying so. */
 const foldersHeld: Program = (child) => queueMicrotask(() => child.exit(HOST_ALREADY_RUNNING_EXIT))
 
@@ -545,6 +565,28 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       `The local host stopped before it was ready, with status 1${TURN_OFF}`
     )
     expect(world.programs()).toHaveLength(2)
+  })
+
+  it('says the host’s own reason when the host it started did not start, even when the reason arrives after its exit', async () => {
+    const world = new World({ bridges: [exits(3)], hosts: [saysWhyItDidNotStart(SOCKET_TOO_LONG)] })
+    expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
+      `The local host did not start: ${SOCKET_TOO_LONG}${TURN_OFF}`
+    )
+  })
+
+  it('says the host’s own reason, not that Helm is not paired, when the host it started for an unpaired Helm did not start', async () => {
+    const world = new World({ bridges: [exits(4)], hosts: [saysWhyItDidNotStart(FROM_SSH)] })
+    expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
+      `The local host did not start: ${FROM_SSH.replace(/\.$/, '')}${TURN_OFF}`
+    )
+    expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, HOST_PROGRAM])
+  })
+
+  it('says only that the host stopped when it did not start without saying why, after an unpaired bridge too', async () => {
+    const world = new World({ bridges: [exits(4)], hosts: [(child) => queueMicrotask(() => child.exit(1))] })
+    expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
+      `The local host stopped before it was ready, with status 1${TURN_OFF}`
+    )
   })
 
   it('ends a host that does not say it is listening by its deadline, and says so', async () => {
