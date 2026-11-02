@@ -14,6 +14,16 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.4.1-preview.6
+
+A preview, not a release: nothing offers it as an update.
+
+**Plugins**
+
+- With "Run sessions in the local host" on, plugins load again. Since
+  2.4.1-preview.1, every plugin showed "Not loaded: could not start a plugin
+  isolate" in Settings, had no panel, and gave sessions none of its tools.
+
 ## 2.4.1-preview.5
 
 A preview, not a release: nothing offers it as an update.
