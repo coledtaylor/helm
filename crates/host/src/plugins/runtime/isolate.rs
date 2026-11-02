@@ -8,13 +8,16 @@
 //! script is handed to the host's runtime to tell the registry, so a script
 //! that never returns cannot hold anything of the host's.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use deno_core::{JsRuntime, OpState, PollEventLoopOptions, op2, v8};
+use deno_core::{
+    Extension, ExtensionFileSource, JsRuntime, OpState, PollEventLoopOptions, op2, v8,
+};
 use floti_protocol::Payload;
 use floti_protocol::channels::plugins::{
     PluginBackgroundState, PluginErrorCode, PluginLogStream, PluginSurfaceKind,
@@ -449,9 +452,32 @@ deno_core::extension!(
         op_floti_bg_broadcast,
     ],
     esm_entry_point = "ext:floti_background/background.js",
-    esm = [dir "src/plugins/runtime", "background.js"],
     options = { setup: Setup },
     state = |state, options| {
         state.put(options.setup);
     },
+    customizer = |extension: &mut Extension| {
+        extension.esm_files = Cow::Borrowed(&BACKGROUND_ESM);
+    },
 );
+
+/// `background.js`, compiled into the host rather than named in `esm = [...]`,
+/// which would read it from the machine that built the host (see `WEB_ESM`
+/// in `engine.rs`).
+static BACKGROUND_ESM: [ExtensionFileSource; 1] = [ExtensionFileSource::new(
+    "ext:floti_background/background.js",
+    deno_core::ascii_str_include!("background.js"),
+)];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_background_bridge_is_compiled_into_the_host() {
+        assert_eq!(
+            engine::extension_scripts(&floti_background::lazy_init()),
+            [("ext:floti_background/background.js", true)]
+        );
+    }
+}

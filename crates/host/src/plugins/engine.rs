@@ -7,11 +7,14 @@
 //! installs is in place, every global outside ECMAScript's, the web types
 //! and the names the caller keeps is removed.
 
+use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Once;
 
 use deno_core::url::{Url, form_urlencoded, quirks};
-use deno_core::{Extension, JsRuntime, ModuleLoader, OpState, RuntimeOptions, op2, v8};
+use deno_core::{
+    Extension, ExtensionFileSource, JsRuntime, ModuleLoader, OpState, RuntimeOptions, op2, v8,
+};
 use deno_error::JsErrorBox;
 
 /// Starts the V8 platform, once for the whole process. Every isolate is made
@@ -129,8 +132,22 @@ deno_core::extension!(
         op_floti_console,
     ],
     esm_entry_point = "ext:floti_web/web.js",
-    esm = [dir "src/plugins", "web.js"],
+    customizer = |extension: &mut Extension| extension.esm_files = Cow::Borrowed(&WEB_ESM),
 );
+
+/// `web.js`, compiled into the host.
+///
+/// Never through the extension's `esm = [...]`: deno_core 0.413 embeds no
+/// file named there. It records the file's path on the machine that built
+/// the host and reads it from there whenever an isolate starts; only a
+/// startup snapshot, which the host does not make, would avoid that. Every
+/// installed host is built on CI, so on every other machine that path is
+/// missing and no isolate starts: no manifest is read and no plugin loads.
+/// Every extension's scripts come in this way (`extension_scripts` checks).
+static WEB_ESM: [ExtensionFileSource; 1] = [ExtensionFileSource::new(
+    "ext:floti_web/web.js",
+    deno_core::ascii_str_include!("web.js"),
+)];
 
 /// A URL's parts, in the order `web.js` reads them.
 fn parts(url: &Url) -> Vec<String> {
@@ -239,6 +256,20 @@ fn op_floti_console(state: &mut OpState, #[string] level: &str, #[string] text: 
     }
 }
 
+/// Each script an extension names, by specifier, and whether it is compiled
+/// into the host rather than read from disk when an isolate starts.
+#[cfg(test)]
+pub(crate) fn extension_scripts(extension: &Extension) -> Vec<(&'static str, bool)> {
+    extension
+        .js_files
+        .iter()
+        .chain(extension.esm_files.iter())
+        .chain(extension.lazy_loaded_js_files.iter())
+        .chain(extension.lazy_loaded_esm_files.iter())
+        .map(|file| (file.specifier, file.is_runtime_loadable()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -251,6 +282,14 @@ mod tests {
 
     fn isolate() -> JsRuntime {
         base_runtime(IsolateOptions::default()).unwrap()
+    }
+
+    #[test]
+    fn the_web_types_are_compiled_into_the_host() {
+        assert_eq!(
+            extension_scripts(&floti_web::lazy_init()),
+            [("ext:floti_web/web.js", true)]
+        );
     }
 
     #[test]
