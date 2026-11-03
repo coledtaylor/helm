@@ -23,15 +23,57 @@
 //! How it ends is its exit status ([`BridgeExit`]): standard input closing
 //! closes the connection and is a success, and every failure has a status of
 //! its own.
+//!
+//! `floti bridge <client folder> [--pair <device name>] -- <program>
+//! [<arg>...]` reaches a host on another computer through a transport
+//! ([`Transport`]): a program that carries bytes unchanged, such as the
+//! user's own `ssh -o BatchMode=yes <target>`, or any command of the user's
+//! choosing. It runs the program as given, with no shell, adding one last
+//! argument, the line to run on the other side: `floti connect`
+//! ([`crate::connect`]). The handshake then runs over the program's standard
+//! input and output exactly as over the socket, holding the host to the key
+//! the client pinned; the transport only makes the host reachable. The
+//! client folder is the one kept for that host, and nothing about the
+//! transport is written to it.
+//!
+//! A client that has pinned no host and is given `--pair <device name>`
+//! pairs first: it learns the host's public key through the same transport
+//! (`floti connect --host-key`), asks to pair while holding the host to it,
+//! writes the code and its expiry on standard error as one line
+//! ([`PAIRING_LINE_PREFIX`]), and waits for someone to run `floti devices
+//! approve <code>` on the host's computer. Once approved it pins the key,
+//! connects again as itself, and relays. A request nobody approves in time
+//! ends with [`BridgeExit::PairingExpired`].
+//!
+//! A transport that cannot be started ends with
+//! [`BridgeExit::TransportNotStarted`]. One that ends before the handshake
+//! finished ends with [`BridgeExit::TransportEnded`], and the last line it
+//! wrote on standard error is the bridge's one line, passed through
+//! unedited, since that line (ssh's own message) says what went wrong;
+//! when that line is `floti connect` saying no host is running there, the
+//! status is [`BridgeExit::Unreachable`] instead.
 
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::process::{ExitStatus, Stdio};
 
+use floti_protocol::message::ClientKind;
+use floti_protocol::noise::PublicKey;
 use floti_protocol::{FrameDecoder, Message, encode_frame};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::process::{Child, ChildStderr};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
-use crate::client::{ClientError, ClientKeys, Connection, is_closed};
+use crate::client::{
+    ClientError, ClientKeys, Connection, PairingOutcome, TRANSPORT_HANDSHAKE_DEADLINE, duplex,
+    is_closed,
+};
+use crate::connect::ConnectExit;
 use crate::platform::folders::{self, UserEnv};
+use crate::platform::launcher::{self, ProgramLauncher};
+use crate::platform::socket::LocalStream;
 use crate::server::local_endpoint;
 
 /// How the bridge ended, which is its exit status.
@@ -56,6 +98,15 @@ pub enum BridgeExit {
     HostNotProven,
     /// The host closed the connection after the handshake.
     HostClosed,
+    /// The transport's program could not be started.
+    TransportNotStarted,
+    /// The transport ended before the handshake finished. The bridge's line
+    /// on standard error is the last one the transport wrote there,
+    /// unedited.
+    TransportEnded,
+    /// The request to pair through a transport expired before anyone
+    /// approved it. Nothing was pinned.
+    PairingExpired,
 }
 
 impl BridgeExit {
@@ -69,6 +120,9 @@ impl BridgeExit {
             Self::NotPinned => 4,
             Self::HostNotProven => 5,
             Self::HostClosed => 6,
+            Self::TransportNotStarted => 7,
+            Self::TransportEnded => 8,
+            Self::PairingExpired => 9,
         }
     }
 
@@ -79,7 +133,8 @@ impl BridgeExit {
             ClientError::NotPinned => Self::NotPinned,
             ClientError::HostNotProven { .. }
             | ClientError::HostClosed { .. }
-            | ClientError::EnrolmentNotProven { .. } => Self::HostNotProven,
+            | ClientError::EnrolmentNotProven { .. }
+            | ClientError::PairingNotAnswered { .. } => Self::HostNotProven,
             _ => Self::Failed,
         }
     }
@@ -115,6 +170,318 @@ async fn bridge(env: UserEnv, client_folder: &Path) -> BridgeExit {
     match keys.connect_local(&endpoint, &folders.data).await {
         Ok(connection) => relay(connection).await,
         Err(err) => fail(BridgeExit::of_connect(&err), &err.to_string()),
+    }
+}
+
+/// A program that carries bytes unchanged to the computer a host runs on,
+/// such as `ssh -o BatchMode=yes <target>`, given the line to run there as
+/// one last argument.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transport {
+    pub program: OsString,
+    pub args: Vec<OsString>,
+}
+
+/// The line a transport runs on the host's computer to reach the host.
+pub const CONNECT_LINE: &str = "floti connect";
+
+/// The line a transport runs on the host's computer to learn its public key.
+pub const HOST_KEY_LINE: &str = "floti connect --host-key";
+
+/// How the one line on standard error that shows a pairing code starts. The
+/// whole line is `floti bridge: pairing code <code>, expires in <seconds>
+/// seconds: run "floti devices approve <code>" on the host.`, for the
+/// desktop to show.
+pub const PAIRING_LINE_PREFIX: &str = "floti bridge: pairing code ";
+
+/// Runs the bridge for the client whose keys are in `client_folder`, to the
+/// host `transport` reaches, pairing first as `pair` when the client has
+/// pinned no host, until its standard input closes or the connection ends,
+/// and says how it ended.
+pub fn run_bridge_through(
+    client_folder: &Path,
+    pair: Option<&str>,
+    transport: &Transport,
+) -> BridgeExit {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => return fail(BridgeExit::Failed, &format!("could not start: {err}")),
+    };
+    let exit = runtime.block_on(bridge_through(client_folder, pair, transport));
+    runtime.shutdown_background();
+    exit
+}
+
+async fn bridge_through(
+    client_folder: &Path,
+    pair: Option<&str>,
+    transport: &Transport,
+) -> BridgeExit {
+    let mut keys = match ClientKeys::open(client_folder) {
+        Ok(keys) => keys,
+        Err(err) => return fail(BridgeExit::Failed, &err.to_string()),
+    };
+    if keys.pinned_host().is_none() {
+        let Some(name) = pair else {
+            return fail(BridgeExit::NotPinned, &ClientError::NotPinned.to_string());
+        };
+        if let Err(exit) = pair_through(&mut keys, name, transport).await {
+            return exit;
+        }
+    }
+    let mut running = match Running::start(transport, CONNECT_LINE) {
+        Ok(running) => running,
+        Err(exit) => return exit,
+    };
+    let stream = running.stream();
+    match keys.connect_over(stream, &running.described).await {
+        Ok(connection) => {
+            let exit = relay(connection).await;
+            running.finish().await;
+            exit
+        }
+        Err(err) => running.not_connected(err).await,
+    }
+}
+
+/// Pairs the client in `keys`, named `name`, with the host `transport`
+/// reaches: learns its key, asks, shows the code, waits for approval and
+/// pins the key.
+async fn pair_through(
+    keys: &mut ClientKeys,
+    name: &str,
+    transport: &Transport,
+) -> Result<(), BridgeExit> {
+    let host = read_host_key(transport).await?;
+    let mut running = Running::start(transport, CONNECT_LINE)?;
+    let stream = running.stream();
+    let request = match keys
+        .ask_to_pair_over(stream, &running.described, &host, name, ClientKind::Desktop)
+        .await
+    {
+        Ok(request) => request,
+        Err(err) => return Err(running.not_connected(err).await),
+    };
+    let code = request.code().to_owned();
+    say(&format!(
+        "{PAIRING_LINE_PREFIX}{code}, expires in {} seconds: run \"floti devices approve {code}\" on the host.",
+        request.expires_in_seconds()
+    ));
+    let outcome = keys.finish_pairing(request).await;
+    running.finish().await;
+    match outcome {
+        Ok(PairingOutcome::Approved(_)) => Ok(()),
+        Ok(PairingOutcome::Expired) => Err(fail(
+            BridgeExit::PairingExpired,
+            "nobody approved the request to pair before it expired; nothing was pinned.",
+        )),
+        Err(err) => Err(fail(BridgeExit::Failed, &err.to_string())),
+    }
+}
+
+/// The host's public key, as `floti connect --host-key` prints it through
+/// `transport`.
+async fn read_host_key(transport: &Transport) -> Result<PublicKey, BridgeExit> {
+    let mut running = Running::start(transport, HOST_KEY_LINE)?;
+    let mut stdout = running
+        .child
+        .stdout
+        .take()
+        .expect("the transport's stdout is piped");
+    let mut printed = Vec::new();
+    let read = tokio::time::timeout(
+        TRANSPORT_HANDSHAKE_DEADLINE,
+        stdout.read_to_end(&mut printed),
+    );
+    if !matches!(read.await, Ok(Ok(_))) {
+        return Err(fail(
+            BridgeExit::Failed,
+            &format!(
+                "{} printed no host key within {TRANSPORT_HANDSHAKE_DEADLINE:?}",
+                running.described
+            ),
+        ));
+    }
+    match running.exited().await {
+        Some(status) if status.success() => {}
+        Some(status) => return Err(running.ended_with(status).await),
+        None => {
+            return Err(fail(
+                BridgeExit::Failed,
+                &format!("{} did not exit once it had printed", running.described),
+            ));
+        }
+    }
+    String::from_utf8_lossy(&printed)
+        .trim()
+        .parse::<PublicKey>()
+        .map_err(|_| {
+            fail(
+                BridgeExit::Failed,
+                &format!("{} did not print a host key", running.described),
+            )
+        })
+}
+
+/// A transport's program, running with `floti connect` (or the line to run)
+/// as its last argument.
+struct Running {
+    child: Child,
+    /// The command line, for errors.
+    described: String,
+    /// The last line the program wrote on standard error, once it ends.
+    last_line: Option<JoinHandle<Option<String>>>,
+}
+
+impl Running {
+    /// Starts `transport` with `line` as its last argument, its standard
+    /// input and output piped to the bridge, opening no window of its own.
+    fn start(transport: &Transport, line: &str) -> Result<Self, BridgeExit> {
+        let described = transport.args.iter().map(|arg| arg.to_string_lossy()).fold(
+            transport.program.to_string_lossy().into_owned(),
+            |mut all, arg| {
+                all.push(' ');
+                all.push_str(&arg);
+                all
+            },
+        ) + " "
+            + line;
+        let mut command = tokio::process::Command::new(&transport.program);
+        command
+            .args(&transport.args)
+            .arg(line)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        launcher::Native.windowless(command.as_std_mut());
+        let mut child = command.spawn().map_err(|err| {
+            fail(
+                BridgeExit::TransportNotStarted,
+                &format!(
+                    "could not run {}: {err}",
+                    transport.program.to_string_lossy()
+                ),
+            )
+        })?;
+        let stderr = child
+            .stderr
+            .take()
+            .expect("the transport's stderr is piped");
+        Ok(Self {
+            child,
+            described,
+            last_line: Some(tokio::spawn(last_line(stderr))),
+        })
+    }
+
+    /// The program's standard output and input, as one stream.
+    fn stream(&mut self) -> LocalStream {
+        let stdout = self
+            .child
+            .stdout
+            .take()
+            .expect("the transport's stdout is piped");
+        let stdin = self
+            .child
+            .stdin
+            .take()
+            .expect("the transport's stdin is piped");
+        duplex(stdout, stdin)
+    }
+
+    /// Its exit status once it has exited, waiting for that as long as a
+    /// transport's handshake may take; `None` if it is still running then.
+    async fn exited(&mut self) -> Option<ExitStatus> {
+        tokio::time::timeout(TRANSPORT_HANDSHAKE_DEADLINE, self.child.wait())
+            .await
+            .ok()
+            .and_then(Result::ok)
+    }
+
+    /// Lets the program end once its standard input has closed, as `floti
+    /// connect` does, and ends it if it has not by then.
+    async fn finish(mut self) {
+        if self.exited().await.is_none() {
+            let _ = self.child.kill().await;
+        }
+    }
+
+    /// The status for a handshake that did not finish with `err`: the
+    /// transport's own when it ended with a failure first, the host's
+    /// otherwise.
+    async fn not_connected(mut self, err: ClientError) -> BridgeExit {
+        let ended_early = matches!(
+            err,
+            ClientError::HostClosed { .. }
+                | ClientError::PairingNotAnswered { .. }
+                | ClientError::PairingEnded
+                | ClientError::Io(_)
+        );
+        if ended_early
+            && let Some(status) = self.exited().await
+            && !status.success()
+        {
+            return self.ended_with(status).await;
+        }
+        let _ = self.child.kill().await;
+        fail(BridgeExit::of_connect(&err), &err.to_string())
+    }
+
+    /// The status for a transport that ended with `status`, a failure,
+    /// before the handshake finished, saying the last line it wrote.
+    async fn ended_with(&mut self, status: ExitStatus) -> BridgeExit {
+        let line = match self.last_line.take() {
+            Some(reading) => tokio::time::timeout(TRANSPORT_HANDSHAKE_DEADLINE, reading)
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten(),
+            None => None,
+        };
+        match line {
+            Some(line) => {
+                let no_host = status.code() == Some(i32::from(ConnectExit::NoHost.code()))
+                    && line.starts_with("floti connect: ");
+                say(&line);
+                if no_host {
+                    BridgeExit::Unreachable
+                } else {
+                    BridgeExit::TransportEnded
+                }
+            }
+            None => fail(
+                BridgeExit::TransportEnded,
+                &format!(
+                    "{} ended before the handshake finished ({status}) and wrote nothing on standard error",
+                    self.described
+                ),
+            ),
+        }
+    }
+}
+
+/// Reads `stderr` to its end, keeping the last line that is not blank, as
+/// written but for its line ending.
+async fn last_line(stderr: ChildStderr) -> Option<String> {
+    let mut reader = BufReader::new(stderr);
+    let mut last = None;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line).await {
+            Ok(0) | Err(_) => return last,
+            Ok(_) => {
+                let text = String::from_utf8_lossy(&line);
+                let text = text.trim_end_matches(['\r', '\n']);
+                if !text.trim().is_empty() {
+                    last = Some(text.to_owned());
+                }
+            }
+        }
     }
 }
 
@@ -233,8 +600,12 @@ fn host_closed() -> BridgeExit {
 
 /// Says `why` on standard error, as one line, and ends with `exit`.
 fn fail(exit: BridgeExit, why: &str) -> BridgeExit {
-    let line = why.replace(['\r', '\n'], " ");
-    let mut err = std::io::stderr().lock();
-    let _ = writeln!(err, "floti bridge: {line}").and_then(|()| err.flush());
+    say(&format!("floti bridge: {}", why.replace(['\r', '\n'], " ")));
     exit
+}
+
+/// Writes `line` on standard error as it is.
+fn say(line: &str) {
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(err, "{line}").and_then(|()| err.flush());
 }

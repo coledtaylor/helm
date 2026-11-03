@@ -51,7 +51,11 @@
 //!   device key and pinned host key on disk, and a Noise session to a host.
 //! - [`bridge`]: `floti bridge`, that client side for a program that does
 //!   not link this crate, relaying the protocol over its standard input and
-//!   output.
+//!   output, to the host on this computer or, through a transport such as
+//!   the user's own `ssh`, to one on another.
+//! - [`connect`]: `floti connect`, what a transport runs on the host's
+//!   computer: it copies bytes between its standard input and output and the
+//!   host's local socket, unchanged.
 
 /// Writes a line to standard error, as `eprintln!` does, then rotates the
 /// host's log when that line took it past its limit ([`host_log`]). In
@@ -71,6 +75,7 @@ pub mod bridge;
 pub mod carry;
 pub mod client;
 pub mod config_console;
+pub mod connect;
 pub mod devices;
 pub mod error;
 pub mod history;

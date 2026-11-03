@@ -46,7 +46,10 @@ export const BRIDGE_EXIT = {
   unreachable: 3,
   notPinned: 4,
   hostNotProven: 5,
-  hostClosed: 6
+  hostClosed: 6,
+  transportNotStarted: 7,
+  transportEnded: 8,
+  pairingExpired: 9
 } as const
 
 /** The line `floti host` prints once it listens, the first on its standard output. */

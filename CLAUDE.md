@@ -29,6 +29,7 @@ crates/
     ├── src/agent/   # the AgentBackend trait; one module per agent (claude_code/), plain.rs for any command line
     └── src/keeper/  # `floti keeper`: the session keeper holding every session's and plain terminal's pty and tree
 test/fake-agents/    # one fake CLI per agent backend, sharing common.mjs; tests drive these, never a real agent
+test/fake-ssh/       # fake ssh and a fake custom transport; tests reach no other computer and never touch ~/.ssh
 ```
 
 pnpm workspaces with `node-linker=hoisted` (`.npmrc` says why). `core` and `ui`

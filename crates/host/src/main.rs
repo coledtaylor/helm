@@ -3,7 +3,15 @@
 //! runs it for the desktop that started it, which it outlives, exiting by
 //! itself once nothing runs and no client is attached. `floti bridge`
 //! connects a client from its folder to the host on this computer and relays
-//! the protocol over standard input and output. `floti update-stop <client
+//! the protocol over standard input and output; `floti bridge <client
+//! folder> [--pair <device name>] -- <program> [<arg>...]` reaches a host on
+//! another computer instead, through a transport such as `ssh -o
+//! BatchMode=yes <target>`, run with `floti connect` as its last argument,
+//! and pairs first when given `--pair` and the client has pinned no host.
+//! `floti connect` is what that runs on the host's computer: it copies bytes
+//! between its standard input and output and the host's local socket,
+//! unchanged, and `floti connect --host-key` prints the host's public key
+//! for a device about to pair. `floti update-stop <client
 //! folder> --ask | --stop` is what an installer runs before it replaces the
 //! binary: it says what stopping the host would end, then stops it.
 //! `floti devices` lists the devices paired with the host on this computer
@@ -20,10 +28,11 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 
-use floti_host::bridge::{BridgeExit, run_bridge};
+use floti_host::bridge::{BridgeExit, Transport, run_bridge, run_bridge_through};
+use floti_host::connect::{ConnectStep, run_connect};
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code> [--role viewer|operator|admin]";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--pair <device name>] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code> [--role viewer|operator|admin]";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -33,6 +42,14 @@ fn main() -> ExitCode {
                 keeper(Path::new(data), Path::new(runtime))
             }
             _ => usage(),
+        };
+    }
+    if args.first().is_some_and(|first| first == "bridge") && args.len() > 2 {
+        return match bridge_through(&args[1..]) {
+            Some((folder, pair, transport)) => ExitCode::from(
+                run_bridge_through(Path::new(&folder), pair.as_deref(), &transport).code(),
+            ),
+            None => usage(),
         };
     }
     if args.first().is_some_and(|first| first == "host") {
@@ -54,6 +71,8 @@ fn main() -> ExitCode {
         ["bridge", folder] if !folder.is_empty() => {
             ExitCode::from(run_bridge(Path::new(folder)).code())
         }
+        ["connect"] => ExitCode::from(run_connect(ConnectStep::Relay).code()),
+        ["connect", "--host-key"] => ExitCode::from(run_connect(ConnectStep::HostKey).code()),
         ["update-stop", ..] => match update_stop::parse(&args[1..]) {
             Some((folder, step)) => ExitCode::from(update_stop::run(&folder, step)),
             None => usage(),
@@ -77,6 +96,33 @@ fn main() -> ExitCode {
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
     ExitCode::from(BridgeExit::Usage.code())
+}
+
+/// What follows `bridge` when it reaches a host through a transport: the
+/// client folder, then `--pair <device name>` or nothing, then `--` and the
+/// program with its arguments, each kept as the OS gave it.
+fn bridge_through(args: &[OsString]) -> Option<(OsString, Option<String>, Transport)> {
+    let (folder, rest) = args.split_first()?;
+    let (pair, rest) = match rest {
+        [flag, name, rest @ ..] if flag == "--pair" => {
+            let name = name.to_str().filter(|name| !name.trim().is_empty())?;
+            (Some(name.to_owned()), rest)
+        }
+        _ => (None, rest),
+    };
+    let [separator, program, args @ ..] = rest else {
+        return None;
+    };
+    (!folder.is_empty() && separator == "--" && !program.is_empty()).then(|| {
+        (
+            folder.clone(),
+            pair,
+            Transport {
+                program: program.clone(),
+                args: args.to_vec(),
+            },
+        )
+    })
 }
 
 /// What follows `host`: nothing, or `--desktop <program>` and any number of

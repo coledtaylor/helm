@@ -541,6 +541,44 @@ is sent), and anything else is a prompt it records and answers.
 A new backend gets its fake here, written to the same pattern, before its
 backend code: the backend's tests drive the fake, never the real CLI.
 
+## The fake transports
+
+A host on another computer is reached through the user's own `ssh` or a
+command of their choosing, which `floti bridge` runs with `floti connect` as
+its last argument. No test reaches another computer, runs a real `ssh`, or
+reads or writes anything under `~/.ssh`, `sshd_config` or `authorized_keys`:
+the fakes in `test/fake-ssh/`, run under Node, stand in for the transport and
+run the line they are given on this computer, in the test's own folders. What
+crosses them is carried unchanged, so the handshake and the protocol are the
+real ones. They share `common.mjs`:
+
+- **`floti` in the line is the binary the test built**, named by
+  `FAKE_SSH_FLOTI`; any other program is looked up on `PATH`. The line is
+  split into words as a shell does for a plain command (quotes group, nothing
+  expands) and run without a shell, with this process's standard input,
+  output and error, and its exit status is the fake's.
+- **Each run is recorded** as one JSON line (`pid`, `program`, `argv`, `line`,
+  and for ssh `options` and `target`) in the file `FAKE_SSH_LOG` names. A test
+  reads it to assert how the transport was run. A run whose test process is
+  gone (the `test-owner` file at or above that file's folder) ends, with the
+  line's program.
+- **`ssh.mjs`** takes ssh's own argv, `[-o <option>]... <target> <line>...`,
+  joins the words after the target as ssh does, and refuses any other option
+  as ssh does. `FAKE_SSH_FAIL` plays one of ssh's failures with ssh's own
+  message and exit status 255: `denied` (`<target>: Permission denied
+  (publickey,password).`), `unresolved` (`ssh: Could not resolve hostname
+  <host>: Name or service not known`), `timeout` (`ssh: connect to host <host>
+  port 22: Connection timed out`) and `password`, a host that wants a
+  password: with `-o BatchMode=yes` it fails as `denied`; without, it writes
+  ssh's prompt and waits on standard input, as a real ssh would, so a test can
+  show a client never leaves it there.
+- **`carry.mjs`** is any custom command that carries bytes: `[<argument>...]
+  <line>`, the line to run as its last argument and every other argument only
+  recorded.
+
+The host's tests (`crates/host/tests/remote.rs`) drive both through
+`floti bridge`; the desktop's run the same files through its own bridge.
+
 ## Rules for every test
 
 - **A failing test means something is broken**, in the app or in the test. Fix

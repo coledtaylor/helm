@@ -29,10 +29,20 @@
 //! [`ClientKeys::finish_pairing`] waits for that, and pins the host key only
 //! once the host says the device is paired. From then on the client connects
 //! as itself ([`ClientKeys::connect`]).
+//!
+//! A host on another computer is reached through a transport that carries
+//! bytes unchanged, such as `ssh <target> floti connect`: its standard output
+//! and input, joined by [`duplex`], are the stream
+//! [`ClientKeys::connect_over`] and [`ClientKeys::ask_to_pair_over`] run the
+//! same handshake over. The transport only makes the host reachable; the
+//! handshake is what lets the client in, and holds the host to its key.
 
 use std::fmt;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
 use floti_protocol::channels::devices::DeviceRole;
@@ -43,7 +53,7 @@ use floti_protocol::noise::{
     EnrolmentCode, Initiator, InitiatorStep, KeyPair, NoiseError, Opener, PublicKey, Sealer,
 };
 use floti_protocol::{FrameDecoder, Message, PROTOCOL_VERSION, ProtocolError, encode_frame};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 use crate::keys::{load_or_create_key_pair, read_key_pair};
 use crate::platform::private_files::{Native as NativeFiles, PrivateFiles, sweep_stale_temps};
@@ -57,6 +67,13 @@ pub const DEVICE_KEY_FILE: &str = "device.key";
 
 /// The host key the client pinned, as 64 hex digits, in its folder.
 pub const PINNED_HOST_FILE: &str = "host.pub";
+
+/// How long a client gives a host reached through a transport to finish the
+/// handshake, from when the transport starts. Longer than the local socket's
+/// [`HANDSHAKE_DEADLINE`]: the transport's own login comes first (`ssh`
+/// connecting and signing in with the user's keys or agent), which in batch
+/// mode never waits on a person but may cross a slow network.
+pub const TRANSPORT_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
 
 const READ_CHUNK: usize = 64 * 1024;
 
@@ -134,6 +151,28 @@ impl ClientKeys {
         connect(endpoint, &self.device, &pinned).await
     }
 
+    /// [`Self::connect`], over `stream`, a byte stream that reaches the host
+    /// some other way than its local socket: a transport such as
+    /// `ssh <target> floti connect`, which carries the bytes unchanged.
+    /// `at` names it in errors. The handshake holds the host to the pinned
+    /// key exactly as on the socket.
+    pub async fn connect_over(
+        &self,
+        stream: LocalStream,
+        at: &str,
+    ) -> Result<Connection, ClientError> {
+        let pinned = self.pinned.ok_or(ClientError::NotPinned)?;
+        connect_over(
+            stream,
+            at,
+            TRANSPORT_HANDSHAKE_DEADLINE,
+            &self.device,
+            &pinned,
+            Ask::Plain,
+        )
+        .await
+    }
+
     /// Connects to the host on this computer at `endpoint`, whose data
     /// folder is `host_data`. While that host waits for its first admin, its
     /// enrolment file is there: a client that has pinned no host enrols with
@@ -155,10 +194,10 @@ impl ClientKeys {
                     connect_with(endpoint, &self.device, &host, Ask::Enrol(&enrolment.code))
                         .await
                         .map_err(|err| match err {
-                            ClientError::HostNotProven { endpoint, .. }
-                            | ClientError::HostClosed { endpoint, .. } => {
+                            ClientError::HostNotProven { at, .. }
+                            | ClientError::HostClosed { at, .. } => {
                                 ClientError::EnrolmentNotProven {
-                                    endpoint,
+                                    at,
                                     host: host.fingerprint(),
                                 }
                             }
@@ -187,14 +226,46 @@ impl ClientKeys {
         name: &str,
         kind: ClientKind,
     ) -> Result<PairingRequest, ClientError> {
-        let mut connection = connect_with(endpoint, &self.device, host, Ask::Pair)
+        let stream = open_socket(endpoint).await?;
+        let at = endpoint.to_string();
+        self.ask_to_pair_with(stream, &at, HANDSHAKE_DEADLINE, host, name, kind)
+            .await
+    }
+
+    /// [`Self::ask_to_pair`], over `stream`, a byte stream that reaches the
+    /// host some other way than its local socket ([`Self::connect_over`]),
+    /// named `at` in errors. `host` is the key learned through the same
+    /// transport (`floti connect --host-key`), and the host is held to it.
+    pub async fn ask_to_pair_over(
+        &self,
+        stream: LocalStream,
+        at: &str,
+        host: &PublicKey,
+        name: &str,
+        kind: ClientKind,
+    ) -> Result<PairingRequest, ClientError> {
+        self.ask_to_pair_with(stream, at, TRANSPORT_HANDSHAKE_DEADLINE, host, name, kind)
+            .await
+    }
+
+    async fn ask_to_pair_with(
+        &self,
+        stream: LocalStream,
+        at: &str,
+        deadline: Duration,
+        host: &PublicKey,
+        name: &str,
+        kind: ClientKind,
+    ) -> Result<PairingRequest, ClientError> {
+        let mut connection = connect_over(stream, at, deadline, &self.device, host, Ask::Pair)
             .await
             .map_err(|err| match err {
-                ClientError::HostNotProven { endpoint, .. }
-                | ClientError::HostClosed { endpoint, .. } => ClientError::PairingNotAnswered {
-                    endpoint,
-                    host: host.fingerprint(),
-                },
+                ClientError::HostNotProven { at, .. } | ClientError::HostClosed { at, .. } => {
+                    ClientError::PairingNotAnswered {
+                        at,
+                        host: host.fingerprint(),
+                    }
+                }
                 other => other,
             })?;
         connection.send(&hello(name, kind)).await?;
@@ -223,7 +294,7 @@ impl ClientKeys {
         let host = host_public_key(host_data)
             .map_err(ClientError::Local)?
             .ok_or_else(|| ClientError::Unreachable {
-                endpoint: endpoint.clone(),
+                at: endpoint.to_string(),
                 source: Error::Refused(format!(
                     "no host has started on {} yet",
                     host_data.display()
@@ -361,9 +432,9 @@ pub enum ClientError {
     #[error("this client has pinned no host key yet; pair it with a host first")]
     NotPinned,
 
-    #[error("no host answered at {endpoint}: {source}")]
+    #[error("no host answered at {at}: {source}")]
     Unreachable {
-        endpoint: Endpoint,
+        at: String,
         #[source]
         source: Error,
     },
@@ -371,27 +442,27 @@ pub enum ClientError {
     /// The host on the socket holds another key than the pinned one, or did
     /// not answer with a handshake at all. Nothing more was sent to it.
     #[error(
-        "the host at {endpoint} did not prove the key this client pinned ({pinned}), so nothing was sent to it"
+        "the host at {at} did not prove the key this client pinned ({pinned}), so nothing was sent to it"
     )]
-    HostNotProven { endpoint: Endpoint, pinned: String },
+    HostNotProven { at: String, pinned: String },
 
     /// The host closed the connection without answering. A host holding
     /// another key than the pinned one does that, since it cannot read the
     /// first message, and so does the pinned host to a device it does not
     /// know or has revoked; a host never says which.
     #[error(
-        "the host at {endpoint} did not prove the key this client pinned ({pinned}): it closed the connection during the handshake, as a host holding another key does, and as a host does to a device it has not paired or has revoked"
+        "the host at {at} did not prove the key this client pinned ({pinned}): it closed the connection during the handshake, as a host holding another key does, and as a host does to a device it has not paired or has revoked"
     )]
-    HostClosed { endpoint: Endpoint, pinned: String },
+    HostClosed { at: String, pinned: String },
 
     /// The host on the socket is not the one the enrolment file names: it
     /// holds another key, so it could not read the first message and closed
     /// the connection, or its answer was not the one that key makes. Nothing
     /// more was sent to it and no key was pinned.
     #[error(
-        "the host at {endpoint} did not prove the key its enrolment file names ({host}), so nothing more was sent to it and no host key was pinned"
+        "the host at {at} did not prove the key its enrolment file names ({host}), so nothing more was sent to it and no host key was pinned"
     )]
-    EnrolmentNotProven { endpoint: Endpoint, host: String },
+    EnrolmentNotProven { at: String, host: String },
 
     /// A file of the client's or the host's enrolment file could not be read
     /// or written.
@@ -402,9 +473,9 @@ pub enum ClientError {
     /// its answer was not the one the key the client held it to makes.
     /// Nothing more was sent to it and no key was pinned.
     #[error(
-        "the host at {endpoint} did not answer this device's request to pair: it holds another key than {host}, has paired or revoked this device already, or has as many requests waiting as it takes"
+        "the host at {at} did not answer this device's request to pair: it holds another key than {host}, has paired or revoked this device already, or has as many requests waiting as it takes"
     )]
-    PairingNotAnswered { endpoint: Endpoint, host: String },
+    PairingNotAnswered { at: String, host: String },
 
     /// The host closed a connection asking to pair without saying how the
     /// request ended: the device asked again elsewhere, or the host stopped.
@@ -419,8 +490,8 @@ pub enum ClientError {
     #[error("the host answered with {0}")]
     Unexpected(&'static str),
 
-    #[error("the host at {endpoint} did not finish the handshake within {HANDSHAKE_DEADLINE:?}")]
-    TimedOut { endpoint: Endpoint },
+    #[error("the host at {at} did not finish the handshake within {within:?}")]
+    TimedOut { at: String, within: Duration },
 
     #[error("the session with the host failed: {0}")]
     Session(#[from] NoiseError),
@@ -461,36 +532,60 @@ async fn connect_with(
     host: &PublicKey,
     ask: Ask<'_>,
 ) -> Result<Connection, ClientError> {
-    let mut stream =
-        NativeSocket
-            .connect(endpoint)
-            .await
-            .map_err(|source| ClientError::Unreachable {
-                endpoint: endpoint.clone(),
-                source,
-            })?;
-    let handshake = tokio::time::timeout(
+    let stream = open_socket(endpoint).await?;
+    connect_over(
+        stream,
+        &endpoint.to_string(),
         HANDSHAKE_DEADLINE,
-        handshake(&mut stream, device, host, ask),
-    );
+        device,
+        host,
+        ask,
+    )
+    .await
+}
+
+/// The host's local socket at `endpoint`, opened.
+async fn open_socket(endpoint: &Endpoint) -> Result<LocalStream, ClientError> {
+    NativeSocket
+        .connect(endpoint)
+        .await
+        .map_err(|source| ClientError::Unreachable {
+            at: endpoint.to_string(),
+            source,
+        })
+}
+
+/// [`connect_with`], over `stream`, however it reaches the host: the local
+/// socket, or a transport's standard input and output. `at` names it in
+/// errors.
+async fn connect_over(
+    mut stream: LocalStream,
+    at: &str,
+    deadline: Duration,
+    device: &KeyPair,
+    host: &PublicKey,
+    ask: Ask<'_>,
+) -> Result<Connection, ClientError> {
+    let handshake = tokio::time::timeout(deadline, handshake(&mut stream, device, host, ask));
     let (transport, rest) = match handshake.await {
         Ok(Ok(done)) => done,
         Ok(Err(Handshake::NotProven)) => {
             return Err(ClientError::HostNotProven {
-                endpoint: endpoint.clone(),
+                at: at.to_owned(),
                 pinned: host.fingerprint(),
             });
         }
         Ok(Err(Handshake::Closed)) => {
             return Err(ClientError::HostClosed {
-                endpoint: endpoint.clone(),
+                at: at.to_owned(),
                 pinned: host.fingerprint(),
             });
         }
         Ok(Err(Handshake::Failed(err))) => return Err(err),
         Err(_) => {
             return Err(ClientError::TimedOut {
-                endpoint: endpoint.clone(),
+                at: at.to_owned(),
+                within: deadline,
             });
         }
     };
@@ -670,6 +765,50 @@ impl fmt::Debug for Connection {
             .field("host", &self.host)
             .field("ended", &self.ended)
             .finish_non_exhaustive()
+    }
+}
+
+/// One byte stream made of a reader and a writer, for a [`Connection`] to
+/// run over ([`ClientKeys::connect_over`]): a transport's standard output and
+/// standard input. Shutting it down shuts the writer down; dropping it closes
+/// both, which is what ends a transport's standard input.
+pub fn duplex(
+    reader: impl AsyncRead + Send + Unpin + 'static,
+    writer: impl AsyncWrite + Send + Unpin + 'static,
+) -> LocalStream {
+    Box::pin(Duplex { reader, writer })
+}
+
+struct Duplex<R, W> {
+    reader: R,
+    writer: W,
+}
+
+impl<R: AsyncRead + Unpin, W: Unpin> AsyncRead for Duplex<R, W> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().reader).poll_read(cx, buf)
+    }
+}
+
+impl<R: Unpin, W: AsyncWrite + Unpin> AsyncWrite for Duplex<R, W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().writer).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().writer).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
     }
 }
 
