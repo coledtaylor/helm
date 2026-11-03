@@ -53,12 +53,9 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 - While building, run only the tests for what changed. A full suite is a
   regression check, and it runs on CI: push the branch and read its results
   on Windows, macOS and Linux.
-- Unit and integration tests validate each task while it is built. End-to-end
-  tests validate the workflows once, after every task of a piece of work is
-  complete and its CI has passed: the specs for the workflows that changed,
-  after one build (`pnpm --filter @helm/desktop exec node scripts/playwright.mjs
-  test -c e2e <spec>`). Never while building or to check a fix; the whole
-  `pnpm test:e2e` only when the owner asks.
+- Unit and integration tests validate the work. End-to-end tests run only
+  before a release is cut (the `procedures` skill): never while building, to
+  check a fix or to finish a task.
 - Nearly everything in a local app can be shown by a unit or integration test.
   Something an end-to-end run catches is a gap in those tiers: add the unit or
   integration test that fails for it, then fix it. Only what needs the whole

@@ -36,13 +36,11 @@ anything. A test that passed is run again only once the code it covers has
 changed. A full suite is a regression check, and CI is where it runs: push the
 branch and read the results on all three OSes, rather than running it locally.
 
-**Unit and integration tests validate each task while it is built; end-to-end
-tests validate the workflows once every task is complete.** An end-to-end run
-builds the app and drives it, which costs minutes and a great deal of memory,
-so it happens once for a piece of work: after all its tasks are complete and
-their CI has passed, the specs for the workflows that changed (see
-[End-to-end tests](#end-to-end-tests)). It is never part of building a task or
-checking a fix. The whole `pnpm test:e2e` runs only when the owner asks for it.
+**Unit and integration tests validate the work; end-to-end tests run only
+before a release is cut.** An end-to-end run builds the app and drives it,
+which costs minutes and a great deal of memory. `pnpm test:e2e` runs as a step
+of cutting a release (the `procedures` skill) and at no other time: never while
+building, to check a fix or to finish a task.
 
 Helm is a local app, so nearly everything can be shown by a unit or
 integration test. When an end-to-end run catches something, the tiers below
@@ -414,8 +412,8 @@ automatically. A targeted `vitest run` measures nothing, so it never trips them.
 ## End-to-end tests
 
 `packages/desktop/e2e/`. One test per user workflow, on its happy path; detail
-belongs in the tier above, so keep this one small. They run once, after every task
-of a piece of work is complete, the changed workflows' specs only. A refusal or an edge case is
+belongs in the tier above, so keep this one small. They run only before a release
+is cut. A refusal or an edge case is
 tested here only when nothing but the real app can show it: a native view drawn
 over the window, or Electron's own guards on a page.
 
