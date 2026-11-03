@@ -39,8 +39,9 @@
 //!
 //! Otherwise it reads stdin a line at a time and answers each with
 //! `echo: <line>`. At its prompt, `/exit <code>` exits with `code`,
-//! `/print <hex>` writes those bytes, and `/child` and `/gui-child` start a
-//! child. It exits 0 when stdin ends.
+//! `/print <hex>` writes those bytes, `/size` writes `size: <cols>x<rows>`,
+//! the size of the terminal it writes to, and `/child` and `/gui-child` start
+//! a child. It exits 0 when stdin ends.
 //!
 //! It, and every child it starts, exits 0 once the test process that owns it
 //! is gone: the one the `test-owner` file nearest above its record folder
@@ -57,6 +58,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use floti_host::platform::process_tree::{Native, ProcessTree};
+use floti_host::platform::terminal_size::{self, TerminalSize};
 use floti_protocol::Knowable;
 use serde_json::json;
 
@@ -241,6 +243,11 @@ fn main() {
             start_child(&mut record, Child::Console, DEFAULT_CHILD_MS);
         } else if line == "/gui-child" {
             start_child(&mut record, Child::Gui, DEFAULT_CHILD_MS);
+        } else if line == "/size" {
+            match terminal_size::Native.of_standard_output() {
+                Ok((cols, rows)) => write_out(format!("size: {cols}x{rows}\r\n").as_bytes()),
+                Err(err) => write_out(format!("size: unknown ({err})\r\n").as_bytes()),
+            }
         } else {
             write_out(format!("echo: {line}\r\n").as_bytes());
         }

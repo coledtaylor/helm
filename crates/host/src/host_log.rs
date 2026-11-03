@@ -60,20 +60,32 @@ pub const TEST_LOG_LIMIT_MARKER: &str = "floti-test-log-limit";
 #[cfg(any(test, feature = "testkit"))]
 pub const TEST_CRASH_MARKER: &str = "floti-test-crash";
 
-/// The file in a data folder that makes a test build's `floti host` abort,
-/// failing an allocation, once it has started a session: a host that dies
-/// with sessions running. A production build never reads it.
+/// The file in a data folder that makes a test build's `floti host` abort
+/// once it has started a session: a host that dies with sessions running.
+/// `panic` panics where no panic may unwind, which aborts the process;
+/// anything else fails an allocation. A production build never reads it.
 #[cfg(any(test, feature = "testkit"))]
 pub const TEST_CRASH_AFTER_SESSION_MARKER: &str = "floti-test-crash-after-session";
 
-/// Aborts this process when [`TEST_CRASH_AFTER_SESSION_MARKER`] is in
-/// `data`, in a test build; nothing otherwise.
+/// Aborts this process as [`TEST_CRASH_AFTER_SESSION_MARKER`] in `data`
+/// asks, in a test build; nothing otherwise.
 #[cfg(any(test, feature = "testkit"))]
 pub fn crash_after_session_if_asked(data: &Path) {
-    if data.join(TEST_CRASH_AFTER_SESSION_MARKER).exists() {
-        std::alloc::handle_alloc_error(
+    /// A panic here cannot unwind out of a function that may not unwind, so
+    /// the process aborts: the way a panic in a host built to abort ends it.
+    extern "C" fn panic_and_abort() {
+        panic!("the test asked this host to panic with sessions running");
+    }
+    match fs::read_to_string(data.join(TEST_CRASH_AFTER_SESSION_MARKER))
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        None => {}
+        Some("panic") => panic_and_abort(),
+        Some(_) => std::alloc::handle_alloc_error(
             std::alloc::Layout::from_size_align(1 << 40, 8).expect("a valid layout"),
-        );
+        ),
     }
 }
 

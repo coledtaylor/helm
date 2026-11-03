@@ -31,6 +31,7 @@ const CONCERNS: &[&str] = &[
     "node_runtime",
     "tray",
     "standard_error",
+    "terminal_size",
 ];
 
 /// The words that make a `cfg` depend on the OS.

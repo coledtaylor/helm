@@ -24,11 +24,11 @@ use floti_host::testkit::{
 };
 use floti_protocol::Knowable;
 use floti_protocol::channel::to_payload;
-use floti_protocol::channels::common::SessionStatus;
+use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
-    PtermOpen, PtermOpenRequest, PtermStreamOpen, SessionList, SessionRestorable, SessionStart,
-    StartSessionRequest,
+    PtermClose, PtermCloseRequest, PtermOpen, PtermOpenRequest, PtermStreamOpen, SessionList,
+    SessionResize, SessionResizeRequest, SessionRestorable, SessionStart, StartSessionRequest,
 };
 
 const TERMINAL: &[&str] = &["terminal"];
@@ -43,10 +43,28 @@ struct KillableHost(Option<Child>);
 
 impl KillableHost {
     fn start(dirs: &TestDirs, agent: &FakeAgent) -> Self {
+        Self::start_with(dirs, agent, |_| {})
+    }
+
+    /// `floti host --desktop`: a host a desktop started, here one that is
+    /// never run, which exits by itself once idle.
+    fn start_desktop(dirs: &TestDirs, agent: &FakeAgent) -> Self {
+        let app = dirs.folder("Helm app");
+        Self::start_with(dirs, agent, |command| {
+            command
+                .arg("--desktop")
+                .arg(app.join("Helm.exe"))
+                .arg("--desktop-arg")
+                .arg(app.join("resources app"));
+        })
+    }
+
+    fn start_with(dirs: &TestDirs, agent: &FakeAgent, more: impl FnOnce(&mut Command)) -> Self {
         pair_test_device(&dirs.floti_endpoint(), &dirs.data);
         let (log_var, log_dir) = agent.log_env();
         let mut command: Command = dirs.floti_command(env!("CARGO_BIN_EXE_floti"));
         command.arg("host").env(log_var, log_dir);
+        more(&mut command);
         Self(Some(command.spawn().expect("run floti host")))
     }
 
@@ -225,12 +243,14 @@ async fn fake_session(
 }
 
 // ---------------------------------------------------------------------------
-// S1 and S2: a killed host leaves its sessions and terminals running, and the
-// next host takes them back with their screens, input and ids
+// S1, S2, S3 and S7: a killed host leaves its sessions and terminals running,
+// the next host takes them back with their screens, input, sizes and ids, and
+// a deliberate stop ends them
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s1_a_killed_host_leaves_sessions_and_terminals_running_and_the_next_takes_them_back() {
+async fn s1_s2_s3_a_killed_host_leaves_sessions_and_terminals_running_and_the_next_takes_them_back()
+{
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let mut first = KillableHost::start(&dirs, &agent);
@@ -291,6 +311,22 @@ async fn s1_a_killed_host_leaves_sessions_and_terminals_running_and_the_next_tak
             String::from_utf8_lossy(bytes).contains("echo: after")
         })
         .await;
+    // The client that typed last sets the size, and it reaches the program's
+    // terminal in the keeper.
+    client
+        .request::<SessionResize>(&SessionResizeRequest {
+            id: session,
+            cols: 101,
+            rows: 31,
+        })
+        .await
+        .unwrap();
+    client.type_into(3, b"/size\r").await;
+    client
+        .read_stream_until(3, |bytes| {
+            String::from_utf8_lossy(bytes).contains("size: 101x31")
+        })
+        .await;
 
     // The folder's plain terminal is the same one, under the same id.
     assert_eq!(
@@ -312,33 +348,37 @@ async fn s1_a_killed_host_leaves_sessions_and_terminals_running_and_the_next_tak
     let record = agent.wait_for_record(terminal_pid, PATIENCE, |record| record.input.len() == 2);
     assert_eq!(record.input, ["before", "again"]);
     // A new terminal's number continues past it.
-    let other = client
-        .request::<PtermOpen>(&PtermOpenRequest {
-            path: in_terminal.to_string_lossy().into_owned(),
-            cols: 80,
-            rows: 24,
-            shell: Some(agent.exe().to_string_lossy().into_owned()),
-            separate: true,
-        })
+    let in_other = dirs.folder("a third project");
+    let other = fake_terminal(&mut client, &agent, &in_other, 5).await;
+    assert!(other > terminal, "{other} after {terminal}");
+    let other_pid = run_in(&agent, &in_other).await;
+    // Closing the terminal taken back ends its program.
+    client
+        .request::<PtermClose>(&PtermCloseRequest { id: terminal })
         .await
         .unwrap();
-    assert!(other.id > terminal, "{} after {terminal}", other.id);
+    until("the closed terminal's program ended", || {
+        !alive(terminal_pid)
+    })
+    .await;
+    assert!(alive(session_pid), "closing a terminal ends no session");
 
-    // A deliberate stop ends everything, the keeper with it.
+    // A deliberate stop ends everything, what was taken back included, and
+    // the keeper with it.
     second.stop(HostStopReason::Stop).await;
     until("the keeper and its programs ended", || {
-        !alive(keeper) && !alive(session_pid) && !alive(terminal_pid)
+        !alive(keeper) && !alive(session_pid) && !alive(other_pid)
     })
     .await;
     assert_eq!(rows(&dirs.data)[0].1, "exited");
 }
 
 // ---------------------------------------------------------------------------
-// S3: a session that ends while no host runs is recorded with its exit code
+// S4: a session that ends while no host runs is recorded with its exit code
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s3_a_session_that_ends_while_no_host_runs_is_recorded_exited_with_its_code() {
+async fn s4_a_session_that_ends_while_no_host_runs_is_recorded_exited_with_its_code() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let mut first = KillableHost::start(&dirs, &agent);
@@ -382,12 +422,12 @@ async fn s3_a_session_that_ends_while_no_host_runs_is_recorded_exited_with_its_c
 }
 
 // ---------------------------------------------------------------------------
-// S4: a keeper that dies while the host runs loses its sessions, which are
+// S12: a keeper that dies while the host runs loses its sessions, which are
 // offered back, and the next session starts a new keeper
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s4_a_keeper_killed_while_the_host_runs_loses_its_sessions_and_offers_them_back() {
+async fn s12_a_keeper_killed_while_the_host_runs_loses_its_sessions_and_offers_them_back() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let host = in_process(&dirs, &agent, &["--fake-tick=100"]);
@@ -439,12 +479,12 @@ async fn s4_a_keeper_killed_while_the_host_runs_loses_its_sessions_and_offers_th
 }
 
 // ---------------------------------------------------------------------------
-// S7: a keeper of another version is ended, its sessions lost and offered,
+// S14: a keeper of another version is ended, its sessions lost and offered,
 // and one of this version starts
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s7_a_keeper_of_another_version_is_ended_and_its_sessions_offered_back() {
+async fn s14_a_keeper_of_another_version_is_ended_and_its_sessions_offered_back() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let marker = dirs.data.join(TEST_KEEPER_VERSION);
@@ -484,17 +524,29 @@ async fn s7_a_keeper_of_another_version_is_ended_and_its_sessions_offered_back()
 }
 
 // ---------------------------------------------------------------------------
-// S9: a host that aborts with sessions running leaves them in the keeper
+// S11: a host that aborts with sessions running leaves them in the keeper
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s9_a_host_that_aborts_after_starting_a_session_leaves_it_running_for_the_next() {
+async fn s11_a_host_that_fails_an_allocation_after_starting_a_session_leaves_it_running_for_the_next()
+ {
+    a_host_that_aborts_after_starting_a_session_leaves_it_running("abort").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s11_a_host_whose_panic_aborts_after_starting_a_session_leaves_it_running_for_the_next() {
+    a_host_that_aborts_after_starting_a_session_leaves_it_running("panic").await;
+}
+
+/// A `floti host` that aborts, as `crash` in its marker says, once it has
+/// started a session: the session runs on, and the next host takes it back.
+async fn a_host_that_aborts_after_starting_a_session_leaves_it_running(crash: &str) {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let marker = dirs
         .data
         .join(floti_host::host_log::TEST_CRASH_AFTER_SESSION_MARKER);
-    std::fs::write(&marker, "").unwrap();
+    std::fs::write(&marker, crash).unwrap();
     let mut first = KillableHost::start(&dirs, &agent);
     let mut client = TestClient::connect(&dirs.floti_endpoint(), TERMINAL).await;
     let folder = dirs.folder("a project");
@@ -507,6 +559,15 @@ async fn s9_a_host_that_aborts_after_starting_a_session_leaves_it_running_for_th
         .await;
     first.ended().await;
     std::fs::remove_file(&marker).unwrap();
+    // The session's shell outlived the host that started it.
+    let mut shell = None;
+    until("the session's shell running in a keeper", || {
+        shell = keeper_children(&dirs);
+        shell.is_some()
+    })
+    .await;
+    let (keeper, shell) = shell.expect("a keeper with a program");
+    assert!(alive(shell));
 
     let second = in_process(&dirs, &agent, &[]);
     let mut client = TestClient::connect(&dirs.floti_endpoint(), TERMINAL).await;
@@ -518,16 +579,92 @@ async fn s9_a_host_that_aborts_after_starting_a_session_leaves_it_running_for_th
         None
     );
     second.stop(HostStopReason::Stop).await;
+    until("the keeper and the session ended", || {
+        !alive(keeper) && !alive(shell)
+    })
+    .await;
+    assert_eq!(rows(&dirs.data)[0].1, "exited");
+}
+
+/// The session keeper on `dirs`' data folder and a program it runs, once
+/// it runs one: the keeper's command line names that folder. On macOS and
+/// Linux the keeper's guard is a fork of it with the same command line, so
+/// the keeper is the one whose parent is not such a process, and its
+/// program is a child that is not.
+fn keeper_children(dirs: &TestDirs) -> Option<(u32, u32)> {
+    let table = process_table::Native
+        .processes()
+        .expect("read the process table");
+    let data = dirs.data.to_string_lossy().into_owned();
+    let is_keeper = |pid: u32| {
+        table.iter().any(|row| {
+            row.pid == pid
+                && row
+                    .command_line
+                    .as_deref()
+                    .is_some_and(|line| line.contains(" keeper ") && line.contains(&data))
+        })
+    };
+    let keeper = table
+        .iter()
+        .find(|row| is_keeper(row.pid) && !is_keeper(row.parent_pid))?;
+    let program = table
+        .iter()
+        .find(|row| row.parent_pid == keeper.pid && !is_keeper(row.pid))?;
+    Some((keeper.pid, program.pid))
+}
+
+// ---------------------------------------------------------------------------
+// S9: a host a desktop started is not idle while its keeper holds a session
+// it took back, and its idle exit takes the keeper with it
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s9_a_desktop_host_is_not_idle_while_its_keeper_holds_a_session_and_its_idle_exit_ends_the_keeper()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let mut first = KillableHost::start(&dirs, &agent);
+    let endpoint = dirs.floti_endpoint();
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let folder = dirs.folder("a project");
+    let release = dirs.root().join("release");
+    let args = format!("--fake-exit-on=\"{}\" && exit 0", release.to_string_lossy());
+    let (session, pid) = fake_session(&mut client, &agent, &folder, &args, 1).await;
+    let keeper = keeper_above(pid);
+    drop(client);
+    first.kill();
+
+    let mut second = KillableHost::start_desktop(&dirs, &agent);
+    let ids = |listed: Vec<SessionRecord>| listed.iter().map(|s| s.id).collect::<Vec<_>>();
+    let client = TestClient::connect(&endpoint, TERMINAL).await;
+    drop(client);
+    // Its only client left with nothing but the session it took back
+    // running: it stays, and the next client finds that session there.
+    let mut later = TestClient::connect(&endpoint, TERMINAL).await;
+    assert_eq!(
+        ids(later.request::<SessionList>(&()).await.unwrap()),
+        [session]
+    );
+    drop(later);
+
+    // The session ends with nobody attached: the host goes, and its keeper.
+    std::fs::write(&release, "").unwrap();
+    second.ended().await;
+    until("the keeper ended with the host", || {
+        !alive(keeper) && !alive(pid)
+    })
+    .await;
     assert_eq!(rows(&dirs.data)[0].1, "exited");
 }
 
 // ---------------------------------------------------------------------------
-// S11: a stop for an update ends the keeper too and leaves the rows for the
+// S7: a stop for an update ends the keeper too and leaves the rows for the
 // next start's one restore offer
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s11_a_stop_for_an_update_ends_the_keeper_and_the_next_start_offers_its_sessions() {
+async fn s7_a_stop_for_an_update_ends_the_keeper_and_the_next_start_offers_its_sessions() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let host = in_process(&dirs, &agent, &[]);
@@ -615,11 +752,11 @@ fn s10_the_keeper_opens_no_store_and_runs_no_plugin_history_usage_or_listener() 
 }
 
 // ---------------------------------------------------------------------------
-// S9: a host dropped without a stop leaves its sessions in the keeper
+// S11: a host dropped without a stop leaves its sessions in the keeper
 // ---------------------------------------------------------------------------
 
 #[test]
-fn s9_a_host_dropped_without_a_stop_leaves_its_sessions_running_in_the_keeper() {
+fn s11_a_host_dropped_without_a_stop_leaves_its_sessions_running_in_the_keeper() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let folder = dirs.folder("a project");

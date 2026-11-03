@@ -24,4 +24,5 @@ pub mod secret_seal;
 pub mod socket;
 pub mod standard_error;
 pub mod startup;
+pub mod terminal_size;
 pub mod tray;
