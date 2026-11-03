@@ -297,3 +297,29 @@ describe('NewSessionDialog', () => {
     before.remove()
   })
 })
+
+describe('NewSessionDialog with more than one host connected', () => {
+  const HOSTS = [
+    { id: 'local', name: 'This PC', remote: false },
+    { id: 'h1', name: 'build-box', remote: true }
+  ]
+
+  it('names the host it starts on, lists only what it is given for that host, and switches to another', async () => {
+    const onHostChange = vi.fn()
+    renderDialog({ hosts: HOSTS, host: 'local', onHostChange })
+
+    const switcher = within(dialog()).getByRole('radiogroup', { name: 'Host' })
+    expect(within(switcher).getByRole('radio', { name: 'This PC' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(switcher).getByRole('radio', { name: 'build-box' }).getAttribute('aria-checked')).toBe('false')
+    expect(within(dialog()).getByText(/Start a session on/)).toBeTruthy()
+
+    await userEvent.click(within(switcher).getByRole('radio', { name: 'build-box' }))
+    expect(onHostChange).toHaveBeenCalledWith('h1')
+  })
+
+  it('names no host and offers no switch with only this PC', () => {
+    renderDialog({ hosts: [HOSTS[0]!], host: 'local' })
+    expect(within(dialog()).queryByRole('radiogroup', { name: 'Host' })).toBeNull()
+    expect(within(dialog()).getByText('Start a session in…')).toBeTruthy()
+  })
+})

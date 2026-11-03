@@ -32,6 +32,11 @@ export interface Tab {
    * carries is a name nobody sees.
    */
   badge?: string | undefined
+  /**
+   * The host the tab's session or page is on, named after the title in mono
+   * when it is not this PC. A tab of this PC's names no host.
+   */
+  host?: string | undefined
   closable?: boolean | undefined
   indicator?: TabIndicator | undefined
   /** Hover text. A session tab puts its working directory here. */
@@ -453,6 +458,14 @@ export function TabBar({
                     >
                       {tab.title}
                     </span>
+                    {tab.host !== undefined && (
+                      <span
+                        data-tab-host={tab.host}
+                        className="max-w-[96px] min-w-0 shrink-0 truncate font-mono text-[10.5px] leading-[16px] text-fg-subtle"
+                      >
+                        {tab.host}
+                      </span>
+                    )}
                     {tab.badge !== undefined && (
                       <span
                         data-tab-badge

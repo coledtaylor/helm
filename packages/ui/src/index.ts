@@ -82,6 +82,7 @@ export { NewHarnessDialog, type NewHarnessDialogProps } from './components/NewHa
 export {
   NewSessionDialog,
   type LaunchChoice,
+  type LauncherHost,
   type NewSessionDialogProps
 } from './components/NewSessionDialog'
 export { NewTabMenu, type NewTabMenuProps } from './components/NewTabMenu'
@@ -144,7 +145,7 @@ export {
   type ProfileEditorProps,
   type ProfilePrediction
 } from './components/ProfileEditor'
-export { ProfileList, type ProfileListProps } from './components/ProfileList'
+export { ProfileList, type ProfileListHost, type ProfileListProps } from './components/ProfileList'
 export { ProjectPane, type ProjectPaneProps } from './components/ProjectPane'
 export {
   ProjectRow,
@@ -170,7 +171,14 @@ export {
   type PaneDropZone
 } from './lib/paneGeometry'
 export { Rail, RAIL_ICON, type RailItem, type RailProps } from './components/Rail'
-export { SessionTree, type SessionTreeProps, type TreeReveal, type TreeSession } from './components/SessionTree'
+export {
+  SessionTree,
+  type SessionTreeProps,
+  type TreeHost,
+  type TreeHostActions,
+  type TreeReveal,
+  type TreeSession
+} from './components/SessionTree'
 export {
   SessionEndedBar,
   formatDuration,

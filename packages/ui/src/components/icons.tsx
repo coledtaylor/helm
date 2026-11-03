@@ -207,6 +207,17 @@ export function MonitorIcon(props: IconProps): JSX.Element {
   )
 }
 
+/** A host on another computer: two stacked units of a server. */
+export function ServerIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <rect x="2.5" y="2.5" width="11" height="4.5" rx="1" />
+      <rect x="2.5" y="9" width="11" height="4.5" rx="1" />
+      <path d="M5 4.75h.01M5 11.25h.01" />
+    </Icon>
+  )
+}
+
 /** A profile: stacked planes, because a profile is repos composed into one. */
 export function LayersIcon(props: IconProps): JSX.Element {
   return (

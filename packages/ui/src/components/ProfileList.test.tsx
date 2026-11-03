@@ -73,3 +73,26 @@ describe('ProfileList', () => {
     expect(props.onLaunch).toHaveBeenCalledWith(PLAIN)
   })
 })
+
+describe('ProfileList on a host', () => {
+  it('names the host its profiles are on, in mono for a remote host, with New profile there', async () => {
+    const onNew = vi.fn()
+    const onLaunch = vi.fn()
+    renderList({
+      profiles: [DEV],
+      onLaunch,
+      host: { id: 'h1', name: 'build-box', remote: true, connected: true, onNew }
+    })
+    const section = screen.getByRole('region', { name: 'Profiles on build-box' })
+    expect(section.querySelector('[data-profile-host-header] .font-mono')?.textContent).toBe('build-box')
+    expect(within(section).getByRole('list', { name: 'Saved profiles on build-box' })).toBeTruthy()
+    await userEvent.click(within(section).getByRole('button', { name: 'New profile on build-box' }))
+    expect(onNew).toHaveBeenCalledOnce()
+  })
+
+  it('says a remote host has none yet, rather than the first-run sentence', () => {
+    renderList({ profiles: [], host: { id: 'h1', name: 'build-box', remote: true, connected: false, onNew: vi.fn() } })
+    expect(screen.getByText('No profiles on build-box yet.')).toBeTruthy()
+    expect(screen.getByText('retrying')).toBeTruthy()
+  })
+})

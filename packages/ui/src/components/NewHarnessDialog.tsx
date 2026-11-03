@@ -56,6 +56,15 @@ export interface NewHarnessDialogProps {
     template: string
   }) => void
   onCancel: () => void
+  /**
+   * The host on another computer it creates on, by name. The folder is then a
+   * path typed in that host's own form, prefilled with what it suggests, and
+   * there is no Choose…: the file picker browses this PC's folders only.
+   * Absent, it creates on this PC as it always has.
+   */
+  host?: string | undefined
+  /** A typed folder changed; needed with `host`. */
+  onDirChange?: ((dir: string) => void) | undefined
 }
 
 /**
@@ -88,7 +97,9 @@ export function NewHarnessDialog({
   templateProblems = [],
   preview = null,
   onCreate,
-  onCancel
+  onCancel,
+  host,
+  onDirChange
 }: NewHarnessDialogProps): JSX.Element {
   const [mode, setMode] = useState(initialMode)
   const [name, setName] = useState('')
@@ -116,7 +127,9 @@ export function NewHarnessDialog({
 
   return (
     <Overlay
-      aria-label={mode === 'new' ? 'Create a harness' : 'Turn a folder into a harness'}
+      aria-label={
+        (mode === 'new' ? 'Create a harness' : 'Turn a folder into a harness') + (host === undefined ? '' : ` on ${host}`)
+      }
       data-harness-dialog={mode}
       className="max-w-[520px]"
       onDismiss={onCancel}
@@ -125,6 +138,14 @@ export function NewHarnessDialog({
         <HelmMarkIcon width={13} height={13} className="shrink-0 text-accent" />
         <h2 className="text-[15px] font-medium tracking-tight text-fg">
           {mode === 'new' ? 'New harness' : 'Turn a folder into a harness'}
+          {host !== undefined && (
+            <>
+              {' on '}
+              <span data-harness-host className="font-mono text-[13px]">
+                {host}
+              </span>
+            </>
+          )}
         </h2>
         <span className="flex-1" />
         <button
@@ -140,8 +161,9 @@ export function NewHarnessDialog({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-2 pb-1">
         <p className="text-[11px] leading-[1.55] text-fg-muted">
-          A harness is a working root with its own config, repos and sessions. Projects and Config
-          always resolve inside one.
+          {host === undefined
+            ? 'A harness is a working root with its own config, repos and sessions. Projects and Config always resolve inside one.'
+            : `A harness there is a folder on ${host}, and its sessions run there. It is created on ${host}; nothing is written on this PC.`}
         </p>
 
         <div
@@ -202,22 +224,37 @@ export function NewHarnessDialog({
             {mode === 'new' ? 'Create it inside' : 'The folder'}
           </span>
           <span className="flex gap-2">
-            <input
-              readOnly
-              value={dir}
-              aria-label={mode === 'new' ? 'Parent folder' : 'Folder'}
-              data-harness-dir
-              placeholder="Choose a folder…"
-              className={cn(inputClass, 'min-w-0 flex-1 font-mono text-[11px] text-fg-muted')}
-            />
-            <button
-              type="button"
-              data-harness-choose
-              onClick={onChooseDir}
-              className="h-[30px] shrink-0 rounded-well border border-border-strong px-2.5 text-[12px] text-fg transition-colors hover:bg-hover"
-            >
-              Choose…
-            </button>
+            {host === undefined ? (
+              <>
+                <input
+                  readOnly
+                  value={dir}
+                  aria-label={mode === 'new' ? 'Parent folder' : 'Folder'}
+                  data-harness-dir
+                  placeholder="Choose a folder…"
+                  className={cn(inputClass, 'min-w-0 flex-1 font-mono text-[11px] text-fg-muted')}
+                />
+                <button
+                  type="button"
+                  data-harness-choose
+                  onClick={onChooseDir}
+                  className="h-[30px] shrink-0 rounded-well border border-border-strong px-2.5 text-[12px] text-fg transition-colors hover:bg-hover"
+                >
+                  Choose…
+                </button>
+              </>
+            ) : (
+              // A path on that host, typed in its own form: the picker would browse this PC.
+              <input
+                value={dir}
+                onChange={(e) => onDirChange?.(e.target.value)}
+                spellCheck={false}
+                aria-label={mode === 'new' ? `Parent folder on ${host}` : `Folder on ${host}`}
+                data-harness-dir
+                placeholder={`A folder on ${host}`}
+                className={cn(inputClass, 'min-w-0 flex-1 font-mono text-[11px]')}
+              />
+            )}
           </span>
           <span className="mt-[5px] block text-[10px] text-fg-subtle">
             {mode === 'new'

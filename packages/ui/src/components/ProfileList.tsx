@@ -8,6 +8,7 @@ import {
   LayersIcon,
   PencilIcon,
   PinIcon,
+  PlusIcon,
   TrashIcon
 } from './icons'
 
@@ -27,6 +28,23 @@ export interface ProfileListProps {
   onTogglePin: (profile: Profile) => void
   /** New pinned order, as ids. Only pinned profiles are reorderable. */
   onReorder: (ids: number[]) => void
+  /**
+   * The host these profiles are saved on, while the Profiles view lists more
+   * than one: a header names it (a remote host's in mono) and offers New
+   * profile there, and the list takes only the room its rows need, so each
+   * host's list follows the last. Absent, it is this PC's list alone.
+   */
+  host?: ProfileListHost | undefined
+}
+
+/** The host a list of profiles is saved on, as its header names it. */
+export interface ProfileListHost {
+  id: string
+  name: string
+  remote: boolean
+  /** Whether the window reaches it now; its rows dim while it does not. */
+  connected: boolean
+  onNew: () => void
 }
 
 /**
@@ -47,7 +65,8 @@ export function ProfileList({
   onDelete,
   onExport,
   onTogglePin,
-  onReorder
+  onReorder,
+  host
 }: ProfileListProps): JSX.Element {
   const [dragging, setDragging] = useState<number | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
@@ -85,17 +104,52 @@ export function ProfileList({
   return (
     // No header of its own: it is the sidebar's Profiles view, and the island's
     // header names it and carries New and Import.
-    <section className="flex min-h-0 flex-1 flex-col">
+    <section
+      data-profile-host={host?.id}
+      aria-label={host === undefined ? undefined : `Profiles on ${host.name}`}
+      className={cn(
+        'flex flex-col',
+        host === undefined ? 'min-h-0 flex-1' : 'shrink-0',
+        host !== undefined && !host.connected && 'opacity-50'
+      )}
+    >
+      {host !== undefined && (
+        <div
+          data-profile-host-header={host.id}
+          className="group/host mx-1.5 mt-1.5 flex h-6 items-center gap-1.5 rounded-raised pr-1 pl-1.5 text-[11px] font-medium text-fg-muted"
+        >
+          <span
+            aria-hidden
+            className={cn('size-1.5 shrink-0 rounded-full border-[1.5px]', host.connected ? 'border-success' : 'border-warn')}
+          />
+          <span className={cn('min-w-0 truncate', host.remote && 'font-mono text-[10.5px]')}>{host.name}</span>
+          {!host.connected && <span className="shrink-0 font-normal text-warn">retrying</span>}
+          <span className="flex-1" />
+          <button
+            type="button"
+            onClick={host.onNew}
+            title={`New profile on ${host.name}`}
+            aria-label={`New profile on ${host.name}`}
+            className="grid size-5 place-items-center rounded-raised text-fg-subtle opacity-0 transition-opacity group-hover/host:opacity-100 hover:bg-hover hover:text-fg focus-visible:opacity-100"
+          >
+            <PlusIcon width={12} height={12} />
+          </button>
+        </div>
+      )}
 
       {profiles.length === 0 ? (
         <p className="px-3.5 pt-1 pb-3 text-[12px] leading-relaxed text-fg-subtle">
-          A profile launches one working directory with other repos&rsquo; skills and agents
-          composed in.
+          {host === undefined || !host.remote
+            ? 'A profile launches one working directory with other repos’ skills and agents composed in.'
+            : `No profiles on ${host.name} yet.`}
         </p>
       ) : (
         <ul
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-1.5"
-          aria-label="Saved profiles"
+          className={cn(
+            'px-1.5 pb-1.5',
+            host === undefined && 'min-h-0 flex-1 overflow-y-auto overscroll-contain'
+          )}
+          aria-label={host === undefined ? 'Saved profiles' : `Saved profiles on ${host.name}`}
         >
           {profiles.map((profile, index) => {
             const isPinned = profile.pinnedOrder !== null

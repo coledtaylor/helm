@@ -22,6 +22,7 @@ import {
 } from '../lib/launcher'
 import { PROJECT_KIND_ICON } from '../lib/projectIcons'
 import { ROW_SELECTED } from '../lib/rows'
+import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatMoment } from '../lib/time'
 import { HistoryIcon, LayersIcon, TerminalIcon } from './icons'
 import { LaunchSentence, RunningHere } from './LaunchNotes'
@@ -66,6 +67,25 @@ export interface NewSessionDialogProps {
    */
   onTerminal?: ((project: Project, beside: boolean) => void) | undefined
   onDismiss: () => void
+  /**
+   * The hosts it can start on, this PC first, while more than one is
+   * connected. The launcher names the one it starts on (`host`) and offers a
+   * switch to the others; what it lists (`projects`, `profiles`, `recency`) is
+   * that host's. Absent, it names no host: there is only this PC.
+   */
+  hosts?: readonly LauncherHost[] | undefined
+  /** The id of the host it starts on, one of `hosts`. */
+  host?: string | undefined
+  /** Another host was chosen: the caller lists that host's folders and profiles instead. */
+  onHostChange?: ((host: string) => void) | undefined
+}
+
+/** A host the launcher can start a session on. */
+export interface LauncherHost {
+  id: string
+  name: string
+  /** A host on another computer, whose name is set in mono. */
+  remote: boolean
 }
 
 /**
@@ -127,7 +147,10 @@ export function NewSessionDialog({
   now,
   onStart,
   onTerminal,
-  onDismiss
+  onDismiss,
+  hosts,
+  host,
+  onHostChange
 }: NewSessionDialogProps): JSX.Element {
   const ids = useId()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -303,7 +326,38 @@ export function NewSessionDialog({
           // around one thing.
           className="min-w-0 flex-1 bg-transparent text-[15px] text-fg outline-none placeholder:text-fg-subtle focus:outline-none"
         />
-        <span className="shrink-0 text-[11.5px] text-fg-subtle">Start a session in…</span>
+        {hosts !== undefined && hosts.length > 1 ? (
+          <span className="flex shrink-0 items-center gap-2 text-[11.5px] text-fg-subtle">
+            Start a session on
+            <span
+              role="radiogroup"
+              aria-label="Host"
+              className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+            >
+              {hosts.map((each) => (
+                <button
+                  key={each.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={each.id === host}
+                  data-launcher-host={each.id}
+                  onClick={() => {
+                    if (each.id !== host) onHostChange?.(each.id)
+                  }}
+                  className={cn(
+                    'rounded-raised px-2 py-0.5 text-[11.5px] transition-colors',
+                    each.remote && 'font-mono text-[11px]',
+                    each.id === host ? SEGMENT_ON : 'text-fg-muted hover:text-fg'
+                  )}
+                >
+                  {each.name}
+                </button>
+              ))}
+            </span>
+          </span>
+        ) : (
+          <span className="shrink-0 text-[11.5px] text-fg-subtle">Start a session in…</span>
+        )}
       </header>
 
       <div
