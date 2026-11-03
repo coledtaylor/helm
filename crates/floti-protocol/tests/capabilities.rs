@@ -13,6 +13,7 @@ fn hello(capabilities: &[&str]) -> Hello {
         client: ClientInfo {
             name: "tomorrow's client".into(),
             kind: ClientKind::Phone,
+            device_name: None,
         },
         capabilities: capabilities.iter().map(|name| (*name).to_owned()).collect(),
     }

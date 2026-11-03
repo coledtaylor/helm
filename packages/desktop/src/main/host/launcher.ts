@@ -11,9 +11,11 @@ import { HostRefusedError, connectHost, type HostConnection } from './client'
  * program:
  *
  * - `floti bridge <client folder>` runs the client's half of the Noise
- *   handshake from the keys in Helm's client folder, enrolling as the first
- *   admin with the one-time code the host wrote when it has pinned no host,
- *   then carries protocol frames on its standard input and output. Its exit
+ *   handshake from the keys in Helm's client folder, then carries protocol
+ *   frames on its standard input and output. With no host key pinned yet it
+ *   holds the host to the key in the host's own data folder, which only this
+ *   OS user can read, and pins it once the host has proven it: reaching the
+ *   host's socket as this user is the access, and nothing is asked. Its exit
  *   status says why it ended (`BRIDGE_EXIT`).
  * - `floti host --desktop <Helm> [--desktop-arg <app>]` is the host, started
  *   by Helm when no host answered, and told which Helm started it (the
@@ -25,7 +27,7 @@ import { HostRefusedError, connectHost, type HostConnection } from './client'
  *   A host still ending its sessions holds its folders until it has, so a
  *   start that finds them held waits it out, up to the start deadline.
  *
- * Helm never opens the enrolment file or a key: the bridge reads them, and
+ * Helm never opens a key: the bridge reads them, and
  * says what went wrong as an exit status. Nothing the bridge prints is
  * logged, nor anything on the host's standard output, and the one line shown
  * is a host's reason for not starting, which it writes to be shown and which
@@ -48,8 +50,7 @@ export const BRIDGE_EXIT = {
   hostNotProven: 5,
   hostClosed: 6,
   transportNotStarted: 7,
-  transportEnded: 8,
-  pairingExpired: 9
+  transportEnded: 8
 } as const
 
 /** The line `floti host` prints once it listens, the first on its standard output. */
@@ -144,6 +145,8 @@ export interface LauncherDeps {
   exists: (path: string) => boolean
   spawn: (command: string, args: string[], options: SpawnOptions) => HostChild
   appVersion: string
+  /** The computer's name, which the desktop's `hello` gives as this device's name. */
+  deviceName?: string
   log: (line: string) => void
   setTimeout: (run: () => void, ms: number) => unknown
   clearTimeout: (timer: unknown) => void
@@ -297,9 +300,7 @@ function bridgeFailure(exit: Exit, binary: string, hostStarted: boolean): LocalH
           : 'No local host answered on its socket'
       )
     case BRIDGE_EXIT.notPinned:
-      return failure(
-        'Helm is not paired with the local host, and the host offered no one-time code for it to enrol with'
-      )
+      return failure('Helm has no key pinned for the local host, and no local host has started on this computer yet')
     case BRIDGE_EXIT.hostNotProven:
       return failure('The local host did not prove the key Helm expected, so Helm did not connect to it')
     case BRIDGE_EXIT.hostClosed:
@@ -374,6 +375,7 @@ export async function startLocalHost(
       const connection = await connectHost({
         transport: { input: child.stdout, output: child.stdin },
         appVersion: deps.appVersion,
+        ...(deps.deviceName !== undefined ? { deviceName: deps.deviceName } : {}),
         log: deps.log
       })
       return { connection, exited, child }
@@ -390,26 +392,27 @@ export async function startLocalHost(
   let attempt = await bridge()
   let host: StartedHost | null = null
   const first = 'exit' in attempt && attempt.exit.error === undefined ? attempt.exit.code : null
-  // A client that has pinned no host does not knock on the socket, so "not
-  // paired, no code" is also what it says when no host is running at all; a
-  // host started then writes the code it enrols with. One already running
-  // refuses to start a second on its folders, and the sentence stays "not paired".
+  // A client that has pinned no host key does not knock on the socket, so
+  // "nothing pinned, no host key to learn" is also what it says when no host
+  // has ever run here; a host started then writes the key the bridge pins at
+  // its first connection. One already running refuses to start a second on
+  // its folders, and the sentence stays "nothing pinned".
   if (mayStart && (first === BRIDGE_EXIT.unreachable || first === BRIDGE_EXIT.notPinned)) {
     deps.log(
       first === BRIDGE_EXIT.unreachable
         ? 'host: no local host answered; starting one'
-        : 'host: not paired with a host and no code waits; starting one'
+        : 'host: no host key pinned and none to learn yet; starting one'
     )
-    const unpaired = attempt
+    const unpinned = attempt
     try {
       // A host still ending its sessions does not answer but holds the
       // folders; one that answers and only refuses Helm is not waited for.
       host = await startHost(binary, hostArgs, hostOptions, deps, first === BRIDGE_EXIT.unreachable)
     } catch (error) {
-      // Only a host that found one already running leaves "not paired" the
-      // reason; one that stopped for a reason of its own says that.
-      if (first === BRIDGE_EXIT.notPinned && error instanceof HostFoldersHeld && 'exit' in unpaired) {
-        throw bridgeFailure(unpaired.exit, binary, false)
+      // Only a host that found one already running leaves "nothing pinned"
+      // the reason; one that stopped for a reason of its own says that.
+      if (first === BRIDGE_EXIT.notPinned && error instanceof HostFoldersHeld && 'exit' in unpinned) {
+        throw bridgeFailure(unpinned.exit, binary, false)
       }
       throw error
     }
@@ -463,8 +466,8 @@ export interface PageBridge {
 
 /**
  * Starts a page's bridge to the host that is already running: main opens one
- * only after its own link has connected, so enrolment is done and the host
- * is listening. `data` gets the host's bytes, unread.
+ * only after its own link has connected, so the host key is pinned and the
+ * host is listening. `data` gets the host's bytes, unread.
  */
 export function openPageBridge(
   places: HostPlaces,

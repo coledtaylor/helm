@@ -89,18 +89,12 @@ zeroize.workspace = true
 # Only the per-OS implementations under src/platform use these.
 [target.'cfg(windows)'.dependencies]
 junction.workspace = true
-windows.workspace = true
-windows-future.workspace = true
 windows-sys.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-block2.workspace = true
-objc2.workspace = true
-objc2-foundation.workspace = true
-objc2-local-authentication.workspace = true
 security-framework.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

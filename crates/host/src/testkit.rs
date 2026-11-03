@@ -13,16 +13,15 @@
 //! - [`RunningHost`]: a host serving on a thread and runtime of its own,
 //!   which the test stops.
 //! - [`TestClient`]: a protocol client that runs the Noise handshake as the
-//!   testkit's device ([`test_device_key`]). [`RunningHost`] pairs that
-//!   device into its host's registry as an admin before serving, so the host
-//!   holds no enrolment code, and records where the host keeps its key, so a
-//!   test connects with an endpoint and nothing else; [`pair_test_device`]
+//!   testkit's device ([`test_device_key`]), or as a new device of a test's
+//!   own, which the host serves as it serves any key that completes the
+//!   handshake. [`RunningHost`] records where the host keeps its key, so a
+//!   test connects with an endpoint and nothing else; [`record_test_host`]
 //!   does the same for a host started another way, such as the `floti host`
-//!   executable. A test of enrolment starts its host unpaired
-//!   ([`RunningHost::start_unpaired`]).
+//!   executable.
 //! - [`HostProcess`] and [`run_floti`]: the `floti` executable, pointed at a
 //!   [`TestDirs`] ([`TestDirs::floti_command`]), as a host the test stops and
-//!   as a command run to its end, such as `floti devices`.
+//!   as a command run to its end, such as `floti version`.
 //!
 //! A test leaves nothing behind: [`TestDirs`] fails the test that leaves a
 //! file in its tree open, and a dropped [`RunningHost`] stops its host before
@@ -59,7 +58,6 @@ use crate::agent::{
     AgentBackend, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder, LaunchRequest,
     LaunchSpec, Registration, ResumeRequest, Resumer,
 };
-use crate::devices::{DeviceRegistry, Role};
 use crate::platform::folders::{Folders, UserEnv};
 use crate::platform::socket::{Endpoint, LocalSocket, Native as NativeSocket};
 use crate::server::{Host, HostConfig, Stopper};
@@ -67,7 +65,7 @@ use crate::server::{Host, HostConfig, Stopper};
 /// The variable naming the folder the fake agent records each run in.
 pub const FAKE_AGENT_LOG_VAR: &str = "FLOTI_FAKE_AGENT_LOG";
 
-/// The name the testkit's device is paired under.
+/// The name the testkit's device gives in its `hello`.
 pub const TEST_DEVICE_NAME: &str = "floti host tests";
 
 /// The device every [`TestClient`] in this test process connects as. Its key
@@ -76,7 +74,7 @@ static TEST_DEVICE: LazyLock<KeyPair> =
     LazyLock::new(|| KeyPair::generate().expect("make the testkit's device key"));
 
 /// For each endpoint a test host serves at, the data folder that host keeps
-/// its key and registry in.
+/// its key in.
 static HOSTS: LazyLock<Mutex<HashMap<Endpoint, PathBuf>>> = LazyLock::new(Default::default);
 
 fn test_device() -> &'static KeyPair {
@@ -89,29 +87,14 @@ pub fn test_device_key() -> PublicKey {
 }
 
 /// Says the host serving at `endpoint` keeps its data in `data`, so a
-/// [`TestClient`] pins that host's key, without pairing anything yet.
-fn record_host(endpoint: &Endpoint, data: &Path) {
+/// [`TestClient`] holds that host to the key kept there: what
+/// [`RunningHost`] does before it serves, for a host started another way,
+/// such as the `floti host` executable.
+pub fn record_test_host(endpoint: &Endpoint, data: &Path) {
     HOSTS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .insert(endpoint.clone(), data.to_path_buf());
-}
-
-/// Pairs the testkit's device with the host whose data folder is `data`,
-/// and records that the host serving at `endpoint` is that one: what
-/// [`RunningHost`] does before it serves, for a host started another way,
-/// such as the `floti host` executable. The folder is made if it is new.
-pub fn pair_test_device(endpoint: &Endpoint, data: &Path) {
-    record_host(endpoint, data);
-    pair_into(data);
-}
-
-/// Pairs the testkit's device as an admin, so a host started after it holds
-/// no enrolment code and every test that does not enrol is served as before.
-fn pair_into(data: &Path) {
-    DeviceRegistry::in_data_folder(data)
-        .pair(test_device_key(), TEST_DEVICE_NAME, Role::Admin)
-        .unwrap_or_else(|err| panic!("pair the testkit's device in {}: {err}", data.display()));
 }
 
 /// The data folder of the host serving at `endpoint`.
@@ -124,7 +107,7 @@ fn data_folder_of(endpoint: &Endpoint) -> PathBuf {
         .unwrap_or_else(|| {
             panic!(
                 "no test host is known at {endpoint}: start it with RunningHost, take its \
-                 endpoint from TestDirs::endpoint, or name it to pair_test_device"
+                 endpoint from TestDirs::endpoint, or name it to record_test_host"
             )
         })
 }
@@ -193,18 +176,6 @@ impl TestDirs {
             self.data
                 .join(crate::server::TEST_HANDSHAKE_DEADLINE_MARKER),
             deadline.as_millis().to_string(),
-        )
-        .expect("mark the test's data folder");
-    }
-
-    /// Moves the clock of a host over this tree's data folder `ahead` of the
-    /// real one, read at every check, so a test steps a request to pair to
-    /// its expiry, or a device's presence past five minutes, rather than
-    /// waiting it out.
-    pub fn step_host_clock(&self, ahead: Duration) {
-        std::fs::write(
-            self.data.join(crate::server::TEST_HOST_CLOCK_MARKER),
-            ahead.as_millis().to_string(),
         )
         .expect("mark the test's data folder");
     }
@@ -287,7 +258,7 @@ impl TestDirs {
     /// in this tree's data folder.
     pub fn endpoint(&self) -> Endpoint {
         let endpoint = NativeSocket.endpoint(&self.runtime, &unique_name());
-        record_host(&endpoint, &self.data);
+        record_test_host(&endpoint, &self.data);
         endpoint
     }
 }
@@ -394,14 +365,6 @@ impl RunningHost {
         Self::start_with(config, |_| ()).0
     }
 
-    /// Starts a host on `config` without pairing the testkit's device first,
-    /// and serves: for a test of a host waiting for its first admin. A
-    /// [`TestClient`] connecting to it pairs the testkit's device then.
-    pub fn start_unpaired(config: HostConfig) -> Self {
-        record_host(&config.endpoint, &config.folders.data);
-        Self::serve(config, |_| ()).0
-    }
-
     /// Starts a host on `config`, hands it to `look` before it serves, and
     /// serves: for a test that looks at the host itself, such as at the
     /// channels it serves. `look` runs on the host's thread.
@@ -409,8 +372,7 @@ impl RunningHost {
         config: HostConfig,
         look: impl FnOnce(&Host) -> T + Send + 'static,
     ) -> (Self, T) {
-        // Before it serves: a test's first client is let in.
-        pair_test_device(&config.endpoint, &config.folders.data);
+        record_test_host(&config.endpoint, &config.folders.data);
         Self::serve(config, look)
     }
 

@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
 use floti_host::client::{ClientKeys, DEVICE_KEY_FILE, PINNED_HOST_FILE};
-use floti_host::devices::{DeviceRegistry, Role};
 use floti_host::fake_agent;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use floti_host::platform::private_files::{Native as NativeFiles, PrivateFiles};
@@ -23,9 +22,7 @@ use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::{
     Endpoint, LocalListener, LocalSocket, LocalStream, Native as NativeSocket,
 };
-use floti_host::server::{
-    ENROLMENT_FILE, FIRST_ADMIN_NAME, HostConfig, local_endpoint, read_enrolment,
-};
+use floti_host::server::{HOST_KEY_FILE, HostConfig, host_public_key, local_endpoint};
 use floti_host::testkit::{FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
@@ -34,7 +31,7 @@ use floti_protocol::channels::sessions::{
     SessionList, SessionStart, SessionStreamOpen, SessionTerminal, StartSessionRequest,
 };
 use floti_protocol::message::{ClientInfo, ClientKind, Hello, Request, StreamData, StreamOpen};
-use floti_protocol::noise::{ENROLMENT_CODE_LEN, EnrolmentCode, KeyPair, PublicKey};
+use floti_protocol::noise::{KeyPair, PublicKey};
 use floti_protocol::{
     Bytes, FrameDecoder, Knowable, Message, PROTOCOL_VERSION, StreamChannel, encode_frame,
 };
@@ -188,6 +185,7 @@ impl Bridge {
             client: ClientInfo {
                 name: "a bridge test".to_owned(),
                 kind: ClientKind::Desktop,
+                device_name: None,
             },
             capabilities: vec!["terminal".to_owned()],
         }));
@@ -314,19 +312,6 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
             .any(|window| window == needle)
 }
 
-/// Fails the test when `printed` holds `code` in any form it could be
-/// printed in.
-fn assert_code_absent(code: &EnrolmentCode, printed: &[u8], what: &str) {
-    let lower = code.expose_hex();
-    for form in [
-        lower.as_bytes(),
-        lower.to_uppercase().as_bytes(),
-        code.expose_secret(),
-    ] {
-        assert!(!contains(printed, form), "the code is in {what}");
-    }
-}
-
 /// Fails the test when `printed` holds any of `keys` whole, in hex. A key
 /// is named by its fingerprint, which is shorter.
 fn assert_keys_absent(keys: &[PublicKey], printed: &[u8], what: &str) {
@@ -393,17 +378,19 @@ async fn tapped(tap: JoinHandle<(Vec<u8>, Vec<u8>)>) -> (Vec<u8>, Vec<u8>) {
 }
 
 // ---------------------------------------------------------------------------
-// S13: enrol or connect pinned, then relay frames unchanged and in order
+// Learn the host's key from its key file, or connect pinned, then relay
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s13_the_bridge_enrols_as_first_admin_then_connects_pinned_and_relays_frames_in_order() {
+async fn s1_a_bridge_with_nothing_pinned_learns_the_hosts_key_pins_it_once_proven_and_relays_frames_in_order()
+ {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
-    let host = RunningHost::start_unpaired(config(&dirs, &agent));
-    let written = read_enrolment(&dirs.data)
+    let host = RunningHost::start(config(&dirs, &agent));
+    let host_key = host_public_key(&dirs.data)
         .unwrap()
-        .expect("the host waits for its first admin");
+        .expect("the host made its key");
+    // A folder the host has never seen: no approval, code or role is asked.
     let folder = dirs.root().join("desk client");
 
     let mut bridge = Bridge::spawn(bridge_command(&dirs, &dirs.runtime, &folder));
@@ -442,24 +429,15 @@ async fn s13_the_bridge_enrols_as_first_admin_then_connects_pinned_and_relays_fr
         "{screen:?}"
     );
 
-    // Enrolled as the first admin, and the code was used.
+    // It pinned the key the host proved.
     let keys = ClientKeys::open(&folder).unwrap();
-    assert_eq!(keys.pinned_host(), Some(written.host_key));
-    let devices = DeviceRegistry::in_data_folder(&dirs.data)
-        .devices()
-        .unwrap();
-    assert_eq!(devices.len(), 1, "{devices:?}");
-    assert_eq!(devices[0].key, keys.device_key());
-    assert_eq!(devices[0].role, Role::Admin);
-    assert_eq!(devices[0].name, FIRST_ADMIN_NAME);
-    assert!(!dirs.data.join(ENROLMENT_FILE).exists());
-
+    assert_eq!(keys.pinned_host(), Some(host_key));
     bridge.close_stdin();
     let first = bridge.ended().await;
     assert_eq!(first.code, Some(0), "{first:?}");
     assert_eq!(first.stderr, "", "{first:?}");
 
-    // With the code gone, the same folder connects pinned and is served.
+    // The same folder connects pinned and is served.
     let mut again = Bridge::spawn(bridge_command(&dirs, &dirs.runtime, &folder));
     again.welcomed().await;
     let listed = again.request::<SessionList>(1, &()).await;
@@ -484,16 +462,12 @@ async fn s13_the_bridge_enrols_as_first_admin_then_connects_pinned_and_relays_fr
             .unwrap()
     );
     for ended in [&first, &second] {
-        assert_code_absent(&written.code, ended.stderr.as_bytes(), "the bridge's log");
-        assert_code_absent(&written.code, &ended.stdout, "the bridge's output");
         assert_keys_absent(
-            &[written.host_key, keys.device_key()],
+            &[host_key, keys.device_key()],
             ended.stderr.as_bytes(),
             "the bridge's log",
         );
     }
-    let kept: Vec<u8> = std::fs::read(folder.join(PINNED_HOST_FILE)).unwrap();
-    assert_code_absent(&written.code, &kept, "the client's folder");
     host.stop(HostStopReason::Stop).await;
 }
 
@@ -515,20 +489,15 @@ async fn s14_with_no_host_answering_the_bridge_exits_3_saying_none_answered() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s14_with_no_pinned_key_and_no_code_file_the_bridge_exits_4_saying_it_must_be_paired() {
+async fn s14_with_nothing_pinned_and_no_host_started_the_bridge_exits_4_saying_none_has_started() {
     let dirs = TestDirs::new();
-    let agent = fake_agent!(&dirs);
-    // A host with an admin keeps no code file.
-    let host = RunningHost::start(config(&dirs, &agent));
-    assert!(!dirs.data.join(ENROLMENT_FILE).exists());
     let folder = dirs.root().join("desk client");
     let ended = Bridge::spawn(bridge_command(&dirs, &dirs.runtime, &folder))
         .ended()
         .await;
-    assert_ended(&ended, 4, "pair it with a host first");
+    assert_ended(&ended, 4, "no host has started on");
     assert!(ended.stdout.is_empty(), "{ended:?}");
     assert_eq!(names_in(&folder), [PathBuf::from(DEVICE_KEY_FILE)]);
-    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -564,22 +533,18 @@ async fn s14_a_host_that_does_not_prove_the_pinned_key_gets_only_the_first_messa
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s14_a_host_that_does_not_prove_the_code_files_key_gets_only_the_first_message_and_the_bridge_exits_5()
+async fn s14_a_host_that_does_not_prove_the_key_its_key_file_names_gets_only_the_first_message_and_the_bridge_exits_5()
  {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
-    let host = RunningHost::start_unpaired(config(&dirs, &agent));
-    let genuine = read_enrolment(&dirs.data).unwrap().expect("a code file");
-    let impostor = KeyPair::generate().unwrap().public();
+    let host = RunningHost::start(config(&dirs, &agent));
+    let genuine = host_public_key(&dirs.data).unwrap().expect("a host key");
+    // The key file now names another key than the one the host holds.
+    let impostor = KeyPair::generate().unwrap();
     NativeFiles
         .write(
-            &dirs.data.join(ENROLMENT_FILE),
-            format!(
-                r#"{{"format":1,"hostKey":"{}","code":"{}"}}"#,
-                impostor.to_hex(),
-                genuine.code.expose_hex().as_str()
-            )
-            .as_bytes(),
+            &dirs.data.join(HOST_KEY_FILE),
+            impostor.private().expose_secret(),
         )
         .unwrap();
     let folder = dirs.root().join("desk client");
@@ -593,28 +558,17 @@ async fn s14_a_host_that_does_not_prove_the_code_files_key_gets_only_the_first_m
     let ended = Bridge::spawn(bridge_command(&dirs, &tap_runtime, &folder))
         .ended()
         .await;
-    assert_ended(&ended, 5, "did not prove the key its enrolment file names");
+    assert_ended(&ended, 5, "did not prove the key it was known by");
     assert!(ended.stdout.is_empty(), "{ended:?}");
     let (to_host, to_client) = tapped(relay).await;
-    assert_eq!(
-        to_host.len(),
-        MESSAGE_1 + ENROLMENT_CODE_LEN,
-        "only the first handshake message"
-    );
+    assert_eq!(to_host.len(), MESSAGE_1, "only the first handshake message");
     assert!(to_client.is_empty());
-    assert_code_absent(&genuine.code, ended.stderr.as_bytes(), "the bridge's log");
     assert_keys_absent(
-        &[impostor, genuine.host_key],
+        &[impostor.public(), genuine],
         ended.stderr.as_bytes(),
         "the bridge's log",
     );
     assert_eq!(names_in(&folder), [PathBuf::from(DEVICE_KEY_FILE)]);
-    assert!(
-        DeviceRegistry::in_data_folder(&dirs.data)
-            .devices()
-            .unwrap()
-            .is_empty()
-    );
     host.stop(HostStopReason::Stop).await;
 }
 
@@ -626,7 +580,7 @@ async fn s14_a_host_that_does_not_prove_the_code_files_key_gets_only_the_first_m
 async fn s15_closing_the_bridges_stdin_exits_0_and_the_host_ends_none_of_its_sessions() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
-    let host = RunningHost::start_unpaired(config(&dirs, &agent));
+    let host = RunningHost::start(config(&dirs, &agent));
     let folder = dirs.root().join("desk client");
     let mut bridge = Bridge::spawn(bridge_command(&dirs, &dirs.runtime, &folder));
     bridge.welcomed().await;
@@ -682,7 +636,7 @@ async fn s15_closing_the_bridges_stdin_exits_0_and_the_host_ends_none_of_its_ses
 async fn s15_the_host_closing_the_connection_ends_the_bridge_with_6_and_one_line() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
-    let host = RunningHost::start_unpaired(config(&dirs, &agent));
+    let host = RunningHost::start(config(&dirs, &agent));
     let folder = dirs.root().join("desk client");
     let mut bridge = Bridge::spawn(bridge_command(&dirs, &dirs.runtime, &folder));
     bridge.welcomed().await;
@@ -696,7 +650,7 @@ async fn s15_the_host_closing_the_connection_ends_the_bridge_with_6_and_one_line
 async fn a_frame_on_the_bridges_stdin_that_does_not_decode_ends_it_with_1_and_one_line() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
-    let host = RunningHost::start_unpaired(config(&dirs, &agent));
+    let host = RunningHost::start(config(&dirs, &agent));
     let folder = dirs.root().join("desk client");
     let mut bridge = Bridge::spawn(bridge_command(&dirs, &dirs.runtime, &folder));
     bridge.welcomed().await;
@@ -722,4 +676,64 @@ fn a_bridge_given_no_client_folder_exits_2_with_the_usage() {
         String::from_utf8_lossy(&output.stderr).contains("floti bridge <client folder>"),
         "{output:?}"
     );
+}
+
+#[test]
+fn s10_retired_commands_and_bridge_options_fail_as_a_usage_error_and_the_usage_names_none_of_them()
+{
+    let dirs = TestDirs::new();
+    let folder = dirs.root().join("desk client");
+    let folder = folder.to_string_lossy().into_owned();
+    let retired: [&[&str]; 9] = [
+        &["devices"],
+        &["devices", "list"],
+        &["devices", "approve", "ab12cd"],
+        &["devices", "revoke", "ab12cd"],
+        &["presence"],
+        &["bridge", &folder, "--pair", "a laptop"],
+        &["bridge", &folder, "--approve", "ab12cd"],
+        &[
+            "bridge",
+            &folder,
+            "--pair",
+            "a laptop",
+            "--",
+            "ssh",
+            "me@build box",
+        ],
+        &[
+            "bridge",
+            &folder,
+            "--approve",
+            "ab12cd",
+            "--",
+            "ssh",
+            "me@build box",
+        ],
+    ];
+    for args in retired {
+        let output = Command::new(env!("CARGO_BIN_EXE_floti"))
+            .args(args)
+            .env(DATA_DIR_VAR, &dirs.data)
+            .env(RUNTIME_DIR_VAR, &dirs.runtime)
+            .stdin(Stdio::null())
+            .output()
+            .expect("run floti");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        let usage = String::from_utf8_lossy(&output.stderr);
+        assert!(usage.starts_with("usage: floti host"), "{args:?}: {usage}");
+        for gone in [
+            "devices",
+            "presence",
+            "--pair",
+            "--approve",
+            "approve",
+            "revoke",
+        ] {
+            assert!(!usage.contains(gone), "{args:?} names {gone}: {usage}");
+        }
+    }
+    // Nothing ran: no client folder was made.
+    assert!(!dirs.root().join("desk client").exists());
 }

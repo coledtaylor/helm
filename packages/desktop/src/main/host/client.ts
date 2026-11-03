@@ -22,6 +22,8 @@ export interface MainConnectOptions {
   transport: HostTransport
   /** Helm's own version, for the `hello`'s client name. */
   appVersion: string
+  /** The computer's name, which the `hello` gives as this device's name. */
+  deviceName?: string
   /** A line for Helm's log. Never given a payload, a frame or stream bytes. */
   log?: (line: string) => void
 }
@@ -62,6 +64,7 @@ export function connectHost(options: MainConnectOptions): Promise<HostConnection
     transport: streamTransport(options.transport.input, options.transport.output),
     appVersion: options.appVersion,
     capabilities: MAIN_CAPABILITIES,
+    ...(options.deviceName !== undefined ? { deviceName: options.deviceName } : {}),
     ...(options.log !== undefined ? { log: options.log } : {})
   })
 }

@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use floti_host::devices::Role;
 use floti_host::platform::socket::Endpoint;
 use floti_host::plugins::background::{
     BackgroundEvent, BackgroundLaunch, BackgroundRuntime, NoBackground, ToolCall, ToolFuture,
@@ -461,11 +460,10 @@ async fn a_version_1_plugin_loads_with_its_background_page_listed_for_the_client
     world.stop().await;
 }
 
-// Admin switches
+// Adding, removing and switching
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_viewer_or_operator_is_refused_adding_removing_or_switching_a_plugin_and_an_admin_is_not()
-{
+async fn any_device_adds_removes_and_switches_a_plugin_and_each_switch_is_stored() {
     let mut world = HostWorld::start().await;
     let kept = world
         .dirs
@@ -473,53 +471,16 @@ async fn a_viewer_or_operator_is_refused_adding_removing_or_switching_a_plugin_a
     let other = world
         .dirs
         .plugin_folder("other plugin", &helm_plugin("other"), HELM_PLUGIN_FILES);
-    let before = world.add(&kept).await.plugins;
-
-    for (role, said) in [(Role::Viewer, "a viewer"), (Role::Operator, "an operator")] {
-        let mut device =
-            TestClient::connect_as(&world.endpoint, &format!("a {said} phone"), role, &[]).await;
-        let refused = format!(
-            "Adding, removing or switching a plugin takes an admin device, and this device is paired as {said}."
-        );
-        let switch = PluginSwitchRequest {
-            path: text(&kept),
-            enabled: false,
-        };
-        let errors = [
-            device
-                .request::<PluginsAdd>(&PluginAddRequest { path: text(&other) })
-                .await
-                .map(drop),
-            device
-                .request::<PluginsRemove>(&PluginRemoveRequest {
-                    path: text(&kept),
-                    delete_secrets: Vec::new(),
-                })
-                .await
-                .map(drop),
-            device.request::<PluginsSetEnabled>(&switch).await.map(drop),
-            device.request::<PluginsSetTools>(&switch).await.map(drop),
-        ];
-        for error in errors {
-            assert_eq!(error.unwrap_err().message, refused, "{role:?}");
-        }
-        assert_eq!(
-            device.request::<PluginsList>(&()).await.unwrap(),
-            before,
-            "nothing changed, and the device still sees the list"
-        );
-    }
-
-    // The desktop, this computer's admin, does each.
+    world.add(&kept).await;
+    // A device the host has never seen switches its tools off; the desktop
+    // does the rest.
+    let mut device = TestClient::connect_as(&world.endpoint, "a phone", &[]).await;
+    // The desktop on this computer does each.
     let off = PluginSwitchRequest {
         path: text(&kept),
         enabled: false,
     };
-    let tools_off = world
-        .client()
-        .request::<PluginsSetTools>(&off)
-        .await
-        .unwrap();
+    let tools_off = device.request::<PluginsSetTools>(&off).await.unwrap();
     assert!(!only(&tools_off).agent.as_ref().unwrap().enabled);
     assert!(only(&tools_off).enabled, "only its tools are off");
     let switched = world
@@ -530,6 +491,7 @@ async fn a_viewer_or_operator_is_refused_adding_removing_or_switching_a_plugin_a
     assert!(!only(&switched).enabled);
     assert_eq!(world.add(&other).await.plugins.len(), 2);
 
+    drop(device);
     world.restart().await;
     let listed = world.list().await;
     assert!(

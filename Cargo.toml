@@ -137,7 +137,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
-    "Win32_Security_Credentials",
     "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
@@ -153,21 +152,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
-# Windows Hello, for `floti presence`: UserConsentVerifier is WinRT, which
-# windows-sys does not cover.
-windows = { version = "0.62", features = [
-    "Foundation",
-    "Security_Credentials_UI",
-    "Win32_Foundation",
-    "Win32_System_WinRT",
-] }
-# The type of the async answer Windows Hello's window interop returns.
-windows-future = "0.3"
-# Touch ID or the account password, for `floti presence` on macOS.
-block2 = "0.6"
-objc2 = "0.6"
-objc2-foundation = "0.3"
-objc2-local-authentication = { version = "0.3", features = ["block2"] }
 # Wipes a private key's bytes when it is dropped. The version snow's own
 # ciphers already use.
 zeroize = "1"

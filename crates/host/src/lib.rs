@@ -1,9 +1,11 @@
 //! The Floti host: one process per user that owns the sessions on this
 //! computer and serves them to clients.
 //!
-//! Clients connect on a local socket only this user can open, prove a paired
-//! device key in a Noise handshake with the host key they pinned, and speak
-//! `floti-protocol` inside that session. Sessions run in ptys, each screen kept off-screen so a
+//! Clients connect on a local socket only this user can open, on this
+//! computer or through the user's own login running `floti connect`, prove
+//! their device key in a Noise handshake with the host key they pinned, and
+//! speak `floti-protocol` inside that session. The login is the access:
+//! whatever completes the handshake is served in full. Sessions run in ptys, each screen kept off-screen so a
 //! client that attaches late draws it as it is, and they outlive their
 //! clients: closing every client ends nothing. They outlive the host too:
 //! their ptys and process trees are the session keeper's ([`keeper`]), a
@@ -45,8 +47,6 @@
 //!   opens with, and the protocol they speak inside it.
 //! - [`keys`]: the key pairs Floti keeps on disk, the host's and a
 //!   client's, each in an owner-only file; never printed, logged or sent.
-//! - [`devices`]: the device registry, which device keys are paired with
-//!   this host and which were revoked.
 //! - [`client`]: a client's side, for the clients that link this crate: its
 //!   device key and pinned host key on disk, and a Noise session to a host.
 //! - [`bridge`]: `floti bridge`, that client side for a program that does
@@ -76,7 +76,6 @@ pub mod carry;
 pub mod client;
 pub mod config_console;
 pub mod connect;
-pub mod devices;
 pub mod error;
 pub mod history;
 pub mod host_log;
@@ -84,7 +83,6 @@ pub mod keeper;
 pub mod keys;
 pub mod platform;
 pub mod plugins;
-pub mod presence;
 pub mod resources;
 pub mod server;
 pub mod session;

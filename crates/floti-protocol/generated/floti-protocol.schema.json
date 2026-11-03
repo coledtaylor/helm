@@ -377,22 +377,6 @@
         }
       ]
     },
-    "ApproveDevice": {
-      "properties": {
-        "code": {
-          "description": "The code the device shows, as typed: case, spaces and hyphens do not\nmatter.",
-          "type": "string"
-        },
-        "role": {
-          "$ref": "#/$defs/DeviceRole"
-        }
-      },
-      "required": [
-        "code",
-        "role"
-      ],
-      "type": "object"
-    },
     "ArchiveMessage": {
       "description": "One message of an archived conversation.",
       "properties": {
@@ -658,6 +642,57 @@
       "required": [
         "url",
         "token"
+      ],
+      "type": "object"
+    },
+    "AttachedDevice": {
+      "description": "A device holding at least one open connection to the host.",
+      "properties": {
+        "away": {
+          "description": "Whether it is connected from another computer, through `floti\nconnect`, rather than on the host's own.",
+          "type": "boolean"
+        },
+        "connections": {
+          "description": "How many connections it holds open: its window, its other pages and\nits sessions' screens each hold one.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fingerprint": {
+          "description": "Its key's fingerprint, as `welcome.device` gives each connection its\nown.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name its client gave in `hello` when it attached: its device name,\nor the client's own name when it gave none.",
+          "type": "string"
+        },
+        "since": {
+          "description": "When its first open connection was welcomed, by the host's clock, as\nRFC 3339 text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fingerprint",
+        "name",
+        "away",
+        "since",
+        "connections"
+      ],
+      "type": "object"
+    },
+    "AttachedDevices": {
+      "description": "Every device attached to the host now.",
+      "properties": {
+        "devices": {
+          "description": "Each attached device once, however many connections it holds, in the\norder they attached.",
+          "items": {
+            "$ref": "#/$defs/AttachedDevice"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "devices"
       ],
       "type": "object"
     },
@@ -1314,6 +1349,13 @@
     },
     "ClientInfo": {
       "properties": {
+        "deviceName": {
+          "description": "The name of the device it runs on, such as the computer's name, shown\nin every client's list of attached devices. Absent, the list shows\n`name`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kind": {
           "$ref": "#/$defs/ClientKind"
         },
@@ -2518,36 +2560,6 @@
       ],
       "type": "object"
     },
-    "DeviceListing": {
-      "properties": {
-        "paired": {
-          "items": {
-            "$ref": "#/$defs/PairedDevice"
-          },
-          "type": "array"
-        },
-        "waiting": {
-          "items": {
-            "$ref": "#/$defs/WaitingDevice"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "paired",
-        "waiting"
-      ],
-      "type": "object"
-    },
-    "DeviceRole": {
-      "description": "What a device may do with the host. Each role can do all the one before\nit can: a viewer sees, an operator also types into and runs sessions, an\nadmin also pairs and revokes devices and changes the host.",
-      "enum": [
-        "viewer",
-        "operator",
-        "admin"
-      ],
-      "type": "string"
-    },
     "DeviceSession": {
       "description": "A running session a device started.",
       "properties": {
@@ -2565,6 +2577,18 @@
       "required": [
         "id",
         "name"
+      ],
+      "type": "object"
+    },
+    "DisconnectDevice": {
+      "properties": {
+        "fingerprint": {
+          "description": "The device's key's fingerprint, as `devices:attached` gives it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fingerprint"
       ],
       "type": "object"
     },
@@ -3114,16 +3138,6 @@
         {
           "const": "notAnEvent",
           "description": "A subscription names a channel that is not an event channel.",
-          "type": "string"
-        },
-        {
-          "const": "notPermitted",
-          "description": "The device's role does not allow it; the message says what it takes\nand what the device is paired as.",
-          "type": "string"
-        },
-        {
-          "const": "presenceNeeded",
-          "description": "An admin action from another computer, with no presence confirmed on\nthat device in the last five minutes. Confirm presence\n(`devices:presence`) and ask again.",
           "type": "string"
         },
         {
@@ -5035,19 +5049,6 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/Pairing",
-          "properties": {
-            "type": {
-              "const": "pairing",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
           "$ref": "#/$defs/Request",
           "properties": {
             "type": {
@@ -5222,117 +5223,6 @@
       "required": [
         "from",
         "to"
-      ],
-      "type": "object"
-    },
-    "PairedDevice": {
-      "description": "A device in the host's registry.",
-      "properties": {
-        "fingerprint": {
-          "description": "Its key's fingerprint.",
-          "type": "string"
-        },
-        "name": {
-          "description": "The name it was paired under: the name it gave when it asked.",
-          "type": "string"
-        },
-        "pairedAt": {
-          "description": "When it was paired, as RFC 3339 text.",
-          "type": "string"
-        },
-        "revokedAt": {
-          "description": "When it was revoked, as RFC 3339 text; absent while it is not.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "role": {
-          "$ref": "#/$defs/DeviceRole"
-        }
-      },
-      "required": [
-        "name",
-        "role",
-        "pairedAt",
-        "fingerprint"
-      ],
-      "type": "object"
-    },
-    "Pairing": {
-      "description": "Where a device's request to pair stands, sent to the device that asked\nand to no one else.",
-      "oneOf": [
-        {
-          "$ref": "#/$defs/PairingWaiting",
-          "description": "The answer to its `hello`: the request waits for someone on the\nhost's computer to approve it.",
-          "properties": {
-            "state": {
-              "const": "waiting",
-              "type": "string"
-            }
-          },
-          "required": [
-            "state"
-          ],
-          "type": "object"
-        },
-        {
-          "$ref": "#/$defs/PairingApproved",
-          "description": "The request was approved: the device is paired, and connects as\nitself from now on. The host closes the connection after this.",
-          "properties": {
-            "state": {
-              "const": "approved",
-              "type": "string"
-            }
-          },
-          "required": [
-            "state"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Nobody approved it in time. The host closes the connection after\nthis; the device may ask again.",
-          "properties": {
-            "state": {
-              "const": "expired",
-              "type": "string"
-            }
-          },
-          "required": [
-            "state"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "PairingApproved": {
-      "properties": {
-        "role": {
-          "$ref": "#/$defs/DeviceRole",
-          "description": "The role the device is paired with."
-        }
-      },
-      "required": [
-        "role"
-      ],
-      "type": "object"
-    },
-    "PairingWaiting": {
-      "properties": {
-        "code": {
-          "description": "The code the device shows, for `floti devices approve <code>` on the\nhost's computer: eight characters, none of them easily taken for\nanother.",
-          "type": "string"
-        },
-        "expiresInSeconds": {
-          "description": "How long the request waits for approval from now.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "code",
-        "expiresInSeconds"
       ],
       "type": "object"
     },
@@ -8010,18 +7900,6 @@
       ],
       "type": "object"
     },
-    "RevokeDevice": {
-      "properties": {
-        "fingerprint": {
-          "description": "The device's key's fingerprint, as `devices:list` and `floti\ndevices` give it.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "fingerprint"
-      ],
-      "type": "object"
-    },
     "RootPath": {
       "description": "A scan root.",
       "properties": {
@@ -9911,36 +9789,6 @@
       ],
       "type": "object"
     },
-    "WaitingDevice": {
-      "description": "A request to pair that waits for approval.",
-      "properties": {
-        "fingerprint": {
-          "description": "Its key's fingerprint.",
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ClientKind",
-          "description": "What kind of client it said it is."
-        },
-        "name": {
-          "description": "The name the device gave in its `hello`.",
-          "type": "string"
-        },
-        "secondsLeft": {
-          "description": "How long the request waits before it expires.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "name",
-        "kind",
-        "fingerprint",
-        "secondsLeft"
-      ],
-      "type": "object"
-    },
     "WatchConfigRequest": {
       "description": "Which file the client's editor has open, or null to release the watch.",
       "properties": {
@@ -9957,7 +9805,7 @@
       "description": "The host's answer to an accepted `hello`.",
       "properties": {
         "away": {
-          "description": "Whether this connection reached the host from another computer,\nthrough `floti connect`: an admin action on it needs presence\n(`devices:presence`) within the last five minutes.",
+          "description": "Whether this connection reached the host from another computer,\nthrough `floti connect`.",
           "type": "boolean"
         },
         "backends": {
@@ -9975,7 +9823,7 @@
           "type": "array"
         },
         "device": {
-          "description": "The fingerprint of the device this connection proved, as `devices:list`\nnames it, so a client can tell its own row; absent for the host's own\nshell.",
+          "description": "The fingerprint of the device this connection proved, as\n`devices:attached` names it, so a client can tell its own row.",
           "type": [
             "string",
             "null"
@@ -9988,17 +9836,6 @@
         "protocol": {
           "$ref": "#/$defs/ProtocolVersion",
           "description": "The version this connection speaks."
-        },
-        "role": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DeviceRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The role this connection's device is paired with; absent for a\nconnection that is not a paired device's (the host's own shell)."
         }
       },
       "required": [
@@ -10685,46 +10522,24 @@
     },
     {
       "capability": null,
-      "kind": "request",
-      "name": "devices:approve",
-      "request": {
-        "$ref": "#/$defs/ApproveDevice"
+      "event": {
+        "$ref": "#/$defs/AttachedDevices"
       },
-      "response": {
-        "$ref": "#/$defs/PairedDevice"
+      "kind": "event",
+      "name": "devices:attached",
+      "snapshot": {
+        "$ref": "#/$defs/AttachedDevices"
       }
     },
     {
       "capability": null,
       "kind": "request",
-      "name": "devices:list",
+      "name": "devices:disconnect",
       "request": {
-        "type": "null"
-      },
-      "response": {
-        "$ref": "#/$defs/DeviceListing"
-      }
-    },
-    {
-      "capability": null,
-      "kind": "request",
-      "name": "devices:presence",
-      "request": {
-        "type": "null"
+        "$ref": "#/$defs/DisconnectDevice"
       },
       "response": {
         "type": "null"
-      }
-    },
-    {
-      "capability": null,
-      "kind": "request",
-      "name": "devices:revoke",
-      "request": {
-        "$ref": "#/$defs/RevokeDevice"
-      },
-      "response": {
-        "$ref": "#/$defs/PairedDevice"
       }
     },
     {

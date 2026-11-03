@@ -553,25 +553,6 @@ async fn helms_data_is_merged_into_a_host_that_already_holds_some_of_it_once_and
     host.stop(HostStopReason::Stop).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_device_that_is_not_an_admin_cannot_copy_into_the_host() {
-    let world = World::new();
-    let config = world.config();
-    let endpoint = config.endpoint.clone();
-    let host = RunningHost::start(config);
-    let _admin = TestClient::connect(&endpoint, &[]).await;
-    let mut viewer =
-        TestClient::connect_as(&endpoint, "a phone", floti_host::devices::Role::Viewer, &[]).await;
-    let refused = viewer.request::<CarryFinish>(&()).await.unwrap_err();
-    assert!(refused.message.contains("admin"), "{}", refused.message);
-    let refused = viewer
-        .request::<CarryNames>(&CarriedSessionNames { names: Vec::new() })
-        .await
-        .unwrap_err();
-    assert!(refused.message.contains("admin"), "{}", refused.message);
-    host.stop(HostStopReason::Stop).await;
-}
-
 /// The readings a `usage:changed` subscription starts with.
 fn usage_snapshot(message: Message) -> Vec<UsageSnapshot> {
     match message {

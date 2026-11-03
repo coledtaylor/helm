@@ -29,6 +29,7 @@ fn every_kind_of_message() -> Vec<Message> {
             client: ClientInfo {
                 name: "desktop".into(),
                 kind: ClientKind::Desktop,
+                device_name: Some("Build box".into()),
             },
             capabilities: vec!["terminal".into(), "files".into()],
         }),
@@ -41,7 +42,6 @@ fn every_kind_of_message() -> Vec<Message> {
                 "Claude Code",
                 BackendFeature::ALL,
             )],
-            role: Some(floti_protocol::channels::devices::DeviceRole::Admin),
             away: true,
             device: Some("0123456789abcdef".to_owned()),
         }),

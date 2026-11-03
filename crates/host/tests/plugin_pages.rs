@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
-use floti_host::devices::Role;
 use floti_host::fake_agent;
 use floti_host::platform::process_tree::{self, ProcessTree};
 use floti_host::platform::socket::Endpoint;
@@ -36,7 +35,7 @@ use floti_protocol::channels::plugins::{
     PluginsSession, PluginsSetEnabled, PluginsSetSetting, PluginsUi,
 };
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, SessionClose, SessionList, SessionStart, StartSessionRequest,
+    CloseSessionRequest, SessionClose, SessionStart, StartSessionRequest,
 };
 use floti_protocol::{Knowable, Message, Payload};
 use serde_json::{Value, json};
@@ -95,15 +94,16 @@ impl World {
         }
     }
 
-    /// Helm's window on the testkit's admin device, listening for what the
+    /// Helm's window on the testkit's device, listening for what the
     /// host sends plugin pages.
     async fn window(&self) -> TestClient {
         listening(TestClient::connect(&self.endpoint, WINDOW).await).await
     }
 
-    /// A window on a device of its own, paired as `role`.
-    async fn window_as(&self, name: &str, role: Role) -> TestClient {
-        listening(TestClient::connect_as(&self.endpoint, name, role, WINDOW).await).await
+    /// A window on a device of its own, a key the host has never seen,
+    /// named `name`.
+    async fn window_as(&self, name: &str) -> TestClient {
+        listening(TestClient::connect_as(&self.endpoint, name, WINDOW).await).await
     }
 
     /// The board plugin, reaching `network`, registered by `client`.
@@ -686,35 +686,23 @@ fn session_ask(folder: &Path, prompt: &str) -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s10_a_viewer_is_refused_a_session_naming_operator_or_admin_and_an_operator_is_asked_on_its_own_window_and_starts_what_was_checked()
- {
+async fn s10_another_device_is_asked_on_its_own_window_and_starts_what_was_checked() {
     let world = World::new();
     let mut admin = world.window().await;
     world.board(&mut admin, &[]).await;
     let folder = world.dirs.folder("a project");
 
-    // A viewer: refused with the sentence, and nothing starts.
-    let mut viewer = world.window_as("viewer phone", Role::Viewer).await;
-    let (code, message) =
-        failed(call(&mut viewer, "sessions.start", &session_ask(&folder, "go")).await);
-    assert_eq!(code, PluginErrorCode::NotAllowed);
-    assert!(
-        message.contains("operator or admin") && message.contains("viewer"),
-        "{message}"
-    );
-    assert_eq!(admin.request::<SessionList>(&()).await.unwrap(), vec![]);
-
-    // An operator: the dialog is put up on its window, and a second ask
+    // Another device: the dialog is put up on its window, and a second ask
     // while it is up is refused.
-    let mut operator = world.window_as("operator laptop", Role::Operator).await;
+    let mut laptop = world.window_as("a laptop").await;
     let asking = start_call(
-        &mut operator,
+        &mut laptop,
         "ask",
         "sessions.start",
         &session_ask(&folder, "look at the build"),
     )
     .await;
-    let asked: PluginUiRequest = operator
+    let asked: PluginUiRequest = laptop
         .event_on(UI, "the session dialog", |ui: &PluginUiRequest| {
             matches!(ui, PluginUiRequest::Session { .. })
         })
@@ -745,7 +733,7 @@ async fn s10_a_viewer_is_refused_a_session_naming_operator_or_admin_and_an_opera
     );
     let (code, _) = failed(
         call(
-            &mut operator,
+            &mut laptop,
             "sessions.start",
             &session_ask(&folder, "again"),
         )
@@ -765,7 +753,7 @@ async fn s10_a_viewer_is_refused_a_session_naming_operator_or_admin_and_an_opera
         .expect_err("another window cannot answer it");
     assert!(refused.message.contains("another client"), "{refused:?}");
 
-    let started = operator
+    let started = laptop
         .request::<PluginsSession>(&PluginSessionAnswer {
             request_id,
             start: true,
@@ -773,13 +761,13 @@ async fn s10_a_viewer_is_refused_a_session_naming_operator_or_admin_and_an_opera
             rows: 30,
         })
         .await
-        .expect("the operator starts it")
+        .expect("the laptop starts it")
         .expect("a session");
     assert_eq!(
         (started.cwd.as_str(), started.name.as_str()),
         (text(&folder).as_str(), "From the board")
     );
-    let answered: String = ok(outcome(&mut operator, asking).await)
+    let answered: String = ok(outcome(&mut laptop, asking).await)
         .deserialized()
         .unwrap();
     assert_eq!(answered, "started");
@@ -799,13 +787,13 @@ async fn s10_a_viewer_is_refused_a_session_naming_operator_or_admin_and_an_opera
 
     // Said no to, nothing starts; withdrawn when the page aborts.
     let asking = start_call(
-        &mut operator,
+        &mut laptop,
         "no",
         "sessions.start",
         &session_ask(&folder, "not this"),
     )
     .await;
-    let PluginUiRequest::Session { request_id, .. } = operator
+    let PluginUiRequest::Session { request_id, .. } = laptop
         .event_on(UI, "the second dialog", |ui: &PluginUiRequest| {
             matches!(ui, PluginUiRequest::Session { .. })
         })
@@ -813,7 +801,7 @@ async fn s10_a_viewer_is_refused_a_session_naming_operator_or_admin_and_an_opera
     else {
         unreachable!()
     };
-    let none = operator
+    let none = laptop
         .request::<PluginsSession>(&PluginSessionAnswer {
             request_id,
             start: false,
@@ -823,19 +811,19 @@ async fn s10_a_viewer_is_refused_a_session_naming_operator_or_admin_and_an_opera
         .await
         .unwrap();
     assert_eq!(none, None);
-    let answered: String = ok(outcome(&mut operator, asking).await)
+    let answered: String = ok(outcome(&mut laptop, asking).await)
         .deserialized()
         .unwrap();
     assert_eq!(answered, "cancelled");
 
     let asking = start_call(
-        &mut operator,
+        &mut laptop,
         "gone",
         "sessions.start",
         &session_ask(&folder, "page closes"),
     )
     .await;
-    let PluginUiRequest::Session { request_id, .. } = operator
+    let PluginUiRequest::Session { request_id, .. } = laptop
         .event_on(UI, "the third dialog", |ui: &PluginUiRequest| {
             matches!(ui, PluginUiRequest::Session { .. })
         })
@@ -843,20 +831,20 @@ async fn s10_a_viewer_is_refused_a_session_naming_operator_or_admin_and_an_opera
     else {
         unreachable!()
     };
-    operator
+    laptop
         .request::<PluginsCancel>(&PluginCancelRequest {
             call_id: "gone".to_owned(),
         })
         .await
         .unwrap();
-    let withdrawn: PluginUiRequest = operator
+    let withdrawn: PluginUiRequest = laptop
         .event_on(UI, "the dialog withdrawn", |ui: &PluginUiRequest| {
             matches!(ui, PluginUiRequest::SessionWithdrawn { .. })
         })
         .await;
     assert_eq!(withdrawn, PluginUiRequest::SessionWithdrawn { request_id });
     assert_eq!(
-        failed(outcome(&mut operator, asking).await).0,
+        failed(outcome(&mut laptop, asking).await).0,
         PluginErrorCode::Aborted
     );
 

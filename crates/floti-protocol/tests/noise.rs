@@ -3,9 +3,8 @@
 
 use floti_protocol::message::{ClientInfo, ClientKind, Hello, StreamData};
 use floti_protocol::noise::{
-    ENROLMENT_CODE_LEN, EnrolmentCode, Initiator, InitiatorStep, KeyPair, MAX_MESSAGE_LEN,
-    MAX_PLAINTEXT_LEN, NoiseError, Opener, PAIRING_MARKER, PendingDevice, PrivateKey, PublicKey,
-    Responder, ResponderStep, Sealer, TAG_LEN, Transport,
+    Initiator, InitiatorStep, KeyPair, MAX_MESSAGE_LEN, MAX_PLAINTEXT_LEN, NoiseError, Opener,
+    PendingDevice, PrivateKey, PublicKey, Responder, ResponderStep, Sealer, TAG_LEN, Transport,
 };
 use floti_protocol::{Bytes, FrameDecoder, Message, ProtocolVersion, encode_frame};
 
@@ -49,6 +48,7 @@ fn hello_frame() -> Vec<u8> {
         client: ClientInfo {
             name: "test".into(),
             kind: ClientKind::Desktop,
+            device_name: None,
         },
         capabilities: vec!["terminal".into()],
     });
@@ -346,109 +346,15 @@ fn a_first_message_that_is_not_a_handshake_fails_at_once() {
 }
 
 #[test]
-fn an_enrolling_device_carries_its_code_to_the_host_inside_the_first_message_and_completes() {
-    let device = keys();
-    let host = keys();
-    let code = EnrolmentCode::generate().unwrap();
-
-    let (initiator, message_1) =
-        Initiator::start_enrolling(&device, &host.public(), &code).unwrap();
-    assert_eq!(message_1.len(), 2 + 96 + ENROLMENT_CODE_LEN);
-    assert_eq!(&message_1[..2], &[0x00, 128]);
-    assert!(
-        !message_1
-            .windows(ENROLMENT_CODE_LEN)
-            .any(|window| window == code.expose_secret()),
-        "the code crossed the wire in the clear"
-    );
-
-    let pending = receive(&host, &message_1).unwrap();
-    assert_eq!(pending.device_key(), device.public());
-    let carried = pending.enrolment_code().expect("the host finds the code");
-    assert!(carried.matches(&code));
-    let printed = format!("{pending:?}");
-    assert!(!printed.contains(code.expose_hex().as_str()), "{printed}");
-    assert!(printed.contains("enrolling: true"), "{printed}");
-
-    let (mut host_side, message_2) = pending.accept().unwrap();
-    let mut device_side = finish(initiator, &message_2).unwrap();
-    assert_eq!(device_side.peer(), host.public());
-    let sealed = device_side.seal(b"hello").unwrap();
-    assert_eq!(host_side.open(&sealed).unwrap(), b"hello");
-}
-
-#[test]
-fn a_first_message_with_no_payload_carries_no_code_and_is_the_same_length_as_before() {
+fn a_first_message_carries_no_payload_and_has_one_length() {
     let host = keys();
     let (_, message_1) = Initiator::start(&keys(), &host.public()).unwrap();
     assert_eq!(message_1.len(), 2 + 96);
-    let pending = receive(&host, &message_1).unwrap();
-    assert!(pending.enrolment_code().is_none());
+    receive(&host, &message_1).unwrap();
 }
 
 #[test]
-fn s1_a_device_asking_to_pair_says_so_inside_the_first_message_and_completes() {
-    let device = keys();
-    let host = keys();
-
-    let (initiator, message_1) = Initiator::start_pairing(&device, &host.public()).unwrap();
-    assert_eq!(message_1.len(), 2 + 96 + PAIRING_MARKER.len());
-    assert_ne!(PAIRING_MARKER.len(), ENROLMENT_CODE_LEN);
-    assert!(
-        !message_1
-            .windows(PAIRING_MARKER.len())
-            .any(|window| window == PAIRING_MARKER),
-        "the ask crossed the wire in the clear"
-    );
-
-    let pending = receive(&host, &message_1).unwrap();
-    assert_eq!(pending.device_key(), device.public());
-    assert!(pending.asks_to_pair());
-    assert!(pending.enrolment_code().is_none());
-    assert!(format!("{pending:?}").contains("asks_to_pair: true"));
-
-    let (mut host_side, message_2) = pending.accept().unwrap();
-    let mut device_side = finish(initiator, &message_2).unwrap();
-    assert_eq!(device_side.peer(), host.public());
-    let sealed = device_side.seal(b"hello").unwrap();
-    assert_eq!(host_side.open(&sealed).unwrap(), b"hello");
-}
-
-#[test]
-fn s11_a_first_message_that_does_not_ask_to_pair_is_not_read_as_asking() {
-    let host = keys();
-    let (_, plain) = Initiator::start(&keys(), &host.public()).unwrap();
-    assert!(!receive(&host, &plain).unwrap().asks_to_pair());
-    let code = EnrolmentCode::generate().unwrap();
-    let (_, enrolling) = Initiator::start_enrolling(&keys(), &host.public(), &code).unwrap();
-    assert!(!receive(&host, &enrolling).unwrap().asks_to_pair());
-}
-
-#[test]
-fn a_pairing_first_message_made_for_another_host_key_is_not_read() {
-    let host = keys();
-    let another = keys();
-    let (_, message_1) = Initiator::start_pairing(&keys(), &another.public()).unwrap();
-    assert_eq!(
-        receive(&host, &message_1).unwrap_err(),
-        NoiseError::FirstMessageUnreadable
-    );
-}
-
-#[test]
-fn an_enrolling_first_message_made_for_another_host_key_is_not_read() {
-    let host = keys();
-    let another = keys();
-    let code = EnrolmentCode::generate().unwrap();
-    let (_, message_1) = Initiator::start_enrolling(&keys(), &another.public(), &code).unwrap();
-    assert_eq!(
-        receive(&host, &message_1).unwrap_err(),
-        NoiseError::FirstMessageUnreadable
-    );
-}
-
-#[test]
-fn a_first_message_of_any_length_but_the_three_a_device_sends_fails_at_its_prefix() {
+fn a_first_message_of_any_length_but_the_one_a_device_sends_fails_at_its_prefix() {
     let host = keys();
     for len in [0_u16, 95, 97, 111, 113, 127, 129, 512] {
         assert!(
@@ -459,9 +365,9 @@ fn a_first_message_of_any_length_but_the_three_a_device_sends_fails_at_its_prefi
             "a first message of {len} bytes"
         );
     }
-    // Split anywhere, the lengths a device sends are still gathered.
-    let code = EnrolmentCode::generate().unwrap();
-    let (_, message_1) = Initiator::start_enrolling(&keys(), &host.public(), &code).unwrap();
+    // Split anywhere, the message a device sends is still gathered.
+    let device = keys();
+    let (_, message_1) = Initiator::start(&device, &host.public()).unwrap();
     let mut responder = Responder::new(&host).unwrap();
     for byte in &message_1[..message_1.len() - 1] {
         responder = match responder.push(std::slice::from_ref(byte)).unwrap() {
@@ -470,9 +376,12 @@ fn a_first_message_of_any_length_but_the_three_a_device_sends_fails_at_its_prefi
         };
     }
     match responder.push(&message_1[message_1.len() - 1..]).unwrap() {
-        ResponderStep::Received { device, used } => {
+        ResponderStep::Received {
+            device: pending,
+            used,
+        } => {
             assert_eq!(used, 1);
-            assert!(device.enrolment_code().unwrap().matches(&code));
+            assert_eq!(pending.device_key(), device.public());
         }
         ResponderStep::Pending(_) => panic!("the whole message did not complete it"),
     }
@@ -648,26 +557,4 @@ fn the_halves_of_a_session_can_move_to_other_threads() {
     sendable::<Initiator>();
     sendable::<Responder>();
     sendable::<PendingDevice>();
-}
-
-#[test]
-fn every_pairing_message_crosses_a_frame_and_reads_back() {
-    use floti_protocol::channels::devices::DeviceRole;
-    use floti_protocol::message::{Pairing, PairingApproved, PairingWaiting};
-
-    for pairing in [
-        Pairing::Waiting(PairingWaiting {
-            code: "ABCD2345".into(),
-            expires_in_seconds: 600,
-        }),
-        Pairing::Approved(PairingApproved {
-            role: DeviceRole::Operator,
-        }),
-        Pairing::Expired,
-    ] {
-        let message = Message::Pairing(pairing);
-        let mut decoder = FrameDecoder::new();
-        decoder.push(&encode_frame(&message).unwrap());
-        assert_eq!(decoder.next_message().unwrap(), Some(message));
-    }
 }

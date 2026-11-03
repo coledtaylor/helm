@@ -24,7 +24,7 @@ use floti_host::server::{Host, HostConfig, SOCKET_NAME, unserved};
 use floti_host::store::Store;
 use floti_host::testkit::{
     FakeAgent, FakeAgentRecord, HostCrash, PATIENCE, RunningHost, TestClient, TestDirs,
-    names_unserved_channel, pair_test_device,
+    names_unserved_channel, record_test_host,
 };
 use floti_host::{Error, fake_agent};
 use floti_protocol::channel::{from_payload, to_payload};
@@ -206,10 +206,10 @@ fn runs_in(agent: &FakeAgent, cwd: &Path, except: &[u32]) -> Vec<FakeAgentRecord
 }
 
 /// The `floti host` executable, with every folder in `dirs`, and the
-/// testkit's device paired with the host it will be, so a [`TestClient`] at
-/// [`binary_endpoint`] is let in.
+/// host it will be recorded for the testkit, so a [`TestClient`] at
+/// [`binary_endpoint`] holds it to the key in its data folder.
 fn floti_host_command(dirs: &TestDirs) -> Command {
-    pair_test_device(&binary_endpoint(dirs), &dirs.data);
+    record_test_host(&binary_endpoint(dirs), &dirs.data);
     let mut command = Command::new(env!("CARGO_BIN_EXE_floti"));
     command
         .arg("host")
@@ -1211,13 +1211,7 @@ async fn a_deliberate_quit_ends_only_what_the_quitting_device_started() {
         .request::<SessionStart>(&start_request(&theirs))
         .await
         .unwrap();
-    let mut quitting = TestClient::connect_as(
-        &endpoint,
-        "a laptop",
-        floti_host::devices::Role::Admin,
-        TERMINAL,
-    )
-    .await;
+    let mut quitting = TestClient::connect_as(&endpoint, "a laptop", TERMINAL).await;
     let ended = quitting
         .request::<SessionStart>(&start_request(&mine))
         .await

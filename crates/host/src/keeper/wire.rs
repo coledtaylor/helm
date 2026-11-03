@@ -50,7 +50,7 @@ pub struct Label {
     pub cwd: PathBuf,
     /// The launch's own folder, which goes when the program ends.
     pub launch_folder: Option<PathBuf>,
-    /// The fingerprint of the paired device that started it, whose
+    /// The fingerprint of the device that started it, whose
     /// deliberate quit ends it: a fingerprint names a device and proves
     /// nothing, so no key crosses here.
     #[serde(default)]

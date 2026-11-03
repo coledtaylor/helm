@@ -1,5 +1,5 @@
 import { app, type BrowserWindow } from 'electron'
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
 import { readFile, rm, writeFile } from 'node:fs/promises'
@@ -18,7 +18,6 @@ import { nativeProfileDialogs } from '../profiles'
 import { updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { createHostFiles, type HostFiles } from './files'
-import { createPresenceCheck, type PresenceCheck } from '../presence'
 import {
   flotiBinary,
   openPageBridge,
@@ -129,6 +128,7 @@ export function connectLocalHost(log: (line: string) => void, startHost = true):
     {
       ...programs,
       appVersion: app.getVersion(),
+      deviceName: hostname(),
       log,
       setTimeout: (run, ms) => setTimeout(run, ms),
       clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
@@ -152,6 +152,7 @@ export function createLocalPageLinks(
     ...(nextConnection !== undefined ? { nextConnection } : {}),
     inHost: link !== null,
     appVersion: app.getVersion(),
+    deviceName: hostname(),
     isHelmPage,
     ready: () =>
       link === null ? Promise.reject(new Error('Sessions do not run in the local host.')) : link.connection(),
@@ -167,8 +168,8 @@ export function createLocalPageLinks(
 /**
  * Helm's links to the hosts on other computers in its `hosts` setting, each
  * through `floti bridge` and that host's own transport, with its own client
- * folder in this run's data directory. This device asks to pair under this
- * computer's name.
+ * folder in this run's data directory. Each connection names this device
+ * with the computer's name, and the first one to a host pins its key.
  */
 export function createDesktopRemoteHosts(options: {
   isHelmPage: (id: number) => boolean
@@ -180,7 +181,7 @@ export function createDesktopRemoteHosts(options: {
 }): RemoteHostLinks {
   const folderOf = (id: string): string => remoteClientFolder(places(), process.platform, id)
   return createRemoteHostLinks({
-    start: (host, onPairing) =>
+    start: (host) =>
       startRemoteHost(
         places(),
         { ...programs, appVersion: app.getVersion(), log: options.log },
@@ -188,9 +189,7 @@ export function createDesktopRemoteHosts(options: {
           folder: folderOf(host.id),
           transport: host.transport,
           floti: host.floti,
-          deviceName: hostname(),
-          approve: host.role ?? null,
-          onPairing
+          deviceName: hostname()
         }
       ),
     openBridge: (host, data) =>
@@ -206,6 +205,7 @@ export function createDesktopRemoteHosts(options: {
     linked: (host, link) => options.plugins.attach(host.id, link),
     isHelmPage: options.isHelmPage,
     appVersion: app.getVersion(),
+    deviceName: hostname(),
     nextConnection: options.nextConnection,
     log: options.log,
     setTimeout: (run, ms) => setTimeout(run, ms),
@@ -255,29 +255,6 @@ export function createDesktopRemoteInstaller(log: (line: string) => void): Remot
     },
     script: (os: FlotiOs) => readFile(join(scripts, os === 'windows' ? 'install.ps1' : 'install.sh'), 'utf8'),
     releaseBase: (version) => `${RELEASES_DOWNLOAD}/v${version}`,
-    log
-  })
-}
-
-/**
- * The check that this computer's user is present, run by this build's
- * `floti presence` over the window, for a host that asks before an admin
- * action (`devices:presence`).
- */
-export function createDesktopPresence(window: () => BrowserWindow | null, log: (line: string) => void): PresenceCheck {
-  return createPresenceCheck({
-    platform: process.platform,
-    binary: () => flotiBinary(places(), programs),
-    windowHandle: () => {
-      const win = window()
-      return win === null || win.isDestroyed() ? null : win.getNativeWindowHandle()
-    },
-    run: (binary, args) =>
-      new Promise((done, fail) => {
-        const child = execFile(binary, [...args], { windowsHide: true }, () => undefined)
-        child.once('error', fail)
-        child.once('exit', (code) => done({ code }))
-      }),
     log
   })
 }

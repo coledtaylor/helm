@@ -4,9 +4,9 @@ import { FakeChild, connects, type Program } from '../../../test/fake-child'
 import { FrameDecoder, encodeFrame } from './frame'
 import { BRIDGE_EXIT, type HostPlaces } from './launcher'
 import {
+  KEY_CHANGED_LINE,
   RemoteHostError,
   openRemotePageBridge,
-  pairingCodeOf,
   remoteClientFolder,
   startRemoteHost,
   type RemoteLauncherDeps
@@ -30,8 +30,6 @@ const COMMAND: HostTransport = {
   program: 'C:\\Windows\\System32\\wsl.exe',
   args: ['-d', 'Ubuntu 24.04', '--']
 }
-const PAIRING_LINE =
-  'floti bridge: pairing code 7Q2K-9XZD, expires in 600 seconds: run "floti devices approve 7Q2K-9XZD" on the host.'
 
 /** The user's own environment, which the bridge and its ssh get as it is. */
 const USER_ENV = { PATH: 'C:\\Windows', SSH_AUTH_SOCK: '\\\\.\\pipe\\openssh-ssh-agent' }
@@ -70,29 +68,6 @@ const endsWith =
     queueMicrotask(() => child.exit(code))
   }
 
-/**
- * A bridge that says it is waiting for approval and answers nothing until
- * `approved` settles, then connects: the hello waits in the pipe meanwhile.
- */
-const pairsThen =
-  (approved: Promise<void>): Program =>
-  (child) => {
-    child.stderr.write(`${PAIRING_LINE}\n`)
-    const write = child.stdout.write.bind(child.stdout)
-    const held: Uint8Array[] = []
-    let open = false
-    child.stdout.write = ((chunk: Uint8Array) => {
-      if (open) return write(chunk)
-      held.push(chunk)
-      return true
-    }) as typeof child.stdout.write
-    void approved.then(() => {
-      open = true
-      for (const chunk of held) write(chunk)
-    })
-    connects(child)
-  }
-
 async function remoteError(promise: Promise<unknown>): Promise<RemoteHostError> {
   const error = await promise.then(
     () => null,
@@ -108,24 +83,12 @@ describe('reaching a host on another computer', () => {
     const host = await startRemoteHost(PLACES, w.deps, {
       folder: FOLDER,
       transport: SSH,
-      deviceName: 'my laptop',
-      approve: null,
-      onPairing: () => undefined
+      deviceName: 'my laptop'
     })
 
     const [bridge] = w.spawned
     expect(bridge?.command).toBe(FLOTI)
-    expect(bridge?.args).toEqual([
-      'bridge',
-      FOLDER,
-      '--pair',
-      'my laptop',
-      '--',
-      'ssh',
-      '-o',
-      'BatchMode=yes',
-      'me@build-box'
-    ])
+    expect(bridge?.args).toEqual(['bridge', FOLDER, '--', 'ssh', '-o', 'BatchMode=yes', 'me@build-box'])
     // Nothing that would skip a host-key check, and no file of the user's named.
     expect(bridge?.args.join(' ')).not.toMatch(/StrictHostKeyChecking|UserKnownHostsFile|known_hosts|IdentityFile|\.ssh/)
     // The user's environment as it is: their agent, their PATH; no Floti folders of this run.
@@ -140,9 +103,7 @@ describe('reaching a host on another computer', () => {
     const host = await startRemoteHost(PLACES, w.deps, {
       folder: FOLDER,
       transport: SSH,
-      deviceName: 'my laptop',
-      approve: null,
-      onPairing: () => undefined
+      deviceName: 'my laptop'
     })
     await host.close()
     const decoder = new FrameDecoder()
@@ -160,15 +121,11 @@ describe('reaching a host on another computer', () => {
     const host = await startRemoteHost(PLACES, w.deps, {
       folder: FOLDER,
       transport: COMMAND,
-      deviceName: 'my laptop',
-      approve: null,
-      onPairing: () => undefined
+      deviceName: 'my laptop'
     })
     expect(w.spawned[0]?.args).toEqual([
       'bridge',
       FOLDER,
-      '--pair',
-      'my laptop',
       '--',
       'C:\\Windows\\System32\\wsl.exe',
       '-d',
@@ -187,7 +144,11 @@ describe('reaching a host on another computer', () => {
   ])('S6: ssh that needs %s fails with its last line, unedited', async (_need, line) => {
     const w = world([endsWith(BRIDGE_EXIT.transportEnded, 'debug: an earlier line', line)])
     const error = await remoteError(
-      startRemoteHost(PLACES, w.deps, { folder: FOLDER, transport: SSH, deviceName: 'my laptop', approve: null, onPairing: () => undefined })
+      startRemoteHost(PLACES, w.deps, {
+        folder: FOLDER,
+        transport: SSH,
+        deviceName: 'my laptop'
+      })
     )
     expect(error.lastLine).toBe(line)
   })
@@ -195,107 +156,81 @@ describe('reaching a host on another computer', () => {
   it('says that no Floti host runs there in floti connect’s own words', async () => {
     const w = world([endsWith(BRIDGE_EXIT.unreachable, 'floti connect: no Floti host is running there.')])
     const error = await remoteError(
-      startRemoteHost(PLACES, w.deps, { folder: FOLDER, transport: SSH, deviceName: 'my laptop', approve: null, onPairing: () => undefined })
+      startRemoteHost(PLACES, w.deps, {
+        folder: FOLDER,
+        transport: SSH,
+        deviceName: 'my laptop'
+      })
     )
     expect(error.lastLine).toBe('floti connect: no Floti host is running there.')
   })
 
-  it('S10: hands the pairing code to the caller only, never to the log, and connects once approved', async () => {
-    let approve: () => void = () => undefined
-    const approved = new Promise<void>((resolve) => {
-      approve = resolve
-    })
-    const w = world([pairsThen(approved)])
-    const codes: string[] = []
-    const connecting = startRemoteHost(PLACES, w.deps, {
-      folder: FOLDER,
-      transport: SSH,
-      deviceName: 'my laptop',
-      approve: null,
-      onPairing: (code) => codes.push(code)
-    })
-    await expect.poll(() => codes).toEqual(['7Q2K-9XZD'])
-    approve()
-    const host = await connecting
-    await host.close()
-    expect(w.log.join('\n')).not.toContain('7Q2K-9XZD')
-  })
-
-  it('S6: approves this device in the same step with the role picked, after --pair', async () => {
-    const w = world([connects])
-    const host = await startRemoteHost(PLACES, w.deps, {
-      folder: FOLDER,
-      transport: SSH,
-      deviceName: 'my laptop',
-      approve: 'operator',
-      onPairing: () => undefined
-    })
-    expect(w.spawned[0]?.args).toEqual([
-      'bridge',
-      FOLDER,
-      '--pair',
-      'my laptop',
-      '--approve',
-      'operator',
-      '--',
-      'ssh',
-      '-o',
-      'BatchMode=yes',
-      'me@build-box'
-    ])
-    await host.close()
-  })
-
-  it('S6: an approval that failed hands on the line it wrote with the code shown again, and the first code with none', async () => {
-    let approve: () => void = () => undefined
-    const approved = new Promise<void>((resolve) => {
-      approve = resolve
-    })
-    const failed = 'floti devices: this device is not an admin here.'
-    const w = world([
-      (child) => {
-        pairsThen(approved)(child)
-        child.stderr.write(`${failed}\n${PAIRING_LINE}\n`)
-      }
-    ])
-    const told: Array<[string, string | null]> = []
-    const connecting = startRemoteHost(PLACES, w.deps, {
-      folder: FOLDER,
-      transport: SSH,
-      deviceName: 'my laptop',
-      approve: 'admin',
-      onPairing: (code, approvalFailed) => told.push([code, approvalFailed])
-    })
-    await expect
-      .poll(() => told)
-      .toEqual([
-        ['7Q2K-9XZD', null],
-        ['7Q2K-9XZD', failed]
-      ])
-    approve()
-    await (await connecting).close()
-    expect(w.log.join('\n')).not.toContain('7Q2K-9XZD')
-  })
-
-  it('a pairing that expired shows the bridge’s own line, not the code', async () => {
-    const w = world([
-      endsWith(
-        BRIDGE_EXIT.pairingExpired,
-        PAIRING_LINE,
-        'floti bridge: nobody approved the request to pair before it expired; nothing was pinned.'
-      )
-    ])
-    const error = await remoteError(
-      startRemoteHost(PLACES, w.deps, { folder: FOLDER, transport: SSH, deviceName: 'my laptop', approve: null, onPairing: () => undefined })
-    )
-    expect(error.lastLine).toBe('floti bridge: nobody approved the request to pair before it expired; nothing was pinned.')
-  })
-
-  it('a window’s own bridge goes through the same transport and never asks to pair', async () => {
+  it('S4: a window’s own bridge goes through the same transport and the same client folder', async () => {
     const w = world([endsWith(BRIDGE_EXIT.transportEnded, 'Connection to build-box closed by remote host.')])
     const bridge = openRemotePageBridge(PLACES, w.deps, { folder: FOLDER, transport: SSH }, () => undefined)
     expect(w.spawned[0]?.args).toEqual(['bridge', FOLDER, '--', 'ssh', '-o', 'BatchMode=yes', 'me@build-box'])
     await expect(bridge.ended).resolves.toBe('Connection to build-box closed by remote host.')
+  })
+
+  it('S7: a host that proves another key than the one pinned is said to have changed its key, in the bridge’s own words', async () => {
+    const line = 'floti bridge: the host proved key SHA256:new, not SHA256:pinned, which this client pinned for it.'
+    const w = world([endsWith(BRIDGE_EXIT.hostNotProven, line)])
+    const error = await remoteError(
+      startRemoteHost(PLACES, w.deps, {
+        folder: FOLDER,
+        transport: SSH,
+        deviceName: 'my laptop'
+      })
+    )
+    expect(error.keyChanged).toBe(true)
+    expect(error.lastLine).toBe(line)
+    // With nothing written, it still says the key changed.
+    const quiet = world([endsWith(BRIDGE_EXIT.hostNotProven)])
+    const said = await remoteError(
+      startRemoteHost(PLACES, quiet.deps, {
+        folder: FOLDER,
+        transport: SSH,
+        deviceName: 'my laptop'
+      })
+    )
+    expect(said).toMatchObject({
+      keyChanged: true,
+      lastLine: KEY_CHANGED_LINE
+    })
+    // Any other failure is no changed key.
+    const other = world([endsWith(BRIDGE_EXIT.transportEnded, 'Host key verification failed.')])
+    expect(
+      (
+        await remoteError(
+          startRemoteHost(PLACES, other.deps, {
+            folder: FOLDER,
+            transport: SSH,
+            deviceName: 'my laptop'
+          })
+        )
+      ).keyChanged
+    ).toBe(false)
+  })
+
+  it('S4: names this device with the computer’s name in its hello, and passes the bridge nothing but its folder and the transport', async () => {
+    const w = world([connects])
+    const host = await startRemoteHost(PLACES, w.deps, {
+      folder: FOLDER,
+      transport: SSH,
+      deviceName: 'my-laptop'
+    })
+    await host.close()
+    const decoder = new FrameDecoder()
+    for (const chunk of w.input[0] ?? []) decoder.push(chunk)
+    const first = decoder.next()
+    expect(
+      first !== null && 'message' in first && first.message.type === 'hello' ? first.message.client : null
+    ).toEqual({
+      name: 'Helm 2.4.0',
+      kind: 'desktop',
+      deviceName: 'my-laptop'
+    })
+    expect(w.spawned[0]?.args.join(' ')).not.toMatch(/--pair|--approve|devices/)
   })
 
   it('keeps each host’s keys in a folder of its own inside Helm’s data, whatever its id', () => {
@@ -306,11 +241,6 @@ describe('reaching a host on another computer', () => {
     expect(one).not.toBe(other)
     expect(remoteClientFolder(PLACES, 'win32', 'h-build')).toBe(one)
   })
-
-  it('reads the code from the pairing line and nothing else', () => {
-    expect(pairingCodeOf(PAIRING_LINE)).toBe('7Q2K-9XZD')
-    expect(pairingCodeOf('me@build-box: Permission denied (publickey).')).toBeNull()
-  })
 })
 
 describe('the floti a host keeps, and a host that refuses this Helm', () => {
@@ -320,15 +250,11 @@ describe('the floti a host keeps, and a host that refuses this Helm', () => {
       folder: FOLDER,
       transport: SSH,
       floti: '/home/me/.local/bin/floti',
-      deviceName: 'my laptop',
-      approve: null,
-      onPairing: () => undefined
+      deviceName: 'my laptop'
     })
     expect(w.spawned[0]?.args).toEqual([
       'bridge',
       FOLDER,
-      '--pair',
-      'my laptop',
       '--floti',
       '/home/me/.local/bin/floti',
       '--',
@@ -366,9 +292,7 @@ describe('the floti a host keeps, and a host that refuses this Helm', () => {
       startRemoteHost(PLACES, w.deps, {
         folder: FOLDER,
         transport: SSH,
-        deviceName: 'my laptop',
-        approve: null,
-        onPairing: () => undefined
+        deviceName: 'my laptop'
       })
     )
     expect(error.refused).toEqual({ host: '0.9', client: '1.0', update: 'host' })

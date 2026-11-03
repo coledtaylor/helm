@@ -69,6 +69,11 @@ export interface ConnectOptions {
    * `pluginPages`: it draws plugins' pages, from files the host serves.
    */
   capabilities: readonly Capability[]
+  /**
+   * The name of the computer Helm runs on, for the `hello`'s device name:
+   * what every client's list of attached devices calls this device.
+   */
+  deviceName?: string
   /** A line for Helm's log. Never given a payload, a frame or stream bytes. */
   log?: (line: string) => void
 }
@@ -244,7 +249,13 @@ class Connection implements HostConnection {
         major: PROTOCOL_VERSION.major,
         minor: PROTOCOL_VERSION.minor
       },
-      client: { name: `Helm ${this.options.appVersion}`, kind: 'desktop' },
+      client: {
+        name: `Helm ${this.options.appVersion}`,
+        kind: 'desktop',
+        ...(this.options.deviceName !== undefined && this.options.deviceName !== ''
+          ? { deviceName: this.options.deviceName }
+          : {})
+      },
       capabilities: [...this.options.capabilities]
     })
     return welcomed.then((welcome) => {

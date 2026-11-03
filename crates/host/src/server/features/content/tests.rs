@@ -107,7 +107,7 @@ impl World {
     fn ask<C: RequestChannel>(&self, request: &C::Request) -> Result<C::Response, String> {
         let mut router = Router::new(&CATALOGUE, CapabilitySet::from_names(["files"]));
         self.features
-            .requests(Caller::admin(ClientId(1)), &mut router);
+            .requests(Caller::new(ClientId(1)), &mut router);
         let answer = router.dispatch(&Request {
             id: 7,
             channel: C::NAME.to_owned(),
@@ -134,7 +134,7 @@ async fn every_content_channel_is_served_from_the_content_feature() {
     let mut router = Router::new(&CATALOGUE, CapabilitySet::from_names(["files"]));
     world
         .features
-        .requests(Caller::admin(ClientId(1)), &mut router);
+        .requests(Caller::new(ClientId(1)), &mut router);
     let handled: Vec<&str> = router.handled().collect();
     for channel in [
         "content:scopes",

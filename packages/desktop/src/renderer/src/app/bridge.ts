@@ -98,14 +98,10 @@ export const eachHostBridge = (listener: (host: string, bridge: HelmBridge) => v
   hostBridges.each((bridge: HostBridge) => listener(bridge.host, bridge.helm))
 
 /**
- * Settings > Devices: each admin host's devices, over the window's own
- * connection to it, asking this computer for presence through main when a
- * host on another computer wants it (`host/devices.ts`).
+ * Settings > Devices: who is attached to each connected host, and
+ * Disconnect, over the window's own connection to it (`host/devices.ts`).
  */
-export const devices: Devices = createDevices({
-  confirmPresence: (reason) => window.helm.invoke('presence:confirm', { reason }),
-  log
-})
+export const devices: Devices = createDevices({ log })
 
 /** The window's own connection to this PC's host, for Settings > Devices. */
 export const localHostConnection = (): ReturnType<typeof link.connection> => link.connection()

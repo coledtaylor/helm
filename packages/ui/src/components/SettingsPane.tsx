@@ -265,7 +265,7 @@ export interface SettingsPaneProps {
   onHostInstalled: (id: string, floti: string) => void
   /** Starts updating a host's floti from outside Settings, such as its sidebar row. */
   hostUpdateRequest?: { id: string; nonce: number } | null | undefined
-  /** Settings > Devices: each admin host's devices, approving and revoking them. */
+  /** Settings > Devices: the devices attached to each connected host, and Disconnect. */
   devices: DevicesSettingsProps
 }
 

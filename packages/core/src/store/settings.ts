@@ -25,6 +25,7 @@ import {
   RAIL_DESTINATIONS,
   REMOTE_HOST_ID_MAX,
   remoteHostsProblem,
+  storedRemoteHosts,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -711,6 +712,10 @@ export function readSettings(store: Store): AppSettings {
   if (Array.isArray(result.railHidden)) {
     result.railHidden = result.railHidden.filter((entry) => !RETIRED_RAIL_DESTINATIONS.has(entry))
   }
+
+  // A host loads with only the fields a host has now (`storedRemoteHosts`),
+  // whatever an earlier version stored beside them.
+  result.hosts = storedRemoteHosts(result.hosts) as AppSettings['hosts']
 
   // A layout written before panes were a tree, read as the row it was with the
   // divider where its own setting left it. That setting is no key of this

@@ -5,14 +5,13 @@
 //!
 //! It connects as `floti bridge` does, with the keys in Helm's client folder,
 //! so the device key never leaves this process. Unlike the bridge it never
-//! pairs or enrols: a folder without a device key and a pinned host key is
-//! left as it is, untouched.
+//! pins a host: a folder without a device key and a pinned host key is left
+//! as it is, untouched.
 //!
 //! `floti update-stop --ask | --stop`, with no client folder, is the same
 //! run on the host's own computer, as the desktop runs it through ssh or a
 //! command before it replaces floti there: it connects as the host itself,
-//! proving the key it reads from the host's key file as `floti devices`
-//! does, and never prints it. Its `--ask` prints the number of sessions the
+//! proving the key it reads from the host's key file, and never prints it. Its `--ask` prints the number of sessions the
 //! host is running, `0` included, on one line, for the desktop to say how
 //! many the update ends; its `--stop` is the same stop for an update.
 //!
@@ -57,7 +56,7 @@ const HOST_EXIT_DEADLINE: Duration = Duration::from_secs(60);
 /// user on the host's computer, with the host's key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Asker {
-    /// A paired client, whose keys are in this folder.
+    /// A client that has connected to this host, whose keys are in this folder.
     Client(PathBuf),
     /// The host itself, by its own key.
     Host,
@@ -201,16 +200,16 @@ async fn perform(env: UserEnv, asker: &Asker, step: Step) -> Outcome {
     }
 }
 
-/// A connection to the host on this computer as the paired client whose
+/// A connection to the host on this computer as the client whose
 /// keys are in `client_folder`.
 async fn as_client(folders: &Folders, client_folder: &Path) -> Result<Connection, Outcome> {
-    let keys = match ClientKeys::open_paired(client_folder) {
+    let keys = match ClientKeys::open_pinned(client_folder) {
         Ok(Some(keys)) => keys,
         Ok(None) => {
             return Err(Outcome::Failed(
                 BridgeExit::NotPinned,
                 format!(
-                    "{} holds no paired client, so this PC's host was not asked anything.",
+                    "{} holds no client that has connected to a host, so this PC's host was not asked anything.",
                     client_folder.display()
                 ),
             ));
@@ -276,6 +275,7 @@ async fn welcomed(connection: &mut Connection) -> Result<(), Outcome> {
             client: ClientInfo {
                 name: "Helm installer".to_owned(),
                 kind: ClientKind::Desktop,
+                device_name: None,
             },
             capabilities: Vec::new(),
         }),

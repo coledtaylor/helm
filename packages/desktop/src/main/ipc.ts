@@ -2,7 +2,6 @@ import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell
 import { FOREIGN_PAGE, type HelmPage, type HostPageLinks } from './host/page-link'
 import type { RemoteHostLinks } from './host/remote'
 import type { RemoteInstaller } from './host/remote-install'
-import type { PresenceCheck } from './presence'
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename } from 'node:path'
@@ -165,8 +164,6 @@ interface IpcContextBase {
   remoteHosts?: RemoteHostLinks | undefined
   /** Installs and updates floti on those hosts' computers, after a yes; see `host/remote-install.ts`. */
   remoteInstall?: RemoteInstaller | undefined
-  /** Asks this computer to confirm its user is present; see `presence.ts`. Unavailable when absent. */
-  presence?: PresenceCheck | undefined
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
   /**
@@ -477,7 +474,6 @@ export function registerIpc(ctx: IpcContext): void {
     'remoteHosts:cancel': ({ id }) => {
       ctx.remoteInstall?.cancel(id)
     },
-    'presence:confirm': ({ reason }) => ctx.presence?.confirm(reason) ?? 'unavailable',
 
     // Sessions in Helm itself: no host, so no host log file.
     'app:info': async () => ({

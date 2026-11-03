@@ -26,6 +26,7 @@ pub fn frame_fixture_messages() -> Vec<(&'static str, Message)> {
                 client: ClientInfo {
                     name: "Helm 2.4.0".to_owned(),
                     kind: ClientKind::Desktop,
+                    device_name: None,
                 },
                 capabilities: vec!["terminal".to_owned()],
             }),

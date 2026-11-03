@@ -27,7 +27,7 @@ request_channel! {
 
 request_channel! {
     /// The running sessions the caller's device started, oldest first: what
-    /// a quit from that device would end. A device is the paired key a
+    /// a quit from that device would end. A device is the key a
     /// connection proved, so every connection a client opens with the same
     /// key counts as one device.
     HostDeviceSessions = "host:deviceSessions", () => Vec<DeviceSession>

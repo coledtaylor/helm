@@ -1,20 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { LOCAL_HOST_KEY, LOCAL_HOST_LABEL, type RemoteHost } from '@helm/core/types'
 import type { DevicesSettingsProps, SettingsDevicesHost } from '@helm/ui'
 import type { HostConnection } from '../../../shared/host/client'
-import type { Devices, DevicesHostRef } from './host/devices'
+import type { AttachedUpdate, Devices, DevicesHostRef } from './host/devices'
 import type { RemoteHostView } from './host/remoteHosts'
 
 /**
  * Settings > Devices, wired: This PC's host first, then each host on another
- * computer that says this device is its admin, listed while the section is on
- * screen and again after each approve or revoke. Listed again every few
- * seconds while on screen, so a device that asks to pair shows up without a
- * click.
+ * computer that is connected now, in the order they were added; a host that
+ * is not connected now is not listed. Who is attached to each comes from its
+ * `devices:attached` subscription, held while the section is on screen, so a
+ * device that attaches or leaves shows up or goes without a click.
  */
-
-/** How often the listing is read again while Settings > Devices is on screen. */
-export const DEVICES_RELIST_MS = 5000
 
 export interface DevicesSettingsDeps {
   devices: Devices
@@ -24,28 +21,48 @@ export interface DevicesSettingsDeps {
   remoteConnection: (id: string) => Promise<HostConnection>
 }
 
-/** The hosts Settings > Devices lists: This PC, then each connected remote host this device is an admin of. */
+/** The hosts Settings > Devices lists: This PC, then each connected host on another computer, in the order added. */
 export function devicesHosts(
   deps: Pick<DevicesSettingsDeps, 'localConnection' | 'remoteConnection'>,
   hosts: readonly RemoteHost[],
   view: Readonly<Record<string, RemoteHostView>>
 ): DevicesHostRef[] {
-  const admin = hosts.filter((host) => {
-    const connection = view[host.id]?.connection
-    return connection?.state === 'connected' && connection.role === 'admin'
-  })
+  const connected = hosts.filter((host) => view[host.id]?.connection?.state === 'connected')
   return [
     {
       id: LOCAL_HOST_KEY,
       name: LOCAL_HOST_LABEL,
       connection: deps.localConnection
     },
-    ...admin.map((host) => ({
+    ...connected.map((host) => ({
       id: host.id,
       name: host.name,
       connection: () => deps.remoteConnection(host.id)
     }))
   ]
+}
+
+/** One host as the section draws it, from what its watch last heard. */
+export function hostView(
+  ref: Pick<DevicesHostRef, 'id' | 'name'>,
+  update: AttachedUpdate | undefined
+): SettingsDevicesHost {
+  return {
+    id: ref.id,
+    name: ref.name,
+    thisComputer: ref.id === LOCAL_HOST_KEY,
+    thisDevice: update?.ok === true ? update.thisDevice : null,
+    attached:
+      update?.ok === true
+        ? update.devices.map(({ fingerprint, name, away, since }) => ({
+            fingerprint,
+            name,
+            away,
+            since
+          }))
+        : null,
+    error: update?.ok === false ? update.message : null
+  }
 }
 
 export function useDevicesSettings(
@@ -54,48 +71,40 @@ export function useDevicesSettings(
   hosts: readonly RemoteHost[],
   view: Readonly<Record<string, RemoteHostView>>
 ): DevicesSettingsProps {
-  const [listed, setListed] = useState<readonly SettingsDevicesHost[] | null>(null)
+  const [attached, setAttached] = useState<Readonly<Record<string, AttachedUpdate>>>({})
   const refs = devicesHosts(deps, hosts, view)
-  // Listed again only when the set of hosts changes, not on every render.
+  // Watched again only when the set of hosts changes, not on every render.
   const key = refs.map((ref) => `${ref.id}\u0000${ref.name}`).join('\u0001')
   const current = useRef(refs)
-  // Kept current after each render, before the listing below reads it.
+  // Kept current after each render, before the watches below read it.
   useEffect(() => {
     current.current = refs
   })
-  const generation = useRef(0)
-
-  const relist = useCallback(async (): Promise<void> => {
-    const mine = ++generation.current
-    const next = await deps.devices.list(current.current)
-    if (mine === generation.current) setListed(next)
-  }, [deps.devices])
+  const { devices } = deps
 
   useEffect(() => {
     if (!shown) return
-    void relist()
-    const timer = setInterval(() => void relist(), DEVICES_RELIST_MS)
-    return () => clearInterval(timer)
-  }, [shown, key, relist])
-
-  return useMemo(() => {
-    const refOf = (id: string): DevicesHostRef | undefined => current.current.find((ref) => ref.id === id)
-    return {
-      hosts: listed,
-      onApprove: async (id, code, role) => {
-        const ref = refOf(id)
-        if (ref === undefined) return 'That host is no longer listed.'
-        const done = await deps.devices.approve(ref, code, role)
-        void relist()
-        return done.ok ? null : done.message
-      },
-      onRevoke: async (id, device) => {
-        const ref = refOf(id)
-        if (ref === undefined) return 'That host is no longer listed.'
-        const done = await deps.devices.revoke(ref, device)
-        void relist()
-        return done.ok ? null : done.message
-      }
+    const stops = current.current.map((ref) =>
+      devices.watchAttached(ref, (update) => setAttached((before) => ({ ...before, [ref.id]: update })))
+    )
+    return () => {
+      for (const stop of stops) stop()
+      setAttached({})
     }
-  }, [listed, deps.devices, relist])
+  }, [shown, key, devices])
+
+  const onDisconnect = useCallback<DevicesSettingsProps['onDisconnect']>(
+    async (id, device) => {
+      const ref = current.current.find((entry) => entry.id === id)
+      if (ref === undefined) return 'That host is no longer connected.'
+      const done = await devices.disconnect(ref, device.fingerprint)
+      return done.ok ? null : done.message
+    },
+    [devices]
+  )
+
+  return {
+    hosts: refs.map((ref) => hostView(ref, attached[ref.id])),
+    onDisconnect
+  }
 }

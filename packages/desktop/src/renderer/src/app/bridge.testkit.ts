@@ -224,10 +224,11 @@ export const remoteHosts: RemoteHostsStore = {
 
 /** No devices anywhere, unless a test says otherwise (Settings > Devices). */
 export const devices: Devices = {
-  list: (hosts) =>
-    Promise.resolve(hosts.map((host) => ({ ...host, thisDevice: null, paired: [], waiting: [], error: null }))),
-  approve: () => Promise.resolve({ ok: true }),
-  revoke: () => Promise.resolve({ ok: true })
+  watchAttached: (_host, listener) => {
+    listener({ ok: true, devices: [], thisDevice: null })
+    return () => undefined
+  },
+  disconnect: () => Promise.resolve({ ok: true })
 }
 
 /** The window's own connection to this PC's host: none in these tests. */

@@ -253,7 +253,7 @@ impl Sessions {
         let device = self
             .hosted
             .device_of(client)
-            .ok_or_else(|| "This connection has no paired device to quit.".to_owned())?;
+            .ok_or_else(|| "This connection has no device to quit.".to_owned())?;
         if end {
             let mut focus = lock(&self.focus);
             for session in self.hosted.started_by(&device) {

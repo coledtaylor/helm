@@ -3,7 +3,7 @@
 //! list, rename, close and resize, the restore offer, the plain terminals,
 //! and the stop that ends them all.
 //!
-//! Which paired device started each running session, and opened each plain
+//! Which device started each running session, and opened each plain
 //! terminal, is known here by its fingerprint, from the device each attached
 //! client's connection proved. Each program's label in the session keeper
 //! carries it too, so a host that takes them back after a crash knows whose
@@ -94,7 +94,7 @@ pub(crate) struct Hosted {
     agent_tools: OnceLock<Arc<HostAgentTools>>,
     /// Who is here: each attached client's device, and the device that
     /// started each running session and opened each plain terminal.
-    presence: Mutex<Presence>,
+    devices: Mutex<Devices>,
     occupancy: watch::Sender<Occupancy>,
 }
 
@@ -116,7 +116,7 @@ impl Occupancy {
 
 /// The devices behind what the host is running.
 #[derive(Default)]
-struct Presence {
+struct Devices {
     /// Each attached client's device: the key its connection proved.
     clients: HashMap<ClientId, PublicKey>,
     /// The fingerprint of the device that started each running session.
@@ -167,15 +167,15 @@ impl Hosted {
             None => TakenBack::default(),
         };
         let lost = records::reconcile_running(&ledger.store(), &held)?;
-        let mut presence = Presence::default();
+        let mut devices = Devices::default();
         for (kind, id, device) in opened {
             match kind {
                 HeldKind::Session if held.contains(&id) => {
-                    presence.sessions.insert(id, device);
+                    devices.sessions.insert(id, device);
                 }
                 HeldKind::Session => {}
                 HeldKind::Terminal => {
-                    presence.terminals.insert(id, device);
+                    devices.terminals.insert(id, device);
                 }
             }
         }
@@ -189,26 +189,26 @@ impl Hosted {
             keeper,
             stopped: AtomicBool::new(false),
             agent_tools: OnceLock::new(),
-            presence: Mutex::new(presence),
+            devices: Mutex::new(devices),
             occupancy: watch::Sender::new(Occupancy::default()),
         })
     }
 
     /// `client` has been welcomed, on a connection that proved `device`.
     pub fn attach_client(&self, client: ClientId, device: PublicKey) {
-        lock(&self.presence).clients.insert(client, device);
+        lock(&self.devices).clients.insert(client, device);
         self.settle();
     }
 
     /// `client`'s connection has ended.
     pub fn detach_client(&self, client: ClientId) {
-        lock(&self.presence).clients.remove(&client);
+        lock(&self.devices).clients.remove(&client);
         self.settle();
     }
 
     /// The device `client`'s connection proved, while it is attached.
     pub fn device_of(&self, client: ClientId) -> Option<PublicKey> {
-        lock(&self.presence).clients.get(&client).copied()
+        lock(&self.devices).clients.get(&client).copied()
     }
 
     /// How busy the host is, now and as it changes.
@@ -223,14 +223,14 @@ impl Hosted {
         let sessions = self.sessions.list();
         let terminals = self.terminals.list();
         let clients = {
-            let mut presence = lock(&self.presence);
-            presence
+            let mut devices = lock(&self.devices);
+            devices
                 .sessions
                 .retain(|id, _| sessions.iter().any(|session| session.id() == *id));
-            presence
+            devices
                 .terminals
                 .retain(|id, _| terminals.iter().any(|terminal| terminal.id() == *id));
-            presence.clients.len()
+            devices.clients.len()
         };
         let now = Occupancy {
             sessions: sessions.len(),
@@ -246,7 +246,7 @@ impl Hosted {
 
     /// The running sessions `device` started, oldest first.
     pub fn started_by(&self, device: &PublicKey) -> Vec<DeviceSession> {
-        let mine = opened_by(&lock(&self.presence).sessions, &device.fingerprint());
+        let mine = opened_by(&lock(&self.devices).sessions, &device.fingerprint());
         self.sessions
             .list()
             .iter()
@@ -268,10 +268,10 @@ impl Hosted {
     pub fn quit(&self, device: &PublicKey, end: bool) -> Vec<u64> {
         let device = device.fingerprint();
         let (sessions, terminals) = {
-            let presence = lock(&self.presence);
+            let devices = lock(&self.devices);
             (
-                opened_by(&presence.sessions, &device),
-                opened_by(&presence.terminals, &device),
+                opened_by(&devices.sessions, &device),
+                opened_by(&devices.terminals, &device),
             )
         };
         for terminal in terminals.iter().filter_map(|id| self.terminals.find(*id)) {
@@ -312,7 +312,7 @@ impl Hosted {
         if let Some(device) = device
             && let Ok(id) = i64::try_from(opened.id)
         {
-            lock(&self.presence)
+            lock(&self.devices)
                 .terminals
                 .entry(SessionId(id))
                 .or_insert(device);
@@ -795,7 +795,7 @@ impl Hosted {
                 opened_by: device.clone(),
             })?;
             if let Some(device) = device {
-                lock(&self.presence).sessions.insert(session.id(), device);
+                lock(&self.devices).sessions.insert(session.id(), device);
             }
             self.settle();
             Ok((

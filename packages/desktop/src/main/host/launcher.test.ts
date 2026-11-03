@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { PATIENCE } from '../../../../../test/patience'
 import { FakeChild, connects, type Program } from '../../../test/fake-child'
-import { encodeFrame } from './frame'
+import { FrameDecoder, encodeFrame } from './frame'
 import {
   HOST_ALREADY_RUNNING_EXIT,
   HOST_RETRY_MS,
@@ -426,7 +426,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     expect(world.programs()).toHaveLength(1 + tries)
   })
 
-  it('starts the host when Helm has paired with none and no code waits, then enrols through the one it started', async () => {
+  it('S6: starts the host when Helm has pinned no host key and none has started, then pins the key of the one it started at its first connection', async () => {
     const world = new World({ bridges: [exits(4), connects] })
     const local = await startLocalHost(WIN_PLACES, world.deps())
 
@@ -440,22 +440,50 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     expect(world.spawned[1]!.running).toBe(true)
   })
 
-  it('says Helm is not paired when the host it would start is already running, with no code for Helm, and does not wait for it', async () => {
+  it('S6: says hello to the local host naming this device with the computer’s name, and asks nothing else of it', async () => {
+    const said: unknown[] = []
+    const recordsHello: Program = (child) => {
+      const decoder = new FrameDecoder()
+      child.stdin.on('data', (chunk: Uint8Array) => {
+        decoder.push(chunk)
+        for (let next = decoder.next(); next !== null; next = decoder.next()) {
+          if ('message' in next) said.push(next.message)
+        }
+      })
+      connects(child)
+    }
+    const world = new World({ bridges: [recordsHello] })
+    const local = await startLocalHost(WIN_PLACES, world.deps({ deviceName: 'my-desktop' }))
+    await local.close()
+    expect(said).toEqual([
+      expect.objectContaining({
+        type: 'hello',
+        client: {
+          name: 'Helm 2.4.0',
+          kind: 'desktop',
+          deviceName: 'my-desktop'
+        }
+      })
+    ])
+    expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`])
+  })
+
+  it('says Helm has nothing pinned when the host it would start is already running, and does not wait for it', async () => {
     const world = new World({
       bridges: [exits(4)],
       // A second host on the same folders refuses to start.
       hosts: [foldersHeld]
     })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `Helm is not paired with the local host, and the host offered no one-time code for it to enrol with${TURN_OFF}`
+      `Helm has no key pinned for the local host, and no local host has started on this computer yet${TURN_OFF}`
     )
     expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, HOST_PROGRAM])
   })
 
-  it('says Helm is not paired when the host it started still offers no code, and ends that host', async () => {
+  it('says Helm has nothing pinned when the host it started still has no key to learn, and ends that host', async () => {
     const world = new World({ bridges: [exits(4), exits(4)] })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `Helm is not paired with the local host, and the host offered no one-time code for it to enrol with${TURN_OFF}`
+      `Helm has no key pinned for the local host, and no local host has started on this computer yet${TURN_OFF}`
     )
     expect(world.spawned[1]!.killed).toBe(true)
   })
@@ -524,16 +552,22 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     )
   })
 
-  it('says the host’s own reason, not that Helm is not paired, when the host it started for an unpaired Helm did not start', async () => {
-    const world = new World({ bridges: [exits(4)], hosts: [saysWhyItDidNotStart(FROM_SSH)] })
+  it('says the host’s own reason, not that Helm has nothing pinned, when the host it started for it did not start', async () => {
+    const world = new World({
+      bridges: [exits(4)],
+      hosts: [saysWhyItDidNotStart(FROM_SSH)]
+    })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
       `The local host did not start: ${FROM_SSH.replace(/\.$/, '')}${TURN_OFF}`
     )
     expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, HOST_PROGRAM])
   })
 
-  it('says only that the host stopped when it did not start without saying why, after an unpaired bridge too', async () => {
-    const world = new World({ bridges: [exits(4)], hosts: [(child) => queueMicrotask(() => child.exit(1))] })
+  it('says only that the host stopped when it did not start without saying why, after a bridge with nothing pinned too', async () => {
+    const world = new World({
+      bridges: [exits(4)],
+      hosts: [(child) => queueMicrotask(() => child.exit(1))]
+    })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
       `The local host stopped before it was ready, with status 1${TURN_OFF}`
     )

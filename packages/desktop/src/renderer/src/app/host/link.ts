@@ -176,6 +176,7 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
       connection = await connectHost({
         transport: relayTransport(deps.bridge, opened.connection, ended),
         appVersion: opened.appVersion,
+        ...(opened.deviceName !== undefined ? { deviceName: opened.deviceName } : {}),
         capabilities: deps.capabilities,
         ...(deps.log !== undefined ? { log: deps.log } : {})
       })
