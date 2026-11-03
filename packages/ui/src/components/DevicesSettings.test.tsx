@@ -61,6 +61,7 @@ describe('Settings > Devices', () => {
     const phone = document.querySelector(`[data-settings-device="${PHONE.fingerprint}"]`) as HTMLElement
     expect(phone.textContent).toContain('phone')
     expect(phone.textContent).toContain('Viewer')
+    expect(phone.querySelector('[data-settings-device-paired-at]')?.textContent).toMatch(/^Paired .*2026/)
     expect(pc.getByText('tablet')).toBeTruthy()
     expect(pc.getByText('9 min left')).toBeTruthy()
   })

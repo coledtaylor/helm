@@ -183,6 +183,9 @@ function PairedRow({
         <span className="text-[11.5px] text-fg-muted">{ROLE_LABEL[device.role]}</span>
         <span className="font-mono text-[11px] text-fg-subtle">{device.fingerprint}</span>
         <span className="flex-1" />
+        <span data-settings-device-paired-at className="text-[11.5px] text-fg-subtle">
+          Paired {when(device.pairedAt)}
+        </span>
         {revoked ? (
           <span data-settings-device-revoked-at className="text-[11.5px] text-fg-subtle">
             Revoked {when(device.revokedAt ?? '')}
