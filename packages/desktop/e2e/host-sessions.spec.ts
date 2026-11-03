@@ -782,6 +782,80 @@ test('after Helm is killed outright, its sessions run on in the host, and the ne
   expect(fakeClaudeLogs(world).filter((log) => log.resumed)).toEqual([])
 })
 
+test('when the host Helm started dies, its tab is lost, Helm starts a new host and reconnects, and Restore resumes the conversation in that tab', async ({
+  helm,
+  world
+}) => {
+  const { window } = helm
+  const id = await startSession(window, 'alpha')
+  const pane = window.getByRole('region', { name: 'First pane' })
+  await typeLine(pane, 'sketch the migration')
+  await expect.poll(() => terminalText(window, id)).toContain('You said: sketch the migration')
+  const first = await claudeRunIn(world, world.projects.alpha)
+  await expect.poll(async () => flotiHostsAmong(flotiChildren(await mainPid(helm))).length).toBe(1)
+  const [host] = flotiHostsAmong(flotiChildren(await mainPid(helm)))
+
+  // The banner is up only while the window has no host, so the page keeps
+  // every text it showed rather than the test racing to see it.
+  await window.evaluate(() => {
+    const seen: string[] = []
+    ;(window as unknown as { __hostStopped: string[] }).__hostStopped = seen
+    new MutationObserver(() => {
+      const banner = document.querySelector('[data-host-stopped-banner]')
+      const text = banner?.textContent ?? null
+      if (text !== null && seen.at(-1) !== text) seen.push(text)
+    }).observe(document.body, { childList: true, subtree: true, characterData: true })
+  })
+
+  // Outright, as a crash would: this test's own host, never another.
+  process.kill(host!, 'SIGKILL')
+
+  // The tab is lost: its last screen stays, dimmed, under a bar that says so.
+  await expect(pane.getByRole('tab', { name: 'alpha, ended' })).toBeVisible()
+  await expect(pane.locator('[data-session-ended="lost"]')).toContainText('Session lost: this PC’s host stopped')
+  await expect(pane.locator('[data-terminal-lost]')).toBeVisible()
+  expect(await terminalText(window, id)).toContain('You said: sketch the migration')
+
+  // Helm started the host that died, so it starts a new one and reconnects.
+  await expect
+    .poll(async () => {
+      const hosts = flotiHostsAmong(flotiChildren(await mainPid(helm)))
+      return hosts.length === 1 && hosts[0] !== host
+    })
+    .toBe(true)
+  await expect(window.locator('[data-host-stopped-banner]')).toHaveCount(0)
+  expect(await window.evaluate(() => (window as unknown as { __hostStopped: string[] }).__hostStopped)).toEqual([
+    'This PC’s host stopped. Starting it again…'
+  ])
+
+  // The new host offers the session back, and the Restore sessions tab opens
+  // in front; the lost tab's own Restore goes through that same offer.
+  await expect(pane.getByRole('tab', { name: 'Restore sessions' })).toBeVisible()
+  await pane.getByRole('tab', { name: 'alpha, ended' }).click()
+  const restore = pane.locator('[data-session-ended="lost"]').getByRole('button', { name: 'Restore' })
+  await expect(restore).toBeEnabled()
+  await restore.click()
+  await window.getByRole('button', { name: 'Resume 1 session' }).click()
+
+  let resumed: FakeClaudeLog | undefined
+  await expect
+    .poll(() => {
+      resumed = fakeClaudeLogs(world).find((log) => log.resumed)
+      return resumed !== undefined
+    })
+    .toBe(true)
+  const run = resumed as FakeClaudeLog
+  expect(run.argv[run.argv.indexOf('--resume') + 1]).toBe(first.sessionId)
+  expect(run.cwd.toLowerCase()).toBe(world.projects.alpha.toLowerCase())
+
+  // In the tab the lost session had: the pane holds that one session tab, now the resumed one.
+  const tabs = pane.locator('[role="tab"][data-tab^="session:"]')
+  await expect(tabs).toHaveCount(1)
+  await expect(tabs).not.toHaveAttribute('data-tab', `session:${String(id)}`)
+  const resumedId = Number(((await tabs.getAttribute('data-tab')) ?? '').replace('session:', ''))
+  await expect.poll(() => terminalText(window, resumedId)).toContain(`Resumed ${first.sessionId}`)
+})
+
 test('a session ended in the host is in the history without a refresh, its archive opens, and it resumes in its folder through the host', async ({
   helm,
   world
