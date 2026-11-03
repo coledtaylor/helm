@@ -125,10 +125,12 @@ its capabilities alone. `noise_sessions.rs` tests the handshake itself: what
 crosses the socket, read through a tap that relays one endpoint to another,
 and clients that misbehave, built as raw sockets from the protocol's Noise
 layer, against the executable, whose stderr is the host's log. The stalled
-handshake runs on a deadline of its own (`TestDirs::with_handshake_deadline`,
-a marker in the data folder that only a test build reads); the real
-deadline's length is stepped on tokio's paused clock in
-`server/connection/tests.rs`. Most tests run a `Host` in the test
+handshake, and the connections that finish it and never say `hello`, run on
+a deadline of their own (`TestDirs::with_handshake_deadline`, a marker in the
+data folder that only a test build reads, which sets the handshake's deadline
+and the hello's); the real deadlines' lengths are stepped on tokio's paused
+clock in `server/connection/tests.rs`, where the wait for `hello` runs over
+in-memory pipes after a real handshake. Most tests run a `Host` in the test
 process on a `TestDirs`; the ones about the executable (one instance per data
 folder and socket, the SSH refusal, Ctrl+C and SIGTERM, a killed host) run the
 built `floti host` with `FLOTI_DATA_DIR`, `FLOTI_RUNTIME_DIR` and the other

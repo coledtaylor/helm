@@ -24,7 +24,9 @@
 //! `hello`, sealed under the session's keys. Then, under the same lock, the
 //! key is paired as the admin named [`FIRST_ADMIN_NAME`] while no other admin
 //! exists, the code is dropped and the file removed. A device that goes
-//! before its `hello`, or whose answer cannot be written, or a host stopping
+//! before its `hello`, whose answer cannot be written, or that has not said
+//! `hello` within the host's deadline for it
+//! ([`HELLO_DEADLINE`](super::HELLO_DEADLINE)), or a host stopping
 //! meanwhile, lets go of the code with nothing paired: the file and the code
 //! stay for that client, or another, to enrol with. So there is no admin a
 //! client never learned the host key of.

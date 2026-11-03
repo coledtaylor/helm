@@ -812,6 +812,87 @@ async fn s10_a_connection_that_stalls_before_or_inside_the_handshake_is_closed_a
     assert_eq!(timed_out, 2, "{stderr}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_connections_that_say_no_hello_are_closed_at_the_deadline_by_fingerprint_and_the_code_is_freed()
+ {
+    let dirs = TestDirs::new();
+    // A deadline of the test's own, for the hello as for the handshake: the
+    // real one's length is stepped in the connection's unit tests, and this
+    // one only shows the closes happen, and are logged, while another client
+    // is served.
+    dirs.with_handshake_deadline(STALL_DEADLINE);
+    let host = HostProcess::start_unpaired(&dirs);
+    let endpoint = binary_endpoint(&dirs);
+    let written = enrolment_of(&dirs, None).await;
+    let registry = DeviceRegistry::in_data_folder(&dirs.data);
+
+    // A new device proves the code and is answered, then says nothing.
+    let mut desk = ClientKeys::open(&dirs.folder("desk")).unwrap();
+    let mut enrolling = enrol_when_free(&mut desk, &endpoint, &dirs.data).await;
+    // A paired device finishes its handshake, then says nothing.
+    let mut quiet = paired_client(&dirs.folder("quiet"), &dirs.data);
+    let mut stalled = connect_local_when_up(&mut quiet, &endpoint, &dirs.data).await;
+
+    // Another client is served while they wait.
+    let mut operator = operator(&dirs, &endpoint).await;
+    assert!(operator.request::<SessionList>(&()).await.is_ok());
+
+    for (name, connection) in [("enrolling", &mut enrolling), ("paired", &mut stalled)] {
+        match tokio::time::timeout(PATIENCE, connection.next()).await {
+            Err(_) => panic!("the host kept the {name} connection open past {PATIENCE:?}"),
+            Ok(Ok(Some(message))) => panic!("the host wrote to the {name} connection: {message:?}"),
+            Ok(Ok(None) | Err(_)) => {}
+        }
+    }
+    assert!(
+        registry
+            .devices()
+            .unwrap()
+            .iter()
+            .all(|device| device.key != desk.device_key()),
+        "the silent device was paired"
+    );
+    let kept = read_enrolment(&dirs.data)
+        .unwrap()
+        .expect("the code is kept");
+    assert!(kept.code.matches(&written.code));
+
+    // Another device then enrols with the same code, as the first admin.
+    let mut laptop = ClientKeys::open(&dirs.folder("laptop")).unwrap();
+    let connection = enrol_when_free(&mut laptop, &endpoint, &dirs.data).await;
+    let mut admin = TestClient::over(connection, CAPABILITIES).await;
+    assert!(admin.request::<SessionList>(&()).await.is_ok());
+    assert_eq!(
+        registry
+            .device(&laptop.device_key())
+            .unwrap()
+            .map(|device| device.role),
+        Some(Role::Admin)
+    );
+    assert!(read_enrolment(&dirs.data).unwrap().is_none());
+
+    drop(operator);
+    let (stdout, stderr) = host.stop(admin).await;
+    let no_hello: Vec<&str> = stderr
+        .lines()
+        .filter(|line| {
+            line.contains("refused client") && line.contains("did not say hello in time")
+        })
+        .collect();
+    assert_eq!(no_hello.len(), 2, "{stderr}");
+    for key in [desk.device_key(), quiet.device_key()] {
+        assert!(
+            no_hello
+                .iter()
+                .any(|line| line.contains(&format!("device {}", key.fingerprint()))),
+            "{stderr}"
+        );
+        assert!(!stderr.contains(&key.to_hex()), "{stderr}");
+    }
+    assert_code_absent(&written.code, stdout.as_bytes(), "the host's output");
+    assert_code_absent(&written.code, stderr.as_bytes(), "the host's log");
+}
+
 // ---------------------------------------------------------------------------
 // S11, S12: what a client keeps on disk
 // ---------------------------------------------------------------------------

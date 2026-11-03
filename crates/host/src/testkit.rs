@@ -178,7 +178,8 @@ impl TestDirs {
     }
 
     /// Gives a host over this tree's data folder `deadline` to finish a
-    /// connection's handshake in, in place of the real one, so a test of the
+    /// connection's handshake in, and `deadline` again to say `hello` once
+    /// it is answered, in place of the real ones, so a test of either
     /// deadline against the executable does not wait the real one out.
     pub fn with_handshake_deadline(&self, deadline: Duration) {
         std::fs::write(
