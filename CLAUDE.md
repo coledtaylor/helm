@@ -52,13 +52,24 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
     paths, through the built app.
 - While building, run only the tests for what changed. A full suite is a
   regression check, and it runs on CI: push the branch and read its results
-  on Windows, macOS and Linux. Run a full suite locally only for what CI does
-  not run (`pnpm test:e2e`).
+  on Windows, macOS and Linux.
+- Unit and integration tests validate the work. End-to-end tests run only
+  before a release is cut (the `procedures` skill): never while building, to
+  check a fix or to finish a task.
+- Nearly everything in a local app can be shown by a unit or integration test.
+  Something an end-to-end run catches is a gap in those tiers: add the unit or
+  integration test that fails for it, then fix it. Only what needs the whole
+  app running stays end-to-end.
+- A Rust test run names the binary that holds the tests: `--lib` for a
+  module's tests, `--test <file>` for one of `crates/host/tests/*.rs`. A
+  filter alone (`cargo nextest run -p floti-host <filter>`) builds and links
+  every test binary in the crate first. `cargo check` finds compile errors
+  without linking. A test that passed runs again only after the code it
+  covers changed.
 - `pnpm check` is the gate. CI runs it on Windows, macOS and Linux on every
   push, then builds. All three jobs are required: a failure on any one fails
   the run and stops the release, and a branch merges only once all three
-  passed. `pnpm test:e2e` runs locally only, never in CI, for a change that
-  touches a user workflow.
+  passed. End-to-end tests run locally only, never in CI.
 - `pnpm test:posix` runs the processes-and-ports, overlay, process-tree and
   data-directory tests where that code is the POSIX one: natively on macOS and
   Linux, and under Linux in WSL from Windows.
