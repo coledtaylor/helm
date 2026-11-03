@@ -88,6 +88,7 @@ import {
 } from './host/desktop'
 import { routePageLinks } from './host/page-link'
 import type { RemoteHostLinks } from './host/remote'
+import { createPortForwards, type PortForwards } from './host/forwards'
 import { createActivityService } from './activity'
 import { createRestoreService, type RestoreService } from './restore'
 import { createResourcesService } from './resources'
@@ -565,8 +566,16 @@ function startApp(options: AppOptions = {}): void {
    * and tries again by itself; a settings write that adds or removes one
    * starts or ends its link (`ipc.ts`).
    */
-  const remoteHosts: RemoteHostLinks | null =
+  /** The ports of remote sessions forwarded to this PC's loopback, only with sessions in the local host. */
+  const forwards: PortForwards | null =
     desktopHost !== null
+      ? createPortForwards({
+          changed: (list) => emit(win, 'forwards:changed', list),
+          log: (line) => console.log(line)
+        })
+      : null
+  const remoteHosts: RemoteHostLinks | null =
+    desktopHost !== null && forwards !== null
       ? createDesktopRemoteHosts({
           isHelmPage,
           nextConnection,
@@ -576,6 +585,7 @@ function startApp(options: AppOptions = {}): void {
             emitToContents(pluginBackground?.contents(), 'remoteHosts:changed', states)
           },
           plugins: desktopHost.remotePlugins,
+          forwards,
           log: (line) => console.log(line)
         })
       : null
@@ -919,6 +929,7 @@ function startApp(options: AppOptions = {}): void {
           remoteInstall: createDesktopRemoteInstaller((line) => console.log(line))
         }
       : {}),
+    ...(forwards !== null ? { forwards } : {}),
     rendererReady: () => {
       pushTheme({ services, themes, plugins, window: () => win })
       // With sessions in the local host the window reads its settings and

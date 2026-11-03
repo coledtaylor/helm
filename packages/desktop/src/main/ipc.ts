@@ -1,6 +1,7 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type WebContents } from 'electron'
 import { FOREIGN_PAGE, type HelmPage, type HostPageLinks } from './host/page-link'
 import type { RemoteHostLinks } from './host/remote'
+import type { PortForwards } from './host/forwards'
 import type { RemoteInstaller } from './host/remote-install'
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -164,6 +165,8 @@ interface IpcContextBase {
   remoteHosts?: RemoteHostLinks | undefined
   /** Installs and updates floti on those hosts' computers, after a yes; see `host/remote-install.ts`. */
   remoteInstall?: RemoteInstaller | undefined
+  /** The ports of those hosts' sessions forwarded to this PC's loopback; see `host/forwards.ts`. */
+  forwards?: PortForwards | undefined
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
   /**
@@ -477,6 +480,11 @@ export function registerIpc(ctx: IpcContext): void {
     'remoteHosts:reconnect': ({ id }) => {
       ctx.remoteHosts?.reconnect(id)
     },
+    'forwards:open': ({ host, session, port }) => {
+      if (ctx.forwards === undefined) return Promise.reject(new Error(NO_REMOTE_HOSTS))
+      return ctx.forwards.open(host, session, port)
+    },
+    'forwards:read': () => ctx.forwards?.list() ?? [],
 
     // Sessions in Helm itself: no host, so no host log file.
     'app:info': async () => ({

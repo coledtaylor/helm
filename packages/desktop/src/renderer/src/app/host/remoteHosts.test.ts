@@ -38,7 +38,18 @@ function world(hosts: Record<string, FakeConnection>) {
   let changed: (states: RemoteHostStates) => void = () => undefined
   const links = new Map<string, ReturnType<typeof reconnectingReach>>()
   const opened: string[] = []
+  // The page's clock, stepped by the test: nothing here waits on time.
+  let clock = 0
+  const timers = new Map<number, { run: () => void; ms: number }>()
+  let nextTimer = 1
   const deps: RemoteHostsDeps = {
+    now: () => clock,
+    setInterval: (run, ms) => {
+      const id = nextTimer++
+      timers.set(id, { run, ms })
+      return id
+    },
+    clearInterval: (timer) => void timers.delete(timer as number),
     bridge: {
       invoke: (() => Promise.resolve({})) as unknown as RemoteHostsDeps['bridge']['invoke'],
       send: () => undefined,
@@ -73,7 +84,15 @@ function world(hosts: Record<string, FakeConnection>) {
       return link
     },
     tell: (states: RemoteHostStates) => changed(states),
-    renders: () => renders
+    renders: () => renders,
+    /** Moves the page's clock on by `ms`. */
+    step: (ms: number) => void (clock += ms),
+    /** Every repeating timer running now, by how often it repeats. */
+    timers: () => [...timers.values()],
+    /** Runs every repeating timer once, as each comes due. */
+    tick: () => {
+      for (const timer of [...timers.values()]) timer.run()
+    }
   }
 }
 
@@ -105,7 +124,9 @@ describe('the window’s view of hosts on other computers', () => {
     ])
     expect(view['h-far']).toEqual({
       connection: { state: 'retrying' },
-      sessions: []
+      sessions: [],
+      roundTripMs: null,
+      resources: new Map()
     })
     expect(view['h-new']?.connection).toEqual({ state: 'keyChanged' })
 
@@ -134,7 +155,7 @@ describe('the window’s view of hosts on other computers', () => {
     expect(dropped?.connection).toEqual({ state: 'retrying' })
     // Still running there: kept, for the pane to dim, never shown as stopped or lost.
     expect(dropped?.sessions).toEqual([{ key: 'h-build:4', name: 'deploy', cwd: '/srv/app', state: 'running' }])
-    expect(Object.keys(dropped ?? {}).sort()).toEqual(['connection', 'sessions'])
+    expect(dropped?.roundTripMs).toBeNull()
 
     // Main reaches it again: the window connects again and lists what runs there now.
     const second = hostListing([record(4, 'deploy', '/srv/app'), record(6, 'tests', '/srv/app')])
@@ -142,9 +163,9 @@ describe('the window’s view of hosts on other computers', () => {
     await w.link('h-build').reconnect(second)
     await settle()
     expect(w.store.get()['h-build']?.sessions.map((row) => row.key)).toEqual(['h-build:4', 'h-build:6'])
-    // Nothing the window did asked a session to end, on either connection.
+    // Nothing the window did asked a session to end, on either connection: it listed and timed.
     for (const connection of [first, second]) {
-      expect(connection.sent.map((request) => request.channel)).toEqual(['session:list'])
+      expect([...new Set(connection.sent.map((request) => request.channel))].sort()).toEqual(['host:ping', 'session:list'])
     }
   })
 
@@ -181,5 +202,77 @@ describe('the window’s view of hosts on other computers', () => {
     ])
     expect(reconnects).toEqual(['h-build'])
     expect(build.sent.length).toBe(sentBefore)
+  })
+
+  it("S11: times the window's connection to each connected host at once and every five seconds, one ping at a time, and has none while it is not connected", async () => {
+    const build = hostListing([])
+    let answer: () => void = () => undefined
+    build.answer('host:ping', () => null)
+    const w = world({ 'h-build': build })
+    // Each ping is answered when the test says, as the host's reply arrives.
+    const request = build.request.bind(build)
+    build.request = ((channel: string, payload: unknown) => {
+      if (channel !== 'host:ping') return request(channel as never, payload as never)
+      build.sent.push({ channel, payload })
+      return new Promise((done) => (answer = () => done(null as never)))
+    }) as typeof build.request
+
+    w.tell({ 'h-build': { state: 'connected' } })
+    await settle()
+    expect(w.timers().map((timer) => timer.ms)).toEqual([5_000])
+    expect(build.payloads('host:ping')).toHaveLength(1)
+    expect(w.store.get()['h-build']?.roundTripMs).toBeNull()
+
+    w.step(42)
+    answer()
+    await settle()
+    expect(w.store.get()['h-build']?.roundTripMs).toBe(42)
+
+    // Every five seconds again; one still waiting is not asked a second time.
+    w.tick()
+    w.tick()
+    expect(build.payloads('host:ping')).toHaveLength(2)
+    w.step(7)
+    answer()
+    await settle()
+    expect(w.store.get()['h-build']?.roundTripMs).toBe(7)
+
+    // Dropped: no round trip, and no more pings.
+    w.link('h-build').lose({ planned: false, restarts: false })
+    w.tell({ 'h-build': { state: 'retrying' } })
+    await settle()
+    expect(w.store.get()['h-build']?.roundTripMs).toBeNull()
+    expect(w.timers()).toEqual([])
+  })
+
+  it("S1: a connected host's processes and ports reach the window from its own pass, while the sessions pane looks", async () => {
+    const build = hostListing([record(4, 'deploy', '/srv/app')])
+    const w = world({ 'h-build': build })
+    w.tell({ 'h-build': { state: 'connected' } })
+    await settle()
+    expect(build.payloads('sessions:watch')).toEqual([])
+
+    w.store.watch(true)
+    await settle()
+    expect(build.payloads('sessions:watch')).toEqual([{ watching: true }])
+    build.snapshot('sessions:resources', [
+      {
+        id: 4,
+        rootPid: 10,
+        processes: [],
+        rootSeen: true,
+        ports: [{ port: 5173, pid: 11, process: 'node', addresses: ['127.0.0.1'] }],
+        opaque: 0,
+        atMs: 1
+      }
+    ])
+    await settle()
+    expect(w.store.get()['h-build']?.resources.get(4)?.ports).toEqual([
+      { port: 5173, pid: 11, process: 'node', addresses: ['127.0.0.1'] }
+    ])
+
+    w.store.watch(false)
+    await settle()
+    expect(build.payloads('sessions:watch')).toEqual([{ watching: true }, { watching: false }])
   })
 })

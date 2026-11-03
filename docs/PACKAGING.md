@@ -376,17 +376,22 @@ There is no telemetry, no crash reporting, no fonts and no CDN. With
 `updateCheck` off, Helm asks nothing by itself at all; the one remaining route
 is a person pressing Check now, so nothing leaves the machine unasked for.
 
-**Inbound is one listener and it is loopback.** A Claude session Helm hosts can
+**Inbound is loopback only.** A Claude session Helm hosts can
 drive the browser pane, and can ask what the other Claude Code sessions on this
 machine are doing; both sets of tools arrive over one MCP endpoint bound to
 `127.0.0.1` on a port chosen per app run - two named servers on two routes, one
-socket. It is the only socket Helm has ever accepted a connection on. Nothing
-off this machine can reach it; every request carries a bearer token minted for
-one session and revoked when that session ends; and each set has its own setting
-(`browserMcp`, `sessionMcp`) that removes it from every launch, with no port
-bound at all when both are off. Worth knowing for a packaged build in
-particular: an installer that a firewall prompt follows is a bad first
-impression, and a loopback bind produces no prompt on Windows.
+socket. Nothing off this machine can reach it; every request carries a bearer
+token minted for one session and revoked when that session ends; and each set
+has its own setting (`browserMcp`, `sessionMcp`) that removes it from every
+launch, with no port bound at all when both are off. The one other listener is
+a forwarded port, opened only when the user chooses Open in browser on a port a
+session on a host on another computer listens on: main binds `127.0.0.1`, on
+the same number when it is free and another free one when not, carries each
+connection over its own link to that host, which connects only to its own
+loopback and only for a port that session's process tree listens on, and closes
+it when the session ends. Worth knowing for a packaged build in particular: an
+installer that a firewall prompt follows is a bad first impression, and a
+loopback bind produces no prompt on Windows.
 
 **Plugins reach the hosts their manifests name.** A plugin page has no network
 of its own (`connect-src 'none'`); `helm.fetch` sends its requests from the

@@ -37,6 +37,7 @@ function world() {
   const starts: PendingStart[] = []
   const bridges: FakeBridge[] = []
   const forgotten: string[] = []
+  const recorded: string[][] = []
   const told: RemoteHostStates[] = []
   const log: string[] = []
   const timers = new Map<number, () => void>()
@@ -70,6 +71,7 @@ function world() {
       return Promise.resolve()
     },
     changed: (states) => told.push(states),
+    hostsChanged: (hosts) => recorded.push(hosts.map((host) => host.name)),
     isHelmPage: () => true,
     appVersion: '2.4.0',
     nextConnection: () => nextConnection++,
@@ -91,6 +93,7 @@ function world() {
     starts,
     bridges,
     forgotten,
+    recorded,
     told,
     log,
     /** The last start for `host`. */
@@ -135,6 +138,16 @@ function page(id = 1): HelmPage & { sent: Array<{ channel: string; payload: unkn
 }
 
 describe('the links to hosts on other computers', () => {
+  it('S6: tells floti doctor the hosts this device added at the first sync and at each change, and not again for the same hosts', () => {
+    const w = world()
+    w.links.sync([])
+    w.links.sync([BUILD])
+    w.links.sync([BUILD])
+    w.links.sync([BUILD, FAR])
+    w.links.sync([FAR])
+    expect(w.recorded).toEqual([[], ['build-box'], ['build-box', 'far-away'], ['far-away']])
+  })
+
   it('S8: links each host over its own connection, and one that cannot be reached holds up none of the others', async () => {
     const w = world()
     w.links.sync([BUILD, LAB, FAR])

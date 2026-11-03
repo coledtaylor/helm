@@ -1551,13 +1551,20 @@ async fn s10_a_client_that_falls_behind_skips_to_the_current_screen_while_the_se
     // Far more than the slow client has credit for, and than the host keeps
     // for it.
     typist.type_into(SCREEN, b"/flood 40000\r").await;
-    // The session never waits on the slow client: it writes all of it.
-    typist
-        .read_stream_until(SCREEN, |bytes| find(bytes, b"flood done", 0).is_some())
-        .await;
-    watcher
-        .read_stream_until(SCREEN, |bytes| find(bytes, b"flood done", 0).is_some())
-        .await;
+    // The session never waits on the slow client: it writes all of it. The
+    // typist and the watcher keep up, so they are read in turns, each granting
+    // credit as it reads: a client left unread while the other took the whole
+    // flood would fall behind too, where the flood arrives faster than one
+    // message per turn (a Linux pty passes it on at once).
+    let flooded = |bytes: &[u8]| find(bytes, b"flood done", 0).is_some();
+    while !(flooded(typist.stream_bytes(SCREEN)) && flooded(watcher.stream_bytes(SCREEN))) {
+        for client in [&mut typist, &mut watcher] {
+            let had = client.stream_bytes(SCREEN).len();
+            client
+                .read_stream_until(SCREEN, |bytes| bytes.len() > had || flooded(bytes))
+                .await;
+        }
+    }
     let before_grant = slow
         .read_stream_until(SCREEN, |bytes| bytes.len() >= 200 * 1024)
         .await

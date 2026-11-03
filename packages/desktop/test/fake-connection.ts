@@ -37,7 +37,17 @@ export class FakeStream implements HostStream {
     return true
   }
 
-  consumed(): void {}
+  /** How much the client has said it consumed of what the host sent. */
+  consumedBytes = 0
+
+  consumed(bytes: number): void {
+    this.consumedBytes += bytes
+  }
+
+  /** Nothing waits on credit here: every write is taken at once. */
+  queued(): number {
+    return 0
+  }
 
   close(): void {
     this.closed = true

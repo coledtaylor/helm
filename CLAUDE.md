@@ -248,7 +248,9 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 - The network posture is stated identically in README, docs/PACKAGING.md, the
   `update:check` comment in `shared/ipc.ts` and SPEC 5; change all four
   together. Helm contacts nothing on its own except the update check, and it
-  listens only on loopback, for the sessions it hosts. A plugin's pages reach
+  listens only on loopback: for the sessions it hosts, and for a port of a
+  session on another computer the user forwarded, which closes with that
+  session (`main/host/forwards.ts`). A plugin's pages reach
   only the origins its manifest lists.
 
 ## Browser pane

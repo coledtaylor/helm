@@ -203,8 +203,8 @@ host's key at the first connection and refuses a host that proves another.
 Disconnect beside each; to keep a lost device out, take its SSH key away as you
 would for any machine.
 
-Helm does **listen** in one place, and it is worth saying out loud because it is
-the only one. A Claude session Helm hosts can reach two sets of tools - one that
+Helm does **listen**, on `127.0.0.1` only, and it is worth saying out loud where.
+A Claude session Helm hosts can reach two sets of tools - one that
 drives the browser pane (open a page, read it, screenshot it, click and type),
 and one that answers what the *other* Claude Code sessions on this machine are
 doing, so an agent can stay out of a working tree somebody else is in. Both
@@ -220,6 +220,15 @@ tools may go: they can never reach further than the pane itself may, and can be
 held to this machine while the pane is not. The session tools are read-only:
 they say what is running and give an agent no way to affect it, and they never
 return any part of another session's conversation.
+
+Helm also listens for a **forwarded port**, and only when you ask for one. A
+session on a host on another computer that runs a dev server lists its port in
+the sessions pane, and **Open in browser** forwards it: Helm listens on
+`127.0.0.1` on this PC, on the same port number when it is free here and on
+another free one when not, and carries each connection made to it over its own
+link to that host, which connects only to its own loopback and only for a port
+that session's processes listen on. Nothing outside this machine can reach the
+forwarded port, and it closes when the session ends.
 
 A **plugin** you add reaches the network on the terms its manifest states.
 Its pages have none of their own: every request goes through Helm, to the

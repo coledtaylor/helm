@@ -1197,8 +1197,13 @@ about the user's own `gh`: Helm no longer runs it.
   screenshot it, click, type and evaluate - and can ask what the other Claude
   Code sessions on this machine are doing. Both reach it through **one** MCP
   endpoint bound to `127.0.0.1` on a port the kernel picks for the run, serving
-  two named servers (`helm-browser`, `helm-sessions`) on two routes. It is the
-  app's **only inbound listener**. Every request needs a bearer token minted for
+  two named servers (`helm-browser`, `helm-sessions`) on two routes. Beside it
+  the app listens only for a **forwarded port**, opened when the user chooses
+  Open in browser on a port a session on a host on another computer listens
+  on: bound to `127.0.0.1`, on the same number when it is free here and another
+  free one when not, each connection carried over main's own link to that host,
+  which connects only to its own loopback and only for a port that session's
+  process tree listens on, and closed when the session ends. Every request needs a bearer token minted for
   one session and revoked when that session ends; there is no unauthenticated
   route; and each family has its own tick - `browserMcp` and `sessionMcp` - each
   of which means no route, no name in the launch's `--mcp-config` document and

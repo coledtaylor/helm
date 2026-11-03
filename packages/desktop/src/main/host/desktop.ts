@@ -30,6 +30,8 @@ import {
 import { createHostLink, type HostLink } from './link'
 import { createOwnDataCopy, type OwnDataCopy } from './own-data'
 import { createPageLinks, type PageLinks } from './page-link'
+import { doctorHosts, recordDoctorHosts } from './doctor-hosts'
+import type { PortForwards } from './forwards'
 import { createRemoteHostLinks, type RemoteHostLinks } from './remote'
 import { openRemotePageBridge, remoteClientFolder, startRemoteHost } from './remote-launcher'
 import { createRemoteInstaller, spawnTransportRun, type RemoteInstaller } from './remote-install'
@@ -177,6 +179,8 @@ export function createDesktopRemoteHosts(options: {
   changed: (states: RemoteHostStates) => void
   /** Each host's plugins and tool relay, on its main link. */
   plugins: RemotePlugins
+  /** The ports of each host's sessions forwarded to this PC, which close with their sessions. */
+  forwards: PortForwards
   log: (line: string) => void
 }): RemoteHostLinks {
   const folderOf = (id: string): string => remoteClientFolder(places(), process.platform, id)
@@ -202,7 +206,22 @@ export function createDesktopRemoteHosts(options: {
     // Its device key and the host key it pinned: nothing else is kept there.
     forget: (host) => rm(folderOf(host.id), { recursive: true, force: true }),
     changed: options.changed,
-    linked: (host, link) => options.plugins.attach(host.id, link),
+    linked: (host, link) => {
+      const plugins = options.plugins.attach(host.id, link)
+      const forwards = options.forwards.attach(host.id, link)
+      return {
+        stop() {
+          forwards.stop()
+          plugins.stop()
+        }
+      }
+    },
+    // What `floti doctor` checks besides this PC's host, recorded where it looks.
+    hostsChanged: (hosts) => {
+      recordDoctorHosts(places(), programs, doctorHosts(hosts, folderOf)).catch((error: unknown) => {
+        options.log(`host: floti doctor was not told this device's hosts (${(error as Error).message})`)
+      })
+    },
     isHelmPage: options.isHelmPage,
     appVersion: app.getVersion(),
     deviceName: hostname(),

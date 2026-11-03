@@ -136,12 +136,20 @@ export interface StreamHandlers {
    * Otherwise it comes back once `data` returns.
    */
   manualCredit?: boolean
+  /**
+   * Everything written has gone to the host: called each time the bytes
+   * waiting on the host's credit (`queued`) drop to none. A writer that
+   * stopped reading its own source while they piled up starts again here.
+   */
+  drained?: () => void
 }
 
 export interface HostStream {
   readonly id: number
   /** Queues bytes for the host, sent as its credit allows. False once the stream is closed. */
   write(bytes: Uint8Array): boolean
+  /** How many written bytes wait on the host's credit; 0 once all went, or the stream closed. */
+  queued(): number
   /** Says `bytes` of what `data` was handed have been consumed, returning that credit. */
   consumed(bytes: number): void
   /** Closes the stream from this side. */
@@ -333,6 +341,7 @@ class Connection implements HostConnection {
         this.flushStream(id, open)
         return true
       },
+      queued: () => (this.streams.get(id) === open ? open.held.reduce((sum, part) => sum + part.length, 0) : 0),
       consumed: (bytes) => this.consumed(id, open, bytes),
       close: () => {
         if (this.streams.get(id) !== open) return
@@ -505,6 +514,12 @@ class Connection implements HostConnection {
 
   /** Sends what the host's credit allows, in chunks of at most `MAX_DATA_CHUNK`. */
   private flushStream(id: number, open: OpenStream): void {
+    const waited = open.held.length > 0
+    this.sendHeld(id, open)
+    if (waited && open.held.length === 0 && this.streams.get(id) === open) open.handlers.drained?.()
+  }
+
+  private sendHeld(id: number, open: OpenStream): void {
     while (open.send > 0 && open.held.length > 0) {
       const room = Math.min(open.send, MAX_DATA_CHUNK)
       const parts: Uint8Array[] = []

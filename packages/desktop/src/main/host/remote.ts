@@ -108,6 +108,11 @@ export interface RemoteHostLinksDeps {
    * and stopped when the link is let go of or Helm quits.
    */
   linked?: (host: RemoteHost, link: HostLink) => { stop(): void }
+  /**
+   * The hosts this device added, at the first `sync` and at each one after
+   * that changes them: what `floti doctor` is told to check (`doctor-hosts.ts`).
+   */
+  hostsChanged?: (hosts: readonly RemoteHost[]) => void
   log: (line: string) => void
   setTimeout: (run: () => void, ms: number) => unknown
   clearTimeout: (timer: unknown) => void
@@ -134,6 +139,8 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
   /** The hosts Helm installed floti on while nobody was signed in there. */
   const atSignIn = new Set<string>()
   let quitting = false
+  /** The hosts as `hostsChanged` was last told them, as JSON; null before the first `sync`. */
+  let recorded: string | null = null
 
   const tell = (): void => deps.changed(Object.fromEntries(states))
 
@@ -220,6 +227,11 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
   return {
     sync(hosts) {
       if (quitting) return
+      const listing = JSON.stringify(hosts)
+      if (listing !== recorded) {
+        recorded = listing
+        deps.hostsChanged?.(hosts)
+      }
       let changed = false
       const listed = new Set(hosts.map((host) => host.id))
       for (const entry of [...entries.values()]) {

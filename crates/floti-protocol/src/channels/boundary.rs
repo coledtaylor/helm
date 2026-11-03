@@ -94,6 +94,10 @@ pub const CLIENT_ONLY: &[Outside] = &[
         "where each host on another computer stands with this device: connected, retrying, its key changed since the client pinned it, or its transport's last line, which the client's main process learns from its own links to those hosts and tells only its own window",
     ),
     outside(
+        "forwards:*",
+        "a port a session on another computer listens on, forwarded to the client's own loopback: the client's main process listens there and carries each connection to that host on a sessions:port stream",
+    ),
+    outside(
         "ownSettings:*",
         "the settings the client keeps for itself: its window, theme, terminal and browser preferences, the programs it picked, which its main process tells the host, and its tabs, panes and splits, which are kept per device and never reach the host",
     ),

@@ -684,6 +684,18 @@ export type HostLinkOpened =
  */
 export type RemoteHostStates = Record<string, RemoteHostConnection>
 
+/** A port of a session on a host on another computer, forwarded to this PC's loopback. */
+export interface ForwardedPort {
+  /** The host's id. */
+  host: string
+  /** The session's id on that host. */
+  session: number
+  /** The port the session's process tree listens on there. */
+  port: number
+  /** The port this PC listens on, at 127.0.0.1: the same number when it was free here. */
+  local: number
+}
+
 /** What Helm's own build says of itself; `app:info` adds the `claude` version wherever sessions run. */
 export type OwnAppInfo = Omit<AppInfo, 'claudeVersion' | 'hostLogFile'>
 
@@ -761,6 +773,20 @@ export interface IpcRequests {
    * before the drop is sent again.
    */
   'remoteHosts:reconnect': { request: { id: string }; response: void }
+
+  /**
+   * Forwards a port a session on a host on another computer listens on to
+   * this PC's loopback, or answers the forward already open for it. Main
+   * listens on 127.0.0.1 only, on the same number when it is free here and
+   * on another free one when not, and carries each connection made to it
+   * over its own link to that host (`sessions:port`), which connects only
+   * to its own loopback, and only for a port that session's process tree
+   * listens on. The forward closes when the session ends. Rejects with the
+   * sentence to show when the host is not connected.
+   */
+  'forwards:open': { request: { host: string; session: number; port: number }; response: ForwardedPort }
+  /** Every port forwarded now; changes arrive on `forwards:changed`. */
+  'forwards:read': { request: void; response: ForwardedPort[] }
 
   'settings:read': { request: void; response: AppSettings }
   'settings:write': { request: Partial<AppSettings>; response: AppSettings }
@@ -992,6 +1018,15 @@ export interface IpcRequests {
    * behind one token, with a tick each. Two families of tools is not two
    * sockets and is not an outbound connection, so what changed is the listening
    * paragraph in those four places and nothing here.
+   *
+   * Forwarded ports moved the listening paragraph again and not this
+   * sentence: a session on a host on another computer can have a port
+   * forwarded to this PC (`forwards:open`, `main/host/forwards.ts`), which
+   * main listens for on `127.0.0.1`, on the same number when it is free and
+   * another free one when not, only when the user chooses Open in browser,
+   * carrying each connection over its own link to that host - a host the
+   * user added - and closing it when the session ends. That is a listener,
+   * on loopback, and contacts nothing new.
    *
    * Plugins did move the sentence, by its last clause: a plugin's background
    * page can fetch with nobody pressing anything, so the sentence says whose
@@ -1873,6 +1908,8 @@ export interface IpcEvents {
    * device pinned it, or what its transport last said.
    */
   'remoteHosts:changed': RemoteHostStates
+  /** Every port forwarded to this PC now, whole, after each change. */
+  'forwards:changed': ForwardedPort[]
   /** With sessions in the local host, a background page's ask for the window, from the hidden window through main. */
   'pluginWindow:asked': PluginUiRequest
   /** With sessions in the local host, the window closed a secret dialog the hidden window handed it. */
@@ -2112,6 +2149,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'remoteHosts:install': true,
   'remoteHosts:cancel': true,
   'remoteHosts:reconnect': true,
+  'forwards:open': true,
+  'forwards:read': true,
   'settings:read': true,
   'settings:write': true,
   'ownSettings:read': true,
@@ -2297,6 +2336,7 @@ export const EVENT_CHANNELS = Object.keys({
   'pluginBackground:changed': true,
   'ownData:changed': true,
   'remoteHosts:changed': true,
+  'forwards:changed': true,
   'pluginWindow:asked': true,
   'pluginWindow:answered': true,
   'profiles:changed': true,
