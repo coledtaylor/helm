@@ -502,6 +502,75 @@ describe('sessions through the local host', () => {
     expect(w.asked).toEqual([])
   })
 
+  it('S13: the quit question names how many sessions it would end on each remote host whose setting ends them and offers to keep them this once', async () => {
+    const buildBox = {
+      id: 'h-build',
+      name: 'build-box',
+      sessions: [
+        { id: 5, name: 'tests' },
+        { id: 6, name: 'deploy' }
+      ]
+    }
+    const lab = { id: 'h-lab', name: 'lab', sessions: [{ id: 2, name: 'notes' }] }
+
+    // One remote host only: the count and that host's name.
+    expect(quitQuestion([], [buildBox])).toEqual(
+      expect.objectContaining({
+        kind: 'quit',
+        message: 'Quitting Helm ends 2 sessions on build-box.',
+        detail: expect.stringContaining('Keep running and quit leaves them running where they are, this once.'),
+        confirmLabel: 'End and quit',
+        keepLabel: 'Keep running and quit',
+        sessions: [],
+        otherNames: ['tests on build-box', 'deploy on build-box']
+      })
+    )
+    expect(quitQuestion([], [lab])).toEqual(
+      expect.objectContaining({
+        message: 'Quitting Helm ends 1 session on lab.',
+        detail: expect.stringContaining('leaves it running where it is, this once.'),
+        otherNames: ['notes on lab']
+      })
+    )
+    // A host with nothing running that this device started is not named.
+    expect(quitQuestion([], [buildBox, { id: 'h-idle', name: 'idle-box', sessions: [] }]).message).toBe(
+      'Quitting Helm ends 2 sessions on build-box.'
+    )
+
+    // This PC and two remote hosts: the total, then each host with its own count, this PC first.
+    const w = world({ listed: [row()] })
+    await w.connect()
+    const live = w.host.sessions.list()
+    expect(quitQuestion(live, [buildBox, lab])).toEqual(
+      expect.objectContaining({
+        message: 'Quitting Helm ends 4 sessions: 1 on this PC’s host, 2 on build-box and 1 on lab.',
+        keepLabel: 'Keep running and quit',
+        sessions: [expect.objectContaining({ id: live[0]?.id })],
+        otherNames: ['tests on build-box', 'deploy on build-box', 'notes on lab']
+      })
+    )
+
+    // askQuit asks that question with the parts it is given; this PC's setting keeping them leaves it out.
+    await expect(w.host.askQuit({ local: false, remote: [buildBox] })).resolves.toBe('end')
+    await expect(w.host.askQuit({ local: true, remote: [buildBox, lab] })).resolves.toBe('end')
+    expect(w.asked).toEqual([
+      expect.objectContaining({ kind: 'quit', message: 'Quitting Helm ends 2 sessions on build-box.' }),
+      expect.objectContaining({
+        kind: 'quit',
+        message: 'Quitting Helm ends 4 sessions: 1 on this PC’s host, 2 on build-box and 1 on lab.'
+      })
+    ])
+  })
+
+  it('S13: asks nothing when this PC keeps its sessions and no remote host would end any', async () => {
+    const w = world({ listed: [row()] })
+    await w.connect()
+    await expect(
+      w.host.askQuit({ local: false, remote: [{ id: 'h-idle', name: 'idle-box', sessions: [] }] })
+    ).resolves.toBe('end')
+    expect(w.asked).toEqual([])
+  })
+
   it('asks about nothing when every running session was started from another device', async () => {
     const w = world({ listed: [row()] })
     w.connection.answer('host:deviceSessions', () => [])
