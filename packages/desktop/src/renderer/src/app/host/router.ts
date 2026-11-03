@@ -40,8 +40,12 @@ export interface HostAdapter {
 export interface RouterDeps {
   /** The preload's bridge. */
   own: HelmBridge
-  /** Whether sessions run in the local host this run. */
-  inHost: () => Promise<boolean>
+  /**
+   * Whether sessions run in the local host this run, asked of main; or `true`
+   * for a host on another computer, which the window reaches only while they
+   * do, so nothing waits on asking.
+   */
+  inHost: (() => Promise<boolean>) | true
   adapters: readonly HostAdapter[]
   /** Whether `boundary.rs` lists a channel as client-only. */
   clientOnly: (channel: string) => boolean
@@ -96,9 +100,10 @@ export function createRouter({ own, inHost, adapters, clientOnly, hostInternal, 
   const refuse = (channel: string, what: string): void =>
     (log ?? console.warn)(`${what} ${refusedSentence(channel)}`)
   /** Null until main has answered whether sessions run in the host. */
-  let known: boolean | null = null
-  let asking: Promise<boolean> | null = null
+  let known: boolean | null = inHost === true ? true : null
+  let asking: Promise<boolean> | null = inHost === true ? Promise.resolve(true) : null
   const placement = (): Promise<boolean> => {
+    if (inHost === true) return Promise.resolve(true)
     asking ??= inHost().then(
       (on) => (known = on),
       () => (known = false)

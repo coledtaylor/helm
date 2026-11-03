@@ -57,7 +57,7 @@ export * from './theme/themes'
 /**
  * The pane layout, re-exported for the same reason: the renderer arranges tabs
  * into groups with it on every render. `layout/panes.ts` imports nothing but a
- * type from this file.
+ * type from this file, and the host key from `hosts.ts`, which is as pure.
  */
 export * from './layout/panes'
 export * from './layout/pluginPages'
@@ -1216,9 +1216,15 @@ export interface DetectedShell {
  *
  * The renderer's `PaneRef` is this type - one definition, because the shape a
  * pane has and the shape it is stored in must not be free to drift apart.
+ *
+ * `host` names the host a project, file or plugin tab belongs to, by its id in
+ * the `hosts` setting, and is absent for this PC's own (`LOCAL_HOST_KEY`). So a
+ * layout written before there were other hosts reads as this PC's, and this
+ * PC's tabs keep the ids they always had (`paneId`). The layout is this
+ * device's own and never reaches a host.
  */
 export type WorkspaceTab =
-  | { kind: 'project'; path: string }
+  | { kind: 'project'; path: string; host?: string }
   | { kind: 'history' }
   | { kind: 'sessions' }
   | { kind: 'config' }
@@ -1228,20 +1234,20 @@ export type WorkspaceTab =
    * opened from - what the view is scoped to, what its path is shown relative
    * to, and the folder Helm checks it is still inside before reading a byte.
    */
-  | { kind: 'file'; root: string; path: string }
+  | { kind: 'file'; root: string; path: string; host?: string }
   /**
    * One of the `tabs` a plugin's manifest declares, with what it was opened
    * with. Kept across a restart; a plugin that is gone or disabled by then
    * takes its tabs with it. `title` is the one the page or the opener gave it,
    * or null for the manifest's.
    */
-  | { kind: 'plugin'; plugin: string; tab: string; params: PluginParams; title: string | null }
+  | { kind: 'plugin'; plugin: string; tab: string; params: PluginParams; title: string | null; host?: string }
   /**
    * The one tab of a plugin that declares `pageStrip`: its tabs, opened as
    * pages in a strip of their own, in order, and the one in front by its
    * `pluginPageId`. Kept across a restart as a plugin tab is.
    */
-  | { kind: 'plugin-pages'; plugin: string; pages: PluginPage[]; active: string | null }
+  | { kind: 'plugin-pages'; plugin: string; pages: PluginPage[]; active: string | null; host?: string }
 
 /** How many tabs are worth writing down. Past this the list is a bug, not a
  * workspace, and a settings row nobody can shrink is worse than a truncation. */

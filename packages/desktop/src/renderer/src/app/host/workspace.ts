@@ -53,8 +53,20 @@ export interface WorkspaceAdapterDeps {
   own: Pick<HelmBridge, 'invoke' | 'on'>
   /** Calls `listener` whenever the window comes to the front. */
   onFocus?: (listener: () => void) => void
+  /**
+   * Set for a host on another computer, named as the window names it. Its
+   * router carries only that host's half of the settings: a write of this
+   * device's own half is refused there, before anything is written, because
+   * this device's settings are read and written only through this PC's bridge
+   * and main. Its `claude` is not located from this PC's file picker either.
+   */
+  remote?: { name: () => string }
   log?: (line: string) => void
 }
+
+/** Why a host on another computer's router refuses a write of this device's own settings. */
+export const ownSettingsElsewhere = (host: string): string =>
+  `This device’s own settings are kept on This PC and never sent to ${host}.`
 
 export interface WorkspaceAdapter extends HostAdapter {
   /** The harnesses and projects on the sidebar: the host's last scan, or its cached one before any. */
@@ -65,6 +77,7 @@ export function createWorkspaceAdapter({
   link,
   own,
   onFocus,
+  remote,
   log = () => undefined
 }: WorkspaceAdapterDeps): WorkspaceAdapter {
   const listeners: { [K in Pushed]: Set<(payload: EventPayload<K>) => void> } = {
@@ -254,6 +267,7 @@ export function createWorkspaceAdapter({
 
       'settings:write': async (patch) => {
         const split = splitSettingsPatch(patch)
+        if (remote !== undefined && Object.keys(split.own).length > 0) throw new Error(ownSettingsElsewhere(remote.name()))
         // A write of Helm's half alone answers with the host's laid over, so
         // the host's are read first when they are not known yet.
         if (Object.keys(split.host).length === 0) await hostKnown()
@@ -277,6 +291,8 @@ export function createWorkspaceAdapter({
       // only a program it kept becomes Helm's, which main tells the host on
       // every connect from then on.
       'setup:locateClaude': async () => {
+        // The picker browses this PC, and the `claude` Helm keeps is this PC's.
+        if (remote !== undefined) throw new Error(ownSettingsElsewhere(remote.name()))
         const { path } = await own.invoke('path:chooseFile', { title: 'Locate the claude executable' })
         const connection = await host()
         if (path === null) return claude(await connection.request('setup:status', null))

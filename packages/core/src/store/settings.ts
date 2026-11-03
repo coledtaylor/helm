@@ -17,11 +17,13 @@ import {
   CORNER_RADIUS,
   DEFAULT_SETTINGS,
   DENSITY_MODES,
+  LOCAL_HOST_KEY,
   PANE_GAP,
   PINNED_PROJECTS_MAX,
   PROJECT_SHELL_HEIGHT_PCT,
   QUIT_SESSIONS,
   RAIL_DESTINATIONS,
+  REMOTE_HOST_ID_MAX,
   remoteHostsProblem,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
@@ -139,6 +141,23 @@ const themeId = (value: unknown): string | null =>
  */
 const ACCENT_HEX = /^#[0-9a-f]{6}$/
 
+/** The tab kinds that belong to one host, and name it when it is not this PC (`WorkspaceTab`, `SessionRef`). */
+const HOSTED_TAB_KINDS: ReadonlySet<string> = new Set(['session', 'project', 'file', 'plugin', 'plugin-pages'])
+
+/**
+ * Why a tab's `host` is not a host another than this PC, or null when it is
+ * one or absent. This PC's tabs carry no host, so its key is refused here: a
+ * layout naming it was written by a bug, not by `toSaved`.
+ */
+function tabHostProblem(host: unknown): string | null {
+  if (host === undefined) return null
+  if (typeof host !== 'string' || host.trim() === '' || host.length > REMOTE_HOST_ID_MAX) {
+    return `expected a host's id, got ${describe(host)}`
+  }
+  if (host === LOCAL_HOST_KEY) return `expected no host on a tab of this PC's, got ${describe(host)}`
+  return null
+}
+
 /**
  * Why one persisted tab is not a tab, or null when it is.
  *
@@ -151,11 +170,18 @@ function paneProblem(pane: unknown): string | null {
   if (typeof pane !== 'object' || pane === null || Array.isArray(pane)) {
     return `expected a pane, got ${describe(pane)}`
   }
-  const { kind, path, id } = pane as Record<string, unknown>
+  const { kind, path, id, host } = pane as Record<string, unknown>
+  // A tab of another host's names it; this PC's tabs, and every tab of a
+  // layout written before there were other hosts, carry none.
+  if (host !== undefined && !HOSTED_TAB_KINDS.has(kind as string)) {
+    return `expected no host on a ${describe(kind)} tab, got ${describe(host)}`
+  }
+  const hostProblem = tabHostProblem(host)
+  if (hostProblem !== null) return hostProblem
   if (kind === 'history' || kind === 'config') return null
   if (kind === 'session') {
-    // A row id. Never reopened from here - only read after a crash, to find
-    // where the session that is being reopened was.
+    // A row id on its host. Never reopened from here - only read after a
+    // crash, to find where the session that is being reopened was.
     if (!isFiniteNumber(id) || !Number.isInteger(id) || id <= 0) {
       return `expected a session id, got ${describe(id)}`
     }

@@ -1,10 +1,10 @@
 import { render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type SessionRecord } from '@helm/core/types'
-import { bridge } from './bridge.testkit'
+import { bridge, remoteBridge } from './bridge.testkit'
 import { FakeResizeObserver, layout, Terminal } from './terminal.testkit'
 import { TerminalPane } from './TerminalPane'
-import { disposeTerminal, estimateGrid, getTerminal } from './terminals'
+import { disposeTerminal, estimateGrid, getTerminal, mountTerminal } from './terminals'
 import { applyTerminalSettings } from './termprefs'
 
 vi.mock('@xterm/xterm', () => import('./terminal.testkit'))
@@ -193,6 +193,36 @@ describe('a session terminal', () => {
       { id: 2, cols: 100, rows: 20 },
       { id: 2, cols: 200, rows: 20 }
     ])
+  })
+
+  it('is kept by host and id: build-box’s session 1 and this PC’s session 1 are two terminals, each streaming over its own host’s bridge', () => {
+    const build = remoteBridge('h-build')
+    const mine = mountTerminal(1, pane(700, 350), { windowsBuild: null })
+    const mineTerm = Terminal.instances.at(-1)!
+    const theirs = mountTerminal(1, pane(700, 350), { windowsBuild: null }, 'h-build')
+    const theirTerm = Terminal.instances.at(-1)!
+    expect(theirs).not.toBe(mine)
+    expect(getTerminal(1)).toBe(mine)
+    expect(getTerminal(1, 'h-build')).toBe(theirs)
+
+    // Output is heard on each host's own bridge, and lands only in that host's terminal.
+    build.emit('session:data', { id: 1, data: 'from build-box' })
+    bridge.emit('session:data', { id: 1, data: 'from this PC' })
+    expect(theirTerm.written).toContain('from build-box')
+    expect(theirTerm.written).not.toContain('from this PC')
+    expect(mineTerm.written).toContain('from this PC')
+    expect(mineTerm.written).not.toContain('from build-box')
+
+    // Keys typed in build-box's terminal go to build-box only.
+    theirTerm.type('ls\r')
+    expect(build.sent('session:input')).toEqual([{ id: 1, data: 'ls\r' }])
+    expect(bridge.sent('session:input')).toEqual([])
+    mineTerm.type('pwd\r')
+    expect(bridge.sent('session:input')).toEqual([{ id: 1, data: 'pwd\r' }])
+
+    disposeTerminal(1, 'h-build')
+    expect(getTerminal(1, 'h-build')).toBeUndefined()
+    expect(getTerminal(1)).toBe(mine)
   })
 
   it('opens hidden without ever sending the pty a grid', () => {

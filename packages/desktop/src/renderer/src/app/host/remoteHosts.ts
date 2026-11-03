@@ -2,14 +2,15 @@ import type { RemoteHostConnection } from '@helm/core/types'
 import type { HostConnection, HostSubscription } from '../../../../shared/host/client'
 import type * as P from '../../../../shared/host/protocol'
 import type { HelmBridge, RemoteHostStates } from '../../../../shared/ipc'
-import { createPageLink, type PageLink } from './link'
+import type { PageLink } from './link'
 
 /**
  * The window's view of each host on another computer this device added:
  * where main's link to it stands, and the sessions running there, listed
- * over a connection of the window's own to that host (`hostLink:open` naming
- * it), one per host. Opening or starting a remote session in a tab is not
- * here: this lists them.
+ * over the window's own connection to that host (`hostLink:open` naming it):
+ * the one that host's bridge holds (`hostBridges.ts`), one per host. Opening
+ * or starting a remote session in a tab goes through that bridge: this lists
+ * them.
  *
  * - Main says where each host stands on `remoteHosts:changed`. The window
  *   connects to a host once main says it is connected, and never asks main to
@@ -49,8 +50,12 @@ export interface RemoteHostsDeps {
   /** The preload's bridge: `remoteHosts:*` and `hostLink:*` only. */
   bridge: Pick<HelmBridge, 'invoke' | 'send' | 'on'>
   log: (line: string) => void
-  /** The window's own connection to one host; a real page link by default. */
-  pageLink?: (host: string) => Pick<PageLink, 'connection' | 'onConnected' | 'onEnded'>
+  /**
+   * The window's own connection to one host: the one that host's bridge
+   * holds (`hostBridges.ts`), so its sessions are listed over the link every
+   * other call to it takes, never a second.
+   */
+  pageLink: (host: string) => Pick<PageLink, 'connection' | 'onConnected' | 'onEnded'>
 }
 
 interface Host {
@@ -71,9 +76,7 @@ export function createRemoteHosts(deps: RemoteHostsDeps): RemoteHostsStore {
   let view: Readonly<Record<string, RemoteHostView>> = {}
   let started = false
 
-  const makeLink =
-    deps.pageLink ??
-    ((host: string) => createPageLink({ bridge: deps.bridge, capabilities: [], host, retries: false, log: deps.log }))
+  const makeLink = deps.pageLink
 
   const render = (): void => {
     const next: Record<string, RemoteHostView> = {}

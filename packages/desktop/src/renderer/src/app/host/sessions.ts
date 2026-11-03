@@ -70,6 +70,8 @@ export interface SessionsAdapterDeps {
   own: Pick<HelmBridge, 'invoke' | 'send' | 'on'>
   front: WindowFront
   shelf: ShellShelf | null
+  /** What the window calls the host these sessions run on, read when asked; this PC's (`LOCAL_HOST_NAME`) by default. */
+  hostName?: () => string
   log?: (line: string) => void
 }
 
@@ -90,12 +92,13 @@ export type SessionsAdapters = HostAdapter[] & {
 
 const isRunning = (record: SessionRecord): boolean => record.status === 'running'
 
-/** How the window names the host its sessions run in: this PC's own, the only one it reaches yet. */
+/** How the window names this PC's own host in a question; a host on another computer goes by its name. */
 export const LOCAL_HOST_NAME = 'this PC’s host'
 
 export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapters {
   const { link, own } = deps
   const log = deps.log ?? (() => undefined)
+  const hostName = deps.hostName ?? (() => LOCAL_HOST_NAME)
   const host = (): Promise<HostConnection> => link.connection()
 
   let current: HostConnection | null = null
@@ -395,7 +398,7 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
           // The host is named by the window: a client names its hosts.
           const agreed = await asking({
             kind: 'close-session',
-            message: `“${sessionLabel(entry)}” is still running on ${LOCAL_HOST_NAME}.`,
+            message: `“${sessionLabel(entry)}” is still running on ${hostName()}.`,
             detail: `Ending it stops the Claude Code session in ${entry.cwd}.`,
             confirmLabel: 'End session',
             sessionNames: [sessionLabel(entry)]

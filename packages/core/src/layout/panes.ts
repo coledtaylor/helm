@@ -1,3 +1,4 @@
+import { LOCAL_HOST_KEY } from '../hosts'
 import type { WorkspaceTab } from '../types'
 import { pluginPagesId, pluginTabId } from '../plugins/tabs'
 
@@ -45,13 +46,25 @@ import { pluginPagesId, pluginTabId } from '../plugins/tabs'
 export type PaneRef =
   | WorkspaceTab
   | { kind: 'browser' }
-  | { kind: 'session'; id: number }
+  | SessionRef
   | { kind: 'terminal'; id: number; path: string }
   | { kind: 'restore' }
 
 /**
+ * A session's tab: its row id on its host, and the host by its id in the
+ * `hosts` setting, absent for this PC's (`LOCAL_HOST_KEY`). Row ids are each
+ * host's own, so a session on another host is told from this PC's by its host
+ * and never by its number alone.
+ */
+export interface SessionRef {
+  kind: 'session'
+  id: number
+  host?: string
+}
+
+/**
  * A tab as `AppSettings.paneLayout` writes it down: every `WorkspaceTab`, and
- * every session by its row id.
+ * every session by its host and row id.
  *
  * A session is written down so that a crash can put its conversation back
  * where it was (`placeRestored`). It never reopens by itself: the next start
@@ -59,7 +72,26 @@ export type PaneRef =
  * drawn. The Browser tab is not written down at all, because nothing could put
  * the pages it was showing back.
  */
-export type SavedPane = WorkspaceTab | { kind: 'session'; id: number }
+export type SavedPane = WorkspaceTab | SessionRef
+
+/** The tab kinds that belong to one host and carry `host` when it is not this PC. */
+type HostedRef = Extract<PaneRef, { host?: string }>
+
+/** The host a tab belongs to: its `host`, or this PC's (`LOCAL_HOST_KEY`) for a tab with none. */
+export function hostOf(ref: PaneRef): string {
+  const host = (ref as Partial<HostedRef>).host
+  return host === undefined ? LOCAL_HOST_KEY : host
+}
+
+/** A session's tab on `host`, carrying the host only when it is not this PC. */
+export function sessionRef(id: number, host: string = LOCAL_HOST_KEY): SessionRef {
+  return host === LOCAL_HOST_KEY ? { kind: 'session', id } : { kind: 'session', id, host }
+}
+
+/** Whether `ref` is the tab of a session on `host`. */
+export function isSessionOn<T extends PaneRef>(ref: T, host: string): ref is Extract<T, { kind: 'session' }> {
+  return ref.kind === 'session' && hostOf(ref) === host
+}
 
 /** Side by side (`row`) or one above the other (`column`). */
 export type PaneAxis = 'row' | 'column'
@@ -148,8 +180,22 @@ export const EMPTY_LAYOUT: PaneLayout = {
  * A Windows path can contain a `#` and a `:`, so this string is an identity and
  * not a record; whatever needs the path or the number reads them off the ref.
  * `session:<id>` is the shape the drivers locate session tabs by.
+ *
+ * A tab of this PC's has the id it always had. A tab of another host's has
+ * that id behind `host:<host id, URI-encoded>/`, so two hosts' sessions with
+ * the same number, or two hosts' folders with the same path, are two tabs, and
+ * nothing that reads a `session:` id as this PC's mistakes another host's for
+ * it. No tab of this PC's starts with `host:`, and the encoded host holds no
+ * `/`, so the two forms never meet.
  */
 export function paneId(ref: PaneRef): string {
+  const id = hostlessPaneId(ref)
+  const host = hostOf(ref)
+  return host === LOCAL_HOST_KEY ? id : `host:${encodeURIComponent(host)}/${id}`
+}
+
+/** A tab's id as this PC's own tab of the same kind would have it. */
+function hostlessPaneId(ref: PaneRef): string {
   switch (ref.kind) {
     case 'project':
       return `project:${ref.path}`
@@ -859,25 +905,30 @@ export function reconcile(
  * by every device that reaches it, while the arrangement is kept per device:
  * a session gets a tab here only where this device placed one (its saved
  * layout, a launch, Open in the sessions pane), so none is given one unasked.
+ * Helm's own process runs this PC's sessions only.
  */
 export function unplacedSessionTabs(sessions: readonly { id: number }[], perDevice: boolean): PaneRef[] {
-  return perDevice ? [] : sessions.map((session) => ({ kind: 'session', id: session.id }))
+  return perDevice ? [] : sessions.map((session) => sessionRef(session.id))
 }
 
-/** The session ids the layout has a tab for. */
-export function sessionTabIds(layout: PaneLayout): Set<number> {
+/** The ids of the sessions on `host` (this PC's by default) the layout has a tab for. */
+export function sessionTabIds(layout: PaneLayout, host: string = LOCAL_HOST_KEY): Set<number> {
   return new Set(
-    layout.groups.flatMap((group) => group.tabs.flatMap((ref) => (ref.kind === 'session' ? [ref.id] : [])))
+    layout.groups.flatMap((group) => group.tabs.flatMap((ref) => (isSessionOn(ref, host) ? [ref.id] : [])))
   )
 }
 
 /**
- * The running sessions this layout has no tab for: the sessions pane lists
- * them as not open here, with Open and End. An ended session has nothing to
- * open.
+ * The running sessions on `host` (this PC's by default) this layout has no
+ * tab for: the sessions pane lists them as not open here, with Open and End.
+ * An ended session has nothing to open.
  */
-export function notOpenHere<T extends { id: number; status: string }>(layout: PaneLayout, sessions: readonly T[]): T[] {
-  const tabs = sessionTabIds(layout)
+export function notOpenHere<T extends { id: number; status: string }>(
+  layout: PaneLayout,
+  sessions: readonly T[],
+  host: string = LOCAL_HOST_KEY
+): T[] {
+  const tabs = sessionTabIds(layout, host)
   return sessions.filter((session) => session.status === 'running' && !tabs.has(session.id))
 }
 
@@ -1039,27 +1090,32 @@ function anchorFor(
  * front if that tab was. `pairs` maps a lost session's row id to the row id
  * of the session that reopened it; a pair whose lost session has no tab here
  * changes nothing. A tab the reopened session already had elsewhere goes, so
- * it is open once.
+ * it is open once. Both ids are row ids on `host` (this PC's by default): a
+ * tab of another host's session is never swapped.
  */
-export function replaceSessionTabs(layout: PaneLayout, pairs: ReadonlyMap<number, number>): PaneLayout {
+export function replaceSessionTabs(
+  layout: PaneLayout,
+  pairs: ReadonlyMap<number, number>,
+  host: string = LOCAL_HOST_KEY
+): PaneLayout {
   const swaps = new Map<number, number>()
   for (const [from, to] of pairs) {
-    if (findTab(layout, paneId({ kind: 'session', id: from })) !== null) swaps.set(from, to)
+    if (findTab(layout, paneId(sessionRef(from, host))) !== null) swaps.set(from, to)
   }
   if (swaps.size === 0) return layout
-  const reopened = new Set([...swaps.values()].map((id) => paneId({ kind: 'session', id })))
+  const reopened = new Set([...swaps.values()].map((id) => paneId(sessionRef(id, host))))
   const groups = layout.groups.map((group): PaneGroup => {
     const tabs = group.tabs
       .filter((ref) => !reopened.has(paneId(ref)))
       .map((ref): PaneRef => {
-        const to = ref.kind === 'session' ? swaps.get(ref.id) : undefined
-        return to === undefined ? ref : { kind: 'session', id: to }
+        const to = isSessionOn(ref, host) ? swaps.get(ref.id) : undefined
+        return to === undefined ? ref : sessionRef(to, host)
       })
     const front = group.tabs.find((ref) => paneId(ref) === group.activeId)
-    const swapped = front?.kind === 'session' ? swaps.get(front.id) : undefined
+    const swapped = front !== undefined && isSessionOn(front, host) ? swaps.get(front.id) : undefined
     const activeId =
       swapped !== undefined
-        ? paneId({ kind: 'session', id: swapped })
+        ? paneId(sessionRef(swapped, host))
         : tabs.some((ref) => paneId(ref) === group.activeId)
           ? group.activeId
           : tabs.at(-1) === undefined
@@ -1089,19 +1145,25 @@ export function replaceSessionTabs(layout: PaneLayout, pairs: ReadonlyMap<number
  * A group's front tab comes back when it was one of these sessions, and the
  * focus goes back to the pane that had it when that pane is one these
  * sessions went back into.
+ *
+ * Both ids in `pairs` are row ids on `host` (this PC's by default): a saved
+ * tab of another host's session with the same number is left alone, and keeps
+ * its place among the tabs that are not being placed.
  */
 export function placeRestored(
   layout: PaneLayout,
   saved: SavedPaneLayout | null,
-  pairs: ReadonlyMap<number, number>
+  pairs: ReadonlyMap<number, number>,
+  host: string = LOCAL_HOST_KEY
 ): PaneLayout {
   if (saved === null) return layout
   const leaves = savedGroups(saved)
   const named = new Map<number, number>()
   for (const group of leaves) {
     for (const pane of group.panes) {
-      const reopened = pane.kind === 'session' ? pairs.get(pane.id) : undefined
-      if (pane.kind === 'session' && reopened !== undefined) named.set(pane.id, reopened)
+      if (!isSessionOn(pane, host)) continue
+      const reopened = pairs.get(pane.id)
+      if (reopened !== undefined) named.set(pane.id, reopened)
     }
   }
   if (named.size === 0) return layout
@@ -1114,7 +1176,7 @@ export function placeRestored(
   const tree = indexed(saved.root)
 
   // Off wherever `reconcile` put them, to go back where they were.
-  const placing = new Set([...named.values()].map((id) => paneId({ kind: 'session', id })))
+  const placing = new Set([...named.values()].map((id) => paneId(sessionRef(id, host))))
   const groups = new Map(
     layout.groups.map((group) => [
       group.id,
@@ -1133,7 +1195,7 @@ export function placeRestored(
     const placed = became.get(at)
     if (placed !== undefined) return placed
     for (const pane of leaves[at]!.panes) {
-      if (pane.kind === 'session') continue
+      if (isSessionOn(pane, host)) continue
       const group = holding(paneId(pane))
       if (group !== null) return group
     }
@@ -1141,7 +1203,7 @@ export function placeRestored(
   }
 
   leaves.forEach((savedGroup, at) => {
-    if (!savedGroup.panes.some((pane) => pane.kind === 'session' && named.has(pane.id))) return
+    if (!savedGroup.panes.some((pane) => isSessionOn(pane, host) && named.has(pane.id))) return
 
     let target = currentOf(at)
     if (target === null) {
@@ -1165,10 +1227,10 @@ export function placeRestored(
     let activeId = groups.get(target)!.activeId
     let position = 0
     for (const pane of savedGroup.panes) {
-      if (pane.kind === 'session') {
+      if (isSessionOn(pane, host)) {
         const reopened = named.get(pane.id)
         if (reopened === undefined) continue
-        const ref: PaneRef = { kind: 'session', id: reopened }
+        const ref: PaneRef = sessionRef(reopened, host)
         tabs.splice(position, 0, ref)
         position += 1
         if (savedGroup.activeId === paneId(pane)) activeId = paneId(ref)

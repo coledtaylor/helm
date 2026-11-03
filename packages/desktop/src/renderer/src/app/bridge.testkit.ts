@@ -1,3 +1,5 @@
+import { LOCAL_HOST_KEY } from '@helm/core/types'
+import type { ConnectedHosts } from './host/hostBridges'
 import type { HostState, HostStateStore } from './host/hostState'
 import type { Devices } from './host/devices'
 import type { RemoteHostsStore } from './host/remoteHosts'
@@ -152,6 +154,56 @@ export const bridge: FakeBridge = createBridge()
 
 /** The same object, under the name `bridge.ts` exports it by. */
 export const helm: HelmBridge = bridge
+
+/** Each host on another computer's bridge a test reached for, by host id. */
+const remoteBridges = new Map<string, FakeBridge>()
+const bridgeListeners = new Set<(host: string, bridge: HelmBridge) => void>()
+
+/**
+ * A host on another computer's bridge, faked as this PC's is: the test plays
+ * that host. Made on first ask, and the same object for the rest of the file.
+ */
+export function remoteBridge(host: string): FakeBridge {
+  const known = remoteBridges.get(host)
+  if (known !== undefined) return known
+  const made = createBridge()
+  remoteBridges.set(host, made)
+  for (const listener of [...bridgeListeners]) listener(host, made)
+  return made
+}
+
+/** As `bridge.ts` exports it: this PC's for `LOCAL_HOST_KEY`, otherwise that host's fake. */
+export const bridgeFor = (host: string): HelmBridge => (host === LOCAL_HOST_KEY ? bridge : remoteBridge(host))
+
+/** As `bridge.ts` exports it: this PC's bridge first, then each remote one made so far and from now on. */
+export const eachHostBridge = (listener: (host: string, bridge: HelmBridge) => void): (() => void) => {
+  bridgeListeners.add(listener)
+  listener(LOCAL_HOST_KEY, bridge)
+  for (const [host, made] of remoteBridges) listener(host, made)
+  return () => {
+    bridgeListeners.delete(listener)
+  }
+}
+
+const NO_CONNECTED_HOSTS: readonly string[] = []
+
+/** No host on another computer is connected, unless a test says otherwise. */
+export const connectedHosts: ConnectedHosts = {
+  get: () => NO_CONNECTED_HOSTS,
+  subscribe: () => () => undefined
+}
+
+/** Which sessions have a tab here, as the window tells each host: recorded, for a test to read. */
+export const hostSessionTabs = {
+  shown: [] as Array<{ host: string; ids: readonly number[] }>,
+  released: [] as Array<{ host: string; id: number }>,
+  show(ids: readonly number[], host: string = LOCAL_HOST_KEY): void {
+    this.shown.push({ host, ids })
+  },
+  release(id: number, host: string = LOCAL_HOST_KEY): void {
+    this.released.push({ host, id })
+  }
+}
 
 const CONNECTED: HostState = { lost: null, reconnects: 0 }
 

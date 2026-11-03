@@ -1,4 +1,5 @@
-import { helm } from './bridge'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
+import { eachHostBridge } from './bridge'
 
 /**
  * Output routing for hosted sessions, with a buffer in front of it.
@@ -14,22 +15,32 @@ import { helm } from './bridge'
  * issued, and output for a session with no pane yet is held until one attaches.
  * The alternative, buffering in the main process, needs a second channel for
  * "the pane is ready now" and puts renderer lifecycle in main's model.
+ *
+ * A session is its host and its row id there: each host numbers its own, so
+ * output is heard on each host's own bridge, from the moment that bridge is
+ * made, and kept apart by host. This PC's host is `LOCAL_HOST_KEY`.
  */
 
 type Sink = (data: string) => void
 
-const sinks = new Map<number, Sink>()
-const pending = new Map<number, string[]>()
+const sinks = new Map<string, Sink>()
+const pending = new Map<string, string[]>()
 
-helm.on('session:data', ({ id, data }) => {
-  const sink = sinks.get(id)
-  if (sink) {
-    sink(data)
-    return
-  }
-  const buffered = pending.get(id)
-  if (buffered) buffered.push(data)
-  else pending.set(id, [data])
+/** One session's key across every host. */
+const keyOf = (host: string, id: number): string => `${host}\n${String(id)}`
+
+eachHostBridge((host, bridge) => {
+  bridge.on('session:data', ({ id, data }) => {
+    const key = keyOf(host, id)
+    const sink = sinks.get(key)
+    if (sink) {
+      sink(data)
+      return
+    }
+    const buffered = pending.get(key)
+    if (buffered) buffered.push(data)
+    else pending.set(key, [data])
+  })
 })
 
 /**
@@ -37,22 +48,24 @@ helm.on('session:data', ({ id, data }) => {
  * Returns the detach function; detaching does not resume buffering, because a
  * pane that has gone away is not coming back.
  */
-export function attachSessionSink(id: number, sink: Sink): () => void {
-  sinks.set(id, sink)
+export function attachSessionSink(id: number, sink: Sink, host: string = LOCAL_HOST_KEY): () => void {
+  const key = keyOf(host, id)
+  sinks.set(key, sink)
 
-  const buffered = pending.get(id)
+  const buffered = pending.get(key)
   if (buffered) {
-    pending.delete(id)
+    pending.delete(key)
     for (const chunk of buffered) sink(chunk)
   }
 
   return () => {
-    if (sinks.get(id) === sink) sinks.delete(id)
+    if (sinks.get(key) === sink) sinks.delete(key)
   }
 }
 
 /** Drops anything held for a session that will never get a pane. */
-export function forgetSession(id: number): void {
-  sinks.delete(id)
-  pending.delete(id)
+export function forgetSession(id: number, host: string = LOCAL_HOST_KEY): void {
+  const key = keyOf(host, id)
+  sinks.delete(key)
+  pending.delete(key)
 }

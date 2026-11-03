@@ -10,7 +10,9 @@ import {
   findTab,
   focusGroup,
   fromSaved,
+  hostOf,
   isPersistable,
+  isSessionOn,
   isSplit,
   moveTab,
   neighbourAt,
@@ -28,6 +30,7 @@ import {
   retitleTab,
   savedGroups,
   sendBeside,
+  sessionRef,
   sessionTabIds,
   splitWith,
   toSaved,
@@ -43,6 +46,7 @@ import {
   type SavedPaneLayout,
   type SavedPaneNode
 } from './panes'
+import { LOCAL_HOST_KEY } from '../hosts'
 
 const session = (id: number): PaneRef => ({ kind: 'session', id })
 const project = (path: string): PaneRef => ({ kind: 'project', path })
@@ -901,5 +905,87 @@ describe('openTabWithPreview', () => {
     const next = openTabWithPreview(closed, plugin('item', { n: 2 }), first.preview, true)
     expect(shape(next.layout)).toEqual([`>history *${id(plugin('item', { n: 2 }))}`])
     expect(next.preview).toBeNull()
+  })
+})
+
+describe('tabs on more than one host', () => {
+  const BUILD = 'h-build'
+  const remote = (id: number, host = BUILD): PaneRef => ({ kind: 'session', id, host })
+  const remoteProject = (path: string): PaneRef => ({ kind: 'project', path, host: BUILD })
+
+  it('keeps this PC’s ids and gives another host’s tabs ids of their own, even for the same number or path', () => {
+    expect(paneId(session(5))).toBe('session:5')
+    expect(paneId(remote(5))).toBe('host:h-build/session:5')
+    expect(paneId(remote(5))).not.toBe(paneId(session(5)))
+    expect(paneId(remote(5, 'h-lab'))).not.toBe(paneId(remote(5)))
+    expect(paneId(remoteProject('/srv/app'))).toBe('host:h-build/project:/srv/app')
+    // A host whose id holds the separators still makes one unambiguous id.
+    expect(paneId({ kind: 'session', id: 5, host: 'a/b:c' })).toBe('host:a%2Fb%3Ac/session:5')
+    // A tab naming this PC's own key is this PC's tab.
+    expect(paneId({ kind: 'session', id: 5, host: LOCAL_HOST_KEY })).toBe('session:5')
+    expect(hostOf(session(5))).toBe(LOCAL_HOST_KEY)
+    expect(hostOf(remote(5))).toBe(BUILD)
+    expect(sessionRef(5)).toEqual({ kind: 'session', id: 5 })
+    expect(sessionRef(5, BUILD)).toEqual({ kind: 'session', id: 5, host: BUILD })
+  })
+
+  it('keeps each tab’s host through being written down and read back, and a layout saved before reads as this PC’s', () => {
+    const layout = layoutOf(row([g(session(5), remote(5)), g(remoteProject('/srv/app'), project('/work/a'))]), 1)
+    const saved = toSaved(layout)
+    expect(savedGroups(saved).map((group) => group.panes)).toEqual([
+      [session(5), remote(5)],
+      [remoteProject('/srv/app'), project('/work/a')]
+    ])
+    expect(shape(fromSaved(saved))).toEqual(shape(layout))
+
+    const before: SavedPaneLayout = { root: g(session(5), project('/work/a')), focused: 0 }
+    const read = fromSaved(before)
+    expect(read.groups[0]!.tabs.map(hostOf)).toEqual([LOCAL_HOST_KEY, LOCAL_HOST_KEY])
+    expect(sessionTabIds(read)).toEqual(new Set([5]))
+    expect(sessionTabIds(read, BUILD)).toEqual(new Set())
+  })
+
+  it('counts the sessions with a tab, and those not open here, per host', () => {
+    const layout = layoutOf(g(session(5), remote(5), remote(7)), 0)
+    expect(sessionTabIds(layout)).toEqual(new Set([5]))
+    expect(sessionTabIds(layout, BUILD)).toEqual(new Set([5, 7]))
+    const running = (id: number) => ({ id, status: 'running' })
+    // This PC runs 5 and 7: its 7 has no tab here, whatever build-box's 7 has.
+    expect(notOpenHere(layout, [running(5), running(7)]).map((s) => s.id)).toEqual([7])
+    expect(notOpenHere(layout, [running(5), running(7), running(8)], BUILD).map((s) => s.id)).toEqual([8])
+  })
+
+  it('reconciles another host’s tab as a tab of its own beside this PC’s with the same number', () => {
+    const layout = layoutOf(g(session(5)), 0)
+    const reconciled = reconcile(layout, () => true, [remote(5), session(5)])
+    expect(shape(reconciled)).toEqual(['>*session:5 host:h-build/session:5'])
+  })
+
+  it('swaps only the sessions on the host that reopened them', () => {
+    const layout = layoutOf(g(session(2), remote(2)), 0)
+    const local = replaceSessionTabs(layout, new Map([[2, 12]]))
+    expect(local.groups[0]!.tabs.map(paneId)).toEqual(['session:12', 'host:h-build/session:2'])
+    const there = replaceSessionTabs(layout, new Map([[2, 12]]), BUILD)
+    expect(there.groups[0]!.tabs.map(paneId)).toEqual(['session:2', 'host:h-build/session:12'])
+  })
+
+  it('puts a reopened session back only where a session of its own host was', () => {
+    const saved: SavedPaneLayout = {
+      root: g(remote(1) as SavedPane, project('/work/a') as SavedPane, session(1) as SavedPane),
+      focused: 0
+    }
+    // build-box's 1 is still running; this PC's 1 was lost and reopened as 11.
+    const drawn = reconcile(fromSaved(saved), (ref) => !isSessionOn(ref, LOCAL_HOST_KEY), [])
+    const hosted = reconcile(drawn, () => true, [session(11)])
+    const restored = placeRestored(hosted, saved, new Map([[1, 11]]))
+    expect(restored.groups[0]!.tabs.map(paneId)).toEqual(['host:h-build/session:1', 'project:/work/a', 'session:11'])
+    // Pairs on build-box move only its sessions.
+    const there = placeRestored(
+      reconcile(fromSaved(saved), (ref) => !isSessionOn(ref, BUILD), [remote(11)]),
+      saved,
+      new Map([[1, 11]]),
+      BUILD
+    )
+    expect(there.groups[0]!.tabs.map(paneId)).toEqual(['host:h-build/session:11', 'project:/work/a', 'session:1'])
   })
 })

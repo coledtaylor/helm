@@ -364,6 +364,36 @@ describe('settings', () => {
       expect(validateSetting('paneLayout', paneLayout)).toBeNull()
     })
 
+    it('reads a layout saved before there were other hosts as this PC’s, and keeps another host’s tabs with their host', () => {
+      const before = { root: { panes: [{ kind: 'session', id: 5 }, { kind: 'project', path: 'C:\\a' }], activeId: null }, focused: 0 }
+      raw('paneLayout', before)
+      expect(readSettings(store).paneLayout).toEqual(before)
+
+      const mixed = {
+        root: {
+          panes: [
+            { kind: 'session', id: 5 },
+            { kind: 'session', id: 5, host: 'h-build' },
+            { kind: 'project', path: '/srv/app', host: 'h-build' },
+            { kind: 'file', root: '/srv/app', path: '/srv/app/README.md', host: 'h-build' },
+            { kind: 'plugin', plugin: 'sample', tab: 'detail', params: {}, title: null, host: 'h-build' }
+          ],
+          activeId: 'host:h-build/session:5'
+        },
+        focused: 0
+      }
+      expect(validateSetting('paneLayout', mixed)).toBeNull()
+      writeSettings(store, { paneLayout: mixed as never })
+      expect(readSettings(store).paneLayout).toEqual(mixed)
+    })
+
+    it('refuses a tab naming this PC’s key, an empty host, or a host on a tab that has none', () => {
+      const one = (pane: Record<string, unknown>) => ({ root: { panes: [pane], activeId: null }, focused: 0 })
+      expect(validateSetting('paneLayout', one({ kind: 'session', id: 5, host: 'local' }))).toMatch(/this PC/)
+      expect(validateSetting('paneLayout', one({ kind: 'session', id: 5, host: '' }))).toMatch(/host/)
+      expect(validateSetting('paneLayout', one({ kind: 'history', host: 'h-build' }))).toMatch(/no host/)
+    })
+
     it('reads a value that is neither shape as no layout, and no key for the old divider', () => {
       raw('paneLayout', { panes: [] })
       raw('paneSplitPct', 62)

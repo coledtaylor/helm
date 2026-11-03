@@ -6,7 +6,8 @@ import {
   type TerminalHost,
   type TerminalReport
 } from '../terminal'
-import { helm } from './bridge'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
+import { bridgeFor, helm } from './bridge'
 import { attachSessionSink, forgetSession } from './sessionStream'
 import { onTerminalPrefs, terminalPrefs } from './termprefs'
 
@@ -24,16 +25,27 @@ import { onTerminalPrefs, terminalPrefs } from './termprefs'
  * So the component only says *where* a session's terminal should appear. The
  * terminal, its output subscription and its lifetime live here, and end when
  * the tab is closed rather than when a render happens to unmount a node.
+ *
+ * A session is its host and its row id there (this PC's host is
+ * `LOCAL_HOST_KEY`, the default): each host numbers its own sessions, so a
+ * terminal is kept by both, and its keys and size go to its own host's bridge.
+ * The clipboard and links are this PC's, through `helm`.
  */
 
 interface Pane {
+  /** The session's host. */
+  on: string
+  id: number
   host: TerminalHost
   /** The terminal's own element, moved between containers as tabs change. */
   element: HTMLDivElement
   detach: () => void
 }
 
-const panes = new Map<number, Pane>()
+const panes = new Map<string, Pane>()
+
+/** One session's key across every host. */
+const keyOf = (host: string, id: number): string => `${host}\n${String(id)}`
 
 /**
  * Every open session terminal takes the new preferences immediately - the
@@ -53,9 +65,15 @@ export interface MountOptions {
   windowsBuild: number | null
 }
 
-/** The terminal for `id`, created on first call, re-parented on later ones. */
-export function mountTerminal(id: number, container: HTMLElement, opts: MountOptions): TerminalHost {
-  const existing = panes.get(id)
+/** The terminal for session `id` on `on`, created on first call, re-parented on later ones. */
+export function mountTerminal(
+  id: number,
+  container: HTMLElement,
+  opts: MountOptions,
+  on: string = LOCAL_HOST_KEY
+): TerminalHost {
+  const key = keyOf(on, id)
+  const existing = panes.get(key)
   if (existing) {
     if (existing.element.parentElement !== container) {
       container.appendChild(existing.element)
@@ -69,6 +87,7 @@ export function mountTerminal(id: number, container: HTMLElement, opts: MountOpt
   element.style.height = '100%'
   container.appendChild(element)
 
+  const session = bridgeFor(on)
   const host = createTerminal(
     element,
     {
@@ -80,8 +99,8 @@ export function mountTerminal(id: number, container: HTMLElement, opts: MountOpt
       ...(opts.windowsBuild !== null ? { windowsBuild: opts.windowsBuild } : {})
     },
     {
-      onInput: (data) => helm.send('session:input', { id, data }),
-      onResize: (cols, rows) => helm.send('session:resize', { id, cols, rows }),
+      onInput: (data) => session.send('session:input', { id, data }),
+      onResize: (cols, rows) => session.send('session:resize', { id, cols, rows }),
       readClipboard: () => helm.invoke('clipboard:read'),
       writeClipboard: async (text) => (await helm.invoke('clipboard:write', text)).outcome,
       openLink: (url) => void helm.invoke('shell:openExternal', { url })
@@ -89,27 +108,30 @@ export function mountTerminal(id: number, container: HTMLElement, opts: MountOpt
     terminalPrefs()
   )
 
-  panes.set(id, {
+  panes.set(key, {
+    on,
+    id,
     host,
     element,
-    detach: attachSessionSink(id, (data) => host.term.write(data))
+    detach: attachSessionSink(id, (data) => host.term.write(data), on)
   })
   return host
 }
 
-export function getTerminal(id: number): TerminalHost | undefined {
-  return panes.get(id)?.host
+export function getTerminal(id: number, on: string = LOCAL_HOST_KEY): TerminalHost | undefined {
+  return panes.get(keyOf(on, id))?.host
 }
 
 /** Ends a terminal for good. Called when its tab closes, not when it unmounts. */
-export function disposeTerminal(id: number): void {
-  const pane = panes.get(id)
+export function disposeTerminal(id: number, on: string = LOCAL_HOST_KEY): void {
+  const key = keyOf(on, id)
+  const pane = panes.get(key)
   if (!pane) return
-  panes.delete(id)
+  panes.delete(key)
   pane.detach()
   pane.host.dispose()
   pane.element.remove()
-  forgetSession(id)
+  forgetSession(id, on)
 }
 
 /**
@@ -205,5 +227,8 @@ function measureCell(prefs: {
  * font change actually reached them. Nothing in the app calls it.
  */
 export function describeSessionTerminals(): TerminalReport[] {
-  return [...panes.entries()].map(([id, pane]) => describeTerminal(String(id), pane.host))
+  // This PC's sessions keep the names the drivers know them by.
+  return [...panes.values()].map((pane) =>
+    describeTerminal(pane.on === LOCAL_HOST_KEY ? String(pane.id) : `${pane.on}:${String(pane.id)}`, pane.host)
+  )
 }
