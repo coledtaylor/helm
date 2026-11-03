@@ -113,6 +113,22 @@ pub enum Revocation {
     Unknown,
 }
 
+/// What changing a device's role by fingerprint came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RoleChange {
+    /// It has the new role now; it had `from`.
+    Changed { device: Device, from: Role },
+    /// It had that role already; nothing changed.
+    Unchanged(Device),
+    /// It is revoked; nothing changed.
+    Revoked(Device),
+    /// It is the host's last unrevoked admin and the role is not admin: a
+    /// host keeps at least one admin, so nothing changed.
+    LastAdmin(Device),
+    /// No device has that fingerprint; nothing changed.
+    Unknown,
+}
+
 /// One device the host has paired.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -300,6 +316,44 @@ impl DeviceRegistry {
         let revoked = device.clone();
         self.write(devices)?;
         Ok(Revocation::Revoked(revoked))
+    }
+
+    /// Gives the device whose key has `fingerprint` the role `role`. Only a
+    /// change changes the file: an unknown or revoked fingerprint, the role
+    /// it has already, or the host's last unrevoked admin made anything else
+    /// leave it as it is.
+    pub fn change_role(&self, fingerprint: &str, role: Role) -> Result<RoleChange> {
+        let _changing = CHANGING.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut devices = self.devices()?;
+        let wanted = fingerprint.trim();
+        let Some(index) = devices
+            .iter()
+            .position(|device| device.key.fingerprint().eq_ignore_ascii_case(wanted))
+        else {
+            return Ok(RoleChange::Unknown);
+        };
+        let device = devices[index].clone();
+        if device.standing() == Standing::Revoked {
+            return Ok(RoleChange::Revoked(device));
+        }
+        if device.role == role {
+            return Ok(RoleChange::Unchanged(device));
+        }
+        if device.role == Role::Admin {
+            let others = devices.iter().enumerate().any(|(at, other)| {
+                at != index && other.role == Role::Admin && other.standing() == Standing::Paired
+            });
+            if !others {
+                return Ok(RoleChange::LastAdmin(device));
+            }
+        }
+        devices[index].role = role;
+        let changed = devices[index].clone();
+        self.write(devices)?;
+        Ok(RoleChange::Changed {
+            device: changed,
+            from: device.role,
+        })
     }
 
     fn write(&self, devices: Vec<Device>) -> Result<()> {
@@ -506,5 +560,68 @@ mod tests {
         assert_eq!(enrolled, 1, "{outcomes:?}");
         assert!(outcomes.contains(&FirstAdmin::AdminExists));
         assert_eq!(registry.devices().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn s10_a_role_changes_by_fingerprint_but_never_for_an_unknown_or_revoked_device_or_the_last_admin()
+     {
+        let dirs = TestDirs::new();
+        let registry = DeviceRegistry::in_data_folder(&dirs.data);
+        let (admin, phone, gone) = (key(), key(), key());
+        registry.pair(admin, "a desktop", Role::Admin).unwrap();
+        registry.pair(phone, "a phone", Role::Operator).unwrap();
+        registry.pair(gone, "a lost phone", Role::Admin).unwrap();
+        registry.revoke(&gone).unwrap();
+
+        let RoleChange::Changed { device, from } = registry
+            .change_role(&phone.fingerprint().to_uppercase(), Role::Viewer)
+            .unwrap()
+        else {
+            panic!("the phone's role did not change");
+        };
+        assert_eq!((device.role, from), (Role::Viewer, Role::Operator));
+        assert_eq!(registry.device(&phone).unwrap().unwrap().role, Role::Viewer);
+        assert!(matches!(
+            registry
+                .change_role(&phone.fingerprint(), Role::Viewer)
+                .unwrap(),
+            RoleChange::Unchanged(_)
+        ));
+
+        let before = std::fs::read(registry.path()).unwrap();
+        assert_eq!(
+            registry
+                .change_role("0000000000000000", Role::Admin)
+                .unwrap(),
+            RoleChange::Unknown
+        );
+        assert!(matches!(
+            registry
+                .change_role(&gone.fingerprint(), Role::Viewer)
+                .unwrap(),
+            RoleChange::Revoked(_)
+        ));
+        // A revoked admin is no admin: the desktop is the last one.
+        assert!(matches!(
+            registry
+                .change_role(&admin.fingerprint(), Role::Operator)
+                .unwrap(),
+            RoleChange::LastAdmin(_)
+        ));
+        assert_eq!(std::fs::read(registry.path()).unwrap(), before);
+
+        // With a second admin, either may stop being one.
+        registry
+            .change_role(&phone.fingerprint(), Role::Admin)
+            .unwrap();
+        assert!(matches!(
+            registry
+                .change_role(&admin.fingerprint(), Role::Operator)
+                .unwrap(),
+            RoleChange::Changed {
+                from: Role::Admin,
+                ..
+            }
+        ));
     }
 }

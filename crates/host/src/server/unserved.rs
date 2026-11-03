@@ -41,16 +41,9 @@ fn entry_covers(entry: &str, channel: &str) -> bool {
     }
 }
 
-/// Every channel not served yet, by the feature that will serve it.
-pub const NOT_YET_SERVED: &[Later] = &[Later {
-    feature: "attached devices list and audit log",
-    channels: &[
-        "devices:attached",
-        "devices:connected",
-        "devices:audit",
-        "devices:role",
-    ],
-}];
+/// Every channel not served yet, by the feature that will serve it. Empty:
+/// the host serves every channel the protocol declares.
+pub const NOT_YET_SERVED: &[Later] = &[];
 
 /// The entry that lists `channel`, when it is not served yet.
 pub fn later(channel: &str) -> Option<&'static Later> {
@@ -224,15 +217,14 @@ mod tests {
     }
 
     #[test]
-    fn only_the_listed_channels_are_answered_as_not_served_yet() {
+    fn the_host_serves_every_channel_the_protocol_declares() {
         let catalogue = Catalogue::protocol();
-        for decl in catalogue.channels() {
-            let name = decl.name();
-            let listed = NOT_YET_SERVED.iter().any(|entry| entry.covers(name));
-            assert_eq!(later(name).is_some(), listed, "{name}");
-        }
-        let drift = drift_against(&catalogue, &served(&[]), NOT_YET_SERVED);
-        assert!(drift.stale.is_empty(), "{drift}");
+        assert!(
+            catalogue
+                .channels()
+                .all(|decl| later(decl.name()).is_none()),
+            "nothing is left on the list"
+        );
     }
 
     #[test]

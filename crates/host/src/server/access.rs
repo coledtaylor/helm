@@ -15,6 +15,11 @@
 //! `host:deviceSessions` are every role's. Plugin page calls keep their own
 //! rule in `features/plugins/pages.rs`.
 //!
+//! The admin channels that only read (`devices:list`, `devices:audit`) are
+//! marked in the table ([`Least::AdminReading`]): every other request on an
+//! admin channel is an admin action, which the audit log records whether it
+//! was done or refused for role or presence (`super::audit`).
+//!
 //! **Presence.** A connection on the host's relay endpoint, which `floti
 //! connect` opens, is away: the device reached the host from another
 //! computer. An admin action from an away connection is refused with
@@ -60,6 +65,10 @@ pub(crate) enum Least {
     Admin,
     /// An admin, but any device for itself: `devices:revoke`.
     AdminUnlessItself,
+    /// An admin, for a request that only reads (`devices:list`,
+    /// `devices:audit`): gated as any admin action, but not recorded in the
+    /// audit log.
+    AdminReading,
 }
 
 /// One channel's rule: its least role, and what a request on it does, as a
@@ -68,6 +77,15 @@ pub(crate) enum Least {
 pub(crate) struct Rule {
     pub least: Least,
     pub doing: &'static str,
+}
+
+impl Rule {
+    /// Whether a request on the channel is an admin action the audit log
+    /// records, done or refused: every admin channel's but those that only
+    /// read.
+    pub(crate) fn audited(self) -> bool {
+        matches!(self.least, Least::Admin | Least::AdminUnlessItself)
+    }
 }
 
 const SEEING: &str = "Seeing this";
@@ -79,6 +97,8 @@ const HARNESS: &str = "Creating a harness";
 const PLUGIN_COMMANDS: &str = "Running a plugin's command";
 const AGENT_TOOLS: &str = "Answering a session's agent tools";
 const DEVICES: &str = "Listing, approving or revoking devices";
+const ROLES: &str = "Changing a device's role";
+const AUDIT: &str = "Reading the audit log";
 const PLUGINS: &str = "Adding, removing or switching a plugin";
 const SECRETS: &str = "Seeing or changing a plugin's secrets";
 const SETTINGS: &str = "Changing the host's settings";
@@ -96,6 +116,9 @@ const RULES: &[(&str, Least, &str)] = &[
     ("host:deviceSessions", Least::Viewer, SEEING),
     // Presence is said by any device; it never raises a role.
     ("devices:presence", Least::Viewer, SEEING),
+    // Who is attached, and each new connection: every role sees them.
+    ("devices:attached", Least::Viewer, SEEING),
+    ("devices:connected", Least::Viewer, SEEING),
     // Seeing: sessions, screens, files, notes, history, usage and the rest.
     ("app:info", Least::Viewer, SEEING),
     ("archive:changed", Least::Viewer, SEEING),
@@ -210,9 +233,11 @@ const RULES: &[(&str, Least, &str)] = &[
     ("agentPlugin:offer", Least::Operator, AGENT_TOOLS),
     ("agentPlugin:answer", Least::Operator, AGENT_TOOLS),
     // Changing the host.
-    ("devices:list", Least::Admin, DEVICES),
+    ("devices:list", Least::AdminReading, DEVICES),
     ("devices:approve", Least::Admin, DEVICES),
     ("devices:revoke", Least::AdminUnlessItself, DEVICES),
+    ("devices:role", Least::Admin, ROLES),
+    ("devices:audit", Least::AdminReading, AUDIT),
     ("plugins:add", Least::Admin, PLUGINS),
     ("plugins:remove", Least::Admin, PLUGINS),
     ("plugins:setEnabled", Least::Admin, PLUGINS),
@@ -298,7 +323,7 @@ pub(crate) fn gate(channel: &str, asker: Asker, itself: bool) -> Gate {
     let least = match rule.least {
         Least::Viewer => return Gate::Open,
         Least::Operator => Role::Operator,
-        Least::Admin => Role::Admin,
+        Least::Admin | Least::AdminReading => Role::Admin,
         Least::AdminUnlessItself if itself => return Gate::Open,
         Least::AdminUnlessItself => Role::Admin,
     };
@@ -309,6 +334,22 @@ pub(crate) fn gate(channel: &str, asker: Asker, itself: bool) -> Gate {
         return Gate::PresenceNeeded;
     }
     Gate::Open
+}
+
+/// Whether a device paired as `role` may be sent what is published on
+/// `channel`: its role alone decides, as it does for a device whose role
+/// changed after it subscribed. A channel with no rule is left to its
+/// subscription's own gate.
+pub(crate) fn role_allows(channel: &str, role: Role) -> bool {
+    let Some(rule) = rule(channel) else {
+        return true;
+    };
+    let least = match rule.least {
+        Least::Viewer => return true,
+        Least::Operator => Role::Operator,
+        Least::Admin | Least::AdminReading | Least::AdminUnlessItself => Role::Admin,
+    };
+    rank(role) >= rank(least)
 }
 
 /// What an admin action from another computer without a recent presence is

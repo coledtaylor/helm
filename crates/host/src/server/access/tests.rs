@@ -10,7 +10,8 @@ use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::noise::KeyPair;
 
 use super::{
-    Asker, Confirmations, Gate, Least, LiveConnections, PRESENCE_WINDOW, gate, refusal, rule, ruled,
+    Asker, Confirmations, Gate, Least, LiveConnections, PRESENCE_WINDOW, gate, refusal,
+    role_allows, rule, ruled,
 };
 use crate::devices::Role;
 use crate::server::clock::HostClock;
@@ -72,7 +73,9 @@ fn s10_each_channel_is_answered_for_the_roles_it_allows_and_refused_for_the_othe
             let allowed = match least {
                 Least::Viewer => true,
                 Least::Operator => rank(role) >= rank(Role::Operator),
-                Least::Admin | Least::AdminUnlessItself => role == Role::Admin,
+                Least::Admin | Least::AdminUnlessItself | Least::AdminReading => {
+                    role == Role::Admin
+                }
             };
             let gated = gate(name, here(role), false);
             if allowed {
@@ -91,6 +94,65 @@ fn s10_each_channel_is_answered_for_the_roles_it_allows_and_refused_for_the_othe
             }
         }
     }
+}
+
+#[test]
+fn s1_s4_s10_s13_every_role_sees_who_is_attached_and_only_an_admin_changes_roles_or_reads_the_audit_log()
+ {
+    for channel in ["devices:attached", "devices:connected"] {
+        for role in ROLES {
+            assert_eq!(gate(channel, here(role), false), Gate::Open, "{channel}");
+            assert!(role_allows(channel, role));
+        }
+    }
+    for channel in ["devices:role", "devices:audit"] {
+        for role in [Role::Viewer, Role::Operator] {
+            assert!(matches!(
+                gate(channel, here(role), false),
+                Gate::NotPermitted(_)
+            ));
+            assert!(!role_allows(channel, role));
+        }
+        assert_eq!(gate(channel, here(Role::Admin), false), Gate::Open);
+        // From another computer, an admin is asked for presence first.
+        let away = Asker {
+            role: Role::Admin,
+            away: true,
+            present: false,
+        };
+        assert_eq!(gate(channel, away, false), Gate::PresenceNeeded);
+    }
+    assert_eq!(
+        gate("devices:role", here(Role::Operator), false),
+        Gate::NotPermitted(
+            "Changing a device's role takes an admin device, and this device is paired as an operator."
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn s11_s12_admin_actions_are_audited_but_reading_the_devices_or_the_audit_log_is_not() {
+    for name in ruled() {
+        let rule = rule(name).unwrap();
+        let expected = matches!(rule.least, Least::Admin | Least::AdminUnlessItself);
+        assert_eq!(rule.audited(), expected, "{name}");
+    }
+    assert!(rule("devices:role").unwrap().audited());
+    assert!(rule("devices:approve").unwrap().audited());
+    assert!(rule("settings:write").unwrap().audited());
+    assert!(!rule("devices:list").unwrap().audited());
+    assert!(!rule("devices:audit").unwrap().audited());
+    assert!(!rule("session:start").unwrap().audited());
+}
+
+#[test]
+fn s10_a_device_is_sent_what_is_published_only_as_its_role_now_allows() {
+    assert!(role_allows("session:data", Role::Viewer));
+    assert!(!role_allows("secrets:changed", Role::Operator));
+    assert!(role_allows("secrets:changed", Role::Admin));
+    // A channel with no rule is left to its subscription's gate.
+    assert!(role_allows("devices:somethingNew", Role::Viewer));
 }
 
 #[test]

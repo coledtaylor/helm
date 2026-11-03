@@ -17,8 +17,10 @@
 //! `floti devices` lists the devices paired with the host on this computer
 //! and those waiting to pair, `floti devices approve <code>|- [--role
 //! viewer|operator|admin]` pairs the one waiting under the code it shows
-//! (`-` reads the code from standard input), and `floti devices revoke
-//! <fingerprint>` revokes a device, closing its connections at once.
+//! (`-` reads the code from standard input), `floti devices revoke
+//! <fingerprint>` revokes a device, closing its connections at once,
+//! `floti devices role <fingerprint> viewer|operator|admin` changes a
+//! device's role, and `floti devices audit` prints the host's audit log.
 //! `floti bridge ... --pair <device name> --approve <role>` pairs in one
 //! step: it runs `floti devices approve - --role <role>` through the same
 //! transport, with its own code on that command's standard input.
@@ -42,7 +44,7 @@ use floti_host::presence;
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
 use floti_protocol::channels::devices::DeviceRole;
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--pair <device name> [--approve viewer|operator|admin]] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code>|- [--role viewer|operator|admin]\n       floti devices revoke <fingerprint>\n       floti presence [--window <handle>] <reason>";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--pair <device name> [--approve viewer|operator|admin]] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code>|- [--role viewer|operator|admin]\n       floti devices revoke <fingerprint>\n       floti devices role <fingerprint> viewer|operator|admin\n       floti devices audit\n       floti presence [--window <handle>] <reason>";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();

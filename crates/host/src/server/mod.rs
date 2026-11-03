@@ -55,6 +55,8 @@
 
 mod access;
 mod agent_tools;
+mod attached;
+pub mod audit;
 mod browser_tools;
 mod clock;
 mod connection;
@@ -63,6 +65,7 @@ mod events;
 mod features;
 mod hosted;
 pub mod idle;
+pub mod notices;
 mod pairing;
 mod plugin_tools;
 pub(crate) mod records;
@@ -106,6 +109,8 @@ use crate::{Error, Result};
 use access::{Confirmations, LiveConnections};
 pub use access::{PRESENCE_NEEDED, PRESENCE_WINDOW};
 use agent_tools::HostAgentTools;
+use attached::Attached;
+use audit::AuditLog;
 use clock::HostClock;
 #[cfg(any(test, feature = "testkit"))]
 pub use clock::TEST_HOST_CLOCK_MARKER;
@@ -115,6 +120,7 @@ pub use enrolment::{FIRST_ADMIN_NAME, LocalEnrolment, read_enrolment};
 use features::Features;
 use hosted::Hosted;
 pub use hosted::Occupancy;
+use notices::HostNotices;
 use pairing::Pairing;
 pub use pairing::{MAX_WAITING, PAIRING_LIFETIME};
 use session_tools::HostWorld;
@@ -384,8 +390,16 @@ impl Host {
             host_key.public(),
             &devices,
         ));
+        // Owner-only and append-only, beside the registry: who came and went
+        // and what was done to the host.
+        let audit = Arc::new(AuditLog::in_data_folder(&folders.data));
         // In memory only: a request to pair does not outlive the host.
-        let pairing = Arc::new(Pairing::new(&folders.data, Arc::clone(&devices)));
+        let pairing = Arc::new(Pairing::new(
+            &folders.data,
+            Arc::clone(&devices),
+            Arc::clone(&audit),
+        ));
+        let notices = Arc::new(HostNotices::for_host(&folders.data));
         // In memory only too: a device confirms its presence again after a
         // restart.
         let confirmations = Arc::new(Confirmations::new(HostClock::new(&folders.data)));
@@ -423,6 +437,11 @@ impl Host {
         hosted.settle();
         let features = Arc::new(Features::new(Arc::clone(&hosted), folders, run)?);
         let agent_tools = start_agent_tools(&hosted, &features)?;
+        let attached = Arc::new(Attached::new(
+            features.shared_events(),
+            Arc::clone(&audit),
+            notices,
+        ));
 
         let (stopper, stop_requested) = Stopper::new();
         let (shutdown, shutdown_rx) = watch::channel(false);
@@ -443,6 +462,8 @@ impl Host {
                 hello_deadline,
                 confirmations,
                 live: Arc::new(LiveConnections::default()),
+                attached,
+                audit,
             },
             identity,
             stopper: stopper.clone(),

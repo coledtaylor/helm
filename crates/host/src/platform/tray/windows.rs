@@ -497,7 +497,7 @@ impl State {
 /// The app's icon at the size the notification area draws icons at this
 /// DPI, or null when Windows would not make it: the shell then shows a
 /// blank icon, which still has its tooltip and menu.
-fn app_icon() -> HICON {
+pub(in crate::platform) fn app_icon() -> HICON {
     // SAFETY: plain values.
     let (width, height) = unsafe {
         let dpi = GetDpiForSystem();
@@ -573,7 +573,7 @@ fn tooltip(text: &str) -> [u16; TOOLTIP_MAX + 1] {
 }
 
 /// `text` as UTF-16 ending in nul.
-fn wide(text: &str) -> Vec<u16> {
+pub(in crate::platform) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 

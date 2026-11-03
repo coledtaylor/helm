@@ -225,7 +225,12 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   While no device is an admin, the host also keeps `enrolment.json` there:
   its public key and a one-time code, fresh at every start, that lets one
   client on this computer enrol as the first admin inside the Noise
-  handshake, then is removed. Each is an owner-only file
+  handshake, then is removed. The host keeps its audit log (`audit.log`,
+  JSON Lines, append-only, rotated like `host.log`, never in `floti.db`)
+  there too: who attached and detached, refusals, pairing, role changes,
+  revokes and admin actions by channel name, and never a key, a code, a
+  request's contents or any session content (input, output, prompt,
+  transcript, file or note text). Each is an owner-only file
   (`platform/private_files`): `0600` on macOS and Linux, an access list naming
   only the user on Windows. Any other device pairs by asking in its
   handshake: the host tells it a short code to show, keeps the request in

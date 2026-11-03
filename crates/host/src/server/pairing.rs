@@ -18,19 +18,25 @@
 //! also checked whenever the requests are read.
 //!
 //! The log says each request's coming and going in one line naming the
-//! device's fingerprint. A pairing code is never logged, printed or sent to
-//! anyone but the device it was made for, and `floti devices` lists no code.
+//! device's fingerprint, and the audit log records each request asked,
+//! approved (by whom, with which role), expired or withdrawn, with the name
+//! the device gave. A pairing code is never logged, recorded, printed or
+//! sent to anyone but the device it was made for, and `floti devices` lists
+//! no code.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use floti_protocol::channels::devices::WaitingDevice;
+use floti_protocol::channels::devices::{
+    AuditActor, AuditDevice, AuditEvent, PairingEnd, WaitingDevice,
+};
 use floti_protocol::message::ClientKind;
 use floti_protocol::noise::{PairingCode, PublicKey};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use super::audit::AuditLog;
 use super::clock::HostClock;
 use crate::devices::{Device, DeviceRegistry, Role};
 
@@ -59,6 +65,8 @@ pub(crate) struct Pairing {
     devices: Arc<DeviceRegistry>,
     /// What a request's age is read on.
     clock: HostClock,
+    /// Where each request's coming and going is recorded.
+    audit: Arc<AuditLog>,
     state: Mutex<State>,
 }
 
@@ -77,6 +85,25 @@ struct Request {
     tell: oneshot::Sender<Outcome>,
 }
 
+impl Request {
+    /// The device asking, as the audit log names it: with no role yet.
+    fn audited(&self) -> AuditDevice {
+        AuditDevice {
+            fingerprint: self.key.fingerprint(),
+            name: Some(self.name.clone()),
+            role: None,
+        }
+    }
+
+    /// Records that the request ended unapproved, `why`.
+    fn ended(&self, audit: &AuditLog, why: PairingEnd) {
+        audit.record(AuditEvent::PairingEnded {
+            device: self.audited(),
+            why,
+        });
+    }
+}
+
 /// A request that waits, held by the connection that made it: dropping it
 /// withdraws the request, unless it was approved or expired first.
 pub(crate) struct Waiting {
@@ -89,12 +116,13 @@ pub(crate) struct Waiting {
 }
 
 impl Pairing {
-    /// No requests yet, for the host whose registry is `devices` and whose
-    /// data folder is `data`.
-    pub(crate) fn new(data: &Path, devices: Arc<DeviceRegistry>) -> Self {
+    /// No requests yet, for the host whose registry is `devices`, whose data
+    /// folder is `data` and whose audit log is `audit`.
+    pub(crate) fn new(data: &Path, devices: Arc<DeviceRegistry>, audit: Arc<AuditLog>) -> Self {
         Self {
             devices,
             clock: HostClock::new(data),
+            audit,
             state: Mutex::new(State {
                 next_id: 0,
                 waiting: Vec::new(),
@@ -122,6 +150,7 @@ impl Pairing {
                 "floti host: the request to pair from device {} expired",
                 request.key.fingerprint()
             );
+            request.ended(&self.audit, PairingEnd::Expired);
             let (closed, _) = oneshot::channel();
             let _ = std::mem::replace(&mut request.tell, closed).send(Outcome::Expired);
             false
@@ -135,15 +164,17 @@ impl Pairing {
         state.waiting.len() < MAX_WAITING
     }
 
-    /// Takes `key`'s request to pair, named `name`, under a code no other
-    /// request has. A request `key` already had is withdrawn.
+    /// Takes `key`'s request to pair, named `name`, made from another
+    /// computer when `away`, under a code no other request has. A request
+    /// `key` already had is withdrawn.
     pub(crate) fn ask(
         self: &Arc<Self>,
         key: PublicKey,
         name: &str,
         kind: ClientKind,
+        away: bool,
     ) -> Result<Waiting, Full> {
-        self.ask_with(key, name, kind, || {
+        self.ask_with(key, name, kind, away, || {
             PairingCode::generate().expect("the OS's random source gives a pairing code")
         })
     }
@@ -154,12 +185,14 @@ impl Pairing {
         key: PublicKey,
         name: &str,
         kind: ClientKind,
+        away: bool,
         mut generate: impl FnMut() -> PairingCode,
     ) -> Result<Waiting, Full> {
         let mut state = self.state();
         self.drop_expired(&mut state);
         if let Some(index) = state.waiting.iter().position(|request| request.key == key) {
-            state.waiting.remove(index);
+            let earlier = state.waiting.remove(index);
+            earlier.ended(&self.audit, PairingEnd::Withdrawn);
             log_line!(
                 "floti host: device {} asked to pair again; its earlier request is withdrawn",
                 key.fingerprint()
@@ -195,6 +228,14 @@ impl Pairing {
             "floti host: device {} asks to pair, named {name:?}; it waits for `floti devices approve` on this computer",
             key.fingerprint()
         );
+        self.audit.record(AuditEvent::PairingAsked {
+            device: AuditDevice {
+                fingerprint: key.fingerprint(),
+                name: Some(name.to_owned()),
+                role: None,
+            },
+            away,
+        });
         Ok(Waiting {
             pairing: Arc::clone(self),
             id,
@@ -210,7 +251,8 @@ impl Pairing {
     pub(crate) fn withdraw_key(&self, key: &PublicKey) {
         let mut state = self.state();
         if let Some(index) = state.waiting.iter().position(|request| request.key == *key) {
-            state.waiting.remove(index);
+            let request = state.waiting.remove(index);
+            request.ended(&self.audit, PairingEnd::Withdrawn);
             log_line!(
                 "floti host: device {} connected without asking to pair while its request \
                  waited; the request is withdrawn",
@@ -240,9 +282,16 @@ impl Pairing {
     }
 
     /// Pairs the device whose request waits under `code` with `role`, and
-    /// tells its connection: the device as paired. A sentence for whoever
-    /// approved when no request waits under that code.
-    pub(crate) fn approve(&self, code: &str, role: Role) -> Result<Device, String> {
+    /// tells its connection: the device as paired. `by` approved it, from
+    /// another computer when `away`. A sentence for whoever approved when no
+    /// request waits under that code.
+    pub(crate) fn approve(
+        &self,
+        code: &str,
+        role: Role,
+        by: &AuditActor,
+        away: bool,
+    ) -> Result<Device, String> {
         const NO_SUCH_CODE: &str = "No device is waiting to pair with that code.";
         let code: PairingCode = code.parse().map_err(|_| NO_SUCH_CODE.to_owned())?;
         let mut state = self.state();
@@ -264,6 +313,15 @@ impl Pairing {
             device.role.with_article(),
             device.name
         );
+        self.audit.record(AuditEvent::PairingApproved {
+            device: AuditDevice {
+                fingerprint: device.key.fingerprint(),
+                name: Some(device.name.clone()),
+                role: Some(device.role.into()),
+            },
+            by: by.clone(),
+            away,
+        });
         let _ = request.tell.send(Outcome::Approved(device.role));
         Ok(device)
     }
@@ -282,6 +340,7 @@ impl Pairing {
         let mut state = self.state();
         if let Some(index) = state.waiting.iter().position(|request| request.id == id) {
             let request = state.waiting.remove(index);
+            request.ended(&self.audit, PairingEnd::Withdrawn);
             log_line!(
                 "floti host: device {} withdrew its request to pair",
                 request.key.fingerprint()

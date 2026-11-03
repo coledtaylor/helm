@@ -39,13 +39,17 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 use super::{
-    Admission, Entry, Refusal, Sealed, admit_within_deadline, hello_within_deadline, serve_pairing,
-    serve_shell,
+    Admission, Entry, Refusal, Sealed, admit_within_deadline, hello_within_deadline, refuse,
+    serve_pairing, serve_shell,
 };
 use crate::devices::{DeviceRegistry, Role, Standing};
 use crate::server::access::{Confirmations, LiveConnections};
+use crate::server::attached::Attached;
+use crate::server::audit::AuditLog;
 use crate::server::clock::HostClock;
 use crate::server::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME, read_enrolment};
+use crate::server::events::Events;
+use crate::server::notices::HostNotices;
 use crate::server::pairing::{MAX_WAITING, PAIRING_LIFETIME, Pairing};
 use crate::server::{
     ENROLMENT_FILE, HANDSHAKE_DEADLINE, HELLO_DEADLINE, TEST_HANDSHAKE_DEADLINE_MARKER,
@@ -90,7 +94,17 @@ fn fixture_with(role: Role) -> Fixture {
     devices.pair(device.public(), "a laptop", role).unwrap();
     let host_key = Arc::new(KeyPair::generate().unwrap());
     let enrolment = Arc::new(Enrolment::prepare(&dirs.data, host_key.public(), &devices));
-    let pairing = Arc::new(Pairing::new(&dirs.data, Arc::clone(&devices)));
+    let audit = Arc::new(AuditLog::in_data_folder(&dirs.data));
+    let pairing = Arc::new(Pairing::new(
+        &dirs.data,
+        Arc::clone(&devices),
+        Arc::clone(&audit),
+    ));
+    let attached = Arc::new(Attached::new(
+        Arc::new(Events::new()),
+        Arc::clone(&audit),
+        Arc::new(HostNotices::for_host(&dirs.data)),
+    ));
     Fixture {
         admission: Admission {
             host_key,
@@ -101,6 +115,8 @@ fn fixture_with(role: Role) -> Fixture {
             hello_deadline: HELLO_DEADLINE,
             confirmations: Arc::new(Confirmations::new(HostClock::new(&dirs.data))),
             live: Arc::new(LiveConnections::default()),
+            attached,
+            audit,
         },
         device,
         shutdown: watch::channel(false).0,
@@ -895,7 +911,16 @@ async fn s1_s3_a_device_asking_to_pair_is_told_its_code_and_then_its_approval_an
     assert!(code.parse::<PairingCode>().is_ok(), "{code}");
     assert_eq!(fx.role_of(&phone.public()), None, "paired only on approval");
 
-    let paired = fx.admission.pairing.approve(&code, Role::Viewer).unwrap();
+    let paired = fx
+        .admission
+        .pairing
+        .approve(
+            &code,
+            Role::Viewer,
+            &floti_protocol::channels::devices::AuditActor::HostShell,
+            false,
+        )
+        .unwrap();
 
     assert_eq!(paired.name, "a late client");
     assert_eq!(
@@ -923,7 +948,17 @@ async fn s2_a_device_that_sends_anything_while_it_waits_is_answered_nothing_and_
     (&mut served.serving).await.unwrap();
     assert_eq!(served.next().await, None, "nothing answered");
     assert!(fx.admission.pairing.list().is_empty());
-    assert!(fx.admission.pairing.approve(&code, Role::Operator).is_err());
+    assert!(
+        fx.admission
+            .pairing
+            .approve(
+                &code,
+                Role::Operator,
+                &floti_protocol::channels::devices::AuditActor::HostShell,
+                false
+            )
+            .is_err()
+    );
     assert_eq!(fx.role_of(&phone.public()), None);
 }
 
@@ -992,6 +1027,7 @@ async fn a_device_asking_to_pair_while_sixteen_wait_is_closed_without_a_byte() {
                     KeyPair::generate().unwrap().public(),
                     "a phone",
                     ClientKind::Phone,
+                    false,
                 )
                 .unwrap()
         })
@@ -1098,4 +1134,72 @@ async fn s3_s6_the_shell_lists_and_approves_devices_and_is_served_nothing_else()
     }
     drop(shell.client);
     shell.serving.await.unwrap();
+}
+
+/// The audit log's entries in `fx`'s data folder, oldest first.
+fn audited(fx: &Fixture) -> Vec<floti_protocol::channels::devices::AuditEvent> {
+    let mut events: Vec<_> = fx
+        .admission
+        .audit
+        .page(&floti_protocol::channels::devices::AuditQuery::default())
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| entry.event)
+        .collect();
+    events.reverse();
+    events
+}
+
+#[tokio::test]
+async fn s8_a_connection_that_closes_before_sending_a_byte_is_not_recorded_and_one_that_sent_is() {
+    use floti_protocol::channels::devices::AuditEvent;
+
+    let fx = fixture();
+    // Closed at once: a port check, or a client that changed its mind.
+    let (client, mut host) = duplex(PIPE);
+    drop(client);
+    let mut shutdown = fx.shutdown.subscribe();
+    let Err(Some(silent)) = admit_within_deadline(&mut host, &fx.admission, &mut shutdown).await
+    else {
+        panic!("a closed connection was admitted");
+    };
+    assert!(matches!(silent, Refusal::Ended { sent: false }));
+    refuse(&fx.admission, ClientId(1), &silent, true);
+    assert!(audited(&fx).is_empty());
+
+    // Closed part way through its first message.
+    let (mut client, mut host) = duplex(PIPE);
+    client.write_all(&fx.first_message()[..4]).await.unwrap();
+    drop(client);
+    let Err(Some(cut)) = admit_within_deadline(&mut host, &fx.admission, &mut shutdown).await
+    else {
+        panic!("a cut handshake was admitted");
+    };
+    assert!(matches!(cut, Refusal::Ended { sent: true }));
+    refuse(&fx.admission, ClientId(2), &cut, true);
+
+    // A key no device has, recorded by its fingerprint.
+    let stranger = KeyPair::generate().unwrap();
+    refuse(
+        &fx.admission,
+        ClientId(3),
+        &Refusal::Unknown(stranger.public()),
+        false,
+    );
+    assert_eq!(
+        audited(&fx),
+        [
+            AuditEvent::Refused {
+                reason: "The connection ended during its handshake".to_owned(),
+                fingerprint: None,
+                away: true,
+            },
+            AuditEvent::Refused {
+                reason: "An unknown key".to_owned(),
+                fingerprint: Some(stranger.public().fingerprint()),
+                away: false,
+            },
+        ]
+    );
 }

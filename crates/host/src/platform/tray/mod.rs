@@ -18,7 +18,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
-mod windows;
+pub(in crate::platform) mod windows;
 
 #[cfg(test)]
 mod tests;

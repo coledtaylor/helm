@@ -195,6 +195,7 @@ impl Features {
         let handle = resources.handle();
         let sessions = sessions::Sessions::new(&context)?;
         let activity = sessions.activity();
+        super::attached::Attached::serve(&context.events)?;
         let browser = Arc::new(BrowserRelay::new(&context.events));
         let plugin_sessions = Arc::new(plugins::PluginSessions::new(&context.hosted));
         let plugin_tools = Arc::new(
@@ -236,6 +237,12 @@ impl Features {
 
     pub fn events(&self) -> &Events {
         &self.events
+    }
+
+    /// The events, for what publishes on them beside the features: who is
+    /// attached.
+    pub(crate) fn shared_events(&self) -> Arc<Events> {
+        Arc::clone(&self.events)
     }
 
     /// The activity pass, for what inside the host reads the listing now.
