@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Profile, ProfileDraft, SessionRecord } from '@helm/core'
 import type { LaunchedProfile } from '../../../shared/ipc'
-import { bridge } from './bridge.testkit'
+import { bridge, remoteBridge } from './bridge.testkit'
 import { useProfiles } from './useProfiles'
 
 vi.mock('./bridge', () => import('./bridge.testkit'))
@@ -132,5 +132,33 @@ describe('useProfiles', () => {
     expect(result.current.error).toBe('That profile no longer exists.')
     expect(result.current.notice).toBeNull()
     expect(result.current.launching).toEqual([])
+  })
+
+  it('lists, saves and launches build-box’s profiles through build-box’s bridge only', async () => {
+    const box = remoteBridge('h1')
+    box.reset()
+    const remote: Profile = { ...DEV, id: 5, name: 'infra', root: '/home/you/work/infra', overlays: [], access: [] }
+    box.answer('profile:list', () => [remote])
+    box.answer('profile:save', ({ draft }) => ({ profile: { ...draft, id: 6, ...stamp }, problems: [] }))
+    box.answer('profile:launch', () => ({
+      session: { ...SESSION, cwd: remote.root },
+      overlays: [],
+      composedInstructions: false,
+      warnings: []
+    }))
+    bridge.clearRecords()
+
+    const { result } = renderHook(() => useProfiles('h1'))
+    await waitFor(() => expect(result.current.profiles).toEqual([remote]))
+    await act(async () => {
+      await result.current.save({ ...DRAFT, root: '/home/you/work/infra', overlays: [], access: [] })
+      await result.current.launch(remote, null)
+    })
+    expect(box.invoked('profile:save')).toEqual([
+      { draft: expect.objectContaining({ root: '/home/you/work/infra' }) }
+    ])
+    expect(box.invoked('profile:launch')).toEqual([expect.objectContaining({ profileId: 5 })])
+    // Nothing read, written or started on this PC.
+    expect(bridge.invocations).toEqual([])
   })
 })

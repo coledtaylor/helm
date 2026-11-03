@@ -14,7 +14,9 @@ import {
   focusGroup,
   fromSaved,
   groupById,
+  hostOf,
   isLoopbackUrl,
+  isSessionOn,
   isProjectPinned,
   isScanRoot,
   liveSessionsIn,
@@ -34,6 +36,7 @@ import {
   savedGroups,
   sendBeside,
   sessionLabel,
+  sessionRef,
   sessionTabIds,
   splitWith,
   toSaved,
@@ -185,6 +188,8 @@ import {
   type MenuEntry,
   type TreeReveal,
   type TreeSession,
+  type TreeHost,
+  type LauncherHost,
   type HostInstallActions
 } from '@helm/ui'
 import { sidebarFor, type SidebarView } from './sidebarFor'
@@ -192,7 +197,9 @@ import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
 import {
+  bridgeFor,
   devices,
+  eachHostBridge,
   helm,
   hostSessionTabs,
   hostState,
@@ -221,6 +228,8 @@ import { useNewSession } from './useNewSession'
 import { useRestore } from './useRestore'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
+import { useHostWorkspaces } from './useHostWorkspaces'
+import { HostProfiles } from './HostProfiles'
 import { useTemplates } from './useTemplates'
 import { useThemes } from './useThemes'
 import { useBrowsers } from './useBrowsers'
@@ -315,11 +324,16 @@ const truncate = (text: string, max: number): string =>
  * file's root, or a session's project - or its folder, for a session no project
  * was recorded against, such as a profile's at a harness root.
  */
-function folderOf(ref: PaneRef | null, sessionsById: ReadonlyMap<number, SessionRecord>): string | null {
+function folderOf(
+  ref: PaneRef | null,
+  sessionsById: ReadonlyMap<number, SessionRecord>,
+  remoteSession: (host: string, id: number) => SessionRecord | undefined = () => undefined
+): string | null {
   if (ref?.kind === 'project' || ref?.kind === 'terminal') return ref.path
   if (ref?.kind === 'file') return ref.root
   if (ref?.kind !== 'session') return null
-  const session = sessionsById.get(ref.id)
+  const host = hostOf(ref)
+  const session = host === LOCAL_HOST_KEY ? sessionsById.get(ref.id) : remoteSession(host, ref.id)
   return session === undefined ? null : (session.projectPath ?? session.cwd)
 }
 
@@ -495,11 +509,42 @@ export function App(): JSX.Element {
 
   const profileState = useProfiles()
   const newSession = useNewSession()
+  /** The launcher's host's profiles, read through its bridge while the launcher is on another host. */
+  const launcherProfiles = useProfiles(newSession.host)
   // Whether the window has its host: lost from a crash until it is back.
   const hostLink = useSyncExternalStore(hostState.subscribe, hostState.get)
   // Each host on another computer: where its link stands and what runs there.
   // A remote host's drop is its own and shows no host-stopped notice.
   const remoteView = useSyncExternalStore(remoteHostLinks.subscribe, remoteHostLinks.get)
+  /**
+   * The hosts on other computers this device has added, kept in its own
+   * settings. They are reached only beside this PC's host, so with "Run
+   * sessions in the local host" off there are none: Settings > Hosts is not
+   * listed and nothing names them.
+   */
+  const listedHosts = useMemo(() => (settings?.sessionsInHost === true ? settings.hosts : []), [settings])
+  const listedHostIds = useMemo(() => listedHosts.map((host) => host.id), [listedHosts])
+  const connectedHostIds = useMemo(
+    () => listedHostIds.filter((id) => remoteView[id]?.connection?.state === 'connected'),
+    [listedHostIds, remoteView]
+  )
+  /** What the window has read of each: its folders, pins and sessions, each through its own bridge. */
+  const hostWork = useHostWorkspaces(listedHostIds, connectedHostIds)
+  /** The hosts a launch can go to: this PC, then each connected host on another computer. */
+  const launcherHosts: LauncherHost[] = useMemo(
+    () => [
+      { id: LOCAL_HOST_KEY, name: LOCAL_HOST_LABEL, remote: false },
+      ...listedHosts
+        .filter((host) => connectedHostIds.includes(host.id))
+        .map((host) => ({ id: host.id, name: host.name, remote: true }))
+    ],
+    [listedHosts, connectedHostIds]
+  )
+  const hostName = useCallback(
+    (host: string): string =>
+      host === LOCAL_HOST_KEY ? LOCAL_HOST_LABEL : (listedHosts.find((each) => each.id === host)?.name ?? host),
+    [listedHosts]
+  )
   // Asked again each time the window gets its host back: the new host offers what the old one lost.
   const restoreState = useRestore(hostLink.reconnects)
   const { offer: restoreOffer, restore: restoreLost, dismiss: dismissRestore } = restoreState
@@ -527,9 +572,16 @@ export function App(): JSX.Element {
       : null
   /** Late-bound for the reason `focusSessionRef` is: starting a session needs
    * the panes, and setup is read before they exist. */
-  const harnessCreatedRef = useRef<(path: string) => void>(() => undefined)
-  const onHarnessCreated = useCallback((path: string) => harnessCreatedRef.current(path), [])
-  const setup = useSetup(settings, launcher.rescan, onHarnessCreated)
+  const harnessCreatedRef = useRef<(path: string, host: string) => void>(() => undefined)
+  const onHarnessCreated = useCallback((path: string, host: string) => harnessCreatedRef.current(path, host), [])
+  const { rescan: rescanHere } = launcher
+  const { rescan: rescanThere } = hostWork
+  /** A rescan of one host's folders, through its own bridge. */
+  const rescanOn = useCallback(
+    (host: string) => (host === LOCAL_HOST_KEY ? rescanHere() : rescanThere(host)),
+    [rescanHere, rescanThere]
+  )
+  const setup = useSetup(settings, rescanOn, onHarnessCreated)
   /**
    * Template authoring, held at app level because both of its entry points are:
    * the New Harness dialog and Settings reach the manager, and a harness's page
@@ -643,6 +695,25 @@ export function App(): JSX.Element {
   const savedLayout = settings?.paneLayout ?? null
   const settingsLoaded = settings !== null
 
+  /** Another host's session by its id there, as the window last heard it. */
+  const remoteSessionOf = useCallback(
+    (host: string, id: number): SessionRecord | undefined =>
+      hostWork.byHost.get(host)?.sessions.find((session) => session.id === id),
+    [hostWork.byHost]
+  )
+  /** Another host's project by its path there, as its scan found it. */
+  const remoteProjectOf = (host: string, path: string): Project | undefined =>
+    hostWork.byHost.get(host)?.discovery?.projects.find((project) => project.path === path)
+  /** A session tab's record and what it is doing, on whichever host it runs. */
+  const sessionAt = (ref: { id: number; host?: string }): { record: SessionRecord; indicator: TabIndicator } | null => {
+    const host = ref.host ?? LOCAL_HOST_KEY
+    const record = host === LOCAL_HOST_KEY ? sessionsById.get(ref.id) : remoteSessionOf(host, ref.id)
+    if (record === undefined) return null
+    const activity =
+      host === LOCAL_HOST_KEY ? sessionActivity.get(ref.id) : hostWork.byHost.get(host)?.activity.get(ref.id)
+    return { record, indicator: indicatorOf(record, record.status === 'running' ? activity : undefined) }
+  }
+
   /**
    * Whether a tab's thing still exists. A rescan that no longer sees a project
    * closes its tab; a view main has dropped takes its tab; a session main no
@@ -650,12 +721,27 @@ export function App(): JSX.Element {
    */
   const keep = useCallback(
     (ref: PaneRef): boolean => {
+      if (ref.kind === 'project' && hostOf(ref) !== LOCAL_HOST_KEY) {
+        // Another host's folder: kept until its own scan says it is gone.
+        if (!settingsLoaded) return true
+        if (!listedHostIds.includes(hostOf(ref))) return false
+        const scanned = hostWork.byHost.get(hostOf(ref))?.discovery ?? null
+        return scanned === null || scanned.projects.some((project) => project.path === ref.path)
+      }
       if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
       // The Browser tab is there while it holds a page. Its last page closing
       // closes it, as closing a browser's last tab closes the window.
       if (ref.kind === 'browser') return browserViews.size > 0
       // Until the first list, nothing has said which sessions there are: a
       // saved tab is kept rather than taken for a session that has gone.
+      if (ref.kind === 'session' && hostOf(ref) !== LOCAL_HOST_KEY) {
+        // Another host's session keeps its tab while that host is away: it is
+        // still running there, and its tab reattaches when the host is back.
+        if (!settingsLoaded) return true
+        if (!listedHostIds.includes(hostOf(ref))) return false
+        const work = hostWork.byHost.get(hostOf(ref))
+        return work === undefined || !work.listed || work.sessions.some((session) => session.id === ref.id)
+      }
       if (ref.kind === 'session') return !sessionsListed || sessionsById.has(ref.id)
       // Answered, it has nothing left to show.
       if (ref.kind === 'restore') return restoreOffer !== null
@@ -673,7 +759,19 @@ export function App(): JSX.Element {
       }
       return true
     },
-    [discovery, projectsByPath, browserViews, sessionsById, sessionsListed, restoreOffer, plugins, pluginState.list]
+    [
+      discovery,
+      projectsByPath,
+      browserViews,
+      sessionsById,
+      sessionsListed,
+      restoreOffer,
+      plugins,
+      pluginState.list,
+      settingsLoaded,
+      listedHostIds,
+      hostWork.byHost
+    ]
   )
 
   /**
@@ -730,6 +828,26 @@ export function App(): JSX.Element {
     if (hostRunning !== true || tabbedSessions === '') return
     hostSessionTabs.show(tabbedSessions.split(',').map(Number))
   }, [hostRunning, tabbedSessions])
+  /**
+   * The same for each host on another computer, told again each time the
+   * window is connected to it again: a tab whose host dropped kept its last
+   * screen, and reattaches here.
+   */
+  const remoteTabbed = useMemo(
+    () =>
+      connectedHostIds
+        .map((host) => `${host}=${[...sessionTabIds(open, host)].sort((a, b) => a - b).join(',')}`)
+        .join('\n'),
+    [connectedHostIds, open]
+  )
+  useEffect(() => {
+    if (remoteTabbed === '') return
+    for (const line of remoteTabbed.split('\n')) {
+      const at = line.lastIndexOf('=')
+      const ids = line.slice(at + 1)
+      if (ids !== '') hostSessionTabs.show(ids.split(',').map(Number), line.slice(0, at))
+    }
+  }, [remoteTabbed])
 
   const shownMax = maximized !== null && groupById(open, maximized) !== undefined ? maximized : null
   const shownGroups = useMemo(
@@ -954,7 +1072,7 @@ export function App(): JSX.Element {
   // turns on which sessions are actually on screen - which only this side knows.
   const { reportFocus } = sessionState
   const visibleSessionKey = visible
-    .flatMap((ref) => (ref.kind === 'session' ? [ref.id] : []))
+    .flatMap((ref) => (isSessionOn(ref, LOCAL_HOST_KEY) ? [ref.id] : []))
     .join(',')
   useEffect(() => {
     reportFocus(visibleSessionKey === '' ? [] : visibleSessionKey.split(',').map(Number))
@@ -973,6 +1091,7 @@ export function App(): JSX.Element {
     const ref = group === undefined ? null : activeRef(group)
     if (ref?.kind === 'project' || ref?.kind === 'terminal') return ref.path
     if (ref?.kind === 'file') return ref.root
+    if (ref?.kind === 'session' && hostOf(ref) !== LOCAL_HOST_KEY) return null
     if (ref?.kind === 'session') return sessionsById.get(ref.id)?.projectPath ?? null
     return null
   }, [open, sessionsById])
@@ -1129,8 +1248,8 @@ export function App(): JSX.Element {
    * (`into`).
    */
   const placeSession = useCallback(
-    (id: number, beside = false, into?: number) => {
-      const ref = { kind: 'session', id } as const
+    (id: number, beside = false, into?: number, host: string = LOCAL_HOST_KEY) => {
+      const ref = sessionRef(id, host)
       commit((current) =>
         into !== undefined
           ? placeIn(current, ref, into)
@@ -1161,6 +1280,16 @@ export function App(): JSX.Element {
   useEffect(() => {
     focusSessionRef.current = openSession
   }, [openSession])
+
+  /** The same for a session on a host on another computer: its tab forward, or a tab here for it. */
+  const openRemoteSession = useCallback(
+    (host: string, id: number) => {
+      const tab = paneId(sessionRef(id, host))
+      if (findTab(open, tab) !== null) focusTab(tab)
+      else placeSession(id, false, undefined, host)
+    },
+    [open, focusTab, placeSession]
+  )
 
   /**
    * A terminal tab in `path`: a plain shell, no `claude`. It lands where a
@@ -1197,6 +1326,40 @@ export function App(): JSX.Element {
       }
     },
     [sessionState, placeSession, open.focused]
+  )
+
+  /**
+   * A project's `+` or Start on a host on another computer: started there
+   * through its own bridge, and given a tab here like any launch.
+   */
+  const [remoteLaunchError, setRemoteLaunchError] = useState<string | null>(null)
+  const { adopt: adoptThere, forget: forgetThere } = hostWork
+  const launchOn = useCallback(
+    async (host: string, project: Project) => {
+      if (host === LOCAL_HOST_KEY) {
+        await launch(project)
+        return
+      }
+      setLaunchingPath(project.path)
+      setRemoteLaunchError(null)
+      try {
+        const { cols, rows } = estimateGrid(bodyRefs.current.get(open.focused) ?? null)
+        const record = await bridgeFor(host).invoke('session:start', {
+          cwd: project.path,
+          projectPath: project.path,
+          name: project.name,
+          cols,
+          rows
+        })
+        adoptThere(host, record)
+        placeSession(record.id, false, undefined, host)
+      } catch (err: unknown) {
+        setRemoteLaunchError(readable(err))
+      } finally {
+        setLaunchingPath(null)
+      }
+    },
+    [launch, adoptThere, placeSession, open.focused]
   )
 
   /**
@@ -1271,6 +1434,7 @@ export function App(): JSX.Element {
    */
   const startChosen = useCallback(
     async (choice: LaunchChoice, into?: number) => {
+      const on = newSession.host
       const target = into ?? (choice.beside ? (besideOf(open, open.focused) ?? open.focused) : open.focused)
       const launched = await newSession.launch(
         {
@@ -1284,12 +1448,13 @@ export function App(): JSX.Element {
         bodyRefs.current.get(target) ?? null
       )
       if (launched === null) return
-      sessionState.adopt(launched.session)
-      placeSession(launched.session.id, choice.beside, into)
+      if (on === LOCAL_HOST_KEY) sessionState.adopt(launched.session)
+      else adoptThere(on, launched.session)
+      placeSession(launched.session.id, choice.beside, into, on)
       if (into === undefined) newSession.hide()
       else setNewTab(null)
     },
-    [newSession, sessionState, placeSession, open]
+    [newSession, sessionState, adoptThere, placeSession, open]
   )
 
   /*
@@ -1299,20 +1464,22 @@ export function App(): JSX.Element {
    */
   const setupNeeded = setup.needed
   useEffect(() => {
-    harnessCreatedRef.current = (path: string) => {
+    harnessCreatedRef.current = (path: string, host: string) => {
       if (setupNeeded) return
       void newSession
         .launch(
           { cwd: path, projectPath: path, profileId: null, permissionMode: null, resume: null },
-          bodyRefs.current.get(open.focused) ?? null
+          bodyRefs.current.get(open.focused) ?? null,
+          host
         )
         .then((launched) => {
           if (launched === null) return
-          sessionState.adopt(launched.session)
-          placeSession(launched.session.id)
+          if (host === LOCAL_HOST_KEY) sessionState.adopt(launched.session)
+          else adoptThere(host, launched.session)
+          placeSession(launched.session.id, false, undefined, host)
         })
     }
-  }, [setupNeeded, newSession, sessionState, placeSession, open.focused])
+  }, [setupNeeded, newSession, sessionState, adoptThere, placeSession, open.focused])
 
   /** The sessions a lost tab's Restore asked for, ticked when the Restore sessions tab opens. */
   const [restoreChosen, setRestoreChosen] = useState<readonly number[] | null>(null)
@@ -1462,29 +1629,58 @@ export function App(): JSX.Element {
    * the session runs on, listed in the sessions pane as not open here. Nothing
    * is asked, because nothing ends.
    */
+  /**
+   * A session's tab on a host on another computer. That host asks first,
+   * naming itself, through the window's confirmation; the tab stays if the
+   * answer is no.
+   */
+  const closeRemoteSession = useCallback(
+    (host: string, id: number) => {
+      void bridgeFor(host)
+        .invoke('session:close', { id })
+        .then(({ closed }) => {
+          if (!closed) return
+          disposeTerminal(id, host)
+          forgetThere(host, id)
+          commit((current) => closeTab(current, paneId(sessionRef(id, host))))
+        })
+    },
+    [forgetThere, commit]
+  )
+
   const keepRunning = useCallback(
-    (id: number) => {
-      hostSessionTabs.release(id)
-      disposeTerminal(id)
-      commit((current) => closeTab(current, `session:${String(id)}`))
+    (id: number, host: string = LOCAL_HOST_KEY) => {
+      hostSessionTabs.release(id, host)
+      disposeTerminal(id, host)
+      commit((current) => closeTab(current, paneId(sessionRef(id, host))))
     },
     [commit]
   )
-  /** A tab's menu: a running session's offers Close tab, keep running, with sessions in the local host only. */
+  /** The session a tab id names, on whichever host, or null for any other tab. */
+  const sessionTabRef = useCallback(
+    (tab: string): { id: number; host: string } | null => {
+      const at = findTab(open, tab)
+      const ref = at === null ? undefined : groupById(open, at.group)?.tabs[at.index]
+      return ref?.kind === 'session' ? { id: ref.id, host: hostOf(ref) } : null
+    },
+    [open]
+  )
+  /** A tab's menu: a running session's offers Close tab, keep running, with sessions in a host only. */
   const tabMenuFor = useCallback(
-    (tab: string): MenuEntry[] =>
-      hostRunning === true &&
-      tab.startsWith('session:') &&
-      sessionsById.get(sessionIdOf(tab))?.status === 'running'
-        ? [{ kind: 'item', id: KEEP_RUNNING, label: 'Close tab, keep running' }]
-        : [],
-    [hostRunning, sessionsById]
+    (tab: string): MenuEntry[] => {
+      const ref = hostRunning === true ? sessionTabRef(tab) : null
+      if (ref === null) return []
+      const record = ref.host === LOCAL_HOST_KEY ? sessionsById.get(ref.id) : remoteSessionOf(ref.host, ref.id)
+      return record?.status === 'running' ? [{ kind: 'item', id: KEEP_RUNNING, label: 'Close tab, keep running' }] : []
+    },
+    [hostRunning, sessionTabRef, sessionsById, remoteSessionOf]
   )
   const onTabMenu = useCallback(
     (tab: string, item: string) => {
-      if (item === KEEP_RUNNING) keepRunning(sessionIdOf(tab))
+      const ref = sessionTabRef(tab)
+      if (item === KEEP_RUNNING && ref !== null) keepRunning(ref.id, ref.host)
     },
-    [keepRunning]
+    [keepRunning, sessionTabRef]
   )
 
   const closeAny = useCallback(
@@ -1493,7 +1689,8 @@ export function App(): JSX.Element {
       const ref = at === null ? undefined : groupById(open, at.group)?.tabs[at.index]
       if (ref === undefined) return
       if (ref.kind === 'session') {
-        closeSession(ref.id)
+        if (hostOf(ref) === LOCAL_HOST_KEY) closeSession(ref.id)
+        else closeRemoteSession(hostOf(ref), ref.id)
         return
       }
       // The shell dies with its tab, not with a render: hiding the page keeps
@@ -1506,7 +1703,7 @@ export function App(): JSX.Element {
       if (ref.kind === 'restore') dismissRestore()
       commit((current) => closeTab(current, id))
     },
-    [open, closeSession, browsers, commit, dismissRestore]
+    [open, closeSession, closeRemoteSession, browsers, commit, dismissRestore]
   )
 
   const splitFocused = useCallback(() => {
@@ -1699,10 +1896,20 @@ export function App(): JSX.Element {
   /** The folder the focused pane is about, for the launcher to open on. */
   const frontFolder = useMemo(() => {
     const group = groupById(open, open.focused)
-    return folderOf(group === undefined ? null : activeRef(group), sessionsById)
-  }, [open, sessionsById])
+    return folderOf(group === undefined ? null : activeRef(group), sessionsById, remoteSessionOf)
+  }, [open, sessionsById, remoteSessionOf])
+  /** The host of the tab in front, while the window is connected to it; this PC otherwise. */
+  const frontHost = useMemo(() => {
+    const group = groupById(open, open.focused)
+    const ref = group === undefined ? null : activeRef(group)
+    const host = ref === null ? LOCAL_HOST_KEY : hostOf(ref)
+    return host !== LOCAL_HOST_KEY && connectedHostIds.includes(host) ? host : LOCAL_HOST_KEY
+  }, [open, connectedHostIds])
   const { show: showLauncher } = newSession
-  const openLauncher = useCallback(() => showLauncher(frontFolder), [showLauncher, frontFolder])
+  const openLauncher = useCallback(
+    () => showLauncher(frontHost === LOCAL_HOST_KEY ? frontFolder : null, frontHost),
+    [showLauncher, frontFolder, frontHost]
+  )
 
   /**
    * A pane's `+`: opens what it offers, hanging from it, or closes it when it
@@ -2089,6 +2296,55 @@ export function App(): JSX.Element {
     return { byPath, elsewhere }
   })()
 
+  /**
+   * Each host on another computer, under its name after this PC: its folders
+   * as its own scan found them, and its sessions under the folder each runs
+   * in. One running there is listed whether or not it has a tab here; one that
+   * ended is listed while its tab is.
+   */
+  const treeHosts: TreeHost[] = listedHosts.map((host) => {
+    const work = hostWork.byHost.get(host.id)
+    const byPath = new Map<string, TreeSession[]>()
+    const elsewhere: TreeSession[] = []
+    const known = new Set((work?.discovery?.projects ?? []).map((project) => project.path.toLowerCase()))
+    const tabbed = sessionTabIds(open, host.id)
+    for (const session of work?.sessions ?? []) {
+      if (session.status !== 'running' && !tabbed.has(session.id)) continue
+      const there = sessionAt({ id: session.id, host: host.id })
+      if (there === null) continue
+      const id = paneId(sessionRef(session.id, host.id))
+      const label = sessionLabel(session)
+      const row: TreeSession = {
+        id,
+        label,
+        state: there.indicator,
+        note: sessionNote(there.indicator, null, now),
+        hint: session.cwd,
+        outside: false,
+        shown: id === frontId ? 'focused' : visibleIds.has(id) ? 'visible' : null
+      }
+      const key = (session.projectPath ?? session.cwd).toLowerCase()
+      if (known.has(key)) {
+        const rows = byPath.get(key)
+        if (rows) rows.push(row)
+        else byPath.set(key, [row])
+      } else elsewhere.push({ ...row, label: `${label} · ${folderName(session.cwd)}` })
+    }
+    return {
+      id: host.id,
+      name: host.name,
+      connected: connectedHostIds.includes(host.id),
+      discovery: work?.discovery ?? null,
+      scanning: work?.scanning ?? false,
+      scanError: work?.scanError,
+      pinnedPaths: work?.pinnedProjects ?? [],
+      sessionsByPath: byPath,
+      elsewhere,
+      selectedPath: front?.kind === 'project' && hostOf(front) === host.id ? front.path : null,
+      launchingPath
+    }
+  })
+
   const openTreeSession = useCallback(
     (id: string) => {
       if (id.startsWith('session:')) {
@@ -2103,6 +2359,29 @@ export function App(): JSX.Element {
     },
     [openSession, openSessions]
   )
+
+  /** What each host's group in the tree asks for, through that host. */
+  const treeHostActions = {
+    onSelect: (host: string, project: Project) =>
+      host === LOCAL_HOST_KEY ? openProject(project) : openPane({ kind: 'project', path: project.path, host }),
+    onLaunch: (host: string, project: Project) => void launchOn(host, project),
+    onOpenSession: (host: string, id: string) => {
+      if (host === LOCAL_HOST_KEY) {
+        openTreeSession(id)
+        return
+      }
+      const session = hostWork.byHost
+        .get(host)
+        ?.sessions.find((each) => paneId(sessionRef(each.id, host)) === id)
+      if (session !== undefined) openRemoteSession(host, session.id)
+    },
+    onTogglePin: (host: string, path: string) =>
+      host === LOCAL_HOST_KEY ? togglePin(path) : hostWork.togglePin(host, path),
+    onNewSession: (host: string) => showLauncher(host === LOCAL_HOST_KEY ? frontFolder : null, host),
+    onNewHarness: (host: string) => setup.openDialog('new', host),
+    onRescan: rescanOn,
+    onAddHost: () => openSettings('hosts')
+  }
 
   /** Helm's live sessions by what they are doing, for the status bar. */
   const running = sessions.filter((session) => session.status === 'running')
@@ -2141,6 +2420,26 @@ export function App(): JSX.Element {
   const tabFor = (ref: PaneRef): Tab[] => {
     switch (ref.kind) {
       case 'session': {
+        if (hostOf(ref) !== LOCAL_HOST_KEY) {
+          const there = sessionAt(ref)
+          if (there === null) return []
+          const label = sessionLabel(there.record)
+          const on = hostName(hostOf(ref))
+          const waitingFor =
+            there.record.status === 'running'
+              ? (hostWork.byHost.get(hostOf(ref))?.activity.get(ref.id)?.waitingFor ?? null)
+              : null
+          return [
+            {
+              id: paneId(ref),
+              title: label,
+              host: on,
+              hint: waitingFor === null ? `${label} · ${on} · ${there.record.cwd}` : `${label} · ${on} · ${there.record.cwd}\nWaiting: ${waitingFor}`,
+              indicator: there.indicator,
+              renamable: true
+            }
+          ]
+        }
         const session = sessionsById.get(ref.id)
         if (!session) return []
         const label = sessionLabel(session)
@@ -2278,14 +2577,16 @@ export function App(): JSX.Element {
               }
             ]
       case 'project': {
-        const project = projectsByPath.get(ref.path)
+        const remote = hostOf(ref) !== LOCAL_HOST_KEY
+        const project = remote ? remoteProjectOf(hostOf(ref), ref.path) : projectsByPath.get(ref.path)
         if (!project) return []
         const Icon = KIND_ICON[project.kind]
         return [
           {
             id: paneId(ref),
             title: project.name,
-            hint: project.path,
+            ...(remote ? { host: hostName(hostOf(ref)) } : {}),
+            hint: remote ? `${hostName(hostOf(ref))} · ${project.path}` : project.path,
             icon: <Icon width={13} height={13} />
           }
         ]
@@ -2335,6 +2636,17 @@ export function App(): JSX.Element {
       )
     }
     if (ref?.kind !== 'session') return null
+    if (hostOf(ref) !== LOCAL_HOST_KEY) {
+      const there = sessionAt(ref)
+      if (there === null) return null
+      return (
+        <PaneCrumb
+          place={folderName(there.record.cwd)}
+          hint={`${hostName(hostOf(ref))} · ${there.record.cwd}`}
+          branch={there.record.branch}
+        />
+      )
+    }
     const session = sessionsById.get(ref.id)
     if (!session) return null
     const project =
@@ -2366,15 +2678,28 @@ export function App(): JSX.Element {
    * while a request is pending: a second reply to an id main has resolved is a
    * reply for a decision that has been taken.
    */
-  const [confirmRequest, setConfirmRequest] = useState<SessionConfirmRequest | null>(null)
-  useEffect(() => helm.on('session:confirm', setConfirmRequest), [])
+  const [confirmAsk, setConfirmAsk] = useState<{ host: string; request: SessionConfirmRequest } | null>(null)
+  const confirmRequest = confirmAsk?.request ?? null
+  // Each host asks on its own bridge, and is answered on it: one on another
+  // computer names itself in what it asks.
+  useEffect(() => {
+    const offs: (() => void)[] = []
+    const stop = eachHostBridge((host, bridge) => {
+      offs.push(bridge.on('session:confirm', (request) => setConfirmAsk({ host, request })))
+    })
+    return () => {
+      stop()
+      for (const off of offs) off()
+    }
+  }, [])
   const answerConfirm = useCallback(
     (agreed: boolean, keep = false) => {
-      if (confirmRequest === null) return
-      helm.send('session:confirmed', keep ? { id: confirmRequest.id, agreed, keep } : { id: confirmRequest.id, agreed })
-      setConfirmRequest(null)
+      if (confirmAsk === null) return
+      const { host, request } = confirmAsk
+      bridgeFor(host).send('session:confirmed', keep ? { id: request.id, agreed, keep } : { id: request.id, agreed })
+      setConfirmAsk(null)
     },
-    [confirmRequest]
+    [confirmAsk]
   )
 
   /**
@@ -2436,6 +2761,8 @@ export function App(): JSX.Element {
   const harnessDialog =
     setup.dialog === null || templates.managerOpen ? null : (
       <NewHarnessDialog
+        {...(setup.dialogHost === LOCAL_HOST_KEY ? {} : { host: hostName(setup.dialogHost) })}
+        onDirChange={setup.typeDialogDir}
         mode={setup.dialog}
         dir={setup.dialogDir}
         onChooseDir={setup.chooseDialogDir}
@@ -2647,7 +2974,8 @@ export function App(): JSX.Element {
    * listed and nothing names them.
    */
   const currentSettings = settings ?? DEFAULT_SETTINGS
-  const remoteHosts = currentSettings.sessionsInHost ? currentSettings.hosts : []
+  const remoteHosts = listedHosts
+  const tabbedThere = (host: string): Set<number> => sessionTabIds(open, host)
   // Hosts and Devices are listed only with that setting on; a page left open
   // on one when the setting goes off shows Sessions, where the setting is.
   const shownSettingsSection: SettingsSectionId =
@@ -2680,7 +3008,12 @@ export function App(): JSX.Element {
       id: host.id,
       name: host.name,
       connected: connection?.state === 'connected',
-      sessions: remoteView[host.id]?.sessions ?? [],
+      sessions: (remoteView[host.id]?.sessions ?? []).map((session) => ({
+        ...session,
+        openHere: tabbedThere(host.id).has(Number(session.key.slice(host.id.length + 1)))
+      })),
+      onOpenSession: (key: string) => openRemoteSession(host.id, Number(key.slice(host.id.length + 1))),
+      onEndSession: (key: string) => closeRemoteSession(host.id, Number(key.slice(host.id.length + 1))),
       // A floti too old or newer than this Helm, with both versions; too old
       // offers the same yes-first update Settings > Hosts does.
       floti:
@@ -2936,6 +3269,20 @@ export function App(): JSX.Element {
   const renderPage = (ref: PaneRef, compact: boolean): ReactNode => {
     switch (ref.kind) {
       case 'project': {
+        if (hostOf(ref) !== LOCAL_HOST_KEY) {
+          const host = hostOf(ref)
+          const project = remoteProjectOf(host, ref.path)
+          return project ? (
+            <ProjectPane
+              key={paneId(ref)}
+              project={project}
+              host={hostName(host)}
+              onLaunch={(p) => void launchOn(host, p)}
+              launching={launchingPath === project.path}
+              launchError={remoteLaunchError}
+            />
+          ) : null
+        }
         const project = projectsByPath.get(ref.path)
         return project ? renderProject(project) : null
       }
@@ -3249,10 +3596,7 @@ export function App(): JSX.Element {
     const groupFront = activeRef(group)
     const groupFrontId = groupFront === null ? null : paneId(groupFront)
     const attention = group.tabs.some(
-      (ref) =>
-        ref.kind === 'session' &&
-        sessionsById.get(ref.id)?.status === 'running' &&
-        sessionActivity.get(ref.id)?.activity === 'waiting'
+      (ref) => ref.kind === 'session' && sessionAt(ref)?.indicator === 'waiting'
     )
     const single = open.groups.length === 1
     return (
@@ -3286,7 +3630,13 @@ export function App(): JSX.Element {
             onClose={closeAny}
             onMove={(tab, toIndex) => commit((current) => moveTab(current, tab, id, toIndex))}
             onRename={(tab, label) => {
-              if (tab.startsWith('session:')) void sessionState.rename(sessionIdOf(tab), label)
+              const ref = sessionTabRef(tab)
+              if (ref === null) return
+              if (ref.host === LOCAL_HOST_KEY) void sessionState.rename(ref.id, label)
+              else
+                void bridgeFor(ref.host)
+                  .invoke('session:rename', { id: ref.id, label })
+                  .then((record) => adoptThere(ref.host, record))
             }}
             onKeep={keepTab}
             menuFor={tabMenuFor}
@@ -3358,12 +3708,34 @@ export function App(): JSX.Element {
             )
           }
           if (ref.kind !== 'session') return null
+          if (hostOf(ref) !== LOCAL_HOST_KEY) {
+            const there = remoteSessionOf(hostOf(ref), ref.id)
+            if (!there) return null
+            const remoteFront = groupFrontId === paneId(ref)
+            // A host that dropped keeps its tab's last screen; the session is
+            // still running there, and the terminal reattaches once it is back.
+            return (
+              <div
+                key={paneId(ref)}
+                className={cn('absolute inset-0', remoteFront ? 'block' : 'hidden')}
+                aria-hidden={!remoteFront}
+              >
+                <TerminalPane
+                  session={there}
+                  host={hostOf(ref)}
+                  active={remoteFront}
+                  windowsBuild={info?.windowsBuild ?? null}
+                  onClose={(id) => closeRemoteSession(hostOf(ref), id)}
+                />
+              </div>
+            )
+          }
           const session = sessionsById.get(ref.id)
           if (!session) return null
           const isFront = groupFrontId === paneId(ref)
           return (
             <div
-              key={ref.id}
+              key={paneId(ref)}
               className={cn('absolute inset-0', isFront ? 'block' : 'hidden')}
               aria-hidden={!isFront}
             >
@@ -3695,6 +4067,9 @@ export function App(): JSX.Element {
             onOpenSession={openTreeSession}
             onAddRoot={launcher.addRoot}
             reveal={treeReveal}
+            {...(listedHosts.length === 0
+              ? {}
+              : { hosts: treeHosts, hostActions: treeHostActions, localName: LOCAL_HOST_LABEL, localKey: LOCAL_HOST_KEY })}
           />
         </Sidebar>
       </div>
@@ -3820,7 +4195,40 @@ export function App(): JSX.Element {
             onExport={(profile) => void profileState.exportProfile(profile.id)}
             onTogglePin={(profile) => void profileState.togglePin(profile)}
             onReorder={(ids) => void profileState.reorder(ids)}
+            {...(listedHosts.length === 0
+              ? {}
+              : {
+                  host: {
+                    id: LOCAL_HOST_KEY,
+                    name: LOCAL_HOST_LABEL,
+                    remote: false,
+                    connected: true,
+                    onNew: () => {
+                      setSaveProblems([])
+                      setEditing(blankProfile(discovery?.roots[0] ?? '', ''))
+                    }
+                  }
+                })}
           />
+          {listedHosts.map((host) => {
+            const scanned = hostWork.byHost.get(host.id)?.discovery ?? null
+            return (
+              <HostProfiles
+                key={host.id}
+                host={host.id}
+                name={host.name}
+                connected={connectedHostIds.includes(host.id)}
+                projects={scanned?.projects ?? EMPTY_PROJECTS}
+                harnesses={scanned?.harnesses ?? []}
+                blank={blankProfile}
+                paneSize={() => bodyRefs.current.get(open.focused) ?? null}
+                onLaunched={(record) => {
+                  adoptThere(host.id, record)
+                  placeSession(record.id, false, undefined, host.id)
+                }}
+              />
+            )
+          })}
         </Sidebar>
       )}
       {sidebarPanel === null && sidebarView.startsWith('plugin:') && pluginState.error !== null && (
@@ -4015,10 +4423,19 @@ export function App(): JSX.Element {
         )}
         {newSession.open && (
           <NewSessionDialog
-            projects={discovery?.projects ?? EMPTY_PROJECTS}
+            // A host switched to is a new list of folders and profiles.
+            key={newSession.host}
+            {...(launcherHosts.length > 1
+              ? { hosts: launcherHosts, host: newSession.host, onHostChange: newSession.setHost }
+              : {})}
+            projects={
+              newSession.host === LOCAL_HOST_KEY
+                ? (discovery?.projects ?? EMPTY_PROJECTS)
+                : (hostWork.byHost.get(newSession.host)?.discovery?.projects ?? EMPTY_PROJECTS)
+            }
             recency={newSession.recency}
-            live={machineSessions.sessions}
-            profiles={profileState.profiles}
+            live={newSession.host === LOCAL_HOST_KEY ? machineSessions.sessions : EMPTY_LIVE}
+            profiles={newSession.host === LOCAL_HOST_KEY ? profileState.profiles : launcherProfiles.profiles}
             home={info?.home ?? null}
             initialPath={newSession.initialPath}
             resumable={newSession.resumable}

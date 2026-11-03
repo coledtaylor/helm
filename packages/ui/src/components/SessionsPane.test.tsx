@@ -309,6 +309,34 @@ describe('SessionsPane: every host under its name', () => {
     expect(within(far).queryByRole('button', { name: 'Update floti' })).toBeNull()
   })
 
+  it('lists a build-box session with no tab here as not open here, with Open and End through build-box', async () => {
+    const onOpenSession = vi.fn()
+    const onEndSession = vi.fn()
+    renderPane({
+      remoteHosts: [
+        {
+          ...BUILD,
+          sessions: [
+            { key: 'h-build:7', name: 'deploy', cwd: '/srv/infra', state: 'busy', openHere: false },
+            { key: 'h-build:8', name: 'watch', cwd: '/srv/infra', state: 'idle', openHere: true }
+          ],
+          onOpenSession,
+          onEndSession
+        }
+      ]
+    })
+    const build = screen.getByRole('region', { name: 'build-box' })
+    const row = build.querySelector<HTMLElement>('[data-not-open-here="h-build:7"]')!
+    expect(row.textContent).toContain('not open here')
+    await userEvent.click(within(row).getByRole('button', { name: 'Open deploy' }))
+    expect(onOpenSession).toHaveBeenCalledWith('h-build:7')
+    await userEvent.click(within(row).getByRole('button', { name: 'End deploy' }))
+    expect(onEndSession).toHaveBeenCalledWith('h-build:7')
+    // The one with a tab here offers neither.
+    expect(within(build).queryByRole('button', { name: 'Open watch' })).toBeNull()
+    expect(build.querySelector('[data-not-open-here="h-build:8"]')).toBeNull()
+  })
+
   it('draws the list as it was while this PC is the only host', () => {
     renderPane({ remoteHosts: [] })
     expect(document.querySelectorAll('[data-sessions-host]')).toHaveLength(0)

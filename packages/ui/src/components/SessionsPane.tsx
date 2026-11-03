@@ -118,6 +118,10 @@ export interface SessionsPaneHost {
   floti?: { verdict: 'tooOld' | 'newer'; host: string; client: string } | null | undefined
   /** Starts the yes-first update of its floti, in Settings > Hosts. */
   onUpdateFloti?: (() => void) | undefined
+  /** Opens a tab here for one of its sessions this device has none for, through that host. */
+  onOpenSession?: ((key: string) => void) | undefined
+  /** Ends one of its sessions, through that host, after the confirmation naming it. */
+  onEndSession?: ((key: string) => void) | undefined
 }
 
 /** One running session on a host on another computer. */
@@ -127,6 +131,11 @@ export interface SessionsPaneRemoteSession {
   name: string
   cwd: string
   state: SessionState
+  /**
+   * Whether this device has a tab for it. One without is listed as not open
+   * here, with Open and End, as this PC's are.
+   */
+  openHere?: boolean | undefined
 }
 
 /** What the window calls this PC's own host where hosts are listed together. */
@@ -321,7 +330,12 @@ export function SessionsPane({
                       remote
                     >
                       {host.sessions.map((session) => (
-                        <RemoteRow key={session.key} session={session} />
+                        <RemoteRow
+                          key={session.key}
+                          session={session}
+                          onOpen={host.onOpenSession}
+                          onEnd={host.onEndSession}
+                        />
                       ))}
                       {host.sessions.length === 0 && (
                         <p className="px-2.5 py-2 text-[11px] text-fg-subtle">
@@ -437,19 +451,59 @@ function HostSection({
   )
 }
 
-/** A running session on another computer's host: its state, name and folder. */
-function RemoteRow({ session }: { session: SessionsPaneRemoteSession }): JSX.Element {
+/**
+ * A running session on another computer's host: its state, name and folder.
+ * One this device has no tab for is not open here, and offers Open and End,
+ * each through that host.
+ */
+function RemoteRow({
+  session,
+  onOpen,
+  onEnd
+}: {
+  session: SessionsPaneRemoteSession
+  onOpen?: ((key: string) => void) | undefined
+  onEnd?: ((key: string) => void) | undefined
+}): JSX.Element {
+  const notOpen = session.openHere === false
   return (
     <div
       data-remote-session={session.key}
-      title={`${session.name} - ${SESSION_STATE_LABEL[session.state]}\n${session.cwd}`}
-      className="flex min-w-0 flex-col gap-0.5 rounded-raised px-2.5 py-row"
+      data-not-open-here={notOpen ? session.key : undefined}
+      title={`${session.name} - ${SESSION_STATE_LABEL[session.state]}${notOpen ? ', not open here' : ''}\n${session.cwd}`}
+      className="flex min-w-0 items-center gap-2 rounded-raised px-2.5 py-row transition-colors hover:bg-hover"
     >
-      <span className="flex min-w-0 items-center gap-2">
-        <span aria-hidden data-session-dot className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[session.state])} />
-        <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">{session.name}</span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-center gap-2">
+          <span aria-hidden data-session-dot className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[session.state])} />
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">{session.name}</span>
+          {notOpen && <span className="shrink-0 text-[10.5px] text-fg-subtle">not open here</span>}
+        </span>
+        <span className="min-w-0 truncate pl-[14px] font-mono text-[10.5px] text-fg-subtle">{session.cwd}</span>
       </span>
-      <span className="min-w-0 truncate pl-[14px] font-mono text-[10.5px] text-fg-subtle">{session.cwd}</span>
+      {notOpen && onOpen !== undefined && (
+        <button
+          type="button"
+          data-not-open-here-open
+          aria-label={`Open ${session.name}`}
+          onClick={() => onOpen(session.key)}
+          className="shrink-0 rounded-well border border-border-strong px-2.5 py-0.5 text-[11.5px] text-fg transition-colors hover:bg-hover"
+        >
+          Open
+        </button>
+      )}
+      {notOpen && onEnd !== undefined && (
+        // Danger in the text and the hover wash, never a fill (DESIGN.md).
+        <button
+          type="button"
+          data-not-open-here-end
+          aria-label={`End ${session.name}`}
+          onClick={() => onEnd(session.key)}
+          className="shrink-0 rounded-well border border-danger/50 px-2.5 py-0.5 text-[11.5px] text-danger transition-colors hover:bg-danger/10"
+        >
+          End
+        </button>
+      )}
     </div>
   )
 }

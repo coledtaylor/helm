@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Profile, ProfileDraft, SessionRecord } from '@helm/core'
-import { helm } from './bridge'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
+import { bridgeFor } from './bridge'
 import { readable } from './errors'
 import { estimateGrid } from './terminals'
 
@@ -11,6 +12,11 @@ import { estimateGrid } from './terminals'
  * back as the whole list on `profiles:changed`, so a second window - or the
  * import dialog, which creates a profile from outside this component tree -
  * cannot leave the sidebar showing something that is not in the database.
+ *
+ * One host's profiles: this PC's by default, or a host on another computer's
+ * by its id. Every read, write and launch goes through that host's bridge
+ * only, so a profile saved from build-box's list is written on build-box and
+ * launches there, with build-box's folders.
  */
 
 export interface ProfilesState {
@@ -37,7 +43,8 @@ export interface ProfilesState {
   launch: (profile: Profile, paneSize: HTMLElement | null) => Promise<SessionRecord | null>
 }
 
-export function useProfiles(): ProfilesState {
+export function useProfiles(host: string = LOCAL_HOST_KEY): ProfilesState {
+  const helm = bridgeFor(host)
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [launching, setLaunching] = useState<number[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -52,7 +59,7 @@ export function useProfiles(): ProfilesState {
       .then(setProfiles)
       .catch((err: unknown) => setError(readable(err)))
     return off
-  }, [])
+  }, [helm])
 
   /**
    * A notice is an acknowledgement, so it goes away on its own. An error is
@@ -73,16 +80,16 @@ export function useProfiles(): ProfilesState {
     } catch (err: unknown) {
       return { profile: null, problems: [readable(err)] }
     }
-  }, [])
+  }, [helm])
 
   const remove = useCallback(async (id: number) => {
     const { deleted } = await helm.invoke('profile:delete', { id })
     return deleted
-  }, [])
+  }, [helm])
 
   const reorder = useCallback(async (ids: number[]) => {
     await helm.invoke('profile:pin', { ids })
-  }, [])
+  }, [helm])
 
   const togglePin = useCallback(
     async (profile: Profile) => {
@@ -96,7 +103,7 @@ export function useProfiles(): ProfilesState {
           : pinned.filter((id) => id !== profile.id)
       await helm.invoke('profile:pin', { ids: next })
     },
-    [profiles]
+    [helm, profiles]
   )
 
   const exportProfile = useCallback(async (id: number) => {
@@ -108,7 +115,7 @@ export function useProfiles(): ProfilesState {
     } catch (err: unknown) {
       setError(readable(err))
     }
-  }, [])
+  }, [helm])
 
   const importProfile = useCallback(async () => {
     setError(null)
@@ -128,7 +135,7 @@ export function useProfiles(): ProfilesState {
     } catch (err: unknown) {
       setError(readable(err))
     }
-  }, [])
+  }, [helm])
 
   const launch = useCallback(
     async (profile: Profile, paneSize: HTMLElement | null): Promise<SessionRecord | null> => {
@@ -168,7 +175,7 @@ export function useProfiles(): ProfilesState {
         setLaunching((current) => current.filter((id) => id !== profile.id))
       }
     },
-    []
+    [helm]
   )
 
   return {

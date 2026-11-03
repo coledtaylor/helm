@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import { useEffect, useRef } from 'react'
 import type { SessionRecord } from '@helm/core'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import { SessionEndedBar, type SessionLost } from '@helm/ui'
 import { getTerminal, mountTerminal } from './terminals'
 import { terminalPrefs } from './termprefs'
@@ -19,6 +20,8 @@ export interface TerminalPaneProps {
    * tab keeps its screen, dimmed with input off, until the next host says.
    */
   hostGone?: boolean
+  /** The host it runs in; its terminal is that host's (`terminals.ts` keeps them by host and id). This PC's when absent. */
+  host?: string
 }
 
 /**
@@ -35,13 +38,14 @@ export function TerminalPane({
   windowsBuild,
   onClose,
   lost,
-  hostGone = false
+  hostGone = false,
+  host: on = LOCAL_HOST_KEY
 }: TerminalPaneProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (boxRef.current) mountTerminal(session.id, boxRef.current, { windowsBuild })
-  }, [session.id, windowsBuild])
+    if (boxRef.current) mountTerminal(session.id, boxRef.current, { windowsBuild }, on)
+  }, [session.id, windowsBuild, on])
 
   const ended = session.status !== 'running'
   const waiting = !ended && hostGone
@@ -51,7 +55,7 @@ export function TerminalPane({
   // carries it again; then its input and cursor come back.
   useEffect(() => {
     if (ended) return
-    const host = getTerminal(session.id)
+    const host = getTerminal(session.id, on)
     if (!host) return
     if (waiting) {
       host.term.options.cursorBlink = false
@@ -62,30 +66,30 @@ export function TerminalPane({
     if (host.term.options.disableStdin !== true) return
     host.term.options.disableStdin = false
     host.term.options.cursorBlink = terminalPrefs().cursorBlink
-  }, [waiting, ended, session.id])
+  }, [waiting, ended, session.id, on])
 
   // Becoming visible is the one moment a pane has to re-measure: while it was
   // hidden its box was 0x0, so every resize the window went through in the
   // meantime was skipped rather than applied to a grid of one column.
   useEffect(() => {
     if (!active) return
-    const host = getTerminal(session.id)
+    const host = getTerminal(session.id, on)
     if (!host) return
     host.refit()
     if (!ended && !waiting) host.term.focus()
-  }, [active, ended, waiting, session.id])
+  }, [active, ended, waiting, session.id, on])
 
   // A terminal with no process behind it should not look like one that has.
   // The buffer stays readable and selectable; the blinking cursor and the
   // keystrokes that would go nowhere do not.
   useEffect(() => {
     if (!ended) return
-    const host = getTerminal(session.id)
+    const host = getTerminal(session.id, on)
     if (!host) return
     host.term.options.cursorBlink = false
     host.term.options.disableStdin = true
     host.term.blur()
-  }, [ended, session.id])
+  }, [ended, session.id, on])
 
   return (
     // The terminal's own fixed ground, edge to edge in its pane's body

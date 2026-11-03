@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HistoryPage, HistoryProject, HistorySession, SessionRecord } from '@helm/core'
 import type { LaunchedSession } from '../../../shared/ipc'
-import { bridge } from './bridge.testkit'
+import { bridge, remoteBridge } from './bridge.testkit'
 import { useNewSession } from './useNewSession'
 
 vi.mock('./bridge', () => import('./bridge.testkit'))
@@ -96,5 +96,41 @@ describe('useNewSession', () => {
     expect(result.current.error).toBe('That profile no longer exists.')
     act(() => result.current.dismissError())
     expect(result.current.error).toBeNull()
+  })
+
+  it('opened on build-box, reads and starts through build-box’s bridge only, and switching reads this PC’s', async () => {
+    const box = remoteBridge('h1')
+    box.reset()
+    box.answer('history:projects', () => [folder('/home/you/work/infra', 900)])
+    box.answer('history:sessions', (): HistoryPage => ({ sessions: [], total: 0, tookMs: 1 }))
+    const launched: LaunchedSession = {
+      session: { ...session, cwd: '/home/you/work/infra' },
+      overlays: [],
+      composedInstructions: false,
+      warnings: []
+    }
+    box.answer('session:launch', () => launched)
+    bridge.clearRecords()
+    const { result } = renderHook(() => useNewSession())
+
+    act(() => result.current.show(null, 'h1'))
+    expect(result.current.host).toBe('h1')
+    await waitFor(() => expect([...result.current.recency]).toEqual([['/home/you/work/infra', 900]]))
+    act(() => result.current.loadResumable(['/home/you/work/infra']))
+    await waitFor(() => expect(box.invoked('history:sessions')).toHaveLength(1))
+    await act(async () => {
+      await result.current.launch(
+        { cwd: '/home/you/work/infra', projectPath: '/home/you/work/infra', profileId: null, permissionMode: null, resume: null },
+        null
+      )
+    })
+    expect(box.invoked('session:launch')).toEqual([expect.objectContaining({ cwd: '/home/you/work/infra' })])
+    // Nothing was read, started or written on this PC.
+    expect(bridge.invocations).toEqual([])
+
+    act(() => result.current.setHost('local'))
+    expect(result.current.host).toBe('local')
+    await waitFor(() => expect(result.current.recency.get('c:\\work\\alpha')).toBe(500))
+    expect(box.invoked('history:projects')).toHaveLength(1)
   })
 })

@@ -31,7 +31,13 @@ export interface ProjectPaneProps {
    * kind of project, and for a harness whose manifest names no template.
    */
   harness?: Harness | null | undefined
-  onReveal: (path: string) => void
+  /** Shows the folder in this PC's file manager; absent for a folder on another computer. */
+  onReveal?: ((path: string) => void) | undefined
+  /**
+   * The host on another computer the folder is on, by name. Its path is that
+   * host's, and everything started from here runs there. Absent for this PC.
+   */
+  host?: string | undefined
   /** Opens a Claude Code session with this project as the working directory. */
   onLaunch: (project: Project) => void
   /** Shown in place of the button while a launch is in flight. */
@@ -106,7 +112,8 @@ export function ProjectPane({
   onSaveAsTemplate,
   onOpenConfig,
   onOpenFiles,
-  onRemoveRoot
+  onRemoveRoot,
+  host
 }: ProjectPaneProps): JSX.Element {
   const { inventory } = project
 
@@ -125,14 +132,25 @@ export function ProjectPane({
           <h1 className="shrink-0 truncate text-[21px] leading-tight font-medium tracking-tight text-fg">
             {project.name}
           </h1>
-          <button
-            type="button"
-            onClick={() => onReveal(project.path)}
-            title="Show in Explorer"
-            className="min-w-0 truncate text-left font-mono text-[11px] text-fg-subtle transition-colors hover:text-accent-text"
-          >
-            {project.path}
-          </button>
+          {onReveal === undefined ? (
+            <span data-project-path title={project.path} className="min-w-0 truncate font-mono text-[11px] text-fg-subtle">
+              {project.path}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onReveal(project.path)}
+              title="Show in Explorer"
+              className="min-w-0 truncate text-left font-mono text-[11px] text-fg-subtle transition-colors hover:text-accent-text"
+            >
+              {project.path}
+            </button>
+          )}
+          {host !== undefined && (
+            <span data-project-host className="shrink-0 text-[11px] text-fg-subtle">
+              on <span className="font-mono">{host}</span>
+            </span>
+          )}
           <span className="ml-auto shrink-0 self-center rounded-full border border-border-strong px-2.5 py-0.5 text-[10px] text-fg-muted">
             {KIND_LABEL[project.kind]}
           </span>

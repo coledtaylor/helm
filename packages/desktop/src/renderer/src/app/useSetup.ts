@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppSettings, TemplateChoice, TemplatePreview } from '@helm/core'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import type { ClaudeStatus } from '../../../shared/ipc'
-import { helm } from './bridge'
+import { bridgeFor, helm } from './bridge'
 
 /**
  * First run, and everything that stays true afterwards.
@@ -69,10 +70,19 @@ export interface SetupState {
 
   /** The create-a-harness dialog, which is reachable long after first run. */
   dialog: HarnessDialogMode | null
+  /**
+   * The host the dialog creates on: this PC's (`LOCAL_HOST_KEY`), or a host on
+   * another computer by its id. Its templates, its suggested folder, the
+   * preview and the harness itself all go through that host's bridge only.
+   */
+  dialogHost: string
   dialogDir: string
+  /** A folder typed for a host on another computer, where there is no picker. */
+  typeDialogDir: (dir: string) => void
   dialogProblems: string[]
   creating: boolean
-  openDialog: (mode: HarnessDialogMode) => void
+  /** Opens the dialog on `host`, this PC's by default. */
+  openDialog: (mode: HarnessDialogMode, host?: string) => void
   closeDialog: () => void
   chooseDialogDir: () => void
   /** The dialog owns its mode once open; the preview has to follow it. */
@@ -103,20 +113,23 @@ export interface SetupState {
 
 export function useSetup(
   settings: AppSettings | null,
-  /** Called when the roots have changed and the tree should be rebuilt. */
-  onRootsChanged: () => void,
+  /** Called when a host's roots have changed and its tree should be rebuilt. */
+  onRootsChanged: (host: string) => void,
   /**
    * Called with a harness that was created whole. Creating one is a step on
    * the way to working in it, so the caller starts a session there rather
    * than leaving somebody on a page.
    */
-  onHarnessCreated?: (path: string) => void
+  onHarnessCreated?: (path: string, host: string) => void
 ): SetupState {
   const [status, setStatus] = useState<ClaudeStatus | null>(null)
   const [checking, setChecking] = useState(false)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [suggestionsError, setSuggestionsError] = useState<string | null>(null)
   const [dialog, setDialog] = useState<HarnessDialogMode | null>(null)
+  const [dialogHost, setDialogHost] = useState<string>(LOCAL_HOST_KEY)
+  /** The dialog's host as the last opening left it, for callbacks that outlive a render. */
+  const dialogHostRef = useRef<string>(LOCAL_HOST_KEY)
   const [dialogDir, setDialogDir] = useState('')
   const [dialogMode, setDialogMode] = useState<HarnessDialogMode>('new')
   const [dialogProblems, setDialogProblems] = useState<string[]>([])
@@ -189,7 +202,7 @@ export function useSetup(
 
   const acceptSuggestion = useCallback(
     (path: string) => {
-      void helm.invoke('roots:accept', { path }).then(() => onRootsChanged())
+      void helm.invoke('roots:accept', { path }).then(() => onRootsChanged(LOCAL_HOST_KEY))
     },
     [onRootsChanged]
   )
@@ -210,7 +223,7 @@ export function useSetup(
    * whole reason this is a callback rather than three lines inside `openDialog`.
    */
   const refreshTemplates = useCallback(() => {
-    void helm.invoke('template:list').then(
+    void bridgeFor(dialogHostRef.current).invoke('template:list').then(
       (listing) => {
         setTemplates(listing.templates)
         setTemplatesDir(listing.dir)
@@ -223,12 +236,32 @@ export function useSetup(
   }, [])
 
   const openDialog = useCallback(
-    (mode: HarnessDialogMode) => {
+    (mode: HarnessDialogMode, host: string = LOCAL_HOST_KEY) => {
       setDialogProblems([])
-      // Seeded with somewhere plausible so the common case is two clicks: the
-      // parent of an existing root for a new harness, and nothing at all for a
-      // conversion, which has to be pointed at a specific folder.
-      setDialogDir(mode === 'new' ? (settings?.scanRoots[0] ?? '') : '')
+      dialogHostRef.current = host
+      setDialogHost(host)
+      if (host === LOCAL_HOST_KEY) {
+        // Seeded with somewhere plausible so the common case is two clicks: the
+        // parent of an existing root for a new harness, and nothing at all for a
+        // conversion, which has to be pointed at a specific folder.
+        setDialogDir(mode === 'new' ? (settings?.scanRoots[0] ?? '') : '')
+      } else {
+        // A host on another computer has no picker here: its folder is typed in
+        // its own path form, prefilled with the first folder it suggests.
+        setDialogDir('')
+        if (mode === 'new') {
+          void bridgeFor(host)
+            .invoke('roots:suggest')
+            .then(
+              (suggested) => {
+                if (dialogHostRef.current !== host) return
+                setDialogDir((typed) => (typed === '' ? (suggested[0] ?? '') : typed))
+              },
+              // Nothing suggested: the field stays empty for a path to be typed.
+              () => undefined
+            )
+        }
+      }
       setDialogMode(mode)
       // Back to `minimal` every time, deliberately. The picker is not a
       // preference: someone who used a template once has a harness from it, and
@@ -258,7 +291,7 @@ export function useSetup(
   useEffect(() => {
     if (dialog === null) return
     let cancelled = false
-    void helm
+    void bridgeFor(dialogHost)
       .invoke('template:preview', { template, mode: dialogMode })
       .then((next) => {
         if (!cancelled) setTemplatePreview(next)
@@ -267,7 +300,7 @@ export function useSetup(
     return () => {
       cancelled = true
     }
-  }, [dialog, dialogMode, template])
+  }, [dialog, dialogHost, dialogMode, template])
 
   const closeDialog = useCallback(() => {
     setDialog(null)
@@ -276,6 +309,8 @@ export function useSetup(
   }, [])
 
   const chooseDialogDir = useCallback(() => {
+    // The picker browses this PC's folders: a host on another computer's path is typed.
+    if (dialogHostRef.current !== LOCAL_HOST_KEY) return
     void helm
       .invoke('path:chooseDirectory', {
         title: dialog === 'convert' ? 'Choose the folder to convert' : 'Create the harness inside'
@@ -287,9 +322,10 @@ export function useSetup(
 
   const createHarness = useCallback(
     (request: { mode: HarnessDialogMode; dir: string; name: string; template: string }) => {
+      const host = dialogHostRef.current
       setCreating(true)
       setDialogProblems([])
-      void helm
+      void bridgeFor(host)
         .invoke('harness:create', {
           mode: request.mode,
           dir: request.dir,
@@ -303,7 +339,7 @@ export function useSetup(
           }
           // The root was added by the main process in the same call, so the
           // disk is worth another look either way.
-          onRootsChanged()
+          onRootsChanged(host)
           if (result.problems.length > 0) {
             /*
              * A template that applied only partly. The harness exists and is in
@@ -325,7 +361,7 @@ export function useSetup(
             return
           }
           setDialog(null)
-          onHarnessCreated?.(result.path)
+          onHarnessCreated?.(result.path, host)
         })
         .catch((err: unknown) => {
           setDialogProblems([err instanceof Error ? err.message : String(err)])
@@ -351,7 +387,9 @@ export function useSetup(
     acceptSuggestion,
     finish,
     dialog,
+    dialogHost,
     dialogDir,
+    typeDialogDir: setDialogDir,
     dialogProblems,
     creating,
     openDialog,

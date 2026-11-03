@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
-import type { HistorySession } from '@helm/core/types'
+import { LOCAL_HOST_KEY, type HistorySession } from '@helm/core/types'
 import type { LaunchedSession, LaunchSessionRequest } from '../../../shared/ipc'
-import { helm } from './bridge'
+import { bridgeFor } from './bridge'
 import { readable } from './errors'
 import { estimateGrid } from './terminals'
 
@@ -14,12 +14,22 @@ import { estimateGrid } from './terminals'
  * a launcher that showed the index as it was at startup would offer to reopen
  * the conversation somebody just ended at the bottom of the list - or not at
  * all.
+ *
+ * It starts on one host (`host`: this PC's `LOCAL_HOST_KEY`, or a host on
+ * another computer by its id), and everything it reads and starts goes
+ * through that host's bridge only: its recency, its conversations and the
+ * launch. Switching the host reads the other host's afresh.
  */
 export interface NewSessionState {
   open: boolean
   /** The folder highlighted when it opened. */
   initialPath: string | null
-  show: (initialPath: string | null) => void
+  /** The host it starts on: `LOCAL_HOST_KEY` for this PC, or a host on another computer's id. */
+  host: string
+  /** Opens it on `host` (this PC's by default), with `initialPath` highlighted. */
+  show: (initialPath: string | null, host?: string) => void
+  /** Moves an open launcher to another host, which it then lists and starts on. */
+  setHost: (host: string) => void
   /**
    * Reads what a launcher shows afresh without opening this one: the new-tab
    * popover is a launcher too, and reads the same index the same way.
@@ -39,10 +49,11 @@ export interface NewSessionState {
   /** What a launch that did start could not compose. */
   warning: string | null
   dismissWarning: () => void
-  /** Starts a session; null, with `error` set, when it could not. */
+  /** Starts a session on `host` (the launcher's by default); null, with `error` set, when it could not. */
   launch: (
     request: Omit<LaunchSessionRequest, 'cols' | 'rows'>,
-    paneSize: HTMLElement | null
+    paneSize: HTMLElement | null,
+    host?: string
   ) => Promise<LaunchedSession | null>
 }
 
@@ -52,6 +63,9 @@ const PER_FOLDER = 3
 export function useNewSession(): NewSessionState {
   const [open, setOpen] = useState(false)
   const [initialPath, setInitialPath] = useState<string | null>(null)
+  const [host, setHostState] = useState<string>(LOCAL_HOST_KEY)
+  /** The host as the last call left it, for callbacks that outlive a render. */
+  const hostRef = useRef<string>(LOCAL_HOST_KEY)
   const [recency, setRecency] = useState<ReadonlyMap<string, number>>(new Map())
   const [resumable, setResumable] = useState<ReadonlyMap<string, readonly HistorySession[]>>(
     new Map()
@@ -73,8 +87,9 @@ export function useNewSession(): NewSessionState {
     const current = opening.current
     asked.current = new Set()
     setResumable(new Map())
+    setRecency(new Map())
     setError(null)
-    void helm
+    void bridgeFor(hostRef.current)
       .invoke('history:projects')
       .then((projects) => {
         if (current !== opening.current) return
@@ -86,10 +101,24 @@ export function useNewSession(): NewSessionState {
   }, [])
 
   const show = useCallback(
-    (path: string | null) => {
+    (path: string | null, on: string = LOCAL_HOST_KEY) => {
+      hostRef.current = on
+      setHostState(on)
       prepare()
       setInitialPath(path)
       setOpen(true)
+    },
+    [prepare]
+  )
+
+  const setHost = useCallback(
+    (on: string) => {
+      if (on === hostRef.current) return
+      hostRef.current = on
+      setHostState(on)
+      // Another host's folders: nothing highlighted from the last one's.
+      setInitialPath(null)
+      prepare()
     },
     [prepare]
   )
@@ -105,7 +134,7 @@ export function useNewSession(): NewSessionState {
       const key = path.toLowerCase()
       if (asked.current.has(key)) continue
       asked.current.add(key)
-      void helm
+      void bridgeFor(hostRef.current)
         .invoke('history:sessions', { project: path, resumableOnly: true, limit: PER_FOLDER })
         .then((page) => {
           if (current !== opening.current) return
@@ -120,14 +149,15 @@ export function useNewSession(): NewSessionState {
   const launch = useCallback(
     async (
       request: Omit<LaunchSessionRequest, 'cols' | 'rows'>,
-      paneSize: HTMLElement | null
+      paneSize: HTMLElement | null,
+      on: string = hostRef.current
     ): Promise<LaunchedSession | null> => {
       setBusy(true)
       setError(null)
       setWarning(null)
       try {
         const { cols, rows } = estimateGrid(paneSize)
-        const launched = await helm.invoke('session:launch', { ...request, cols, rows })
+        const launched = await bridgeFor(on).invoke('session:launch', { ...request, cols, rows })
         // What did start is in the tab; what could not be composed into it is
         // said once, because the terminal will never say it.
         if (launched.warnings.length > 0) setWarning(launched.warnings.join(' '))
@@ -145,7 +175,9 @@ export function useNewSession(): NewSessionState {
   return {
     open,
     initialPath,
+    host,
     show,
+    setHost,
     prepare,
     hide,
     recency,
