@@ -485,12 +485,12 @@ impl ActivityState {
         if self.last.overview.sessions != next.overview.sessions
             && let Err(err) = events.set_state::<SessionsOverviewChanged, _>(&next.overview)
         {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
         if self.last.states != next.states
             && let Err(err) = events.set_state::<SessionActivityChanged, _>(&next.states)
         {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
         self.last = next;
     }
@@ -527,13 +527,13 @@ async fn publish_exits(
                         if focus.worth_notifying(client, record.id)
                             && let Err(err) = events.emit_to::<SessionNotify>(client, &record)
                         {
-                            eprintln!("floti host: {err}");
+                            log_line!("floti host: {err}");
                         }
                     }
                     focus.forget(record.id);
                 }
                 if let Err(err) = events.emit::<SessionExit>(&record) {
-                    eprintln!("floti host: {err}");
+                    log_line!("floti host: {err}");
                 }
             }
             // Missed exits are missed events; the clients see a gap in the
@@ -554,7 +554,7 @@ async fn publish_terminal_exits(mut exits: broadcast::Receiver<TerminalExit>, ev
                     exit_code: i32::try_from(exit.code).unwrap_or(i32::MAX),
                 };
                 if let Err(err) = events.emit::<PtermExit>(&ended) {
-                    eprintln!("floti host: {err}");
+                    log_line!("floti host: {err}");
                 }
             }
             Err(RecvError::Lagged(_)) => {}

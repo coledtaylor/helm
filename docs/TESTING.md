@@ -124,7 +124,15 @@ the same for the executable, so a test still connects with an endpoint and
 its capabilities alone. `noise_sessions.rs` tests the handshake itself: what
 crosses the socket, read through a tap that relays one endpoint to another,
 and clients that misbehave, built as raw sockets from the protocol's Noise
-layer, against the executable, whose stderr is the host's log. The stalled
+layer, against the executable, whose log is `host.log` in the `TestDirs`
+logs folder (`TestDirs::host_log`): `floti host` points its own standard
+error there, so the pipe a test gives it stays empty. The log's own tests
+run the executable too: a host made to panic or to fail an allocation by a
+marker in its data folder that only a test build reads
+(`TestDirs::crash_host_at_start`) leaves the message after its start line,
+and a log past a limit the test sets (`TestDirs::with_log_limit`, another
+such marker) is rotated at start; rotation as lines are written is tested in
+`host_log/tests.rs` with a stand-in for standard error. The stalled
 handshake, and the connections that finish it and never say `hello`, run on
 a deadline of their own (`TestDirs::with_handshake_deadline`, a marker in the
 data folder that only a test build reads, which sets the handshake's deadline

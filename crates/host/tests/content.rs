@@ -1461,6 +1461,7 @@ impl Wire {
                 mode: AppMode::Dev,
                 home: Some(dirs.home.clone()),
                 node: None,
+                desktop: false,
             },
         });
         let mut client = TestClient::connect(&endpoint, CAPABILITIES).await;

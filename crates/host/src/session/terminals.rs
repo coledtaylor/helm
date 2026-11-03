@@ -201,7 +201,7 @@ impl Terminals {
     pub fn end_all(&self) {
         for session in self.host.list() {
             if let Err(err) = session.end_now() {
-                eprintln!("floti host: {err}");
+                log_line!("floti host: {err}");
             }
         }
     }

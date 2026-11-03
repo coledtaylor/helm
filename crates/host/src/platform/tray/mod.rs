@@ -190,7 +190,7 @@ pub async fn run<A: NotificationArea + 'static>(
             // to the next time the count moves, and the host runs on either way.
             Err(err) if !said_failure => {
                 said_failure = true;
-                eprintln!("floti host: the notification area: {err}");
+                log_line!("floti host: the notification area: {err}");
             }
             Err(_) => {}
         }
@@ -218,7 +218,7 @@ pub async fn run<A: NotificationArea + 'static>(
                 match on_pick(item, *occupancy.borrow()) {
                     Step::Open => {
                         if let Err(err) = area.open(&desktop) {
-                            eprintln!("floti host: could not open the desktop: {err}");
+                            log_line!("floti host: could not open the desktop: {err}");
                         }
                     }
                     // One question at a time: a second pick while it is up

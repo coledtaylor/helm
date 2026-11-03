@@ -307,8 +307,16 @@
         "dbFile": {
           "type": "string"
         },
+        "desktop": {
+          "description": "Whether a desktop started the host (`floti host --desktop`), rather\nthan the user's sign-in or a shell.",
+          "type": "boolean"
+        },
         "home": {
           "description": "The host's home directory, so a long path can be shown from `~`.\nFor showing only; every path the host acts on stays absolute.",
+          "type": "string"
+        },
+        "logFile": {
+          "description": "The host's log file (`host.log` in its logs folder), where its\nstandard error and any panic land.",
           "type": "string"
         },
         "migrations": {
@@ -343,6 +351,8 @@
         "mode",
         "dataDir",
         "dbFile",
+        "logFile",
+        "desktop",
         "migrations",
         "home",
         "releasesUrl"

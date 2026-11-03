@@ -627,6 +627,8 @@ fn app_info_and_settings_payloads_survive_the_wire() {
             mode: AppMode::DevLive,
             data_dir: "C:\\Users\\someone\\AppData\\Local\\Floti".into(),
             db_file: "C:\\Users\\someone\\AppData\\Local\\Floti\\floti.db".into(),
+            log_file: "C:\\Users\\someone\\AppData\\Local\\Floti\\logs\\host.log".into(),
+            desktop: true,
             migrations: vec!["0001_init".into()],
             windows_build: Some(26100),
             home: "C:\\Users\\someone".into(),

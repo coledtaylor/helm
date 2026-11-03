@@ -281,7 +281,7 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
         Err(refusal) => {
             // A host stopping closes a handshake in flight without a word.
             if let Some(refusal) = refusal {
-                eprintln!("floti host: refused client {}: {refusal}", client.0);
+                log_line!("floti host: refused client {}: {refusal}", client.0);
             }
             return;
         }
@@ -549,7 +549,7 @@ impl<S: AsyncRead + AsyncWrite> Sealed<S> {
             Ok(hello) => Some(hello),
             Err(refusal) => {
                 if let Some(refusal) = refusal {
-                    eprintln!("floti host: refused client {}: {refusal}", client.0);
+                    log_line!("floti host: refused client {}: {refusal}", client.0);
                 }
                 None
             }
@@ -631,7 +631,7 @@ async fn serve_pairing<S: AsyncRead + AsyncWrite>(
         .pairing
         .ask(device, &hello.client.name, hello.client.kind)
     else {
-        eprintln!(
+        log_line!(
             "floti host: refused client {}: {}",
             client.0,
             Refusal::TooManyWaiting(device)
@@ -835,7 +835,7 @@ impl Connection {
             Ok(hello) => hello,
             Err(refusal) => {
                 if let Some(refusal) = refusal {
-                    eprintln!("floti host: refused client {}: {refusal}", self.client.0);
+                    log_line!("floti host: refused client {}: {refusal}", self.client.0);
                 }
                 return None;
             }
@@ -857,7 +857,7 @@ impl Connection {
         let key = claim.key();
         let refusal = match claim.commit() {
             Ok(Some(_)) => {
-                eprintln!(
+                log_line!(
                     "floti host: enrolled device {} as the first admin, named \"{FIRST_ADMIN_NAME}\"",
                     key.fingerprint()
                 );
@@ -866,7 +866,7 @@ impl Connection {
             Ok(None) => Refusal::Unknown(key),
             Err(err) => Refusal::Unchecked(key, err),
         };
-        eprintln!("floti host: refused client {}: {refusal}", self.client.0);
+        log_line!("floti host: refused client {}: {refusal}", self.client.0);
         false
     }
 

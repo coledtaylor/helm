@@ -5,10 +5,10 @@
 //! admin with the one-time code in its data folder, once.
 //!
 //! The tests run hosts in this process ([`RunningHost`]) and the `floti host`
-//! executable, whose stderr is the host's log. What crosses the socket is
-//! read through a tap that relays one endpoint to another and keeps every
-//! byte; clients that misbehave are raw sockets driven by the protocol's own
-//! Noise layer.
+//! executable, whose log is its file in the test's logs folder. What crosses
+//! the socket is read through a tap that relays one endpoint to another and
+//! keeps every byte; clients that misbehave are raw sockets driven by the
+//! protocol's own Noise layer.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -20,6 +20,7 @@ use floti_host::agent::AgentBackend;
 use floti_host::client::{ClientError, ClientKeys, Connection, DEVICE_KEY_FILE, PINNED_HOST_FILE};
 use floti_host::devices::{DeviceRegistry, Role, Standing};
 use floti_host::fake_agent;
+use floti_host::host_log::LOG_FILE;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use floti_host::platform::private_files::{Native as NativeFiles, PrivateFiles};
 use floti_host::platform::socket::{
@@ -84,8 +85,9 @@ fn start_request(folder: &Path) -> StartSessionRequest {
     }
 }
 
-/// The `floti host` executable with every folder in `dirs`, its stdout and
-/// stderr piped, and the testkit's device paired with it.
+/// The `floti host` executable with every folder in `dirs`, its stdout
+/// piped, and the testkit's device paired with it. Its standard error is its
+/// log file.
 fn floti_host_command(dirs: &TestDirs) -> Command {
     pair_test_device(&binary_endpoint(dirs), &dirs.data);
     unpaired_host_command(dirs)
@@ -121,24 +123,30 @@ fn binary_endpoint(dirs: &TestDirs) -> Endpoint {
 
 /// A `floti host` executable the test stops; dropped unstopped, it is
 /// killed, so a failing test leaves no host running.
-struct HostProcess(Option<Child>);
+struct HostProcess {
+    child: Option<Child>,
+    /// The folder tree it runs over, whose logs folder holds its log.
+    logs: PathBuf,
+}
 
 impl HostProcess {
     fn start(dirs: &TestDirs) -> Self {
-        Self(Some(
-            floti_host_command(dirs).spawn().expect("run floti host"),
-        ))
+        Self {
+            child: Some(floti_host_command(dirs).spawn().expect("run floti host")),
+            logs: dirs.logs.clone(),
+        }
     }
 
     /// A host with nothing paired first, waiting for its first admin.
     fn start_unpaired(dirs: &TestDirs) -> Self {
-        Self(Some(
-            unpaired_host_command(dirs).spawn().expect("run floti host"),
-        ))
+        Self {
+            child: Some(unpaired_host_command(dirs).spawn().expect("run floti host")),
+            logs: dirs.logs.clone(),
+        }
     }
 
     /// Asks the host to stop through `client` and hands back its stdout and
-    /// stderr once it has exited.
+    /// its log once it has exited.
     async fn stop(mut self, mut client: TestClient) -> (String, String) {
         client
             .request::<HostStop>(&HostStopRequest {
@@ -147,7 +155,7 @@ impl HostProcess {
             .await
             .expect("the host takes the stop");
         drop(client);
-        let mut child = self.0.take().expect("a host still running");
+        let mut child = self.child.take().expect("a host still running");
         let deadline = Instant::now() + PATIENCE;
         while child.try_wait().expect("poll the host").is_none() {
             if Instant::now() >= deadline {
@@ -158,16 +166,17 @@ impl HostProcess {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         let output = child.wait_with_output().expect("read the host's output");
+        let log = std::fs::read(self.logs.join(LOG_FILE)).expect("read the host's log");
         (
             String::from_utf8_lossy(&output.stdout).into_owned(),
-            String::from_utf8_lossy(&output.stderr).into_owned(),
+            String::from_utf8_lossy(&log).into_owned(),
         )
     }
 }
 
 impl Drop for HostProcess {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
+        if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -598,20 +607,20 @@ async fn s5_a_new_host_makes_its_key_owner_only_before_it_accepts_anyone_and_pri
         .unwrap();
     assert!(stranger.connect(&endpoint).await.is_err());
     let client = TestClient::connect(&endpoint, CAPABILITIES).await;
-    let (stdout, stderr) = host.stop(client).await;
+    let (stdout, log) = host.stop(client).await;
 
     let host_private = std::fs::read(&key_file).unwrap();
     let device_private = std::fs::read(stranger.folder().join(DEVICE_KEY_FILE)).unwrap();
     assert!(
-        stderr.contains(&format!(
+        log.contains(&format!(
             "unknown device {}",
             stranger.device_key().fingerprint()
         )),
-        "{stderr}"
+        "{log}"
     );
     for private in [&host_private, &device_private] {
         let lower = hex(private);
-        for printed in [&stdout, &stderr] {
+        for printed in [&stdout, &log] {
             assert!(!printed.contains(&lower), "a private key was printed");
             assert!(
                 !printed.contains(&lower.to_uppercase()),
@@ -675,12 +684,12 @@ async fn s7_an_unknown_device_is_closed_without_a_byte_and_logged_with_its_finge
 
     let mut client = TestClient::connect(&endpoint, CAPABILITIES).await;
     assert!(client.request::<SessionList>(&()).await.is_ok());
-    let (_, stderr) = host.stop(client).await;
+    let (_, log) = host.stop(client).await;
     let line = format!(
         "floti host: refused client 1: unknown device {}",
         stranger.public().fingerprint()
     );
-    assert!(stderr.contains(&line), "{stderr}");
+    assert!(log.contains(&line), "{log}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -725,11 +734,11 @@ async fn s8_a_revoked_device_is_closed_without_a_byte_and_logged_while_a_paired_
     assert!(laptop.connect(&endpoint).await.is_err());
     assert!(client.request::<SessionList>(&()).await.is_ok());
 
-    let (_, stderr) = host.stop(client).await;
+    let (_, log) = host.stop(client).await;
     for key in [revoked.public(), laptop.device_key()] {
         assert!(
-            stderr.contains(&format!("revoked device {}", key.fingerprint())),
-            "{stderr}"
+            log.contains(&format!("revoked device {}", key.fingerprint())),
+            "{log}"
         );
     }
 }
@@ -766,12 +775,12 @@ async fn s9_a_connection_that_does_not_speak_the_handshake_is_closed_unanswered_
     }
 
     let client = TestClient::connect(&endpoint, CAPABILITIES).await;
-    let (_, stderr) = host.stop(client).await;
-    let failed = stderr
+    let (_, log) = host.stop(client).await;
+    let failed = log
         .lines()
         .filter(|line| line.contains("refused client") && line.contains("failed handshake"))
         .count();
-    assert_eq!(failed, 3, "{stderr}");
+    assert_eq!(failed, 3, "{log}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -804,12 +813,12 @@ async fn s10_a_connection_that_stalls_before_or_inside_the_handshake_is_closed_a
     );
     assert!(to_silent.is_empty() && to_partway.is_empty());
 
-    let (_, stderr) = host.stop(client).await;
-    let timed_out = stderr
+    let (_, log) = host.stop(client).await;
+    let timed_out = log
         .lines()
         .filter(|line| line.contains("refused client") && line.contains("did not finish in time"))
         .count();
-    assert_eq!(timed_out, 2, "{stderr}");
+    assert_eq!(timed_out, 2, "{log}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -872,25 +881,25 @@ async fn s5_connections_that_say_no_hello_are_closed_at_the_deadline_by_fingerpr
     assert!(read_enrolment(&dirs.data).unwrap().is_none());
 
     drop(operator);
-    let (stdout, stderr) = host.stop(admin).await;
-    let no_hello: Vec<&str> = stderr
+    let (stdout, log) = host.stop(admin).await;
+    let no_hello: Vec<&str> = log
         .lines()
         .filter(|line| {
             line.contains("refused client") && line.contains("did not say hello in time")
         })
         .collect();
-    assert_eq!(no_hello.len(), 2, "{stderr}");
+    assert_eq!(no_hello.len(), 2, "{log}");
     for key in [desk.device_key(), quiet.device_key()] {
         assert!(
             no_hello
                 .iter()
                 .any(|line| line.contains(&format!("device {}", key.fingerprint()))),
-            "{stderr}"
+            "{log}"
         );
-        assert!(!stderr.contains(&key.to_hex()), "{stderr}");
+        assert!(!log.contains(&key.to_hex()), "{log}");
     }
     assert_code_absent(&written.code, stdout.as_bytes(), "the host's output");
-    assert_code_absent(&written.code, stderr.as_bytes(), "the host's log");
+    assert_code_absent(&written.code, log.as_bytes(), "the host's log");
 }
 
 // ---------------------------------------------------------------------------
@@ -1261,16 +1270,16 @@ async fn enrolment_s1_to_s3_a_client_on_this_computer_enrols_from_an_empty_folde
     assert_eq!(devices[0].name, FIRST_ADMIN_NAME);
     assert!(!file.exists(), "the used code's file is still there");
 
-    let (stdout, stderr) = host.stop(client).await;
+    let (stdout, log) = host.stop(client).await;
     assert!(
-        stderr.contains(&format!(
+        log.contains(&format!(
             "enrolled device {} as the first admin",
             keys.device_key().fingerprint()
         )),
-        "{stderr}"
+        "{log}"
     );
     assert_code_absent(&written.code, stdout.as_bytes(), "the host's output");
-    assert_code_absent(&written.code, stderr.as_bytes(), "the host's log");
+    assert_code_absent(&written.code, log.as_bytes(), "the host's log");
 
     assert_eq!(
         names_in(&folder),
@@ -1320,12 +1329,12 @@ async fn enrolment_s4_a_used_code_is_refused_unanswered_and_logged_and_the_admin
     let mut client = TestClient::over(connection, CAPABILITIES).await;
     assert!(client.request::<SessionList>(&()).await.is_ok());
 
-    let (_, stderr) = host.stop(client).await;
+    let (_, log) = host.stop(client).await;
     assert!(
-        stderr.contains(&format!("unknown device {}", other.public().fingerprint())),
-        "{stderr}"
+        log.contains(&format!("unknown device {}", other.public().fingerprint())),
+        "{log}"
     );
-    assert_code_absent(&written.code, stderr.as_bytes(), "the host's log");
+    assert_code_absent(&written.code, log.as_bytes(), "the host's log");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1375,18 +1384,18 @@ async fn enrolment_s5_a_wrong_code_or_none_is_refused_unanswered_and_logged_and_
         .await
         .expect("the code still enrols the right client");
     drop(serving);
-    let (_, stderr) = host.stop(TestClient::over(admin, CAPABILITIES).await).await;
+    let (_, log) = host.stop(TestClient::over(admin, CAPABILITIES).await).await;
     for (reason, key) in [
         ("unknown", guesser.public()),
         ("unknown", silent.public()),
         ("revoked", lost.public()),
     ] {
         assert!(
-            stderr.contains(&format!("{reason} device {}", key.fingerprint())),
-            "{stderr}"
+            log.contains(&format!("{reason} device {}", key.fingerprint())),
+            "{log}"
         );
     }
-    assert_code_absent(&written.code, stderr.as_bytes(), "the host's log");
+    assert_code_absent(&written.code, log.as_bytes(), "the host's log");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1439,15 +1448,15 @@ async fn enrolment_s6_of_two_devices_with_the_right_code_at_once_exactly_one_is_
     let connection = floti_host::client::connect(&endpoint, winner, &written.host_key)
         .await
         .expect("the admin reconnects");
-    let (_, stderr) = host
+    let (_, log) = host
         .stop(TestClient::over(connection, CAPABILITIES).await)
         .await;
     assert!(
-        stderr.contains(&format!("unknown device {}", loser.public().fingerprint())),
-        "{stderr}"
+        log.contains(&format!("unknown device {}", loser.public().fingerprint())),
+        "{log}"
     );
-    let enrolments = stderr.matches("enrolled device").count();
-    assert_eq!(enrolments, 1, "{stderr}");
+    let enrolments = log.matches("enrolled device").count();
+    assert_eq!(enrolments, 1, "{log}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1512,17 +1521,17 @@ async fn enrolment_a_client_gone_before_its_hello_is_not_enrolled_and_enrols_whe
         ]
     );
 
-    let (stdout, stderr) = host.stop(client).await;
-    assert_eq!(stderr.matches("enrolled device").count(), 1, "{stderr}");
+    let (stdout, log) = host.stop(client).await;
+    assert_eq!(log.matches("enrolled device").count(), 1, "{log}");
     assert!(
-        stderr.contains(&format!(
+        log.contains(&format!(
             "enrolled device {} as the first admin",
             keys.device_key().fingerprint()
         )),
-        "{stderr}"
+        "{log}"
     );
     assert_code_absent(&written.code, stdout.as_bytes(), "the host's output");
-    assert_code_absent(&written.code, stderr.as_bytes(), "the host's log");
+    assert_code_absent(&written.code, log.as_bytes(), "the host's log");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1616,15 +1625,15 @@ async fn enrolment_s8_a_host_with_an_admin_keeps_no_code_enrols_no_one_and_a_new
     assert_eq!(names_in(&folder), [PathBuf::from(DEVICE_KEY_FILE)]);
 
     let client = TestClient::connect(&endpoint, CAPABILITIES).await;
-    let (_, stderr) = host.stop(client).await;
+    let (_, log) = host.stop(client).await;
     assert!(
-        stderr.contains(&format!(
+        log.contains(&format!(
             "unknown device {}",
             stranger.public().fingerprint()
         )),
-        "{stderr}"
+        "{log}"
     );
-    assert!(!stderr.contains("enrolled device"), "{stderr}");
+    assert!(!log.contains("enrolled device"), "{log}");
     let devices = DeviceRegistry::in_data_folder(&dirs.data)
         .devices()
         .unwrap();

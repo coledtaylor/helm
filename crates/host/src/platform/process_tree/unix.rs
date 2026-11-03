@@ -99,7 +99,7 @@ impl ProcessTree for Native {
         let guard = GUARD.get_or_init(|| match start_guard() {
             Ok(pipe) => Some(pipe),
             Err(err) => {
-                eprintln!(
+                log_line!(
                     "floti host: {}. Sessions still run, but if the host crashes, what they started may keep running.",
                     Error::io("start the guard that ends sessions with the host", err)
                 );

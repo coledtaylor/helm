@@ -326,6 +326,7 @@ fn start_host(dirs: &TestDirs, endpoint: &Endpoint) -> RunningHost {
             mode: AppMode::Dev,
             home: Some(dirs.home.clone()),
             node: None,
+            desktop: false,
         },
     })
 }

@@ -262,7 +262,7 @@ impl SessionHost {
             if let Some(folder) = launch_folder
                 && let Err(err) = remove_launch_folder(&folder)
             {
-                eprintln!("floti host: {err}");
+                log_line!("floti host: {err}");
             }
         })?;
         Ok(session)
@@ -582,7 +582,7 @@ impl Session {
         // lists again on hearing it must not find the session still there.
         lock(&shared.sessions).remove(&self.id);
         if let Err(err) = shared.ledger.finished(self.id, &exit) {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
 
         let mut state = lock(&self.state);

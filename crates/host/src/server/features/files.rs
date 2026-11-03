@@ -36,7 +36,7 @@ impl Files {
             Arc::clone(&context.workspace.roots),
             move |client, change| {
                 if let Err(err) = events.emit_to::<FilesChanged>(client, change) {
-                    eprintln!("floti host: {err}");
+                    log_line!("floti host: {err}");
                 }
             },
         );

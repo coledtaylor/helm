@@ -57,6 +57,7 @@ impl World {
                 mode: floti_protocol::channels::workspace::AppMode::Dev,
                 home: Some(dirs.home.clone()),
                 node: None,
+                desktop: false,
             },
         )
         .unwrap();

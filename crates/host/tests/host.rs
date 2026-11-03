@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
 use floti_host::agent::claude_code::ClaudeCodeSettings;
+use floti_host::host_log::{KEPT_LOGS, LOG_FILE};
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use floti_host::platform::node_runtime::NODE_VAR;
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree, descendants};
@@ -21,7 +22,7 @@ use floti_host::platform::startup;
 use floti_host::server::{Host, HostConfig, SOCKET_NAME, unserved};
 use floti_host::store::Store;
 use floti_host::testkit::{
-    FakeAgent, FakeAgentRecord, PATIENCE, RunningHost, TestClient, TestDirs,
+    FakeAgent, FakeAgentRecord, HostCrash, PATIENCE, RunningHost, TestClient, TestDirs,
     names_unserved_channel, pair_test_device,
 };
 use floti_host::{Error, fake_agent};
@@ -736,10 +737,11 @@ async fn s8_a_second_floti_host_exits_saying_one_is_running_and_the_first_keeps_
         .output()
         .expect("run a second host");
     assert!(!second.status.success());
-    let stderr = String::from_utf8_lossy(&second.stderr);
+    // Said in the log the two share, which the second only added to.
+    let log = dirs.host_log();
     assert!(
-        stderr.contains("A Floti host is already running for this user"),
-        "{stderr}"
+        log.contains("floti host: A Floti host is already running for this user"),
+        "{log}"
     );
 
     // The first still serves the client it had, and new ones.
@@ -2467,4 +2469,191 @@ async fn every_subscriber_to_session_exit_gets_a_sessions_finished_row_when_it_e
     }
 
     host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// The host's log
+// ---------------------------------------------------------------------------
+
+/// Where the line that opens run `pid`'s part of `log` starts, checking that
+/// it names the host's version, that process and when it started, in UTC.
+fn start_line_at(log: &str, pid: u32) -> usize {
+    let prefix = format!("floti host {} started at ", env!("CARGO_PKG_VERSION"));
+    let suffix = format!(", process {pid}");
+    let mut at = 0;
+    for line in log.split_inclusive('\n') {
+        if let Some(rest) = line.trim_end().strip_prefix(&prefix)
+            && let Some(time) = rest.strip_suffix(&suffix)
+        {
+            time.parse::<Timestamp>()
+                .unwrap_or_else(|err| panic!("the start time {time:?}: {err}"));
+            assert!(time.ends_with('Z'), "not in UTC: {time}");
+            return at;
+        }
+        at += line.len();
+    }
+    panic!("no start line for process {pid} in the log: {log}");
+}
+
+/// Where `wanted` is in `log`, failing the test when it is not there.
+fn position_of(log: &str, wanted: &str) -> usize {
+    log.find(wanted)
+        .unwrap_or_else(|| panic!("{wanted:?} is not in the log: {log}"))
+}
+
+/// The log of the `floti host` over `dirs` once it holds `wanted`.
+async fn log_holding(dirs: &TestDirs, wanted: &str) -> String {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let log = dirs.host_log();
+        if log.contains(wanted) {
+            return log;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{wanted:?} was not in the log within {PATIENCE:?}: {log}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// `host.log.<n>` in `dirs`' logs folder.
+fn rotated(dirs: &TestDirs, n: u32) -> PathBuf {
+    dirs.logs.join(format!("{LOG_FILE}.{n}"))
+}
+
+/// The names in `dirs`' logs folder, sorted.
+fn log_names(dirs: &TestDirs) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(&dirs.logs)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Runs a `floti host` over `dirs` that ends itself as `how` says just after
+/// its start line, and answers its process and its log once it has exited,
+/// checking that it failed and wrote nothing to the standard error it was
+/// given.
+fn log_of_a_host_that_crashes(dirs: &TestDirs, how: HostCrash) -> (u32, String) {
+    dirs.crash_host_at_start(how);
+    let mut host = HostProcess::spawn(&mut floti_host_command(dirs));
+    let pid = host.id();
+    let status = wait_exit(&mut host);
+    assert!(!status.success(), "{status}");
+    let (_, stderr) = output_of(host);
+    assert_eq!(
+        stderr, "",
+        "the host wrote to the standard error it was given"
+    );
+    (pid, dirs.host_log())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_floti_host_writes_to_standard_error_is_in_its_log_after_its_start_line_and_stays_once_it_ends()
+ {
+    let dirs = TestDirs::new();
+    let mut host = HostProcess::spawn(&mut floti_host_command(&dirs));
+    let pid = host.id();
+    let endpoint = binary_endpoint(&dirs);
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+
+    // A connection that opens with no handshake, which the host refuses and
+    // says so.
+    let mut stranger = NativeSocket.connect(&endpoint).await.unwrap();
+    tokio::io::AsyncWriteExt::write_all(&mut stranger, b"\x00\x05hello")
+        .await
+        .unwrap();
+    drop(stranger);
+    log_holding(&dirs, "floti host: refused client").await;
+
+    client
+        .request::<HostStop>(&HostStopRequest {
+            reason: HostStopReason::Stop,
+        })
+        .await
+        .expect("stop the host");
+    assert!(wait_exit(&mut host).success());
+    let (stdout, stderr) = output_of(host);
+    assert_eq!(
+        stderr, "",
+        "the host wrote to the standard error it was given"
+    );
+    assert!(stdout.contains("Floti host stopped."), "{stdout}");
+
+    let log = dirs.host_log();
+    assert!(
+        start_line_at(&log, pid) < position_of(&log, "floti host: refused client"),
+        "{log}"
+    );
+}
+
+#[test]
+fn a_floti_host_that_panics_leaves_the_panic_in_its_log_after_its_start_line() {
+    let dirs = TestDirs::new();
+    let (pid, log) = log_of_a_host_that_crashes(&dirs, HostCrash::Panic);
+    let started = start_line_at(&log, pid);
+    let noted = position_of(&log, "floti host: panicked at ");
+    let message = position_of(&log, "the test asked this host to panic");
+    assert!(started < noted && noted < message, "{log}");
+}
+
+#[test]
+fn a_floti_host_aborted_by_a_failed_allocation_leaves_the_failure_in_its_log_after_its_start_line()
+{
+    let dirs = TestDirs::new();
+    let (pid, log) = log_of_a_host_that_crashes(&dirs, HostCrash::FailedAllocation);
+    assert!(
+        start_line_at(&log, pid)
+            < position_of(&log, "memory allocation of 1099511627776 bytes failed"),
+        "{log}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_host_log_past_its_limit_is_rotated_when_floti_host_starts_and_only_three_older_files_are_kept()
+ {
+    let dirs = TestDirs::new();
+    dirs.with_log_limit(1000);
+    let earlier = "a line from an earlier run\n".repeat(50);
+    std::fs::write(dirs.logs.join(LOG_FILE), &earlier).unwrap();
+    for n in 1..=KEPT_LOGS {
+        std::fs::write(rotated(&dirs, n), format!("rotated {n}\n")).unwrap();
+    }
+
+    let mut host = HostProcess::spawn(&mut floti_host_command(&dirs));
+    let pid = host.id();
+    let mut client = TestClient::connect(&binary_endpoint(&dirs), TERMINAL).await;
+    client
+        .request::<HostStop>(&HostStopRequest {
+            reason: HostStopReason::Stop,
+        })
+        .await
+        .expect("stop the host");
+    assert!(wait_exit(&mut host).success());
+    drop(output_of(host));
+
+    // The new log opens with this run's start line.
+    let log = dirs.host_log();
+    assert_eq!(start_line_at(&log, pid), 0, "{log}");
+    // The full one is now the most recent kept: what it had, then the start
+    // line written before the host held its data folder.
+    let last = std::fs::read_to_string(rotated(&dirs, 1)).unwrap();
+    let after = last
+        .strip_prefix(&earlier)
+        .unwrap_or_else(|| panic!("host.log.1 is not the earlier log: {last}"));
+    assert_eq!(start_line_at(after, pid), 0, "{after}");
+    assert_eq!(
+        std::fs::read_to_string(rotated(&dirs, 2)).unwrap(),
+        "rotated 1\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(rotated(&dirs, 3)).unwrap(),
+        "rotated 2\n"
+    );
+    assert_eq!(
+        log_names(&dirs),
+        ["host.log", "host.log.1", "host.log.2", "host.log.3"]
+    );
 }

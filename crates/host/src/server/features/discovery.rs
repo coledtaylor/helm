@@ -95,7 +95,7 @@ impl Scanner {
 
     fn status(&self, status: &ScanStatus) {
         if let Err(err) = self.events.set_state::<ScanStatusChanged, _>(status) {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
     }
 
@@ -143,7 +143,7 @@ impl Scanner {
             .events
             .set_state_as::<DiscoveryUpdated>(result, &Some(result.clone()));
         if let Err(err) = pushed {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
         if read_git {
             let states: GitStates = result
@@ -157,7 +157,7 @@ impl Scanner {
 
     fn git(&self, states: &GitStates) {
         if let Err(err) = self.events.set_state::<GitUpdated, _>(states) {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
     }
 

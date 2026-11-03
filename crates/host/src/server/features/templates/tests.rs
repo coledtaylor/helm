@@ -74,6 +74,7 @@ impl World {
                 mode: AppMode::Dev,
                 home: Some(dirs.home.clone()),
                 node: None,
+                desktop: false,
             },
         )
         .unwrap();

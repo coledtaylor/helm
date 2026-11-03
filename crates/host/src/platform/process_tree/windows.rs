@@ -111,7 +111,7 @@ impl ProcessTree for Native {
             .get_or_init(|| match join_a_job_that_ends_with_this_process() {
                 Ok(()) => Knowable::Known(true),
                 Err(err) => {
-                    eprintln!(
+                    log_line!(
                         "floti host: {}. Sessions still run, but if the host crashes, what they started keeps running.",
                         Error::io("tie what the host starts to its own life", err)
                     );

@@ -123,7 +123,7 @@ impl Pairing {
             if now.saturating_duration_since(request.asked_at) < PAIRING_LIFETIME {
                 return true;
             }
-            eprintln!(
+            log_line!(
                 "floti host: the request to pair from device {} expired",
                 request.key.fingerprint()
             );
@@ -165,7 +165,7 @@ impl Pairing {
         self.drop_expired(&mut state);
         if let Some(index) = state.waiting.iter().position(|request| request.key == key) {
             state.waiting.remove(index);
-            eprintln!(
+            log_line!(
                 "floti host: device {} asked to pair again; its earlier request is withdrawn",
                 key.fingerprint()
             );
@@ -196,7 +196,7 @@ impl Pairing {
             code,
             tell,
         });
-        eprintln!(
+        log_line!(
             "floti host: device {} asks to pair, named {name:?}; it waits for `floti devices approve` on this computer",
             key.fingerprint()
         );
@@ -216,7 +216,7 @@ impl Pairing {
         let mut state = self.state();
         if let Some(index) = state.waiting.iter().position(|request| request.key == *key) {
             state.waiting.remove(index);
-            eprintln!(
+            log_line!(
                 "floti host: device {} connected without asking to pair while its request \
                  waited; the request is withdrawn",
                 key.fingerprint()
@@ -263,7 +263,7 @@ impl Pairing {
             .pair(request.key, &request.name, role)
             .map_err(|err| err.to_string())?;
         let request = state.waiting.remove(index);
-        eprintln!(
+        log_line!(
             "floti host: paired device {} as {}, named {:?}",
             device.key.fingerprint(),
             device.role.with_article(),
@@ -287,7 +287,7 @@ impl Pairing {
         let mut state = self.state();
         if let Some(index) = state.waiting.iter().position(|request| request.id == id) {
             let request = state.waiting.remove(index);
-            eprintln!(
+            log_line!(
                 "floti host: device {} withdrew its request to pair",
                 request.key.fingerprint()
             );

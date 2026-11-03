@@ -30,6 +30,7 @@ const CONCERNS: &[&str] = &[
     "secret_seal",
     "node_runtime",
     "tray",
+    "standard_error",
 ];
 
 /// The words that make a `cfg` depend on the OS.

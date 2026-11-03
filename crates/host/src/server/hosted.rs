@@ -237,7 +237,7 @@ impl Hosted {
         };
         for terminal in terminals.iter().filter_map(|id| self.terminals.find(*id)) {
             if let Err(err) = terminal.end_now() {
-                eprintln!("floti host: {err}");
+                log_line!("floti host: {err}");
             }
         }
         if !end {
@@ -249,11 +249,11 @@ impl Hosted {
             .collect();
         let ids: Vec<SessionId> = running.iter().map(|session| session.id()).collect();
         if let Err(err) = records::record_stopped(&self.ledger.store(), &ids) {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
         for session in &running {
             if let Err(err) = session.end_now() {
-                eprintln!("floti host: {err}");
+                log_line!("floti host: {err}");
             }
         }
         ids.iter()
@@ -744,7 +744,7 @@ impl Hosted {
         // The session's own process owns its files too, so a session that
         // outlives a crashed host keeps them.
         if let Err(err) = launch_folder.add_owner(session.pid()) {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
         let launched = LaunchedSession {
             session: self.record(session.id())?,
@@ -856,7 +856,7 @@ impl Hosted {
             return;
         };
         if let Err(err) = records::record_conversation(&self.ledger.store(), id, conversation_id) {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
     }
 
@@ -1038,12 +1038,12 @@ impl Hosted {
             if reason == HostStopReason::Stop {
                 let ids: Vec<SessionId> = running.iter().map(|session| session.id()).collect();
                 if let Err(err) = records::record_stopped(&self.ledger.store(), &ids) {
-                    eprintln!("floti host: {err}");
+                    log_line!("floti host: {err}");
                 }
             }
             for session in &running {
                 if let Err(err) = session.end_now() {
-                    eprintln!("floti host: {err}");
+                    log_line!("floti host: {err}");
                 }
             }
             for session in &running {

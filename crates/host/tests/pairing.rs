@@ -16,15 +16,16 @@ use floti_host::client::{
     self, ClientError, ClientKeys, Connection, DEVICE_KEY_FILE, PairingOutcome, PairingRequest,
 };
 use floti_host::devices::{Device, DeviceRegistry, Role};
+use floti_host::fake_agent;
 use floti_host::keys::read_key_pair;
 use floti_host::platform::socket::Endpoint;
-use floti_host::server::{FIRST_ADMIN_NAME, PAIRING_LIFETIME, read_enrolment};
+use floti_host::server::{FIRST_ADMIN_NAME, HOST_KEY_FILE, PAIRING_LIFETIME, read_enrolment};
 use floti_host::testkit::{
     HostProcess, PATIENCE, TEST_DEVICE_NAME, TestClient, TestDirs, host_key_when_made,
     pair_test_device, raw_connection, read_until_closed, run_floti,
 };
 use floti_protocol::channels::devices::{ApproveDevice, DeviceRole, DevicesApprove, DevicesList};
-use floti_protocol::channels::sessions::SessionList;
+use floti_protocol::channels::sessions::{SessionList, SessionStart, StartSessionRequest};
 use floti_protocol::message::{ClientKind, Message};
 use floti_protocol::noise::{Initiator, KeyPair, PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN};
 use tokio::io::AsyncWriteExt;
@@ -653,4 +654,122 @@ async fn s12_pairing_on_a_host_waiting_for_its_first_admin_leaves_the_enrolment_
     );
     assert_eq!(devices[1].key, desk.device_key());
     host.stop(desk_client).await;
+}
+
+// ---------------------------------------------------------------------------
+// What the host's log holds
+// ---------------------------------------------------------------------------
+
+/// What the session is told, which nothing but the session may see.
+const PROMPT: &str = "a prompt only the session sees";
+
+/// Fails the test when `text` holds the key file at `path`: as it is kept,
+/// or its bytes in hex, in either case.
+fn assert_key_file_absent(path: &Path, text: &str, what: &str) {
+    let kept = std::fs::read(path).expect("read a key file");
+    let as_kept = String::from_utf8_lossy(&kept);
+    assert!(
+        !text.contains(as_kept.trim()),
+        "{} is in {what}: {text}",
+        path.display()
+    );
+    let hex: String = kept.iter().map(|byte| format!("{byte:02x}")).collect();
+    for hex in [hex.clone(), hex.to_uppercase()] {
+        assert!(
+            !text.contains(&hex),
+            "{} is in {what}: {text}",
+            path.display()
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_host_that_enrols_pairs_and_runs_a_session_logs_no_key_code_prompt_or_output_and_names_keys_by_fingerprint()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let host = start_unpaired_host(&dirs);
+    let endpoint = dirs.floti_endpoint();
+
+    // A laptop asks to pair while the host waits for its first admin.
+    let mut laptop = device(&dirs, "laptop");
+    let request = ask_when_up(&laptop, &endpoint, &dirs.data).await;
+    let pairing_code = request.code().to_owned();
+    let enrolment = read_enrolment(&dirs.data)
+        .unwrap()
+        .expect("the host waits for its first admin");
+
+    // The desktop enrols as the first admin with the one-time code.
+    let mut desk = device(&dirs, "desk");
+    let connection = desk
+        .connect_local(&endpoint, &dirs.data)
+        .await
+        .expect("enrol");
+    let mut admin = TestClient::over(connection, &["terminal"]).await;
+
+    // The laptop is paired under its code.
+    approve(&dirs, &pairing_code, None).await;
+    assert_eq!(
+        laptop.finish_pairing(request).await.unwrap(),
+        PairingOutcome::Approved(DeviceRole::Operator)
+    );
+
+    // A session runs the fake agent, which answers a prompt.
+    let folder = dirs.folder("a project");
+    let session = admin
+        .request::<SessionStart>(&StartSessionRequest {
+            cwd: folder.to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            ..StartSessionRequest::default()
+        })
+        .await
+        .expect("start a session");
+    admin.attach(1, session.id).await;
+    admin.read_stream_until(1, |bytes| !bytes.is_empty()).await;
+    let run_agent = format!("\"{}\" --fake-tick=100\r", agent.exe().display());
+    admin.type_into(1, run_agent.as_bytes()).await;
+    admin
+        .read_stream_until(1, |bytes| String::from_utf8_lossy(bytes).contains("tick 1"))
+        .await;
+    admin.type_into(1, format!("{PROMPT}\r").as_bytes()).await;
+    let answer = format!("echo: {PROMPT}");
+    admin
+        .read_stream_until(1, |bytes| String::from_utf8_lossy(bytes).contains(&answer))
+        .await;
+
+    let (out, log) = host.stop(admin).await;
+    for named in [
+        format!(
+            "enrolled device {} as the first admin",
+            desk.device_key().fingerprint()
+        ),
+        format!(
+            "paired device {} as an operator",
+            laptop.device_key().fingerprint()
+        ),
+    ] {
+        assert!(log.contains(&named), "{named:?} is not in the log: {log}");
+    }
+    let enrolment_code = enrolment.code.expose_hex();
+    let key_files = [
+        dirs.data.join(HOST_KEY_FILE),
+        desk.folder().join(DEVICE_KEY_FILE),
+        laptop.folder().join(DEVICE_KEY_FILE),
+    ];
+    for (text, what) in [(&log, "the host's log"), (&out, "the host's output")] {
+        assert_code_absent(&pairing_code, text, what);
+        assert_code_absent(enrolment_code.as_str(), text, what);
+        for key in [enrolment.host_key, desk.device_key(), laptop.device_key()] {
+            assert_key_absent(&key, text, what);
+        }
+        for file in &key_files {
+            assert_key_file_absent(file, text, what);
+        }
+        assert!(!text.contains(PROMPT), "the prompt is in {what}: {text}");
+        assert!(
+            !text.contains("tick 1"),
+            "the session's output is in {what}: {text}"
+        );
+    }
 }

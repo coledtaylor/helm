@@ -99,7 +99,7 @@ impl Workspace {
         let events = Arc::clone(&context.events);
         workspace.settings.on_change(move |settings| {
             if let Err(err) = events.set_state::<SettingsChanged, _>(settings) {
-                eprintln!("floti host: {err}");
+                log_line!("floti host: {err}");
             }
         });
         Ok(Self {

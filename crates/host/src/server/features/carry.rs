@@ -45,7 +45,7 @@ impl Carry {
     /// Tells History's and the archive's subscribers what a batch changed.
     fn stored_changed(&self, names: bool) {
         if let Err(err) = self.history.stored_changed(names) {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
     }
 }
@@ -63,9 +63,10 @@ fn admin_only(caller: Caller) -> Result<(), String> {
 }
 
 fn said(merged: CarryMerged, what: &str) {
-    eprintln!(
+    log_line!(
         "floti host: copied {} {what} from Helm, kept {} already here",
-        merged.added, merged.kept
+        merged.added,
+        merged.kept
     );
 }
 
@@ -107,7 +108,7 @@ impl Feature for Carry {
                 if merged.added > 0
                     && let Err(err) = self.history.usage_changed()
                 {
-                    eprintln!("floti host: {err}");
+                    log_line!("floti host: {err}");
                 }
                 Ok(merged)
             })
@@ -122,7 +123,7 @@ impl Feature for Carry {
                         .and_then(|ceiling| carry::merge_conversations(conn, &parts, ceiling))
                         .map_err(|err| err.to_string())?
                 };
-                eprintln!(
+                log_line!(
                     "floti host: copied {} archived conversations ({} messages) from Helm, kept {} parts already here, dropped {} to stay under the archive's limit",
                     merged.added, merged.messages, merged.kept, merged.evicted
                 );
@@ -135,7 +136,7 @@ impl Feature for Carry {
                 admin_only(caller)?;
                 let status =
                     carry::finish(self.store().connection()).map_err(|err| err.to_string())?;
-                eprintln!("floti host: copying Helm's data finished");
+                log_line!("floti host: copying Helm's data finished");
                 Ok(status)
             });
     }

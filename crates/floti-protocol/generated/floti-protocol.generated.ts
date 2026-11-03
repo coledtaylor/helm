@@ -159,6 +159,16 @@ arguments: unknown, };
  */
 export type AppInfo = { version: string, mode: AppMode, dataDir: string, dbFile: string, 
 /**
+ * The host's log file (`host.log` in its logs folder), where its
+ * standard error and any panic land.
+ */
+logFile: string, 
+/**
+ * Whether a desktop started the host (`floti host --desktop`), rather
+ * than the user's sign-in or a shell.
+ */
+desktop: boolean, 
+/**
  * Migration tags this build applied or found already applied.
  */
 migrations: Array<string>, 

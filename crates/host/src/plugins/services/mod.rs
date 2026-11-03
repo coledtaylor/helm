@@ -77,7 +77,7 @@ impl ServicesConfig {
             inherited: Arc::new(|| std::env::vars_os().collect()),
             log: Arc::new(move |plugin, stream, line| {
                 if stream == PluginLogStream::Host {
-                    eprintln!("floti host: plugin {plugin}'s service: {line}");
+                    log_line!("floti host: plugin {plugin}'s service: {line}");
                 }
                 logs.push(plugin, stream, line.to_owned());
             }),

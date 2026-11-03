@@ -167,7 +167,7 @@ impl NotificationArea for Native {
             .name("notification area question".to_owned())
             .spawn(move || answer(ask(&text, &title)));
         if let Err(err) = asked {
-            eprintln!("floti host: could not ask before stopping: {err}");
+            log_line!("floti host: could not ask before stopping: {err}");
         }
     }
 
@@ -217,7 +217,7 @@ fn ask(text: &[u16], title: &[u16]) -> bool {
         )
     };
     if answer == 0 {
-        eprintln!(
+        log_line!(
             "floti host: could not ask before stopping: {}",
             io::Error::last_os_error()
         );

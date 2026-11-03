@@ -18,7 +18,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use floti_host::bridge::{BridgeExit, run_bridge};
-use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions};
+use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
 
 const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code> [--role viewer|operator|admin]";
 
@@ -93,11 +93,11 @@ fn host(options: HostOptions) -> ExitCode {
     match floti_host::run_host(options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err @ Error::AlreadyRunning(_)) => {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
             ExitCode::from(ALREADY_RUNNING_EXIT)
         }
         Err(err) => {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
             ExitCode::FAILURE
         }
     }

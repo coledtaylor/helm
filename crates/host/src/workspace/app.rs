@@ -2,6 +2,7 @@
 
 use floti_protocol::channels::workspace::AppInfo;
 
+use crate::host_log::LOG_FILE;
 use crate::platform::folders::Folders;
 use crate::platform::startup;
 use crate::server::HostRun;
@@ -12,9 +13,9 @@ use crate::store::{MIGRATIONS, Store};
 /// host.
 pub const RELEASES_URL: &str = "https://github.com/coledtaylor/helm/releases/latest";
 
-/// The host's version, how it was started, where its data and database are,
-/// the migrations its store has, and the user's home folder for showing
-/// paths from `~`.
+/// The host's version, how it was started and whether a desktop started it,
+/// where its data, database and log are, the migrations its store has, and
+/// the user's home folder for showing paths from `~`.
 pub fn app_info(run: &HostRun, folders: &Folders, store: &Store) -> AppInfo {
     let outcome = store.migrations();
     AppInfo {
@@ -22,6 +23,8 @@ pub fn app_info(run: &HostRun, folders: &Folders, store: &Store) -> AppInfo {
         mode: run.mode,
         data_dir: folders.data.display().to_string(),
         db_file: store.file().display().to_string(),
+        log_file: folders.logs.join(LOG_FILE).display().to_string(),
+        desktop: run.desktop,
         migrations: MIGRATIONS
             .iter()
             .map(|migration| migration.tag)

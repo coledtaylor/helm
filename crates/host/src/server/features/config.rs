@@ -55,7 +55,7 @@ impl Config {
                 let store: Arc<dyn SnapshotStore> = context.hosted.ledger().shared_store();
                 let sink = change_sink(move |client, change| {
                     if let Err(err) = events.emit_to::<ConfigChangedOutside>(client, change) {
-                        eprintln!("floti host: {err}");
+                        log_line!("floti host: {err}");
                     }
                 });
                 ConfigConsole::new(backend, agent, store, sink)

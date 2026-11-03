@@ -89,7 +89,7 @@ impl Enrolment {
             Ok(true) => None,
             Ok(false) => match write_code(&path, host) {
                 Ok(code) => {
-                    eprintln!(
+                    log_line!(
                         "floti host: no device is an admin yet; a client on this computer can \
                          enrol as the first admin with the one-time code in {}",
                         path.display()
@@ -97,14 +97,14 @@ impl Enrolment {
                     Some(code)
                 }
                 Err(err) => {
-                    eprintln!(
+                    log_line!(
                         "floti host: no enrolment code was written, so no device can enrol: {err}"
                     );
                     None
                 }
             },
             Err(err) => {
-                eprintln!(
+                log_line!(
                     "floti host: the device registry cannot be read, so no enrolment code was \
                      written: {err}"
                 );
@@ -238,7 +238,7 @@ fn remove(path: &Path) {
     match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => eprintln!("floti host: could not remove {}: {err}", path.display()),
+        Err(err) => log_line!("floti host: could not remove {}: {err}", path.display()),
     }
 }
 

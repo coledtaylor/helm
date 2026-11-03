@@ -336,7 +336,7 @@ async fn pass_on_exits(mut exits: broadcast::Receiver<ExitNotice>, shared: Weak<
                 };
                 match tokio::task::spawn_blocking(move || shared.pass().map(drop)).await {
                     Ok(Ok(())) => {}
-                    Ok(Err(err)) => eprintln!("floti host: {err}"),
+                    Ok(Err(err)) => log_line!("floti host: {err}"),
                     Err(_) => return,
                 }
             }
@@ -359,7 +359,7 @@ fn every<T: Timed>(shared: &Arc<T>, period: Duration, work: fn(&T) -> crate::Res
             };
             match tokio::task::spawn_blocking(move || work(&shared)).await {
                 Ok(Ok(())) => {}
-                Ok(Err(err)) => eprintln!("floti host: {err}"),
+                Ok(Err(err)) => log_line!("floti host: {err}"),
                 Err(_) => return,
             }
         }

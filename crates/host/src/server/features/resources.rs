@@ -269,7 +269,7 @@ impl Passes {
                 .events
                 .set_state::<SessionResourcesChanged, _>(&state.current)
         {
-            eprintln!("floti host: {err}");
+            log_line!("floti host: {err}");
         }
         state.current.clone()
     }

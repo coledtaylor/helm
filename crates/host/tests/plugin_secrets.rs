@@ -79,6 +79,7 @@ fn config(dirs: &TestDirs, endpoint: &Endpoint) -> HostConfig {
             mode: AppMode::Dev,
             home: Some(dirs.home.clone()),
             node: None,
+            desktop: false,
         },
     }
 }

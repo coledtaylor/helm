@@ -3,13 +3,15 @@
 //!
 //! An integration test names the executable (`env!("CARGO_BIN_EXE_floti")`,
 //! which only it can), and everything here points it at the test's
-//! [`TestDirs`] and never at the user's own folders. A [`HostProcess`]
+//! [`TestDirs`] and never at the user's own folders. A `floti host`'s
+//! standard error is its log file in the tree's logs folder
+//! ([`TestDirs::host_log`]), not the pipe its command was given. A [`HostProcess`]
 //! dropped unstopped is killed, and a command run with [`run_floti`] that
 //! has not exited within [`PATIENCE`] is killed, so a failing test leaves no
 //! process behind.
 
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
@@ -19,6 +21,7 @@ use tokio::io::AsyncReadExt;
 use tokio::time::Instant;
 
 use super::{PATIENCE, TestClient, TestDirs};
+use crate::host_log::{LOG_FILE, TEST_CRASH_MARKER, TEST_LOG_LIMIT_MARKER};
 use crate::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use crate::platform::socket::{Endpoint, LocalSocket, LocalStream, Native as NativeSocket};
 use crate::platform::startup;
@@ -57,19 +60,70 @@ impl TestDirs {
     pub fn floti_endpoint(&self) -> Endpoint {
         NativeSocket.endpoint(&self.runtime, SOCKET_NAME)
     }
+
+    /// The log of a `floti host` over this tree, every run's in turn, or an
+    /// empty string when none has written one.
+    pub fn host_log(&self) -> String {
+        read_host_log(&self.logs)
+    }
+
+    /// Gives the log of a `floti host` over this tree a limit of `bytes` in
+    /// place of the real one.
+    pub fn with_log_limit(&self, bytes: u64) {
+        std::fs::write(self.data.join(TEST_LOG_LIMIT_MARKER), bytes.to_string())
+            .expect("mark the test's data folder");
+    }
+
+    /// Makes the next `floti host` over this tree end itself just after its
+    /// start line, as a fault would: by a panic, or by failing an allocation,
+    /// which aborts the process.
+    pub fn crash_host_at_start(&self, how: HostCrash) {
+        let how = match how {
+            HostCrash::Panic => "panic",
+            HostCrash::FailedAllocation => "abort",
+        };
+        std::fs::write(self.data.join(TEST_CRASH_MARKER), how)
+            .expect("mark the test's data folder");
+    }
+}
+
+/// How [`TestDirs::crash_host_at_start`] ends a host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostCrash {
+    Panic,
+    FailedAllocation,
+}
+
+/// What `host.log` in the logs folder `logs` holds, or an empty string.
+fn read_host_log(logs: &Path) -> String {
+    std::fs::read(logs.join(LOG_FILE))
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default()
 }
 
 /// A `floti host` the test stops; dropped unstopped, it is killed.
-pub struct HostProcess(Option<Child>);
+pub struct HostProcess {
+    child: Option<Child>,
+    /// The logs folder its command names, where its log is.
+    logs: Option<PathBuf>,
+}
 
 impl HostProcess {
     /// Runs `command`, a `floti host`.
     pub fn spawn(mut command: Command) -> Self {
-        Self(Some(command.spawn().expect("run floti host")))
+        let logs = command
+            .get_envs()
+            .find(|(name, _)| *name == OsStr::new(LOG_DIR_VAR))
+            .and_then(|(_, value)| value)
+            .map(PathBuf::from);
+        Self {
+            child: Some(command.spawn().expect("run floti host")),
+            logs,
+        }
     }
 
     /// Asks the host to stop through `client` and hands back its stdout and
-    /// stderr once it has exited.
+    /// its log once it has exited.
     pub async fn stop(self, mut client: TestClient) -> (String, String) {
         client
             .request::<HostStop>(&HostStopRequest {
@@ -82,9 +136,9 @@ impl HostProcess {
     }
 
     /// Waits for the host to exit, which it was asked to, and hands back its
-    /// stdout and stderr.
+    /// stdout and its log.
     pub async fn exited(mut self) -> (String, String) {
-        let mut child = self.0.take().expect("a host still running");
+        let mut child = self.child.take().expect("a host still running");
         let deadline = Instant::now() + PATIENCE;
         while child.try_wait().expect("poll the host").is_none() {
             if Instant::now() >= deadline {
@@ -97,14 +151,14 @@ impl HostProcess {
         let output = child.wait_with_output().expect("read the host's output");
         (
             String::from_utf8_lossy(&output.stdout).into_owned(),
-            String::from_utf8_lossy(&output.stderr).into_owned(),
+            self.logs.as_deref().map(read_host_log).unwrap_or_default(),
         )
     }
 }
 
 impl Drop for HostProcess {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
+        if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }

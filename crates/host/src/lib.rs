@@ -23,6 +23,8 @@
 //!   outside its per-OS files is conditional on the OS.
 //! - [`store`]: `floti.db`, which only the host opens.
 //! - [`history`]: the history index and the transcript archive in it.
+//! - [`host_log`]: `host.log`, where `floti host` points its standard error,
+//!   rotated so it stays bounded.
 //! - [`resources`]: what each hosted session is holding (its process tree
 //!   and listening ports), shaped from one read of the machine.
 //! - [`usage`]: each backend's latest usage reading.
@@ -45,6 +47,18 @@
 //!   not link this crate, relaying the protocol over its standard input and
 //!   output.
 
+/// Writes a line to standard error, as `eprintln!` does, then rotates the
+/// host's log when that line took it past its limit ([`host_log`]). In
+/// `floti host` standard error is the log; in a test process it is the test's
+/// own. Every line the host writes about itself goes through here.
+#[macro_export]
+macro_rules! log_line {
+    ($($arg:tt)*) => {{
+        ::std::eprintln!($($arg)*);
+        $crate::host_log::wrote();
+    }};
+}
+
 pub mod agent;
 pub mod agent_tools;
 pub mod bridge;
@@ -54,6 +68,7 @@ pub mod config_console;
 pub mod devices;
 pub mod error;
 pub mod history;
+pub mod host_log;
 pub mod keys;
 pub mod platform;
 pub mod plugins;
@@ -73,9 +88,12 @@ use std::ffi::OsString;
 use std::sync::Arc;
 
 use floti_protocol::channels::host::HostStopReason;
+use jiff::Timestamp;
 use tokio::sync::{mpsc, watch};
 
-use platform::folders::UserEnv;
+use host_log::HostLog;
+use platform::folders::{Folders, UserEnv};
+use platform::standard_error;
 use platform::startup::{self, StopSignals};
 use platform::tray::{self, NotificationArea};
 use server::idle::{FIRST_CLIENT_WAIT, until_idle};
@@ -121,12 +139,24 @@ pub struct DesktopCommand {
 /// account before it opens anything, and refuses when another host already
 /// has its data folder or socket ([`Error::AlreadyRunning`]). Whatever stops
 /// it before it listens, it says why on the console ([`not_started`]).
+///
+/// Past the refusals, the first thing it opens is its log ([`host_log`]):
+/// its standard error goes there from then on, a panic's message and a
+/// failed allocation's last line included, after a line naming its version,
+/// process and start.
 pub fn run_host(options: HostOptions) -> Result<()> {
     let env = UserEnv::from_process();
     if let Some(refusal) = startup::launch_refusal(&env, startup::account()) {
         return not_started(Err(Error::Refused(refusal)));
     }
-    let config = not_started(HostConfig::from_env(&env))?;
+    let mut config = not_started(HostConfig::from_env(&env))?;
+    config.run.desktop = options.desktop.is_some();
+    let started = Timestamp::now();
+    let log = open_log(&config.folders);
+    host_log::note_panics();
+    log_line!("{}", host_log::start_line(started));
+    #[cfg(any(test, feature = "testkit"))]
+    host_log::crash_if_asked(&config.folders.data);
     let runtime = not_started(
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -136,6 +166,9 @@ pub fn run_host(options: HostOptions) -> Result<()> {
     let reason = runtime.block_on(async {
         let mut signals = not_started(StopSignals::register())?;
         let host = not_started(Host::start(config))?;
+        if let Some(log) = log {
+            own_log(log, started);
+        }
         say(&format!("Floti host is listening at {}.", host.endpoint()));
         let stopper = host.stopper();
         let mut area = None;
@@ -159,7 +192,7 @@ pub fn run_host(options: HostOptions) -> Result<()> {
         if let Some(area) = area
             && let Err(err) = area.hide()
         {
-            eprintln!("floti host: the notification area: {err}");
+            log_line!("floti host: the notification area: {err}");
         }
         stopped
     });
@@ -170,6 +203,35 @@ pub fn run_host(options: HostOptions) -> Result<()> {
         HostStopReason::Update => "Floti host stopped for an update.",
     });
     Ok(())
+}
+
+/// Opens the host's log in its logs folder and points standard error at it,
+/// before anything else the host opens, so that whatever it writes from here
+/// to its end is kept. A host that cannot open it says so where standard
+/// error still goes, and runs on without one.
+fn open_log(folders: &Folders) -> Option<&'static HostLog> {
+    match host_log::install(
+        &folders.logs,
+        host_log::log_limit(&folders.data),
+        standard_error::Native,
+    ) {
+        Ok(log) => Some(log),
+        Err(err) => {
+            log_line!("floti host: it keeps no log file: {err}");
+            None
+        }
+    }
+}
+
+/// Once the host holds its data folder, no other host writes its log: one
+/// past its limit is rotated now, and the new file opens with the start line
+/// again.
+fn own_log(log: &HostLog, started: Timestamp) {
+    match log.own() {
+        Ok(true) => log_line!("{}", host_log::start_line(started)),
+        Ok(false) => {}
+        Err(err) => log_line!("floti host: the log was not rotated: {err}"),
+    }
 }
 
 /// Shows a host a desktop started in the notification area, as
@@ -188,7 +250,7 @@ fn notification_area(
         Ok(area) => Arc::new(area),
         Err(Error::Unsupported { .. }) => return None,
         Err(err) => {
-            eprintln!("floti host: it shows no icon in the notification area: {err}");
+            log_line!("floti host: it shows no icon in the notification area: {err}");
             return None;
         }
     };

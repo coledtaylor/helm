@@ -122,6 +122,7 @@ fn start_host(dirs: &TestDirs, endpoint: &Endpoint, node: Option<PathBuf>) -> Ru
             mode: AppMode::Dev,
             home: Some(dirs.home.clone()),
             node,
+            desktop: false,
         },
     })
 }

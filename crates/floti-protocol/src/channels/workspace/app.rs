@@ -59,6 +59,12 @@ pub struct AppInfo {
     pub mode: AppMode,
     pub data_dir: String,
     pub db_file: String,
+    /// The host's log file (`host.log` in its logs folder), where its
+    /// standard error and any panic land.
+    pub log_file: String,
+    /// Whether a desktop started the host (`floti host --desktop`), rather
+    /// than the user's sign-in or a shell.
+    pub desktop: bool,
     /// Migration tags this build applied or found already applied.
     pub migrations: Vec<String>,
     /// The Windows build number of the host's machine, for a terminal

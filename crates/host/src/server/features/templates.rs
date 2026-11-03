@@ -51,7 +51,7 @@ impl Templates {
         // the picker still has the built-in scaffold, and the listing names
         // the folder it could not read.
         if let Some(problem) = seed_templates(&dir).problem {
-            eprintln!("floti host: {problem}");
+            log_line!("floti host: {problem}");
         }
         Ok(Self {
             hosted: Arc::clone(&context.hosted),

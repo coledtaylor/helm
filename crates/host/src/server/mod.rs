@@ -237,6 +237,9 @@ pub struct HostRun {
     /// The Node binary plugin services of the `node` kind run on, or `None`
     /// when this host has none ([`node_runtime::runtime`]).
     pub node: Option<PathBuf>,
+    /// Whether a desktop started it (`floti host --desktop`), so that a
+    /// desktop that loses it may start another in its place.
+    pub desktop: bool,
 }
 
 impl HostRun {
@@ -255,6 +258,7 @@ impl HostRun {
             },
             home: env.home.clone(),
             node: node_runtime::runtime(env, exe.as_deref(), &node_runtime::Native),
+            desktop: false,
         }
     }
 }
@@ -267,6 +271,7 @@ impl Default for HostRun {
             mode: AppMode::Dev,
             home: None,
             node: None,
+            desktop: false,
         }
     }
 }
@@ -496,7 +501,7 @@ impl Host {
         let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
         while store.strong_count() > 0 {
             if tokio::time::Instant::now() >= deadline {
-                eprintln!(
+                log_line!(
                     "floti host: the store was still in use {RELEASE_WAIT:?} after the sessions ended"
                 );
                 break;
@@ -597,7 +602,7 @@ async fn accept(
                 ));
             }
             Err(err) => {
-                eprintln!("floti host: {err}");
+                log_line!("floti host: {err}");
                 // A failing accept is not retried in a tight loop.
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
