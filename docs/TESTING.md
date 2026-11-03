@@ -36,14 +36,19 @@ anything. A test that passed is run again only once the code it covers has
 changed. A full suite is a regression check, and CI is where it runs: push the
 branch and read the results on all three OSes, rather than running it locally.
 
-**Unit and integration tests validate a change while it is built; end-to-end
-tests validate the happy paths and catch product regressions.** An end-to-end
-run builds the app and drives it, which costs minutes and a great deal of
-memory, so it happens once, at the very end of a task that changed a user
-workflow: after the task's unit and integration tests and its CI have passed,
-and only that workflow's spec (see [End-to-end tests](#end-to-end-tests)). It is
-never part of building a change or checking a fix. The whole `pnpm test:e2e`
-runs only when the owner asks for it.
+**Unit and integration tests validate each task while it is built; end-to-end
+tests validate the workflows once every task is complete.** An end-to-end run
+builds the app and drives it, which costs minutes and a great deal of memory,
+so it happens once for a piece of work: after all its tasks are complete and
+their CI has passed, the specs for the workflows that changed (see
+[End-to-end tests](#end-to-end-tests)). It is never part of building a task or
+checking a fix. The whole `pnpm test:e2e` runs only when the owner asks for it.
+
+Helm is a local app, so nearly everything can be shown by a unit or
+integration test. When an end-to-end run catches something, the tiers below
+it had a gap: add the unit or integration test that fails for it, then fix
+it. An end-to-end run that keeps sending work back means those tiers are not
+good enough. Only what needs the whole app running stays an end-to-end test.
 
 The protocol crate generates JSON Schema and TypeScript into
 `crates/floti-protocol/generated/`. A test fails when those files are out of
@@ -409,8 +414,8 @@ automatically. A targeted `vitest run` measures nothing, so it never trips them.
 ## End-to-end tests
 
 `packages/desktop/e2e/`. One test per user workflow, on its happy path; detail
-belongs in the tier above, so keep this one small. They run once at the end of a
-task, the changed workflow's spec only, never while it is built. A refusal or an edge case is
+belongs in the tier above, so keep this one small. They run once, after every task
+of a piece of work is complete, the changed workflows' specs only. A refusal or an edge case is
 tested here only when nothing but the real app can show it: a native view drawn
 over the window, or Electron's own guards on a page.
 

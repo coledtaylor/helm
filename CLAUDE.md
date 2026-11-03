@@ -53,14 +53,16 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 - While building, run only the tests for what changed. A full suite is a
   regression check, and it runs on CI: push the branch and read its results
   on Windows, macOS and Linux.
-- Unit and integration tests validate a change while it is built. End-to-end
-  tests validate the happy paths and catch product regressions, so they run
-  once, at the very end of a task that changed a user workflow, after its unit
-  and integration tests and CI have passed, and only that workflow's spec
-  (`pnpm --filter @helm/desktop exec node scripts/playwright.mjs test -c e2e
-  <spec>` after one build). Never
-  while building or to check a fix; the whole `pnpm test:e2e` only when the
-  owner asks.
+- Unit and integration tests validate each task while it is built. End-to-end
+  tests validate the workflows once, after every task of a piece of work is
+  complete and its CI has passed: the specs for the workflows that changed,
+  after one build (`pnpm --filter @helm/desktop exec node scripts/playwright.mjs
+  test -c e2e <spec>`). Never while building or to check a fix; the whole
+  `pnpm test:e2e` only when the owner asks.
+- Nearly everything in a local app can be shown by a unit or integration test.
+  Something an end-to-end run catches is a gap in those tiers: add the unit or
+  integration test that fails for it, then fix it. Only what needs the whole
+  app running stays end-to-end.
 - A Rust test run names the binary that holds the tests: `--lib` for a
   module's tests, `--test <file>` for one of `crates/host/tests/*.rs`. A
   filter alone (`cargo nextest run -p floti-host <filter>`) builds and links
