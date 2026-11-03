@@ -1515,6 +1515,14 @@ fn find(bytes: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         .map(|at| at + from)
 }
 
+/// How many times `needle` occurs in `bytes`.
+fn count(bytes: &[u8], needle: &[u8]) -> usize {
+    bytes
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
 /// `bytes` from the first `start` to the end of the first `end` after it.
 fn between<'a>(bytes: &'a [u8], start: &[u8], end: &[u8]) -> &'a [u8] {
     let from = find(bytes, start, 0).expect("the start");
@@ -1549,33 +1557,50 @@ async fn s10_a_client_that_falls_behind_skips_to_the_current_screen_while_the_se
     }
 
     // Far more than the slow client has credit for, and than the host keeps
-    // for it.
-    typist.type_into(SCREEN, b"/flood 40000\r").await;
-    // The session never waits on the slow client: it writes all of it. The
-    // typist and the watcher keep up, so they are read in turns, each granting
-    // credit as it reads: a client left unread while the other took the whole
-    // flood would fall behind too, where the flood arrives faster than one
-    // message per turn (a Linux pty passes it on at once).
-    let flooded = |bytes: &[u8]| find(bytes, b"flood done", 0).is_some();
-    while !(flooded(typist.stream_bytes(SCREEN)) && flooded(watcher.stream_bytes(SCREEN))) {
-        for client in [&mut typist, &mut watcher] {
-            let had = client.stream_bytes(SCREEN).len();
-            client
-                .read_stream_until(SCREEN, |bytes| bytes.len() > had || flooded(bytes))
-                .await;
+    // for it, in floods the clients that keep up take one at a time: each is
+    // well inside what the host keeps for a client, so only a client that
+    // stops taking output falls behind. The slow one takes nothing more, and
+    // does not even read its socket, as on a link that stalled.
+    const FLOODS: usize = 16;
+    let mut searched = [0usize; 2];
+    for flood in 1..=FLOODS {
+        typist.type_into(SCREEN, b"/flood 5000\r").await;
+        // The session never waits on the slow client: it writes all of it.
+        // The typist and the watcher are read in turns, each granting credit
+        // as it reads.
+        let mut ended = [false; 2];
+        while ended.contains(&false) {
+            for (at, client) in [&mut typist, &mut watcher].into_iter().enumerate() {
+                if ended[at] {
+                    continue;
+                }
+                client.read_more(SCREEN).await;
+                let bytes = client.stream_bytes(SCREEN);
+                if let Some(done) = find(bytes, b"flood done", searched[at]) {
+                    ended[at] = true;
+                    searched[at] = done + 1;
+                } else {
+                    searched[at] = bytes.len().saturating_sub(b"flood done".len());
+                }
+            }
         }
+        assert_eq!(
+            count(typist.stream_bytes(SCREEN), b"flood done"),
+            flood,
+            "the typist took each flood to its end"
+        );
     }
     let before_grant = slow
         .read_stream_until(SCREEN, |bytes| bytes.len() >= 200 * 1024)
         .await
         .len();
     assert!(
-        find(slow.stream_bytes(SCREEN), b"flood done", 0).is_none(),
+        count(slow.stream_bytes(SCREEN), b"flood done") < FLOODS,
         "the slow client had no credit for the end"
     );
 
     // Once it grants again, it is sent a reset and the screen as it is now,
-    // which ends with the flood's last line, and then what comes next.
+    // which ends with the last flood's last line, and then what comes next.
     slow.grant_withheld().await;
     let caught_up = slow
         .read_stream_until(SCREEN, |bytes| {
@@ -1595,7 +1620,7 @@ async fn s10_a_client_that_falls_behind_skips_to_the_current_screen_while_the_se
     let typed = typist.stream_bytes(SCREEN);
     let watched = watcher.stream_bytes(SCREEN);
     assert!(
-        caught_up.len() + 1024 * 1024 < between(typed, b"echo: before", b"flood done").len(),
+        caught_up.len() + 1024 * 1024 < between(typed, b"echo: before", b"echo: after").len(),
         "the slow client was sent {} bytes of {}",
         caught_up.len(),
         typed.len()

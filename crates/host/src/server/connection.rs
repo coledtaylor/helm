@@ -293,6 +293,8 @@ pub(crate) async fn serve(
         closing: BTreeSet::new(),
         stop_after_flush: None,
         later: Vec::new(),
+        unsent: Vec::new(),
+        unsent_from: 0,
     };
     if connection.received(&rest).is_err() {
         return;
@@ -682,6 +684,13 @@ struct Connection {
     /// Answers routed to be worked out, not yet handed to the loop that
     /// waits on them.
     later: Vec<LaterAnswer>,
+    /// Sealed frames taken from the outbox and not yet written to the
+    /// client, from `unsent_from` on. The loop writes them as the socket
+    /// takes them and goes on meanwhile, so a client that stops reading never
+    /// holds up its session's output: that output waits in the outbox, where
+    /// falling behind is measured. Credit bounds what is taken for a stream.
+    unsent: Vec<u8>,
+    unsent_from: usize,
 }
 
 /// An answer a feature is still working out: the message it comes to.
@@ -759,12 +768,28 @@ impl Connection {
             for answer in self.later.drain(..) {
                 later.spawn(answer);
             }
-            if self.flush().await.is_err() {
+            if self.fill().is_err() {
                 return;
             }
-            // Dropping the reserved stop carries it out.
-            drop(self.stop_after_flush.take());
+            if self.stop_after_flush.is_some() {
+                // The answer to a stop goes out before the stop is carried
+                // out, which dropping the reservation does.
+                if self.send_all().await.is_err() {
+                    return;
+                }
+                drop(self.stop_after_flush.take());
+            }
+            let unsent = self.unsent_from < self.unsent.len();
             let ended = tokio::select! {
+                written = self.writer.write(&self.unsent[self.unsent_from..]), if unsent => {
+                    match written {
+                        Ok(0) | Err(_) => Err(End::Gone),
+                        Ok(n) => {
+                            self.wrote(n);
+                            Ok(())
+                        }
+                    }
+                }
                 read = self.reader.read(&mut buf) => match read {
                     Ok(0) | Err(_) => Err(End::Gone),
                     Ok(n) => self
@@ -806,7 +831,7 @@ impl Connection {
             if ended.is_err() {
                 // Whatever is already queued, such as the answer to a stop,
                 // still goes out.
-                let _ = self.flush().await;
+                let _ = self.send_all().await;
                 return;
             }
         }
@@ -1292,12 +1317,15 @@ impl Connection {
         }
     }
 
-    /// Sends everything the client's credit allows, then closes the streams
-    /// of ended sessions whose output has all gone.
-    async fn flush(&mut self) -> std::io::Result<()> {
+    /// Takes everything the client's credit allows from the outbox into what
+    /// is to be written, then closes the streams of ended sessions whose
+    /// output has all been taken.
+    fn fill(&mut self) -> std::io::Result<()> {
         loop {
             while let Some(message) = self.outbox.next_message() {
-                self.write(&message).await?;
+                let frame = encode_frame(&message).map_err(std::io::Error::other)?;
+                let sealed = self.sealer.seal(&frame).map_err(std::io::Error::other)?;
+                self.unsent.extend_from_slice(&sealed);
             }
             let drained: Vec<u64> = self
                 .closing
@@ -1318,10 +1346,33 @@ impl Connection {
         }
     }
 
+    /// Writes one message at once, before the loop that writes the rest
+    /// starts.
     async fn write(&mut self, message: &Message) -> std::io::Result<()> {
         let frame = encode_frame(message).map_err(std::io::Error::other)?;
         let sealed = self.sealer.seal(&frame).map_err(std::io::Error::other)?;
         self.writer.write_all(&sealed).await
+    }
+
+    /// The client's socket took `n` more of what was to be written.
+    fn wrote(&mut self, n: usize) {
+        self.unsent_from += n;
+        if self.unsent_from >= self.unsent.len() {
+            self.unsent.clear();
+            self.unsent_from = 0;
+        }
+    }
+
+    /// Writes everything the client's credit allows and waits until the
+    /// socket has taken it all.
+    async fn send_all(&mut self) -> std::io::Result<()> {
+        self.fill()?;
+        self.writer
+            .write_all(&self.unsent[self.unsent_from..])
+            .await?;
+        self.unsent.clear();
+        self.unsent_from = 0;
+        Ok(())
     }
 
     /// The client has gone: its sessions run on without it.

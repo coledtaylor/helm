@@ -374,16 +374,30 @@ impl TestClient {
         done: impl Fn(&[u8]) -> bool,
     ) -> Vec<u8> {
         let deadline = Instant::now() + PATIENCE;
-        loop {
-            let bytes = self.stream_bytes.get(&stream).cloned().unwrap_or_default();
-            if done(&bytes) {
-                return bytes;
+        // Checked in place and copied once: a copy per message would make
+        // reading a large stream cost the square of its length.
+        while !done(self.stream_bytes(stream)) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() || !self.pump(left).await {
+                panic!(
+                    "stream {stream} did not show what was expected within {PATIENCE:?}; it had: {:?}",
+                    String::from_utf8_lossy(self.stream_bytes(stream))
+                );
             }
+        }
+        self.stream_bytes(stream).to_vec()
+    }
+
+    /// Waits up to [`PATIENCE`] for more bytes on `stream`, granting credit
+    /// for what it reads unless it is withholding it; panics when none come.
+    pub async fn read_more(&mut self, stream: u64) {
+        let had = self.stream_bytes(stream).len();
+        let deadline = Instant::now() + PATIENCE;
+        while self.stream_bytes(stream).len() == had {
             let left = deadline.saturating_duration_since(Instant::now());
             assert!(
                 !left.is_zero() && self.pump(left).await,
-                "stream {stream} did not show what was expected within {PATIENCE:?}; it had: {:?}",
-                String::from_utf8_lossy(&bytes)
+                "stream {stream} had nothing more within {PATIENCE:?} after {had} bytes"
             );
         }
     }

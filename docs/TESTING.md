@@ -141,7 +141,9 @@ The host process itself is tested in `crates/host/tests/host.rs`, through
 local socket, runs the Noise handshake as the testkit's device, pinned to
 that host's key, says `hello`, makes typed requests and reads a session's
 terminal, granting credit as it reads; after `withhold_credit` it grants
-none until `grant_withheld`, as a client on a link too slow to keep up. The host serves any key that
+none until `grant_withheld`, as a client on a link too slow to keep up, and
+reads nothing more from its socket until a test reads it again (`read_more`
+takes the next message that comes). The host serves any key that
 completes the handshake, so the device simply connects: `RunningHost`
 records where its host keeps its key, and `record_test_host` does the same
 for the executable, so a test connects with an endpoint and its

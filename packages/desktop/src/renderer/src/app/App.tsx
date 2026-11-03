@@ -207,7 +207,6 @@ import { sidebarFor, type SidebarView } from "./sidebarFor";
 import type { PanelActionIcon } from "@coledtaylor/helm-plugin-sdk";
 import type {
   AppMode,
-  ForwardedPort,
   PluginInfo,
   PluginUiRequest,
 } from "../../../shared/ipc";
@@ -229,6 +228,7 @@ import {
   sessionsInHost,
 } from "./bridge";
 import { useDevicesSettings } from "./useDevicesSettings";
+import { useForwardedPorts } from "./useForwardedPorts";
 import { LOCAL_HOST_NAME } from "./host/sessions";
 import { ProjectColumn } from "./ProjectColumn";
 import { disposeShell, terminalShellKey } from "./pterms";
@@ -1452,30 +1452,6 @@ export function App(): JSX.Element {
   }, [sessionsPaneOpen, watchResources]);
 
   /**
-   * The ports of sessions on other computers main forwards to this PC's
-   * loopback now, so a port row can say where it is; and the sentence the last
-   * Open in browser that failed said, by session key, until another is pressed.
-   */
-  const [forwards, setForwards] = useState<readonly ForwardedPort[]>([]);
-  const [portProblems, setPortProblems] = useState<ReadonlyMap<string, string>>(
-    new Map(),
-  );
-  useEffect(() => {
-    let current = true;
-    const off = helm.on("forwards:changed", (list) => setForwards(list));
-    void helm.invoke("forwards:read").then(
-      (list) => {
-        if (current) setForwards(list);
-      },
-      () => undefined,
-    );
-    return () => {
-      current = false;
-      off();
-    };
-  }, []);
-
-  /**
    * Which page is on screen, told to every view: the one in front of the
    * Browser tab, while that tab is in front of a pane. A page reports its own
    * rectangle while it is mounted; one that goes behind another page, or a
@@ -1659,35 +1635,10 @@ export function App(): JSX.Element {
 
   /**
    * Open in browser on a port of a session on another computer: main forwards
-   * it to this PC's loopback, and the Browser tab opens that address through
-   * `browser:open`, so it meets the reach rule a typed one does. What went
-   * wrong is said under the session's row.
+   * it to this PC's loopback, and the Browser tab opens that address.
    */
-  const openRemotePort = useCallback(
-    (host: string, session: number, key: string, port: number) => {
-      setPortProblems((last) => {
-        if (!last.has(key)) return last;
-        const next = new Map(last);
-        next.delete(key);
-        return next;
-      });
-      helm.invoke("forwards:open", { host, session, port }).then(
-        (forward) =>
-          openBrowser({
-            url: `http://localhost:${String(forward.local)}/`,
-            project: null,
-          }),
-        (error: unknown) =>
-          setPortProblems((last) =>
-            new Map(last).set(
-              key,
-              error instanceof Error ? error.message : String(error),
-            ),
-          ),
-      );
-    },
-    [openBrowser],
-  );
+  const { forwards, portProblems, openRemotePort } =
+    useForwardedPorts(openBrowser);
 
   /**
    * What a plugin asked main for that needs the window: a tab of its own
