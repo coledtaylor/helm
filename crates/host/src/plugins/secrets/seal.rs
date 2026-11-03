@@ -1,5 +1,10 @@
 //! What a host seals plugin secrets with: this OS's store for this user.
 //!
+//! The installed host keeps its key in the entry it has always used; a host
+//! whose data folder was moved (`FLOTI_DATA_DIR`) keeps one in an entry named
+//! from that folder ([`StoreEntry`]), so a development run never reads or
+//! makes the installed host's key.
+//!
 //! A test never touches the user's credential store. Only in a build with
 //! the testkit (the crate's own tests, and the `floti` `pnpm test:e2e`
 //! builds), a data folder a test marked ([`TEST_SEAL_MARKER`], which every
@@ -11,7 +16,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::platform::secret_seal::{Native, SecretSeal};
+use floti_protocol::channels::workspace::AppMode;
+
+use crate::platform::secret_seal::{Native, SecretSeal, StoreEntry};
+use crate::server::HostRun;
 
 /// The file in a data folder that makes a test build seal inside it.
 #[cfg(any(test, feature = "testkit"))]
@@ -25,14 +33,24 @@ pub const TEST_SEAL_KEY_FILE: &str = "key-file";
 #[cfg(any(test, feature = "testkit"))]
 pub const TEST_SEAL_UNAVAILABLE: &str = "unavailable";
 
-/// The seal a host whose data folder is `data` uses.
-pub fn for_data_folder(data: &Path) -> Arc<dyn SecretSeal> {
+/// The seal a host started as `run`, whose data folder is `data`, uses.
+pub fn for_host(run: &HostRun, data: &Path) -> Arc<dyn SecretSeal> {
     #[cfg(any(test, feature = "testkit"))]
     if let Some(seal) = test_seal(data) {
         return seal;
     }
-    let _ = data;
-    Arc::new(Native::new())
+    Arc::new(Native::new(store_entry(run, data)))
+}
+
+/// The OS store entry the host's key is kept in: today's for the installed
+/// host, and its data folder's own for any other.
+pub fn store_entry(run: &HostRun, data: &Path) -> StoreEntry {
+    match run.mode {
+        AppMode::Installed => StoreEntry::installed(),
+        AppMode::Dev | AppMode::DevLive | AppMode::Portable => {
+            StoreEntry::for_moved_data_folder(data)
+        }
+    }
 }
 
 #[cfg(any(test, feature = "testkit"))]
@@ -57,5 +75,26 @@ fn test_seal(data: &Path) -> Option<Arc<dyn SecretSeal>> {
             ))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_installed_host_uses_todays_entry_and_a_moved_data_folder_its_own() {
+        let data = Path::new("/somewhere/helm-data");
+        let installed = HostRun {
+            mode: AppMode::Installed,
+            ..HostRun::default()
+        };
+        assert_eq!(store_entry(&installed, data), StoreEntry::installed());
+        let moved = HostRun::default();
+        assert_eq!(
+            store_entry(&moved, data),
+            StoreEntry::for_moved_data_folder(data)
+        );
+        assert_ne!(store_entry(&moved, data), StoreEntry::installed());
     }
 }

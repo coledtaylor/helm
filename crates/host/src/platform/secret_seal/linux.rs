@@ -1,8 +1,10 @@
 //! One random 256-bit key in a Secret Service entry Floti owns, made the
 //! first time a value is sealed, and [`KeySeal`] under it.
 //!
-//! The entry is in the default collection, with the attributes
-//! `application = floti` and `purpose = plugin-secrets-key`. With no session
+//! The entry is in the default collection, with the attributes the host's
+//! [`StoreEntry`] names: `application = floti` and
+//! `purpose = plugin-secrets-key` for the installed host, and a `purpose`
+//! tagged with its data folder for a host whose folder was moved. With no session
 //! bus, or no Secret Service on it (WSL, CI, a server with no desktop),
 //! sealing is unavailable, and asked again next time: a keyring that starts
 //! later is found then.
@@ -16,24 +18,26 @@ use std::time::Duration;
 
 use secret_service::{EncryptionType, SecretService};
 
-use super::{KeySeal, SealError, SecretSeal};
-
-const LABEL: &str = "Floti plugin secrets key";
-const ATTRIBUTES: [(&str, &str); 2] = [("application", "floti"), ("purpose", "plugin-secrets-key")];
+use super::{KeySeal, SealError, SecretSeal, StoreEntry};
 
 /// How long the Secret Service has to answer, an unlock prompt included:
 /// D-Bus's own limit for a call.
 const PATIENCE: Duration = Duration::from_secs(25);
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Native {
+    /// The Secret Service entry the key is kept in.
+    entry: StoreEntry,
     /// The key, once the Secret Service has answered.
     key: Mutex<Option<Arc<KeySeal>>>,
 }
 
 impl Native {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(entry: StoreEntry) -> Self {
+        Self {
+            entry,
+            key: Mutex::new(None),
+        }
     }
 
     fn key(&self) -> Result<Arc<KeySeal>, SealError> {
@@ -41,9 +45,10 @@ impl Native {
         if let Some(found) = key.as_ref() {
             return Ok(Arc::clone(found));
         }
+        let entry = self.entry.clone();
         let stored = std::thread::Builder::new()
             .name("floti secret service".into())
-            .spawn(read_or_make_key)
+            .spawn(move || read_or_make_key(&entry))
             .map_err(|_| SealError::Unavailable)?
             .join()
             .map_err(|_| SealError::Unavailable)??;
@@ -55,9 +60,12 @@ impl Native {
     }
 }
 
-/// Floti's key from the Secret Service, made and stored there first if it
-/// has none.
-fn read_or_make_key() -> Result<Vec<u8>, SealError> {
+/// Floti's key from the Secret Service entry `entry` names, made and stored
+/// there first if it has none. The search matches items holding at least
+/// these attributes, so the entries differ in `purpose`'s value.
+fn read_or_make_key(entry: &StoreEntry) -> Result<Vec<u8>, SealError> {
+    let label = entry.secret_service_label();
+    let named = entry.secret_service_attributes();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -71,7 +79,10 @@ fn read_or_make_key() -> Result<Vec<u8>, SealError> {
                     Err(_) => service.get_any_collection().await?,
                 };
                 collection.ensure_unlocked().await?;
-                let attributes: HashMap<&str, &str> = ATTRIBUTES.into_iter().collect();
+                let attributes: HashMap<&str, &str> = named
+                    .iter()
+                    .map(|(key, value)| (*key, value.as_str()))
+                    .collect();
                 if let Some(item) = collection
                     .search_items(attributes.clone())
                     .await?
@@ -86,7 +97,7 @@ fn read_or_make_key() -> Result<Vec<u8>, SealError> {
                     return Ok(None);
                 };
                 collection
-                    .create_item(LABEL, attributes, &made, false, "application/octet-stream")
+                    .create_item(&label, attributes, &made, false, "application/octet-stream")
                     .await?;
                 Ok::<_, secret_service::Error>(Some(made.to_vec()))
             })
@@ -130,7 +141,7 @@ mod tests {
             eprintln!("a session bus is here; the user's keyring is left alone");
             return;
         }
-        let native = Native::new();
+        let native = Native::new(StoreEntry::installed());
         assert!(!native.available());
         assert_eq!(native.seal(b"value"), Err(SealError::Unavailable));
         assert_eq!(native.unseal(b"anything"), Err(SealError::Unavailable));

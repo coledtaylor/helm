@@ -1,7 +1,9 @@
 //! DPAPI for the current user: what Credential Manager and Electron's
 //! `safeStorage` use underneath. The OS keeps the key with the user's
 //! profile, so the sealed bytes are all there is to store, and only this
-//! user on this computer can unseal them.
+//! user on this computer can unseal them. With nothing stored there is no
+//! entry to name: every host, installed or on a moved data folder, seals the
+//! same way.
 
 use std::ptr;
 
@@ -10,17 +12,18 @@ use windows_sys::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
 };
 
-use super::{SealError, SecretSeal};
+use super::{SealError, SecretSeal, StoreEntry};
 
 /// Mixed into every seal, so a value is Floti's to unseal and not any
 /// program's that unseals the user's DPAPI blobs blindly.
 const ENTROPY: &[u8] = b"floti plugin secret";
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Native;
 
 impl Native {
-    pub fn new() -> Self {
+    /// DPAPI keeps nothing in a store, so the entry names nothing here.
+    pub fn new(_entry: StoreEntry) -> Self {
         Self
     }
 }
@@ -117,7 +120,7 @@ mod tests {
 
     #[test]
     fn dpapi_seals_for_this_user_and_unseals_what_it_sealed() {
-        let native = Native::new();
+        let native = Native::new(StoreEntry::installed());
         assert!(native.available());
         let plain = "ghp_secret value with spaces and ünïcode".as_bytes();
         let sealed = native.seal(plain).unwrap();
@@ -130,8 +133,24 @@ mod tests {
     }
 
     #[test]
+    fn dpapi_seals_the_same_way_on_a_moved_data_folder() {
+        // No entry is stored on Windows, so a host on a moved data folder
+        // unseals what the installed one sealed, as it did before.
+        let installed = Native::new(StoreEntry::installed());
+        let moved = Native::new(StoreEntry::for_moved_data_folder(std::path::Path::new(
+            "/a moved/helm-data",
+        )));
+        let sealed = installed.seal(b"value").unwrap();
+        assert_eq!(moved.unseal(&sealed).unwrap(), b"value");
+        assert_eq!(
+            installed.unseal(&moved.seal(b"other").unwrap()).unwrap(),
+            b"other"
+        );
+    }
+
+    #[test]
     fn dpapi_refuses_bytes_it_did_not_seal() {
-        let native = Native::new();
+        let native = Native::new(StoreEntry::installed());
         assert!(matches!(
             native.unseal(b"not a dpapi blob"),
             Err(SealError::Failed(_))
