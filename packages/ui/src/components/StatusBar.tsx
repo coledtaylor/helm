@@ -1,8 +1,12 @@
-import { Fragment, type JSX } from 'react'
-import type { UsageDisplayMode, UsageSnapshot } from '@helm/core/types'
-import { cn } from '../lib/cn'
-import type { HostChoice } from './HostSwitch'
-import { UsageStatus } from './UsageStatus'
+import { Fragment, type JSX } from "react";
+import {
+  LOCAL_HOST_KEY,
+  type UsageDisplayMode,
+  type UsageSnapshot,
+} from "@helm/core/types";
+import { cn } from "../lib/cn";
+import type { HostChoice } from "./HostSwitch";
+import { UsageStatus } from "./UsageStatus";
 
 export interface StatusBarProps {
   /**
@@ -11,85 +15,91 @@ export interface StatusBarProps {
    * back with a background task still running, and one that has not said
    * anything yet, as well as one that is simply ready.
    */
-  sessions: { working: number; waiting: number; idle: number }
+  sessions: { working: number; waiting: number; idle: number };
   /** Brings the next session that is waiting on you to the front. */
-  onShowWaiting: () => void
+  onShowWaiting: () => void;
   /**
    * What kind of build this is when it is not an ordinary install - "dev",
    * "dev · live", "portable" - and null when it is. Each of those changes what
    * the binary is and where the data lives, so it is worth a word; an
    * installed build is the case that needs none.
    */
-  mode: string | null
+  mode: string | null;
   /** The app's own version, first on the bar. Null until the app has said. */
-  version: string | null
+  version: string | null;
   /** The `claude` CLI's version, `x.y.z`, or null while it is not known. */
-  claudeVersion: string | null
+  claudeVersion: string | null;
   /** The `claude` CLI was not found. Said here as well as in the banner,
    * because the banner can be dismissed and the fact cannot. */
-  claudeMissing: boolean
+  claudeMissing: boolean;
   /** Claude Code's cached plan-limit figures, or null before the first read. */
-  usage: UsageSnapshot | null
+  usage: UsageSnapshot | null;
   /** Why the shown host's usage could not be read, while it could not: said as Unknown, never as a figure. */
-  usageError?: string | null | undefined
+  usageError?: string | null | undefined;
   /** Which host's usage the bar shows, while more than one is connected. */
-  usageHostChoice?: HostChoice | undefined
-  usageDisplay: UsageDisplayMode
-  onUsageDisplayChange: (mode: UsageDisplayMode) => void
+  usageHostChoice?: HostChoice | undefined;
+  usageDisplay: UsageDisplayMode;
+  onUsageDisplayChange: (mode: UsageDisplayMode) => void;
   /**
    * What the launch's update check found, or null if it made none. Structural
    * rather than the desktop package's `UpdateCheck`: the bar renders a version
    * and opens a URL, so it takes a version and a URL.
    */
-  update: { latest: string; newer: boolean; url: string } | null
-  onOpenUpdate: (url: string) => void
+  update: { latest: string; newer: boolean; url: string } | null;
+  onOpenUpdate: (url: string) => void;
   /** Each plugin's item, in the order the plugins were added. Pressing one opens its panel. */
-  plugins?: readonly StatusPluginItem[] | undefined
+  plugins?: readonly StatusPluginItem[] | undefined;
   /**
    * The hosts sessions run in and what quitting Helm does on each, this PC
    * first, while sessions run in the local host; empty otherwise, when there
    * is no host to name. Pressing one opens the setting that decides.
    */
-  hosts?: readonly StatusHostItem[] | undefined
+  hosts?: readonly StatusHostItem[] | undefined;
 }
 
 export interface StatusHostItem {
   /** `local` for this PC's own host, a remote host's id otherwise. */
-  id: string
+  id: string;
   /** What the bar calls the host: "This PC" for this PC's own. */
-  name: string
+  name: string;
   /** Whether quitting Helm ends the sessions it started there. */
-  quitEnds: boolean
+  quitEnds: boolean;
   /** The link to the host ended and is trying again by itself. Nothing there ended. */
-  retrying?: boolean | undefined
+  retrying?: boolean | undefined;
   /**
    * The host's ssh or command could not reach it: the last line it wrote,
    * unedited, and the line to try by hand in a terminal. The item says the
    * host is not reachable, and its hover text holds both lines.
    */
-  unreachable?: { lastLine: string; tryLine: string } | null | undefined
+  unreachable?: { lastLine: string; tryLine: string } | null | undefined;
+  /**
+   * How long the window's last ping to a connected host on another computer
+   * took to come back, in milliseconds: what a keystroke there costs. Null
+   * before its first answer. This PC's own host is never given one a figure.
+   */
+  roundTripMs?: number | null | undefined;
   /** Opens the setting where what quitting does there is set. */
-  onOpen: () => void
+  onOpen: () => void;
 }
 
 export interface StatusPluginItem {
   /** The plugin's id. */
-  id: string
+  id: string;
   /** The plugin's name, said in the tooltip when the item has none of its own. */
-  name: string
-  text: string
-  tone: 'neutral' | 'accent' | 'success' | 'warn' | 'danger'
-  tooltip: string | null
-  onSelect: () => void
+  name: string;
+  text: string;
+  tone: "neutral" | "accent" | "success" | "warn" | "danger";
+  tooltip: string | null;
+  onSelect: () => void;
 }
 
-const PLUGIN_TONE: Record<StatusPluginItem['tone'], string> = {
-  neutral: 'text-fg-subtle hover:text-fg',
-  accent: 'text-accent-text',
-  success: 'text-success',
-  warn: 'text-warn',
-  danger: 'text-danger'
-}
+const PLUGIN_TONE: Record<StatusPluginItem["tone"], string> = {
+  neutral: "text-fg-subtle hover:text-fg",
+  accent: "text-accent-text",
+  success: "text-success",
+  warn: "text-warn",
+  danger: "text-danger",
+};
 
 /**
  * The bottom strip. On the left, which Helm this is and which `claude` it
@@ -116,9 +126,9 @@ export function StatusBar({
   update,
   onOpenUpdate,
   plugins = [],
-  hosts = []
+  hosts = [],
 }: StatusBarProps): JSX.Element {
-  const total = sessions.working + sessions.waiting + sessions.idle
+  const total = sessions.working + sessions.waiting + sessions.idle;
   return (
     // No island and no border: the status bar is the one strip that sits
     // directly on the canvas (DESIGN.md), a caption under the islands rather
@@ -151,8 +161,8 @@ export function StatusBar({
           title={`Helm ${update.latest} was released. Opens the releases page - Helm downloads and installs nothing.`}
           onClick={() => onOpenUpdate(update.url)}
           className={cn(
-            '-mx-1 shrink-0 rounded px-1 text-accent underline decoration-dotted',
-            'underline-offset-[3px] transition-colors hover:bg-hover'
+            "-mx-1 shrink-0 rounded px-1 text-accent underline decoration-dotted",
+            "underline-offset-[3px] transition-colors hover:bg-hover",
           )}
         >
           {update.latest} available
@@ -178,14 +188,19 @@ export function StatusBar({
         </>
       )}
 
-      {(version !== null || claudeMissing || claudeVersion !== null) && <Divider />}
+      {(version !== null || claudeMissing || claudeVersion !== null) && (
+        <Divider />
+      )}
 
       {total === 0 ? (
         <span data-status-sessions="none">No sessions running</span>
       ) : (
         <>
           {sessions.working > 0 && (
-            <span data-status-sessions="working" className="flex shrink-0 items-center gap-1.5">
+            <span
+              data-status-sessions="working"
+              className="flex shrink-0 items-center gap-1.5"
+            >
               <span aria-hidden className="size-1.5 rounded-full bg-accent" />
               {sessions.working} working
             </span>
@@ -206,8 +221,14 @@ export function StatusBar({
             </button>
           )}
           {sessions.idle > 0 && (
-            <span data-status-sessions="idle" className="flex shrink-0 items-center gap-1.5">
-              <span aria-hidden className="size-1.5 rounded-full border-[1.5px] border-success" />
+            <span
+              data-status-sessions="idle"
+              className="flex shrink-0 items-center gap-1.5"
+            >
+              <span
+                aria-hidden
+                className="size-1.5 rounded-full border-[1.5px] border-success"
+              />
               {sessions.idle} idle
             </span>
           )}
@@ -218,17 +239,29 @@ export function StatusBar({
           anybody quits: a quit should never do what you did not expect. One
           item per host, this PC first, each behind a rule of its own. */}
       {hosts.map((host) => {
-        const unreachable = host.unreachable ?? null
-        const away = host.retrying === true || unreachable !== null
+        const unreachable = host.unreachable ?? null;
+        const away = host.retrying === true || unreachable !== null;
+        // This PC's host is no network away, so it never shows a figure.
+        const roundTrip =
+          away || host.id === LOCAL_HOST_KEY
+            ? null
+            : (host.roundTripMs ?? null);
         return (
           <Fragment key={host.id}>
             <Divider />
             <button
               type="button"
               data-status-host={
-                unreachable !== null ? 'unreachable' : away ? 'retrying' : host.quitEnds ? 'ends' : 'keeps'
+                unreachable !== null
+                  ? "unreachable"
+                  : away
+                    ? "retrying"
+                    : host.quitEnds
+                      ? "ends"
+                      : "keeps"
               }
               data-status-host-id={host.id}
+              data-status-round-trip={roundTrip ?? undefined}
               onClick={host.onOpen}
               title={
                 unreachable !== null
@@ -240,27 +273,35 @@ ${unreachable.lastLine}
 ${unreachable.tryLine}
 
 ` +
-                    'Nothing running there ended, and Helm keeps trying. Opens Settings.'
+                    "Nothing running there ended, and Helm keeps trying. Opens Settings."
                   : (away
                       ? `Helm lost its connection to ${host.name} and is trying again. Nothing running there ended. `
-                      : `Sessions run in the host on ${host.name}. `) +
-                    `Quitting Helm ${host.quitEnds ? 'ends' : 'keeps running'} the ones it started there. Opens Settings.`
+                      : `Sessions run in the host on ${host.name}. ` +
+                        (roundTrip === null
+                          ? ""
+                          : `A keystroke typed into a session on ${host.name} takes ${String(roundTrip)} ms to come back. `)) +
+                    `Quitting Helm ${host.quitEnds ? "ends" : "keeps running"} the ones it started there. Opens Settings.`
               }
               className={cn(
-                '-mx-1 flex shrink-0 items-center gap-1.5 rounded px-1 transition-colors hover:bg-hover hover:text-fg',
-                away && 'text-warn'
+                "-mx-1 flex shrink-0 items-center gap-1.5 rounded px-1 transition-colors hover:bg-hover hover:text-fg",
+                away && "text-warn",
               )}
             >
-              {away && <span aria-hidden className="size-1.5 rounded-full border-[1.5px] border-warn" />}
-              {host.name} ·{' '}
+              {away && (
+                <span
+                  aria-hidden
+                  className="size-1.5 rounded-full border-[1.5px] border-warn"
+                />
+              )}
+              {host.name} ·{" "}
               {unreachable !== null
-                ? 'not reachable'
+                ? "not reachable"
                 : away
-                  ? 'not connected, retrying'
-                  : `quit ${host.quitEnds ? 'ends' : 'keeps'} sessions`}
+                  ? "not connected, retrying"
+                  : `${roundTrip === null ? "" : `${String(roundTrip)} ms · `}quit ${host.quitEnds ? "ends" : "keeps"} sessions`}
             </button>
           </Fragment>
-        )
+        );
       })}
 
       <span className="flex-1" />
@@ -275,8 +316,8 @@ ${unreachable.tryLine}
           title={item.tooltip ?? item.name}
           onClick={item.onSelect}
           className={cn(
-            '-mx-1 max-w-[220px] shrink-0 truncate rounded px-1 transition-colors hover:bg-hover',
-            PLUGIN_TONE[item.tone]
+            "-mx-1 max-w-[220px] shrink-0 truncate rounded px-1 transition-colors hover:bg-hover",
+            PLUGIN_TONE[item.tone],
           )}
         >
           {item.text}
@@ -292,10 +333,10 @@ ${unreachable.tryLine}
         hostChoice={usageHostChoice}
       />
     </footer>
-  )
+  );
 }
 
 /** A hairline between the groups on the left, the one the usage figures use between their windows. */
 function Divider(): JSX.Element {
-  return <span aria-hidden className="h-2.5 w-px shrink-0 bg-border-strong" />
+  return <span aria-hidden className="h-2.5 w-px shrink-0 bg-border-strong" />;
 }

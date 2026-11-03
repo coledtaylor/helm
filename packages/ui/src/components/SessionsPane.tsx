@@ -1,21 +1,31 @@
-import type { JSX, ReactNode } from 'react'
+import type { JSX, ReactNode } from "react";
 import type {
   LiveSession,
   SessionPort,
   SessionProcess,
   SessionRecord,
-  SessionResources
-} from '@helm/core'
-import { sessionLabel } from '@helm/core/types'
-import { cn } from '../lib/cn'
-import { ROW_SELECTED } from '../lib/rows'
-import { SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
-import { formatAge, formatMoment } from '../lib/time'
-import { Chip } from './Chip'
-import { EmptyState } from './EmptyState'
-import { PaneBack } from './PaneBack'
-import { BranchIcon, GlobeIcon, PlugIcon, TerminalIcon, WarnIcon } from './icons'
-import { PAGE_BAR, PAGE_LIST_BESIDE } from '../lib/page'
+  SessionResources,
+} from "@helm/core";
+import { sessionLabel } from "@helm/core/types";
+import { cn } from "../lib/cn";
+import { ROW_SELECTED } from "../lib/rows";
+import {
+  SESSION_STATE_DOT,
+  SESSION_STATE_LABEL,
+  type SessionState,
+} from "../lib/sessionstate";
+import { formatAge, formatMoment } from "../lib/time";
+import { Chip } from "./Chip";
+import { EmptyState } from "./EmptyState";
+import { PaneBack } from "./PaneBack";
+import {
+  BranchIcon,
+  GlobeIcon,
+  PlugIcon,
+  TerminalIcon,
+  WarnIcon,
+} from "./icons";
+import { PAGE_BAR, PAGE_LIST_BESIDE } from "../lib/page";
 
 /**
  * Every live Claude Code session on this machine, and what Helm's own are
@@ -58,13 +68,13 @@ import { PAGE_BAR, PAGE_LIST_BESIDE } from '../lib/page'
  */
 
 /** How often main re-reads the tree while this pane is open. See `resources.ts`. */
-const PASS_SECONDS = 4
+const PASS_SECONDS = 4;
 
 export interface SessionsPaneProps {
   /** Every live session on the machine, hosted first. */
-  sessions: readonly LiveSession[]
+  sessions: readonly LiveSession[];
   /** When main last read the registry, epoch ms. Null before the first answer. */
-  readAtMs: number | null
+  readAtMs: number | null;
   /**
    * Helm's own rows, by session id - the detail half for a hosted session.
    *
@@ -72,74 +82,91 @@ export interface SessionsPaneProps {
    * the tab strip is drawn from, and a second copy of a session's argv would be
    * a second thing to keep true.
    */
-  records: ReadonlyMap<number, SessionRecord>
+  records: ReadonlyMap<number, SessionRecord>;
   /** What each hosted session is holding, by session id. */
-  resources: ReadonlyMap<number, SessionResources>
+  resources: ReadonlyMap<number, SessionResources>;
   /** The row on screen, by pid. Null for none. */
-  selectedPid: number | null
-  onSelect: (session: LiveSession | null) => void
+  selectedPid: number | null;
+  onSelect: (session: LiveSession | null) => void;
   /** Brings a hosted session's terminal tab forward, opening one here when it has none. */
-  onOpenSession?: ((id: number) => void) | undefined
+  onOpenSession?: ((id: number) => void) | undefined;
   /**
    * With sessions in a host: the running sessions this device has no tab for.
    * Every device sees every session, and which have a tab is each device's
    * own, so these are listed as not open here, with Open and End.
    */
-  notOpenHere?: readonly SessionRecord[] | undefined
+  notOpenHere?: readonly SessionRecord[] | undefined;
   /** Ends a session, after the confirmation naming its host. */
-  onEndSession?: ((id: number) => void) | undefined
-  onReveal: (path: string) => void
+  onEndSession?: ((id: number) => void) | undefined;
+  onReveal: (path: string) => void;
   /** Docked beside a session split: list *or* detail, never both. */
-  compact?: boolean | undefined
+  compact?: boolean | undefined;
   /**
    * The hosts on other computers this device has added, in the order they
    * were added, each with its running sessions. With any, the list is grouped
    * by host: this PC first, everything above under it, then each of these
    * under its name.
    */
-  remoteHosts?: readonly SessionsPaneHost[] | undefined
+  remoteHosts?: readonly SessionsPaneHost[] | undefined;
 }
 
 /** A host on another computer, and its running sessions as this device last heard them. */
 export interface SessionsPaneHost {
-  id: string
-  name: string
+  id: string;
+  name: string;
   /**
    * Whether this device's link to it is up. While it is not, its rows are
    * dimmed and say it is not connected and retrying: nothing there ended.
    */
-  connected: boolean
-  sessions: readonly SessionsPaneRemoteSession[]
+  connected: boolean;
+  sessions: readonly SessionsPaneRemoteSession[];
   /**
    * Its floti refused this device's hello (P6): too old, which Update floti
    * fixes there, or newer, which updating Helm on this PC fixes. `host` is the
    * protocol its floti speaks and `client` this Helm's.
    */
-  floti?: { verdict: 'tooOld' | 'newer'; host: string; client: string } | null | undefined
+  floti?:
+    | { verdict: "tooOld" | "newer"; host: string; client: string }
+    | null
+    | undefined;
   /** Starts the yes-first update of its floti, in Settings > Hosts. */
-  onUpdateFloti?: (() => void) | undefined
+  onUpdateFloti?: (() => void) | undefined;
   /** Opens a tab here for one of its sessions this device has none for, through that host. */
-  onOpenSession?: ((key: string) => void) | undefined
+  onOpenSession?: ((key: string) => void) | undefined;
   /** Ends one of its sessions, through that host, after the confirmation naming it. */
-  onEndSession?: ((key: string) => void) | undefined
+  onEndSession?: ((key: string) => void) | undefined;
+  /**
+   * Forwards `port` of one of its sessions to this PC's loopback and opens it
+   * in the Browser tab.
+   */
+  onOpenPort?: ((key: string, port: number) => void) | undefined;
 }
 
 /** One running session on a host on another computer. */
 export interface SessionsPaneRemoteSession {
   /** Unique across every host, so it never meets this PC's session ids. */
-  key: string
-  name: string
-  cwd: string
-  state: SessionState
+  key: string;
+  name: string;
+  cwd: string;
+  state: SessionState;
   /**
    * Whether this device has a tab for it. One without is listed as not open
    * here, with Open and End, as this PC's are.
    */
-  openHere?: boolean | undefined
+  openHere?: boolean | undefined;
+  /**
+   * The ports its process tree listens on there, from that host's own pass
+   * while this pane looks. Null or absent while that is not known.
+   */
+  ports?: readonly SessionPort[] | null | undefined;
+  /** Each of those ports forwarded to this PC now: its port there, and the one on this PC's loopback. */
+  forwarded?: ReadonlyMap<number, number> | undefined;
+  /** Why the last Open in browser for one of its ports did not open, in a sentence. */
+  portProblem?: string | null | undefined;
 }
 
 /** What the window calls this PC's own host where hosts are listed together. */
-const THIS_PC = 'This PC'
+const THIS_PC = "This PC";
 
 /**
  * What a live session's dot says.
@@ -150,11 +177,11 @@ const THIS_PC = 'This PC'
  * rather than to a guess.
  */
 function stateOf(session: LiveSession): SessionState {
-  return session.activity ?? 'running'
+  return session.activity ?? "running";
 }
 
 function nameOf(session: LiveSession): string {
-  return session.name ?? `pid ${String(session.pid)}`
+  return session.name ?? `pid ${String(session.pid)}`;
 }
 
 export function SessionsPane({
@@ -169,17 +196,20 @@ export function SessionsPane({
   onEndSession,
   onReveal,
   compact = false,
-  remoteHosts = []
+  remoteHosts = [],
 }: SessionsPaneProps): JSX.Element {
-  const selected = sessions.find((session) => session.pid === selectedPid) ?? null
-  const showList = !compact || selected === null
-  const showDetail = !compact || selected !== null
+  const selected =
+    sessions.find((session) => session.pid === selectedPid) ?? null;
+  const showList = !compact || selected === null;
+  const showDetail = !compact || selected !== null;
 
   // A session not open here is listed once, under its own heading.
-  const elsewhere = new Set(notOpenHere.map((record) => record.id))
-  const hosted = sessions.filter((session) => session.helmSessionId !== null)
-  const hostedHere = hosted.filter((session) => !elsewhere.has(session.helmSessionId!))
-  const foreign = sessions.filter((session) => session.helmSessionId === null)
+  const elsewhere = new Set(notOpenHere.map((record) => record.id));
+  const hosted = sessions.filter((session) => session.helmSessionId !== null);
+  const hostedHere = hosted.filter(
+    (session) => !elsewhere.has(session.helmSessionId!),
+  );
+  const foreign = sessions.filter((session) => session.helmSessionId === null);
 
   /*
    * Directories with more than one live session in them.
@@ -189,13 +219,13 @@ export function SessionsPane({
    * because two agents in one working tree is the same problem whether or not
    * Helm started both.
    */
-  const crowded = new Set<string>()
-  const seenDirs = new Set<string>()
+  const crowded = new Set<string>();
+  const seenDirs = new Set<string>();
   for (const session of sessions) {
-    if (session.cwd === null) continue
-    const key = session.cwd.toLowerCase()
-    if (seenDirs.has(key)) crowded.add(key)
-    seenDirs.add(key)
+    if (session.cwd === null) continue;
+    const key = session.cwd.toLowerCase();
+    if (seenDirs.has(key)) crowded.add(key);
+    seenDirs.add(key);
   }
 
   // This PC's list: every session on this machine, as it has always been drawn.
@@ -208,7 +238,8 @@ export function SessionsPane({
           icon={<TerminalIcon width={18} height={18} />}
           title="Nothing running"
         >
-          A session started anywhere on this machine is listed here, in Helm or not.
+          A session started anywhere on this machine is listed here, in Helm or
+          not.
         </EmptyState>
       ) : (
         <>
@@ -218,7 +249,11 @@ export function SessionsPane({
                 <NotOpenRow
                   key={record.id}
                   record={record}
-                  live={hosted.find((session) => session.helmSessionId === record.id) ?? null}
+                  live={
+                    hosted.find(
+                      (session) => session.helmSessionId === record.id,
+                    ) ?? null
+                  }
                   onOpen={onOpenSession}
                   onEnd={onEndSession}
                 />
@@ -232,7 +267,9 @@ export function SessionsPane({
                 key={session.pid}
                 session={session}
                 selected={session.pid === selectedPid}
-                crowded={session.cwd !== null && crowded.has(session.cwd.toLowerCase())}
+                crowded={
+                  session.cwd !== null && crowded.has(session.cwd.toLowerCase())
+                }
                 resources={
                   session.helmSessionId === null
                     ? undefined
@@ -243,7 +280,9 @@ export function SessionsPane({
             ))}
             {hostedHere.length === 0 && (
               <p className="px-2.5 py-2 text-[11px] text-fg-subtle">
-                {notOpenHere.length === 0 ? 'Helm is hosting no sessions.' : 'No session is open here.'}
+                {notOpenHere.length === 0
+                  ? "Helm is hosting no sessions."
+                  : "No session is open here."}
               </p>
             )}
           </Section>
@@ -260,7 +299,10 @@ export function SessionsPane({
                   key={session.pid}
                   session={session}
                   selected={session.pid === selectedPid}
-                  crowded={session.cwd !== null && crowded.has(session.cwd.toLowerCase())}
+                  crowded={
+                    session.cwd !== null &&
+                    crowded.has(session.cwd.toLowerCase())
+                  }
                   onSelect={onSelect}
                 />
               ))}
@@ -269,7 +311,7 @@ export function SessionsPane({
         </>
       )}
     </>
-  )
+  );
 
   return (
     // On the pane (DESIGN.md 3): the bar, then the list beside the detail.
@@ -279,11 +321,14 @@ export function SessionsPane({
           session split at the window's `minWidth` this is 171px, and the age
           on the right is `shrink-0`, so without a threshold it painted past the
           island's own edge and read as "read just". */}
-      <header data-pane-header="sessions" className={cn(PAGE_BAR, '@container/head')}>
+      <header
+        data-pane-header="sessions"
+        className={cn(PAGE_BAR, "@container/head")}
+      >
         <p className="hidden min-w-0 truncate text-[11px] text-fg-subtle @[300px]/head:block">
           {sessions.length === 0
-            ? 'No Claude Code session is running on this machine'
-            : `${describeCount(hosted.length, 'in Helm')} · ${describeCount(foreign.length, 'outside Helm')}`}
+            ? "No Claude Code session is running on this machine"
+            : `${describeCount(hosted.length, "in Helm")} · ${describeCount(foreign.length, "outside Helm")}`}
         </p>
         <span className="flex-1" />
         {readAtMs !== null && (
@@ -291,7 +336,9 @@ export function SessionsPane({
             className="hidden shrink-0 text-[10.5px] tabular-nums text-fg-subtle @[260px]/head:inline"
             title={`Claude Code's session registry was last read ${formatMoment(readAtMs)}`}
           >
-            {formatAge(readAtMs) === 'now' ? 'read just now' : `read ${formatAge(readAtMs)} ago`}
+            {formatAge(readAtMs) === "now"
+              ? "read just now"
+              : `read ${formatAge(readAtMs)} ago`}
           </span>
         )}
       </header>
@@ -303,8 +350,13 @@ export function SessionsPane({
         {showList && (
           <div
             className={cn(
-              'flex flex-col overflow-hidden',
-              compact ? 'min-w-0 flex-1' : cn('w-[38%] max-w-[520px] min-w-[320px] shrink-0', PAGE_LIST_BESIDE)
+              "flex flex-col overflow-hidden",
+              compact
+                ? "min-w-0 flex-1"
+                : cn(
+                    "w-[38%] max-w-[520px] min-w-[320px] shrink-0",
+                    PAGE_LIST_BESIDE,
+                  ),
             )}
           >
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
@@ -314,7 +366,9 @@ export function SessionsPane({
                 <>
                   <HostSection id="local" name={THIS_PC} connected>
                     {sessions.length === 0 && notOpenHere.length === 0 ? (
-                      <p className="px-2.5 py-2 text-[11px] text-fg-subtle">Nothing is running on this PC.</p>
+                      <p className="px-2.5 py-2 text-[11px] text-fg-subtle">
+                        Nothing is running on this PC.
+                      </p>
                     ) : (
                       thisPc
                     )}
@@ -335,11 +389,14 @@ export function SessionsPane({
                           session={session}
                           onOpen={host.onOpenSession}
                           onEnd={host.onEndSession}
+                          onOpenPort={host.onOpenPort}
                         />
                       ))}
                       {host.sessions.length === 0 && (
                         <p className="px-2.5 py-2 text-[11px] text-fg-subtle">
-                          {host.connected ? 'Nothing is running there.' : 'Nothing listed yet.'}
+                          {host.connected
+                            ? "Nothing is running there."
+                            : "Nothing listed yet."}
                         </p>
                       )}
                     </HostSection>
@@ -386,7 +443,7 @@ export function SessionsPane({
         )}
       </div>
     </div>
-  )
+  );
 }
 
 /**
@@ -401,15 +458,15 @@ function HostSection({
   floti = null,
   onUpdateFloti,
   remote = false,
-  children
+  children,
 }: {
-  id: string
-  name: string
-  connected: boolean
-  floti?: SessionsPaneHost['floti']
-  onUpdateFloti?: (() => void) | undefined
-  remote?: boolean
-  children: ReactNode
+  id: string;
+  name: string;
+  connected: boolean;
+  floti?: SessionsPaneHost["floti"];
+  onUpdateFloti?: (() => void) | undefined;
+  remote?: boolean;
+  children: ReactNode;
 }): JSX.Element {
   return (
     <section
@@ -419,22 +476,42 @@ function HostSection({
       className="mb-2"
     >
       <div className="flex min-w-0 items-center gap-2 px-2.5 pt-1.5 pb-1">
-        <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', connected ? 'bg-success' : 'bg-warn')} />
-        <span className={cn('min-w-0 truncate text-[12px] font-medium text-fg', remote && 'font-mono')}>{name}</span>
+        <span
+          aria-hidden
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            connected ? "bg-success" : "bg-warn",
+          )}
+        />
+        <span
+          className={cn(
+            "min-w-0 truncate text-[12px] font-medium text-fg",
+            remote && "font-mono",
+          )}
+        >
+          {name}
+        </span>
         {!connected && (
-          <span data-sessions-host-floti={floti?.verdict} className="shrink-0 text-[11px] text-warn">
-            {floti === null ? 'not connected, retrying' : floti.verdict === 'tooOld' ? 'floti too old' : 'newer floti'}
+          <span
+            data-sessions-host-floti={floti?.verdict}
+            className="shrink-0 text-[11px] text-warn"
+          >
+            {floti === null
+              ? "not connected, retrying"
+              : floti.verdict === "tooOld"
+                ? "floti too old"
+                : "newer floti"}
           </span>
         )}
       </div>
       {!connected && floti !== null && (
         <div className="flex min-w-0 items-center gap-2 px-2.5 pb-1.5 pl-[22px]">
           <span className="min-w-0 flex-1 text-[11px] leading-[1.4] text-fg-muted">
-            {floti.verdict === 'tooOld'
+            {floti.verdict === "tooOld"
               ? `Its floti speaks protocol ${floti.host}; this Helm speaks ${floti.client}.`
               : `It speaks protocol ${floti.host}; this Helm speaks ${floti.client}. Update Helm on this PC.`}
           </span>
-          {floti.verdict === 'tooOld' && onUpdateFloti !== undefined && (
+          {floti.verdict === "tooOld" && onUpdateFloti !== undefined && (
             <button
               type="button"
               data-sessions-host-update={id}
@@ -446,70 +523,144 @@ function HostSection({
           )}
         </div>
       )}
-      <div className={cn(!connected && 'opacity-50')}>{children}</div>
+      <div className={cn(!connected && "opacity-50")}>{children}</div>
     </section>
-  )
+  );
 }
 
 /**
  * A running session on another computer's host: its state, name and folder.
  * One this device has no tab for is not open here, and offers Open and End,
- * each through that host.
+ * each through that host. Under it, each port it listens on there, with Open
+ * in browser.
  */
 function RemoteRow({
   session,
   onOpen,
-  onEnd
+  onEnd,
+  onOpenPort,
 }: {
-  session: SessionsPaneRemoteSession
-  onOpen?: ((key: string) => void) | undefined
-  onEnd?: ((key: string) => void) | undefined
+  session: SessionsPaneRemoteSession;
+  onOpen?: ((key: string) => void) | undefined;
+  onEnd?: ((key: string) => void) | undefined;
+  onOpenPort?: ((key: string, port: number) => void) | undefined;
 }): JSX.Element {
-  const notOpen = session.openHere === false
+  const notOpen = session.openHere === false;
+  const ports = session.ports ?? [];
+  const problem = session.portProblem ?? null;
   return (
-    <div
-      data-remote-session={session.key}
-      data-not-open-here={notOpen ? session.key : undefined}
-      title={`${session.name} - ${SESSION_STATE_LABEL[session.state]}${notOpen ? ', not open here' : ''}\n${session.cwd}`}
-      className="flex min-w-0 items-center gap-2 rounded-raised px-2.5 py-row transition-colors hover:bg-hover"
-    >
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex min-w-0 items-center gap-2">
-          <span aria-hidden data-session-dot className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[session.state])} />
-          <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">{session.name}</span>
-          {notOpen && <span className="shrink-0 text-[10.5px] text-fg-subtle">not open here</span>}
+    <>
+      <div
+        data-remote-session={session.key}
+        data-not-open-here={notOpen ? session.key : undefined}
+        title={`${session.name} - ${SESSION_STATE_LABEL[session.state]}${notOpen ? ", not open here" : ""}\n${session.cwd}`}
+        className="flex min-w-0 items-center gap-2 rounded-raised px-2.5 py-row transition-colors hover:bg-hover"
+      >
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-2">
+            <span
+              aria-hidden
+              data-session-dot
+              className={cn(
+                "size-1.5 shrink-0 rounded-full",
+                SESSION_STATE_DOT[session.state],
+              )}
+            />
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">
+              {session.name}
+            </span>
+            {notOpen && (
+              <span className="shrink-0 text-[10.5px] text-fg-subtle">
+                not open here
+              </span>
+            )}
+          </span>
+          <span className="min-w-0 truncate pl-[14px] font-mono text-[10.5px] text-fg-subtle">
+            {session.cwd}
+          </span>
         </span>
-        <span className="min-w-0 truncate pl-[14px] font-mono text-[10.5px] text-fg-subtle">{session.cwd}</span>
-      </span>
-      {notOpen && onOpen !== undefined && (
-        <button
-          type="button"
-          data-not-open-here-open
-          aria-label={`Open ${session.name}`}
-          onClick={() => onOpen(session.key)}
-          className="shrink-0 rounded-well border border-border-strong px-2.5 py-0.5 text-[11.5px] text-fg transition-colors hover:bg-hover"
-        >
-          Open
-        </button>
+        {notOpen && onOpen !== undefined && (
+          <button
+            type="button"
+            data-not-open-here-open
+            aria-label={`Open ${session.name}`}
+            onClick={() => onOpen(session.key)}
+            className="shrink-0 rounded-well border border-border-strong px-2.5 py-0.5 text-[11.5px] text-fg transition-colors hover:bg-hover"
+          >
+            Open
+          </button>
+        )}
+        {notOpen && onEnd !== undefined && (
+          // Danger in the text and the hover wash, never a fill (DESIGN.md).
+          <button
+            type="button"
+            data-not-open-here-end
+            aria-label={`End ${session.name}`}
+            onClick={() => onEnd(session.key)}
+            className="shrink-0 rounded-well border border-danger/50 px-2.5 py-0.5 text-[11.5px] text-danger transition-colors hover:bg-danger/10"
+          >
+            End
+          </button>
+        )}
+      </div>
+      {ports.length > 0 && (
+        <ul className="flex flex-col gap-0.5 pt-0.5 pr-2.5 pb-1 pl-[24px]">
+          {ports.map((port) => {
+            const local = session.forwarded?.get(port.port) ?? null;
+            return (
+              <li
+                key={`${String(port.pid)}:${String(port.port)}`}
+                data-remote-port={`${session.key}:${String(port.port)}`}
+                title={describePort(port)}
+                className="flex min-w-0 items-center gap-2 rounded-well bg-surface-raised px-2.5 py-1"
+              >
+                <PlugIcon
+                  width={11}
+                  height={11}
+                  className="shrink-0 text-accent"
+                />
+                <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-fg">
+                  {port.port}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-fg-muted">
+                  {port.process}
+                  {local !== null && (
+                    <span className="text-fg-subtle">
+                      {" · "}
+                      <span data-port-forwarded>
+                        forwarded to localhost:{local}
+                      </span>
+                    </span>
+                  )}
+                </span>
+                {onOpenPort !== undefined && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenPort(session.key, port.port)}
+                    className="shrink-0 rounded-well border border-border-strong px-2 py-0.5 text-[11px] text-fg transition-colors hover:bg-hover"
+                  >
+                    Open in browser
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       )}
-      {notOpen && onEnd !== undefined && (
-        // Danger in the text and the hover wash, never a fill (DESIGN.md).
-        <button
-          type="button"
-          data-not-open-here-end
-          aria-label={`End ${session.name}`}
-          onClick={() => onEnd(session.key)}
-          className="shrink-0 rounded-well border border-danger/50 px-2.5 py-0.5 text-[11.5px] text-danger transition-colors hover:bg-danger/10"
+      {problem !== null && (
+        <p
+          data-remote-port-problem={session.key}
+          className="pr-2.5 pb-1 pl-[24px] text-[11px] leading-[1.4] text-warn"
         >
-          End
-        </button>
+          {problem}
+        </p>
       )}
-    </div>
-  )
+    </>
+  );
 }
 
 function describeCount(n: number, suffix: string): string {
-  return `${String(n)} ${n === 1 ? 'session' : 'sessions'} ${suffix}`
+  return `${String(n)} ${n === 1 ? "session" : "sessions"} ${suffix}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -519,11 +670,11 @@ function describeCount(n: number, suffix: string): string {
 function Section({
   label,
   count,
-  children
+  children,
 }: {
-  label: string
-  count: number
-  children: ReactNode
+  label: string;
+  count: number;
+  children: ReactNode;
 }): JSX.Element {
   return (
     <section aria-label={label} className="mb-1">
@@ -531,11 +682,13 @@ function Section({
         <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
           {label}
         </span>
-        <span className="text-[9.5px] tabular-nums text-fg-subtle">{count}</span>
+        <span className="text-[9.5px] tabular-nums text-fg-subtle">
+          {count}
+        </span>
       </div>
       {children}
     </section>
-  )
+  );
 }
 
 /**
@@ -552,17 +705,17 @@ function Row({
   selected,
   crowded,
   resources,
-  onSelect
+  onSelect,
 }: {
-  session: LiveSession
-  selected: boolean
-  crowded: boolean
-  resources?: SessionResources | undefined
-  onSelect: (session: LiveSession) => void
+  session: LiveSession;
+  selected: boolean;
+  crowded: boolean;
+  resources?: SessionResources | undefined;
+  onSelect: (session: LiveSession) => void;
 }): JSX.Element {
-  const state = stateOf(session)
-  const name = nameOf(session)
-  const ports = resources?.ports ?? null
+  const state = stateOf(session);
+  const name = nameOf(session);
+  const ports = resources?.ports ?? null;
 
   return (
     <button
@@ -572,24 +725,34 @@ function Row({
       data-session-state={state}
       data-session-hosted={session.helmSessionId !== null}
       onClick={() => onSelect(session)}
-      title={`${name} - ${SESSION_STATE_LABEL[state]}\n${session.cwd ?? 'working directory not recorded'}`}
+      title={`${name} - ${SESSION_STATE_LABEL[state]}\n${session.cwd ?? "working directory not recorded"}`}
       className={cn(
-        'relative flex w-full flex-col gap-0.5 rounded-raised px-2.5 py-row text-left transition-colors',
-        selected ? ROW_SELECTED : 'hover:bg-hover'
+        "relative flex w-full flex-col gap-0.5 rounded-raised px-2.5 py-row text-left transition-colors",
+        selected ? ROW_SELECTED : "hover:bg-hover",
       )}
     >
       <span className="flex min-w-0 items-center gap-2">
         <span
           aria-hidden
           data-session-dot
-          className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[state])}
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            SESSION_STATE_DOT[state],
+          )}
         />
-        <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">
+          {name}
+        </span>
         {session.waitingFor !== null && (
           // The CLI's own sentence, verbatim and never matched against - it
           // comes from whichever dialog is on top. It fits here where it does
           // not fit on a 240px tab, which is why the tab puts it in a hint.
-          <Chip tone="warn" dense truncate title={`Waiting: ${session.waitingFor}`}>
+          <Chip
+            tone="warn"
+            dense
+            truncate
+            title={`Waiting: ${session.waitingFor}`}
+          >
             {session.waitingFor}
           </Chip>
         )}
@@ -598,7 +761,7 @@ function Row({
             tone="accent"
             dense
             icon={<PlugIcon width={9} height={9} />}
-            title={ports.map(describePort).join('\n')}
+            title={ports.map(describePort).join("\n")}
           >
             {ports.length}
           </Chip>
@@ -614,24 +777,33 @@ function Row({
           than starve the thing they sit beside. */}
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 pl-[14px]">
         <span className="min-w-[8rem] flex-1 truncate font-mono text-[10.5px] text-fg-subtle">
-          {session.cwd ?? '(no working directory recorded)'}
+          {session.cwd ?? "(no working directory recorded)"}
         </span>
         {crowded && (
           // The collision, said in the list. Two sessions in one working tree
           // is the fact this whole surface exists to surface, so it is on the
           // row rather than only on the pane the row opens.
-          <Chip tone="warn" dense icon={<WarnIcon width={9} height={9} />} title="More than one live session is running in this folder">
+          <Chip
+            tone="warn"
+            dense
+            icon={<WarnIcon width={9} height={9} />}
+            title="More than one live session is running in this folder"
+          >
             shared
           </Chip>
         )}
         {!session.registered && (
-          <Chip tone="neutral" dense title="Helm holds this process; Claude Code has not written its record yet">
+          <Chip
+            tone="neutral"
+            dense
+            title="Helm holds this process; Claude Code has not written its record yet"
+          >
             starting
           </Chip>
         )}
       </span>
     </button>
-  )
+  );
 }
 
 /**
@@ -643,16 +815,16 @@ function NotOpenRow({
   record,
   live,
   onOpen,
-  onEnd
+  onEnd,
 }: {
-  record: SessionRecord
+  record: SessionRecord;
   /** Its registry row, when Claude Code has written one: the state dot. */
-  live: LiveSession | null
-  onOpen?: ((id: number) => void) | undefined
-  onEnd?: ((id: number) => void) | undefined
+  live: LiveSession | null;
+  onOpen?: ((id: number) => void) | undefined;
+  onEnd?: ((id: number) => void) | undefined;
 }): JSX.Element {
-  const state = live === null ? 'running' : stateOf(live)
-  const name = sessionLabel(record)
+  const state = live === null ? "running" : stateOf(live);
+  const name = sessionLabel(record);
   return (
     <div
       data-not-open-here={record.id}
@@ -661,10 +833,21 @@ function NotOpenRow({
     >
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-2">
-          <span aria-hidden data-session-dot className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[state])} />
-          <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">{name}</span>
+          <span
+            aria-hidden
+            data-session-dot
+            className={cn(
+              "size-1.5 shrink-0 rounded-full",
+              SESSION_STATE_DOT[state],
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">
+            {name}
+          </span>
         </span>
-        <span className="min-w-0 truncate pl-[14px] font-mono text-[10.5px] text-fg-subtle">{record.cwd}</span>
+        <span className="min-w-0 truncate pl-[14px] font-mono text-[10.5px] text-fg-subtle">
+          {record.cwd}
+        </span>
       </span>
       {onOpen !== undefined && (
         <button
@@ -690,7 +873,7 @@ function NotOpenRow({
         </button>
       )}
     </div>
-  )
+  );
 }
 
 function NothingSelected({ count }: { count: number }): JSX.Element {
@@ -698,13 +881,13 @@ function NothingSelected({ count }: { count: number }): JSX.Element {
     <EmptyState
       name="sessions-detail"
       icon={<TerminalIcon width={18} height={18} />}
-      title={count === 0 ? 'No session running' : 'Pick a session'}
+      title={count === 0 ? "No session running" : "Pick a session"}
     >
       {count === 0
-        ? 'Nothing is running on this machine.'
+        ? "Nothing is running on this machine."
         : "See what it is working in, and for Helm's own, the processes and ports it holds."}
     </EmptyState>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -716,27 +899,32 @@ function Detail({
   record,
   resources,
   onOpenSession,
-  onReveal
+  onReveal,
 }: {
-  session: LiveSession
-  record: SessionRecord | null
-  resources: SessionResources | null
-  onOpenSession?: ((id: number) => void) | undefined
-  onReveal: (path: string) => void
+  session: LiveSession;
+  record: SessionRecord | null;
+  resources: SessionResources | null;
+  onOpenSession?: ((id: number) => void) | undefined;
+  onReveal: (path: string) => void;
 }): JSX.Element {
-  const state = stateOf(session)
-  const name = record === null ? nameOf(session) : sessionLabel(record)
-  const helmSessionId = session.helmSessionId
-  const cwd = session.cwd
+  const state = stateOf(session);
+  const name = record === null ? nameOf(session) : sessionLabel(record);
+  const helmSessionId = session.helmSessionId;
+  const cwd = session.cwd;
 
   return (
     <div className="flex flex-col gap-4 p-4">
       <header className="flex flex-wrap items-center gap-2.5">
         <span
           aria-hidden
-          className={cn('size-2 shrink-0 rounded-full', SESSION_STATE_DOT[state])}
+          className={cn(
+            "size-2 shrink-0 rounded-full",
+            SESSION_STATE_DOT[state],
+          )}
         />
-        <h2 className="min-w-0 truncate text-[15px] font-medium tracking-tight text-fg">{name}</h2>
+        <h2 className="min-w-0 truncate text-[15px] font-medium tracking-tight text-fg">
+          {name}
+        </h2>
         {/* A hairline outline in a semantic tone, never a fill - DESIGN.md 4's
             state chip. One word carrying the whole status of the thing on screen is exactly
             what that pill is for. */}
@@ -753,8 +941,8 @@ function Detail({
             data-open-session-tab
             onClick={() => onOpenSession(helmSessionId)}
             className={cn(
-              'flex shrink-0 items-center gap-2 rounded-well border border-border-strong px-3 py-1',
-              'text-[12px] text-fg transition-colors hover:bg-hover'
+              "flex shrink-0 items-center gap-2 rounded-well border border-border-strong px-3 py-1",
+              "text-[12px] text-fg transition-colors hover:bg-hover",
             )}
           >
             <TerminalIcon width={13} height={13} className="text-accent" />
@@ -806,7 +994,9 @@ function Detail({
         </Fact>
         {session.version !== null && (
           <Fact label="Claude Code">
-            <span className="font-mono text-[11px] text-fg-muted">{session.version}</span>
+            <span className="font-mono text-[11px] text-fg-muted">
+              {session.version}
+            </span>
           </Fact>
         )}
         {session.claudeSessionId !== null && (
@@ -825,7 +1015,7 @@ function Detail({
               alone a 171px pane got a tall wrapped block *and* a horizontal
               scrollbar under it, which is both degradations at once. */}
           <pre className="rounded-raised border border-border bg-surface-raised px-3 py-2 font-mono text-[11px] leading-[1.7] wrap-anywhere whitespace-pre-wrap text-fg-muted select-text">
-            {record.argv.join(' ')}
+            {record.argv.join(" ")}
           </pre>
         </Group>
       )}
@@ -833,9 +1023,10 @@ function Detail({
       {helmSessionId === null ? (
         <Group label="What Helm knows">
           <p className="text-[11.5px] leading-[1.6] text-fg-subtle">
-            Helm did not start this session, so it has no branch, no profile, no argv, no process
-            tree and no ports for it. Everything above is what Claude Code recorded about it, and
-            that is the whole of what is knowable from here.
+            Helm did not start this session, so it has no branch, no profile, no
+            argv, no process tree and no ports for it. Everything above is what
+            Claude Code recorded about it, and that is the whole of what is
+            knowable from here.
           </p>
         </Group>
       ) : (
@@ -845,38 +1036,38 @@ function Detail({
         </>
       )}
     </div>
-  )
+  );
 }
 
 function StateChip({
   state,
-  waitingFor
+  waitingFor,
 }: {
-  state: SessionState
-  waitingFor: string | null
+  state: SessionState;
+  waitingFor: string | null;
 }): JSX.Element {
   const TONE: Record<SessionState, string> = {
-    busy: 'border-accent/40 text-accent-text',
-    waiting: 'border-warn/40 text-warn',
-    shell: 'border-success/40 text-success',
-    idle: 'border-success/40 text-success',
-    running: 'border-success/40 text-success',
-    ended: 'border-border-strong text-fg-muted',
-    failed: 'border-danger/40 text-danger'
-  }
+    busy: "border-accent/40 text-accent-text",
+    waiting: "border-warn/40 text-warn",
+    shell: "border-success/40 text-success",
+    idle: "border-success/40 text-success",
+    running: "border-success/40 text-success",
+    ended: "border-border-strong text-fg-muted",
+    failed: "border-danger/40 text-danger",
+  };
   return (
     <span
       data-session-state-chip={state}
       title={waitingFor === null ? undefined : `Waiting: ${waitingFor}`}
       className={cn(
-        'shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] whitespace-nowrap',
-        TONE[state]
+        "shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] whitespace-nowrap",
+        TONE[state],
       )}
     >
       {SESSION_STATE_LABEL[state]}
-      {waitingFor === null ? '' : ` · ${waitingFor}`}
+      {waitingFor === null ? "" : ` · ${waitingFor}`}
     </span>
-  )
+  );
 }
 
 /**
@@ -900,10 +1091,16 @@ function Facts({ children }: { children: ReactNode }): JSX.Element {
         {children}
       </dl>
     </div>
-  )
+  );
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }): JSX.Element {
+function Fact({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}): JSX.Element {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <dt className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
@@ -911,10 +1108,16 @@ function Fact({ label, children }: { label: string; children: ReactNode }): JSX.
       </dt>
       <dd className="flex min-w-0 items-center">{children}</dd>
     </div>
-  )
+  );
 }
 
-function Group({ label, children }: { label: string; children: ReactNode }): JSX.Element {
+function Group({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}): JSX.Element {
   return (
     <section aria-label={label} className="flex min-w-0 flex-col gap-1.5">
       <h3 className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
@@ -922,17 +1125,20 @@ function Group({ label, children }: { label: string; children: ReactNode }): JSX
       </h3>
       {children}
     </section>
-  )
+  );
 }
 
 /** Helm has nothing to say here, and says that rather than painting a zero. */
 function Unknown({ children }: { children: ReactNode }): JSX.Element {
-  return <span className="text-[11px] text-fg-subtle italic">{children}</span>
+  return <span className="text-[11px] text-fg-subtle italic">{children}</span>;
 }
 
 function describePort(port: SessionPort): string {
-  const where = port.addresses.length === 0 ? 'address not recorded' : port.addresses.join(', ')
-  return `${String(port.port)} - ${port.process} (pid ${String(port.pid)}) on ${where}`
+  const where =
+    port.addresses.length === 0
+      ? "address not recorded"
+      : port.addresses.join(", ");
+  return `${String(port.port)} - ${port.process} (pid ${String(port.pid)}) on ${where}`;
 }
 
 /**
@@ -943,13 +1149,20 @@ function describePort(port: SessionPort): string {
  * on `0.0.0.0` can.
  */
 function isLoopbackOnly(port: SessionPort): boolean {
-  if (port.addresses.length === 0) return false
+  if (port.addresses.length === 0) return false;
   return port.addresses.every(
-    (address) => address === '127.0.0.1' || address === '::1' || address.startsWith('127.')
-  )
+    (address) =>
+      address === "127.0.0.1" ||
+      address === "::1" ||
+      address.startsWith("127."),
+  );
 }
 
-function Ports({ resources }: { resources: SessionResources | null }): JSX.Element {
+function Ports({
+  resources,
+}: {
+  resources: SessionResources | null;
+}): JSX.Element {
   return (
     <Group label="Listening ports">
       {resources === null || resources.ports === null ? (
@@ -957,8 +1170,8 @@ function Ports({ resources }: { resources: SessionResources | null }): JSX.Eleme
         // is listening on nothing" are different claims, and only one of them
         // is something to act on.
         <p data-ports-unknown className="text-[11.5px] text-fg-subtle">
-          <Unknown>Unknown</Unknown> - Helm could not read the machine&rsquo;s listening sockets on
-          the last pass.
+          <Unknown>Unknown</Unknown> - Helm could not read the machine&rsquo;s
+          listening sockets on the last pass.
         </p>
       ) : resources.ports.length === 0 ? (
         <p className="text-[11.5px] text-fg-subtle">
@@ -972,7 +1185,11 @@ function Ports({ resources }: { resources: SessionResources | null }): JSX.Eleme
               data-session-port={port.port}
               className="flex min-w-0 items-center gap-2 rounded-well bg-surface-raised px-2.5 py-1"
             >
-              <PlugIcon width={11} height={11} className="shrink-0 text-accent" />
+              <PlugIcon
+                width={11}
+                height={11}
+                className="shrink-0 text-accent"
+              />
               <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-fg">
                 {port.port}
               </span>
@@ -981,45 +1198,55 @@ function Ports({ resources }: { resources: SessionResources | null }): JSX.Eleme
                 <span className="text-fg-subtle"> · {String(port.pid)}</span>
               </span>
               <Chip
-                tone={isLoopbackOnly(port) ? 'neutral' : 'warn'}
+                tone={isLoopbackOnly(port) ? "neutral" : "warn"}
                 dense
                 icon={<GlobeIcon width={9} height={9} />}
-                title={port.addresses.join(', ')}
+                title={port.addresses.join(", ")}
               >
-                {isLoopbackOnly(port) ? 'loopback' : (port.addresses[0] ?? 'unknown')}
+                {isLoopbackOnly(port)
+                  ? "loopback"
+                  : (port.addresses[0] ?? "unknown")}
               </Chip>
             </li>
           ))}
         </ul>
       )}
     </Group>
-  )
+  );
 }
 
-function Tree({ resources }: { resources: SessionResources | null }): JSX.Element {
+function Tree({
+  resources,
+}: {
+  resources: SessionResources | null;
+}): JSX.Element {
   if (resources === null || resources.processes === null) {
     return (
       <Group label="Process tree">
-        <p data-tree-unknown className="text-[11.5px] leading-[1.6] text-fg-subtle">
-          <Unknown>Unknown</Unknown> - Helm could not enumerate the machine&rsquo;s processes on the
-          last pass. This is not the same as the session having no children.
+        <p
+          data-tree-unknown
+          className="text-[11.5px] leading-[1.6] text-fg-subtle"
+        >
+          <Unknown>Unknown</Unknown> - Helm could not enumerate the
+          machine&rsquo;s processes on the last pass. This is not the same as
+          the session having no children.
         </p>
       </Group>
-    )
+    );
   }
 
   if (!resources.rootSeen) {
     return (
       <Group label="Process tree">
         <p className="text-[11.5px] leading-[1.6] text-fg-subtle">
-          The session&rsquo;s own process was not in the last pass, so it has exited since Helm last
-          looked.
+          The session&rsquo;s own process was not in the last pass, so it has
+          exited since Helm last looked.
         </p>
       </Group>
-    )
+    );
   }
 
-  const children = resources.processes.filter((process) => process.depth > 0)
+  const children = resources.processes.filter((process) => process.depth > 0);
 
   return (
     <Group label="Process tree">
@@ -1035,19 +1262,20 @@ function Tree({ resources }: { resources: SessionResources | null }): JSX.Elemen
         </ul>
       )}
       <p className="text-[10.5px] leading-[1.6] text-fg-subtle">
-        Sampled every {PASS_SECONDS}s while this pane is open, so a child that started and finished
-        between two passes was never here.
+        Sampled every {PASS_SECONDS}s while this pane is open, so a child that
+        started and finished between two passes was never here.
         {resources.opaque > 0 && (
           <>
-            {' '}
-            {resources.opaque} of {resources.processes.length}{' '}
-            {resources.opaque === 1 ? 'process' : 'processes'} would not give up a command line;
-            Helm assumes no elevation and reports that as unknown rather than as nothing.
+            {" "}
+            {resources.opaque} of {resources.processes.length}{" "}
+            {resources.opaque === 1 ? "process" : "processes"} would not give up
+            a command line; Helm assumes no elevation and reports that as
+            unknown rather than as nothing.
           </>
         )}
       </p>
     </Group>
-  )
+  );
 }
 
 function TreeRow({ process }: { process: SessionProcess }): JSX.Element {
@@ -1059,25 +1287,32 @@ function TreeRow({ process }: { process: SessionProcess }): JSX.Element {
       // processes six deep in nested `<ul>`s spends most of its width on
       // structure that a 12px step already says.
       style={{ paddingLeft: `${String(6 + process.depth * 12)}px` }}
-      title={process.commandLine ?? 'The command line was not readable for this process.'}
+      title={
+        process.commandLine ??
+        "The command line was not readable for this process."
+      }
     >
-      <span className="shrink-0 font-mono text-[11px] text-fg">{process.name}</span>
+      <span className="shrink-0 font-mono text-[11px] text-fg">
+        {process.name}
+      </span>
       <span className="shrink-0 font-mono text-[10px] tabular-nums text-fg-subtle">
         {process.pid}
       </span>
       {process.ports !== null && process.ports.length > 0 && (
         <span className="shrink-0 font-mono text-[10px] tabular-nums text-accent-text">
-          :{process.ports.join(' :')}
+          :{process.ports.join(" :")}
         </span>
       )}
       <span
         className={cn(
-          'min-w-0 flex-1 truncate font-mono text-[10.5px]',
-          process.commandLine === null ? 'text-fg-subtle italic' : 'text-fg-muted'
+          "min-w-0 flex-1 truncate font-mono text-[10.5px]",
+          process.commandLine === null
+            ? "text-fg-subtle italic"
+            : "text-fg-muted",
         )}
       >
-        {process.commandLine ?? 'command line not readable'}
+        {process.commandLine ?? "command line not readable"}
       </span>
     </li>
-  )
+  );
 }

@@ -1,6 +1,14 @@
-import type { JSX, ReactNode } from 'react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import type { Harness } from '@helm/core'
+import type { JSX, ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import type { Harness } from "@helm/core";
 import {
   activateTab,
   activeRef,
@@ -79,8 +87,8 @@ import {
   type RailItemId,
   type RestoreOffer,
   type SavedPaneLayout,
-  type SessionRecord
-} from '@helm/core/types'
+  type SessionRecord,
+} from "@helm/core/types";
 import {
   AppShell,
   BROWSER_ZOOM,
@@ -193,13 +201,22 @@ import {
   type TreeHost,
   type LauncherHost,
   type HostChoice,
-  type HostInstallActions
-} from '@helm/ui'
-import { sidebarFor, type SidebarView } from './sidebarFor'
-import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
-import type { AppMode, PluginInfo, PluginUiRequest } from '../../../shared/ipc'
-import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
-import { hostFrameKey, hostLabel } from '../../../shared/plugins/origin'
+  type HostInstallActions,
+} from "@helm/ui";
+import { sidebarFor, type SidebarView } from "./sidebarFor";
+import type { PanelActionIcon } from "@coledtaylor/helm-plugin-sdk";
+import type {
+  AppMode,
+  ForwardedPort,
+  PluginInfo,
+  PluginUiRequest,
+} from "../../../shared/ipc";
+import {
+  browserKeyCommand,
+  COMMANDS_THAT_REPEAT,
+  type BrowserCommand,
+} from "../../../shared/browserKeys";
+import { hostFrameKey, hostLabel } from "../../../shared/plugins/origin";
 import {
   bridgeFor,
   devices,
@@ -209,56 +226,66 @@ import {
   hostState,
   localHostConnection,
   remoteHosts as remoteHostLinks,
-  sessionsInHost
-} from './bridge'
-import { useDevicesSettings } from './useDevicesSettings'
-import { LOCAL_HOST_NAME } from './host/sessions'
-import { ProjectColumn } from './ProjectColumn'
-import { disposeShell, terminalShellKey } from './pterms'
-import { disposeTerminal, estimateGrid } from './terminals'
-import { readable } from './errors'
-import { TerminalPane, type HostLost } from './TerminalPane'
-import { TerminalTabPane } from './TerminalTabPane'
-import { terminalFontStack } from '../terminal'
-import { crumbStatus, indicatorOf, sessionNote, useNow } from './sessionView'
-import { useConfig } from './useConfig'
-import { DocumentModeSwitch, DocumentTab, documentKind, type DocumentMode } from './DocumentTab'
-import { fileKey, joinRoot, relativeTo, useFiles } from './useFiles'
-import { sessionHistoryProps, useHistory } from './useHistory'
-import { useLauncher } from './useLauncher'
-import { useProfiles } from './useProfiles'
-import { useLiveSessions } from './useLiveSessions'
-import { useNewSession } from './useNewSession'
-import { useRestore } from './useRestore'
-import { useSessions } from './useSessions'
-import { useSetup } from './useSetup'
-import { useHostWorkspaces } from './useHostWorkspaces'
-import { HostProfiles } from './HostProfiles'
-import { useTemplates } from './useTemplates'
-import { useThemes } from './useThemes'
-import { useBrowsers } from './useBrowsers'
-import { useShells } from './useShells'
-import { treeLaunchNotice, type TreeLaunchFailure } from './launchNotice'
-import { closeKeepingRunning, keepRemoteTab, useSessionConfirm, useShownSessionTabs } from './hostTabs'
-import { useUpdate } from './useUpdate'
-import { useOwnDataCopy } from './useOwnDataCopy'
-import { useUsage } from './useUsage'
-import { useHostPlugins, usePlugins } from './usePlugins'
-import { PluginFrame, PluginsUnavailable } from './PluginFrame'
+  sessionsInHost,
+} from "./bridge";
+import { useDevicesSettings } from "./useDevicesSettings";
+import { LOCAL_HOST_NAME } from "./host/sessions";
+import { ProjectColumn } from "./ProjectColumn";
+import { disposeShell, terminalShellKey } from "./pterms";
+import { disposeTerminal, estimateGrid } from "./terminals";
+import { readable } from "./errors";
+import { TerminalPane, type HostLost } from "./TerminalPane";
+import { TerminalTabPane } from "./TerminalTabPane";
+import { terminalFontStack } from "../terminal";
+import { crumbStatus, indicatorOf, sessionNote, useNow } from "./sessionView";
+import { useConfig } from "./useConfig";
+import {
+  DocumentModeSwitch,
+  DocumentTab,
+  documentKind,
+  type DocumentMode,
+} from "./DocumentTab";
+import { fileKey, joinRoot, relativeTo, useFiles } from "./useFiles";
+import { sessionHistoryProps, useHistory } from "./useHistory";
+import { useLauncher } from "./useLauncher";
+import { useProfiles } from "./useProfiles";
+import { useLiveSessions } from "./useLiveSessions";
+import { useNewSession } from "./useNewSession";
+import { useRestore } from "./useRestore";
+import { useSessions } from "./useSessions";
+import { useSetup } from "./useSetup";
+import { useHostWorkspaces } from "./useHostWorkspaces";
+import { HostProfiles } from "./HostProfiles";
+import { useTemplates } from "./useTemplates";
+import { useThemes } from "./useThemes";
+import { useBrowsers } from "./useBrowsers";
+import { useShells } from "./useShells";
+import { treeLaunchNotice, type TreeLaunchFailure } from "./launchNotice";
+import {
+  closeKeepingRunning,
+  keepRemoteTab,
+  useSessionConfirm,
+  useShownSessionTabs,
+} from "./hostTabs";
+import { useUpdate } from "./useUpdate";
+import { useOwnDataCopy } from "./useOwnDataCopy";
+import { useUsage } from "./useUsage";
+import { useHostPlugins, usePlugins } from "./usePlugins";
+import { PluginFrame, PluginsUnavailable } from "./PluginFrame";
 import {
   disposePluginFrames,
   emitToPluginFrame,
   queueToPluginFrame,
-  setPluginFrameHooks
-} from './pluginFrames'
-import { usePluginSettings } from './usePluginSettings'
-import type { SurfaceSpec } from '../plugins/relay'
+  setPluginFrameHooks,
+} from "./pluginFrames";
+import { usePluginSettings } from "./usePluginSettings";
+import type { SurfaceSpec } from "../plugins/relay";
 
 const KIND_ICON = {
   harness: HarnessIcon,
   repo: RepoIcon,
-  folder: FolderIcon
-} as const
+  folder: FolderIcon,
+} as const;
 
 /**
  * A link in a rendered note, handed to the OS browser.
@@ -272,24 +299,24 @@ const KIND_ICON = {
  * is not one of them and never will be.
  */
 const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
-  helm.invoke('shell:openExternal', { url })
+  helm.invoke("shell:openExternal", { url });
 
 /** Settings > Hosts' check, install and cancel on a host's computer: main runs them, through that host's own transport. */
 const hostInstall: HostInstallActions = {
-  check: (target) => helm.invoke('remoteHosts:check', target),
-  install: (id, host) => helm.invoke('remoteHosts:install', { id, host }),
-  cancel: (id) => void helm.invoke('remoteHosts:cancel', { id })
-}
+  check: (target) => helm.invoke("remoteHosts:check", target),
+  install: (id, host) => helm.invoke("remoteHosts:install", { id, host }),
+  cancel: (id) => void helm.invoke("remoteHosts:cancel", { id }),
+};
 
 /** A stable empty list, so a view with no console entries does not hand
  * `BrowserPane` a fresh array to re-render against on every render. */
-const EMPTY_CONSOLE: ConsoleEntry[] = []
+const EMPTY_CONSOLE: ConsoleEntry[] = [];
 /** The Browser tab: one, however many pages it holds. */
-const BROWSER_TAB = { kind: 'browser' } as const
+const BROWSER_TAB = { kind: "browser" } as const;
 
 /** The same, for a project with nothing running in it - which is most of them. */
-const EMPTY_LIVE: LiveSession[] = []
-const EMPTY_PROJECTS: Project[] = []
+const EMPTY_LIVE: LiveSession[] = [];
+const EMPTY_PROJECTS: Project[] = [];
 
 /**
  * The editors' tokeniser, on the far side of an IPC boundary.
@@ -299,8 +326,11 @@ const EMPTY_PROJECTS: Project[] = []
  * per render of `App` would cancel and restart the debounce on every render the
  * app happens to do. Nothing here closes over state.
  */
-const helmHighlight = (path: string, source: string): Promise<EditorHighlight> =>
-  helm.invoke('editor:highlight', { path, source })
+const helmHighlight = (
+  path: string,
+  source: string,
+): Promise<EditorHighlight> =>
+  helm.invoke("editor:highlight", { path, source });
 
 /**
  * What each build mode is called on the status bar, and null for the one that
@@ -311,10 +341,10 @@ const helmHighlight = (path: string, source: string): Promise<EditorHighlight> =
  */
 const MODE_LABEL: Record<AppMode, string | null> = {
   installed: null,
-  portable: 'portable',
-  dev: 'dev',
-  'dev-live': 'dev · live'
-}
+  portable: "portable",
+  dev: "dev",
+  "dev-live": "dev · live",
+};
 
 /**
  * A tab label, cut to what a pill can hold.
@@ -323,7 +353,7 @@ const MODE_LABEL: Record<AppMode, string | null> = {
  * and a title glued together and the number is the half that identifies it.
  */
 const truncate = (text: string, max: number): string =>
-  text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`
+  text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
 
 /**
  * The folder a tab is about, for a launcher to open on: a project tab's, a
@@ -333,18 +363,25 @@ const truncate = (text: string, max: number): string =>
 function folderOf(
   ref: PaneRef | null,
   sessionsById: ReadonlyMap<number, SessionRecord>,
-  remoteSession: (host: string, id: number) => SessionRecord | undefined = () => undefined
+  remoteSession: (host: string, id: number) => SessionRecord | undefined = () =>
+    undefined,
 ): string | null {
-  if (ref?.kind === 'project' || ref?.kind === 'terminal') return ref.path
-  if (ref?.kind === 'file') return ref.root
-  if (ref?.kind !== 'session') return null
-  const host = hostOf(ref)
-  const session = host === LOCAL_HOST_KEY ? sessionsById.get(ref.id) : remoteSession(host, ref.id)
-  return session === undefined ? null : (session.projectPath ?? session.cwd)
+  if (ref?.kind === "project" || ref?.kind === "terminal") return ref.path;
+  if (ref?.kind === "file") return ref.root;
+  if (ref?.kind !== "session") return null;
+  const host = hostOf(ref);
+  const session =
+    host === LOCAL_HOST_KEY
+      ? sessionsById.get(ref.id)
+      : remoteSession(host, ref.id);
+  return session === undefined ? null : (session.projectPath ?? session.cwd);
 }
 
 /** A panel header action's glyph, by the name the manifest gives it. */
-const PANEL_ACTION_ICON: Record<PanelActionIcon, (props: { width: number; height: number }) => JSX.Element> = {
+const PANEL_ACTION_ICON: Record<
+  PanelActionIcon,
+  (props: { width: number; height: number }) => JSX.Element
+> = {
   refresh: RefreshIcon,
   plus: PlusIcon,
   search: SearchIcon,
@@ -355,23 +392,23 @@ const PANEL_ACTION_ICON: Record<PanelActionIcon, (props: { width: number; height
   edit: PencilIcon,
   trash: TrashIcon,
   link: LinkIcon,
-  eye: EyeIcon
-}
+  eye: EyeIcon,
+};
 
-const NO_PLUGINS: ReadonlyMap<string, PluginInfo> = new Map()
+const NO_PLUGINS: ReadonlyMap<string, PluginInfo> = new Map();
 
 /** A plugin's request, with the host whose plugin made it. */
-type OnHost<T> = T & { host: string }
+type OnHost<T> = T & { host: string };
 
 /** The surfaces that show one host's data at a time, with a switch while more than one is connected. */
-type HostSurface = 'history' | 'usage' | 'config' | 'files' | 'plugins'
+type HostSurface = "history" | "usage" | "config" | "files" | "plugins";
 const LOCAL_SURFACES: Readonly<Record<HostSurface, string>> = {
   history: LOCAL_HOST_KEY,
   usage: LOCAL_HOST_KEY,
   config: LOCAL_HOST_KEY,
   files: LOCAL_HOST_KEY,
-  plugins: LOCAL_HOST_KEY
-}
+  plugins: LOCAL_HOST_KEY,
+};
 
 /**
  * The sidebar view of a plugin's rail panel: `plugin:<id>` for this PC's, as
@@ -379,90 +416,112 @@ const LOCAL_SURFACES: Readonly<Record<HostSurface, string>> = {
  * id holds no dot, so the two never meet.
  */
 function railViewOf(host: string, id: string): SidebarView {
-  return host === LOCAL_HOST_KEY ? pluginRailId(id) : `plugin:${id}.${hostLabel(host)}`
+  return host === LOCAL_HOST_KEY
+    ? pluginRailId(id)
+    : `plugin:${id}.${hostLabel(host)}`;
 }
 
 /** The surface a plugin's rail icon opens: its rail panel on its host, as the relay knows it. */
-function railPanelSpec(id: string, plugin: PluginInfo, host: string = LOCAL_HOST_KEY): SurfaceSpec | null {
-  if (plugin.rail === null) return null
-  const panel = plugin.panels[plugin.rail.panel]
-  if (panel === undefined) return null
+function railPanelSpec(
+  id: string,
+  plugin: PluginInfo,
+  host: string = LOCAL_HOST_KEY,
+): SurfaceSpec | null {
+  if (plugin.rail === null) return null;
+  const panel = plugin.panels[plugin.rail.panel];
+  if (panel === undefined) return null;
   return {
     key: hostFrameKey(host, `panel:${id}/${plugin.rail.panel}`),
     plugin: id,
     ...(host === LOCAL_HOST_KEY ? {} : { host }),
     revision: plugin.revision,
     url: panel.url,
-    surface: 'panel',
+    surface: "panel",
     name: plugin.rail.panel,
     params: {},
-    title: panel.title
-  }
+    title: panel.title,
+  };
 }
 
 /**
  * The frame key of a plugin tab: its pane id on its host, with the host named
  * the way every plugin frame names one (`hostFrameKey`).
  */
-function pluginTabKey(ref: Extract<PaneRef, { kind: 'plugin' }>): string {
-  const { host, ...here } = ref
-  return hostFrameKey(host, paneId(here))
+function pluginTabKey(ref: Extract<PaneRef, { kind: "plugin" }>): string {
+  const { host, ...here } = ref;
+  return hostFrameKey(host, paneId(here));
 }
 
 /** What a page in a plugin's strip is called: the title it was given, or its tab's in the manifest. */
 /** The second line of a preview tab's hover text. */
-const PREVIEW_HINT = 'Preview - double-click to keep it open'
+const PREVIEW_HINT = "Preview - double-click to keep it open";
 
 /** The strip previews with `plugin`'s set to `page`, or taken away (null). */
-function withPreview(previews: ReadonlyMap<string, string>, plugin: string, page: string | null): ReadonlyMap<string, string> {
-  if ((previews.get(plugin) ?? null) === page) return previews
-  const next = new Map(previews)
-  if (page === null) next.delete(plugin)
-  else next.set(plugin, page)
-  return next
+function withPreview(
+  previews: ReadonlyMap<string, string>,
+  plugin: string,
+  page: string | null,
+): ReadonlyMap<string, string> {
+  if ((previews.get(plugin) ?? null) === page) return previews;
+  const next = new Map(previews);
+  if (page === null) next.delete(plugin);
+  else next.set(plugin, page);
+  return next;
 }
 
 /** The strip previews with `page` no longer `plugin`'s preview, if it was. */
-function withoutPreview(previews: ReadonlyMap<string, string>, plugin: string, page: string): ReadonlyMap<string, string> {
-  return previews.get(plugin) === page ? withPreview(previews, plugin, null) : previews
+function withoutPreview(
+  previews: ReadonlyMap<string, string>,
+  plugin: string,
+  page: string,
+): ReadonlyMap<string, string> {
+  return previews.get(plugin) === page
+    ? withPreview(previews, plugin, null)
+    : previews;
 }
 
-function pluginPageTitle(page: PluginPagesRef['pages'][number], plugin: PluginInfo): string {
-  return page.title ?? plugin.tabs[page.tab]?.title ?? page.tab
+function pluginPageTitle(
+  page: PluginPagesRef["pages"][number],
+  plugin: PluginInfo,
+): string {
+  return page.title ?? plugin.tabs[page.tab]?.title ?? page.tab;
 }
 
 /** The session id inside a `session:12` tab id. */
-const sessionIdOf = (id: string): number => Number(id.slice('session:'.length))
+const sessionIdOf = (id: string): number => Number(id.slice("session:".length));
 
 /** The session tab menu's Close tab, keep running. */
-const KEEP_RUNNING = 'keep-running'
+const KEEP_RUNNING = "keep-running";
 /** Every host's bridge, for the question a host asks before a running session's tab closes. */
-const HOST_BRIDGES = { each: eachHostBridge, bridgeFor }
+const HOST_BRIDGES = { each: eachHostBridge, bridgeFor };
 
 /** The last segment of a path, for a session in no project the scan found. */
 const folderName = (path: string): string =>
-  path.split(/[\\/]+/).filter((part) => part !== '').at(-1) ?? path
+  path
+    .split(/[\\/]+/)
+    .filter((part) => part !== "")
+    .at(-1) ?? path;
 
 /** Settings > Devices' reach: the devices store and the window's own connection to each host. */
 const DEVICES_DEPS = {
   devices,
   localConnection: localHostConnection,
-  remoteConnection: (id: string) => remoteHostLinks.connection(id)
-}
+  remoteConnection: (id: string) => remoteHostLinks.connection(id),
+};
 
 /** No remote hosts, as one value so a hook's input does not change every render. */
-const NO_HOSTS: readonly RemoteHost[] = []
+const NO_HOSTS: readonly RemoteHost[] = [];
 
 export function App(): JSX.Element {
-  const launcher = useLauncher()
+  const launcher = useLauncher();
   /**
    * Show in Explorer for a path on `host`: this PC's file manager shows this
    * PC's folders only, so a surface showing a host on another computer offers
    * none rather than a button that does nothing.
    */
   const revealOn = (host: string): ((path: string) => void) | undefined =>
-    host === LOCAL_HOST_KEY ? launcher.reveal : undefined
-  const { discovery, settings, info } = launcher
+    host === LOCAL_HOST_KEY ? launcher.reveal : undefined;
+  const { discovery, settings, info } = launcher;
 
   /**
    * The panes, or null while they are still the saved ones.
@@ -476,15 +535,15 @@ export function App(): JSX.Element {
    * IPC a moment after the first paint, so a sync would render the empty window
    * first and the real one after.
    */
-  const [layout, setLayout] = useState<PaneLayout | null>(null)
+  const [layout, setLayout] = useState<PaneLayout | null>(null);
   /** The pane given the whole window, by its group's id, or null for the arrangement. */
-  const [maximized, setMaximized] = useState<number | null>(null)
+  const [maximized, setMaximized] = useState<number | null>(null);
   /**
    * The tab being dragged out of a strip, or null. Every pane's drop zones
    * wake for the length of the gesture, and need to know which tab it is to
    * say which zones would do anything.
    */
-  const [draggingTab, setDraggingTab] = useState<string | null>(null)
+  const [draggingTab, setDraggingTab] = useState<string | null>(null);
   /**
    * A pane's `+` was pressed and what it opened is on screen: which pane (its
    * group's id), the
@@ -492,122 +551,155 @@ export function App(): JSX.Element {
    * opened.
    */
   const [newTab, setNewTab] = useState<{
-    group: number
-    anchor: HTMLElement
-    folder: string | null
+    group: number;
+    anchor: HTMLElement;
+    folder: string | null;
     /** The host it opens on: the pane's front tab's while connected, else this PC. */
-    host: string
-  } | null>(
-    null
-  )
+    host: string;
+  } | null>(null);
   /**
    * The file tab standing as a preview - opened by a single click, replaced by
    * the next one (`openFile`). Not written down: a restart reopens it as an
    * ordinary tab, which is what a tab that survived a restart is.
    */
-  const [preview, setPreview] = useState<string | null>(null)
+  const [preview, setPreview] = useState<string | null>(null);
   /**
    * The page standing as the preview in each plugin's strip, by plugin
    * (`placePluginPage`). A strip's preview is its own, apart from the pane's.
    * Not written down, for the reason `preview` is not.
    */
-  const [pagePreviews, setPagePreviews] = useState<ReadonlyMap<string, string>>(new Map())
+  const [pagePreviews, setPagePreviews] = useState<ReadonlyMap<string, string>>(
+    new Map(),
+  );
   /** Ctrl+P, open on this project, or null. */
-  const [quickOpenRoot, setQuickOpenRoot] = useState<string | null>(null)
+  const [quickOpenRoot, setQuickOpenRoot] = useState<string | null>(null);
   /** Which half of it: names (Ctrl+P) or text (Ctrl+Shift+F). */
-  const [quickOpenMode, setQuickOpenMode] = useState<QuickOpenMode>('files')
+  const [quickOpenMode, setQuickOpenMode] = useState<QuickOpenMode>("files");
   /**
    * A note's Preview / Source / Edit, by file key. Absent is Preview. Kept per
    * file rather than per tab, so a note closed in Source opens in Source.
    */
-  const [docModes, setDocModes] = useState<ReadonlyMap<string, DocumentMode>>(new Map())
+  const [docModes, setDocModes] = useState<ReadonlyMap<string, DocumentMode>>(
+    new Map(),
+  );
   /** Notes with a draft that is not on disk - the tab strip's dot. */
-  const [docDirty, setDocDirty] = useState<ReadonlySet<string>>(new Set())
+  const [docDirty, setDocDirty] = useState<ReadonlySet<string>>(new Set());
   /** Where a file opened from a text search lands, by file key: the line and the words. */
-  const [fileReveals, setFileReveals] = useState<ReadonlyMap<string, QuickOpenAt>>(new Map())
+  const [fileReveals, setFileReveals] = useState<
+    ReadonlyMap<string, QuickOpenAt>
+  >(new Map());
   /** The section of Settings in the pane; the sidebar lists the rest. */
-  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>('general')
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSectionId>("general");
   /** A host whose floti the sidebar asked to update, which Settings > Hosts starts on. */
-  const [hostUpdateRequest, setHostUpdateRequest] = useState<{ id: string; nonce: number } | null>(null)
+  const [hostUpdateRequest, setHostUpdateRequest] = useState<{
+    id: string;
+    nonce: number;
+  } | null>(null);
   /** Where each file tab's caret is, so VS Code opens at the same line. */
-  const fileCarets = useRef(new Map<string, number>())
-  const [sidebarView, setSidebarView] = useState<SidebarView>('sessions')
-  const pluginState = usePlugins()
+  const fileCarets = useRef(new Map<string, number>());
+  const [sidebarView, setSidebarView] = useState<SidebarView>("sessions");
+  const pluginState = usePlugins();
   /** The plugins that are on, by id: only these have tabs, panels and rail icons. */
-  const plugins = pluginState.live
+  const plugins = pluginState.live;
   /** Plugins' secret requests, answered one dialog at a time, in order, each on the host whose plugin asked. */
-  const [secretAsks, setSecretAsks] = useState<OnHost<Extract<PluginUiRequest, { kind: 'secret' }>>[]>([])
+  const [secretAsks, setSecretAsks] = useState<
+    OnHost<Extract<PluginUiRequest, { kind: "secret" }>>[]
+  >([]);
   /** Sessions plugins asked to start, put to the user one dialog at a time, in order, each on its plugin's host. */
-  const [sessionAsks, setSessionAsks] = useState<OnHost<Extract<PluginUiRequest, { kind: 'session' }>>[]>([])
+  const [sessionAsks, setSessionAsks] = useState<
+    OnHost<Extract<PluginUiRequest, { kind: "session" }>>[]
+  >([]);
   /** The front one's launch: under way, or why it did not start. */
-  const [sessionAskState, setSessionAskState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
+  const [sessionAskState, setSessionAskState] = useState<{
+    busy: boolean;
+    error: string | null;
+  }>({ busy: false, error: null });
   /** Ctrl+Shift+P. */
-  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false);
   /** The rail's current view, pressed again, puts the sidebar away. */
-  const [sidebarHidden, setSidebarHidden] = useState(false)
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   /** The last tab click's row, for the Sessions tree to bring into view. */
-  const [treeReveal, setTreeReveal] = useState<TreeReveal | null>(null)
+  const [treeReveal, setTreeReveal] = useState<TreeReveal | null>(null);
   /** Bumped when a file tab is clicked: the Files tree scrolls to its row. */
-  const [filesRevealSeq, setFilesRevealSeq] = useState<number | undefined>(undefined)
-  const revealCount = useRef(0)
+  const [filesRevealSeq, setFilesRevealSeq] = useState<number | undefined>(
+    undefined,
+  );
+  const revealCount = useRef(0);
   /** The project a session is starting in, from its page or its `+`. */
-  const [launchingPath, setLaunchingPath] = useState<string | null>(null)
+  const [launchingPath, setLaunchingPath] = useState<string | null>(null);
   /**
    * The row the sessions pane has open, by pid - the one key a session Helm
    * does not host also has. Held here rather than in the pane because a pane
    * can be thrown away and rebuilt at will, and a selection that unmounted with
    * it would drop whenever somebody looked at another tab.
    */
-  const [selectedLivePid, setSelectedLivePid] = useState<number | null>(null)
+  const [selectedLivePid, setSelectedLivePid] = useState<number | null>(null);
   /** Each pane's body by its group's id, measured to open a pty at roughly the right grid. */
-  const bodyRefs = useRef(new Map<number, HTMLDivElement>())
+  const bodyRefs = useRef(new Map<number, HTMLDivElement>());
 
-  const profileState = useProfiles()
-  const newSession = useNewSession()
+  const profileState = useProfiles();
+  const newSession = useNewSession();
   /** The launcher's host's profiles, read through its bridge while the launcher is on another host. */
-  const launcherProfiles = useProfiles(newSession.host)
+  const launcherProfiles = useProfiles(newSession.host);
   // Whether the window has its host: lost from a crash until it is back.
-  const hostLink = useSyncExternalStore(hostState.subscribe, hostState.get)
+  const hostLink = useSyncExternalStore(hostState.subscribe, hostState.get);
   // Each host on another computer: where its link stands and what runs there.
   // A remote host's drop is its own and shows no host-stopped notice.
-  const remoteView = useSyncExternalStore(remoteHostLinks.subscribe, remoteHostLinks.get)
+  const remoteView = useSyncExternalStore(
+    remoteHostLinks.subscribe,
+    remoteHostLinks.get,
+  );
   /**
    * The hosts on other computers this device has added, kept in its own
    * settings. They are reached only beside this PC's host, so with "Run
    * sessions in the local host" off there are none: Settings > Hosts is not
    * listed and nothing names them.
    */
-  const listedHosts = useMemo(() => (settings?.sessionsInHost === true ? settings.hosts : []), [settings])
-  const listedHostIds = useMemo(() => listedHosts.map((host) => host.id), [listedHosts])
+  const listedHosts = useMemo(
+    () => (settings?.sessionsInHost === true ? settings.hosts : []),
+    [settings],
+  );
+  const listedHostIds = useMemo(
+    () => listedHosts.map((host) => host.id),
+    [listedHosts],
+  );
   const connectedHostIds = useMemo(
-    () => listedHostIds.filter((id) => remoteView[id]?.connection?.state === 'connected'),
-    [listedHostIds, remoteView]
-  )
+    () =>
+      listedHostIds.filter(
+        (id) => remoteView[id]?.connection?.state === "connected",
+      ),
+    [listedHostIds, remoteView],
+  );
   /** What the window has read of each: its folders, pins and sessions, each through its own bridge. */
-  const hostWork = useHostWorkspaces(listedHostIds, connectedHostIds)
+  const hostWork = useHostWorkspaces(listedHostIds, connectedHostIds);
   /** Each connected host's plugins, read through its own bridge: the rail lists their panels after this PC's. */
-  const remotePlugins = useHostPlugins(connectedHostIds)
+  const remotePlugins = useHostPlugins(connectedHostIds);
   /** A remote host's plugins that are on, by id; none for a host not connected. */
   const pluginsOn = useCallback(
     (host: string): ReadonlyMap<string, PluginInfo> =>
-      host === LOCAL_HOST_KEY ? plugins : (remotePlugins.get(host)?.live ?? NO_PLUGINS),
-    [plugins, remotePlugins]
-  )
+      host === LOCAL_HOST_KEY
+        ? plugins
+        : (remotePlugins.get(host)?.live ?? NO_PLUGINS),
+    [plugins, remotePlugins],
+  );
   /** The hosts a launch can go to: this PC, then each connected host on another computer. */
   const launcherHosts: LauncherHost[] = useMemo(
     () => [
       { id: LOCAL_HOST_KEY, name: LOCAL_HOST_LABEL, remote: false },
       ...listedHosts
         .filter((host) => connectedHostIds.includes(host.id))
-        .map((host) => ({ id: host.id, name: host.name, remote: true }))
+        .map((host) => ({ id: host.id, name: host.name, remote: true })),
     ],
-    [listedHosts, connectedHostIds]
-  )
+    [listedHosts, connectedHostIds],
+  );
   const hostName = useCallback(
     (host: string): string =>
-      host === LOCAL_HOST_KEY ? LOCAL_HOST_LABEL : (listedHosts.find((each) => each.id === host)?.name ?? host),
-    [listedHosts]
-  )
+      host === LOCAL_HOST_KEY
+        ? LOCAL_HOST_LABEL
+        : (listedHosts.find((each) => each.id === host)?.name ?? host),
+    [listedHosts],
+  );
   /**
    * What the window shows while main's link to a host on another computer is
    * down: the host's name, the last line its ssh or command wrote when it
@@ -617,22 +709,31 @@ export function App(): JSX.Element {
    */
   const hostAway = useCallback(
     (host: string): HostLost | null => {
-      if (host === LOCAL_HOST_KEY) return null
-      const listed = listedHosts.find((each) => each.id === host)
-      const connection = remoteView[host]?.connection ?? null
-      if (listed === undefined || connection === null || connection.state === 'connected') return null
+      if (host === LOCAL_HOST_KEY) return null;
+      const listed = listedHosts.find((each) => each.id === host);
+      const connection = remoteView[host]?.connection ?? null;
+      if (
+        listed === undefined ||
+        connection === null ||
+        connection.state === "connected"
+      )
+        return null;
       return {
         hostName: listed.name,
         lastLine: failedLastLine(connection),
         tryLine: lineToTryByHand(listed),
-        onReconnect: () => remoteHostLinks.reconnect(host)
-      }
+        onReconnect: () => remoteHostLinks.reconnect(host),
+      };
     },
-    [listedHosts, remoteView]
-  )
+    [listedHosts, remoteView],
+  );
   // Asked again each time the window gets its host back: the new host offers what the old one lost.
-  const restoreState = useRestore(hostLink.reconnects)
-  const { offer: restoreOffer, restore: restoreLost, dismiss: dismissRestore } = restoreState
+  const restoreState = useRestore(hostLink.reconnects);
+  const {
+    offer: restoreOffer,
+    restore: restoreLost,
+    dismiss: dismissRestore,
+  } = restoreState;
   /**
    * The host History, Usage, Config, Files and Settings > Plugins each show:
    * kept in this window only and sent to no host, This PC until switched. A
@@ -640,86 +741,105 @@ export function App(): JSX.Element {
    * listed but not connected stays chosen, and its surface says why it cannot
    * be read rather than showing another host's.
    */
-  const [surfaceHosts, setSurfaceHosts] = useState<Readonly<Record<HostSurface, string>>>(LOCAL_SURFACES)
+  const [surfaceHosts, setSurfaceHosts] =
+    useState<Readonly<Record<HostSurface, string>>>(LOCAL_SURFACES);
   /** A project's Config or Files asked for while that surface showed another host, pointed once it shows this PC. */
-  const [pendingScope, setPendingScope] = useState<{ surface: 'config' | 'files'; path: string; host: string } | null>(
-    null
-  )
+  const [pendingScope, setPendingScope] = useState<{
+    surface: "config" | "files";
+    path: string;
+    host: string;
+  } | null>(null);
   const shownHostOf = (surface: HostSurface): string => {
-    const chosen = surfaceHosts[surface]
-    return chosen === LOCAL_HOST_KEY || listedHostIds.includes(chosen) ? chosen : LOCAL_HOST_KEY
-  }
-  const historyHost = shownHostOf('history')
-  const usageHost = shownHostOf('usage')
-  const configHost = shownHostOf('config')
-  const filesHost = shownHostOf('files')
-  const pluginsHost = shownHostOf('plugins')
+    const chosen = surfaceHosts[surface];
+    return chosen === LOCAL_HOST_KEY || listedHostIds.includes(chosen)
+      ? chosen
+      : LOCAL_HOST_KEY;
+  };
+  const historyHost = shownHostOf("history");
+  const usageHost = shownHostOf("usage");
+  const configHost = shownHostOf("config");
+  const filesHost = shownHostOf("files");
+  const pluginsHost = shownHostOf("plugins");
   const showHostOn = useCallback(
     (surface: HostSurface, host: string) =>
-      setSurfaceHosts((current) => (current[surface] === host ? current : { ...current, [surface]: host })),
-    []
-  )
+      setSurfaceHosts((current) =>
+        current[surface] === host ? current : { ...current, [surface]: host },
+      ),
+    [],
+  );
   /**
    * A surface's host switch: This PC and each connected host, and the one it
    * shows when that has dropped. Absent while there is only one to choose,
    * which leaves the surface as it always was.
    */
   const hostChoiceFor = (surface: HostSurface): HostChoice | undefined => {
-    const host = shownHostOf(surface)
-    const hosts =
-      launcherHosts.some((each) => each.id === host)
-        ? launcherHosts
-        : [...launcherHosts, { id: host, name: hostName(host), remote: true }]
-    return hosts.length < 2 ? undefined : { hosts, host, onHostChange: (next) => showHostOn(surface, next) }
-  }
-  const historyState = useHistory(historyHost)
-  const configState = useConfig(configHost)
-  const usage = useUsage(usageHost)
-  const check = useUpdate()
-  const ownData = useOwnDataCopy()
-  const themes = useThemes()
+    const host = shownHostOf(surface);
+    const hosts = launcherHosts.some((each) => each.id === host)
+      ? launcherHosts
+      : [...launcherHosts, { id: host, name: hostName(host), remote: true }];
+    return hosts.length < 2
+      ? undefined
+      : { hosts, host, onHostChange: (next) => showHostOn(surface, next) };
+  };
+  const historyState = useHistory(historyHost);
+  const configState = useConfig(configHost);
+  const usage = useUsage(usageHost);
+  const check = useUpdate();
+  const ownData = useOwnDataCopy();
+  const themes = useThemes();
   /*
    * Every live session on the machine, and what Helm's own are holding. Held
    * here rather than inside the sessions pane because the tree and the launch
    * warning need it whether or not that pane has ever been opened.
    */
-  const machineSessions = useLiveSessions()
+  const machineSessions = useLiveSessions();
   /**
    * From `answered` and not `attempted`: the bar's line is a standing fact - a
    * newer release exists - and a manual check that could not reach GitHub is
    * not evidence against it. The settings pane takes `attempted` instead.
    */
-  const answered = check.answered
+  const answered = check.answered;
   const update =
-    answered !== null && answered.newer && answered.latest !== null && answered.url !== null
+    answered !== null &&
+    answered.newer &&
+    answered.latest !== null &&
+    answered.url !== null
       ? { latest: answered.latest, newer: true, url: answered.url }
-      : null
+      : null;
   /** Late-bound for the reason `focusSessionRef` is: starting a session needs
    * the panes, and setup is read before they exist. */
-  const harnessCreatedRef = useRef<(path: string, host: string) => void>(() => undefined)
-  const onHarnessCreated = useCallback((path: string, host: string) => harnessCreatedRef.current(path, host), [])
-  const { rescan: rescanHere } = launcher
-  const { rescan: rescanThere } = hostWork
+  const harnessCreatedRef = useRef<(path: string, host: string) => void>(
+    () => undefined,
+  );
+  const onHarnessCreated = useCallback(
+    (path: string, host: string) => harnessCreatedRef.current(path, host),
+    [],
+  );
+  const { rescan: rescanHere } = launcher;
+  const { rescan: rescanThere } = hostWork;
   /** A rescan of one host's folders, through its own bridge. */
   const rescanOn = useCallback(
-    (host: string) => (host === LOCAL_HOST_KEY ? rescanHere() : rescanThere(host)),
-    [rescanHere, rescanThere]
-  )
-  const setup = useSetup(settings, rescanOn, onHarnessCreated)
+    (host: string) =>
+      host === LOCAL_HOST_KEY ? rescanHere() : rescanThere(host),
+    [rescanHere, rescanThere],
+  );
+  const setup = useSetup(settings, rescanOn, onHarnessCreated);
   /**
    * Template authoring, held at app level because both of its entry points are:
    * the New Harness dialog and Settings reach the manager, and a harness's page
    * reaches "Save as template".
    */
-  const templates = useTemplates()
-  const shells = useShells()
+  const templates = useTemplates();
+  const shells = useShells();
   /**
    * The browser pane's views, which live in the main process. The recent-address
    * list is main's to write - it is the side that knows a navigation succeeded -
    * so it arrives on `settings:changed` like any other setting.
    */
-  const browsers = useBrowsers(settings?.browserRecentUrls ?? DEFAULT_SETTINGS.browserRecentUrls)
-  const browserViews = browsers.views
+  const browsers = useBrowsers(
+    settings?.browserRecentUrls ?? DEFAULT_SETTINGS.browserRecentUrls,
+  );
+  const browserViews = browsers.views;
 
   /**
    * What the Terminal group shows, and one writer for them. Six of the seven are
@@ -730,29 +850,37 @@ export function App(): JSX.Element {
   const terminalSettings = useMemo(
     () => ({
       terminalFontFamily: settings?.terminalFontFamily ?? null,
-      terminalFontSize: settings?.terminalFontSize ?? DEFAULT_SETTINGS.terminalFontSize,
-      terminalCursorStyle: settings?.terminalCursorStyle ?? DEFAULT_SETTINGS.terminalCursorStyle,
-      terminalCursorBlink: settings?.terminalCursorBlink ?? DEFAULT_SETTINGS.terminalCursorBlink,
-      terminalScrollback: settings?.terminalScrollback ?? DEFAULT_SETTINGS.terminalScrollback,
+      terminalFontSize:
+        settings?.terminalFontSize ?? DEFAULT_SETTINGS.terminalFontSize,
+      terminalCursorStyle:
+        settings?.terminalCursorStyle ?? DEFAULT_SETTINGS.terminalCursorStyle,
+      terminalCursorBlink:
+        settings?.terminalCursorBlink ?? DEFAULT_SETTINGS.terminalCursorBlink,
+      terminalScrollback:
+        settings?.terminalScrollback ?? DEFAULT_SETTINGS.terminalScrollback,
       terminalShell: settings?.terminalShell ?? null,
       projectShellHeightPct:
-        settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct
+        settings?.projectShellHeightPct ??
+        DEFAULT_SETTINGS.projectShellHeightPct,
     }),
-    [settings]
-  )
+    [settings],
+  );
 
-  const { writeSettings } = launcher
+  const { writeSettings } = launcher;
   const locateShell = useCallback(() => {
-    void helm.invoke('path:chooseFile', { title: 'Choose a shell' }).then(({ path }) => {
-      if (path !== null) writeSettings({ terminalShell: path })
-    })
-  }, [writeSettings])
+    void helm
+      .invoke("path:chooseFile", { title: "Choose a shell" })
+      .then(({ path }) => {
+        if (path !== null) writeSettings({ terminalShell: path });
+      });
+  }, [writeSettings]);
 
-  const savedShellHeight = settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct
+  const savedShellHeight =
+    settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct;
   const setShellHeight = useCallback(
     (projectShellHeightPct: number) => writeSettings({ projectShellHeightPct }),
-    [writeSettings]
-  )
+    [writeSettings],
+  );
 
   /**
    * The tree's star, both directions. Composed from `settings` rather than from
@@ -761,35 +889,40 @@ export function App(): JSX.Element {
    */
   const togglePin = useCallback(
     (path: string) => {
-      const held = settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects
+      const held = settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects;
       writeSettings({
-        pinnedProjects: withProjectPinned(held, path, !isProjectPinned(held, path))
-      })
+        pinnedProjects: withProjectPinned(
+          held,
+          path,
+          !isProjectPinned(held, path),
+        ),
+      });
     },
-    [settings, writeSettings]
-  )
+    [settings, writeSettings],
+  );
 
   /** The profile being edited, or a seeded draft from "save as profile". Null
    * when the dialog is closed. */
-  const [editing, setEditing] = useState<Profile | ProfileDraft | null>(null)
-  const [saveProblems, setSaveProblems] = useState<string[]>([])
+  const [editing, setEditing] = useState<Profile | ProfileDraft | null>(null);
+  const [saveProblems, setSaveProblems] = useState<string[]>([]);
   /**
    * A remote project page's Save as profile: a draft for that host's own
    * profile editor in the Profiles sidebar, which keeps it on that host.
    * The nonce makes the same project asked twice a second request.
    */
   const [profileRequest, setProfileRequest] = useState<{
-    host: string
-    draft: ProfileDraft
-    nonce: number
-  } | null>(null)
-  const [saving, setSaving] = useState(false)
+    host: string;
+    draft: ProfileDraft;
+    nonce: number;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const projectsByPath = useMemo(() => {
-    const map = new Map<string, Project>()
-    for (const project of discovery?.projects ?? []) map.set(project.path, project)
-    return map
-  }, [discovery])
+    const map = new Map<string, Project>();
+    for (const project of discovery?.projects ?? [])
+      map.set(project.path, project);
+    return map;
+  }, [discovery]);
 
   // ---------------------------------------------------------------------------
   // The panes
@@ -797,10 +930,17 @@ export function App(): JSX.Element {
 
   /** Late-bound so the sessions hook can bring a session forward on a
    * notification click, before the layout below exists to do it with. */
-  const focusSessionRef = useRef<(id: number) => void>(() => undefined)
-  const activateSession = useCallback((id: number) => focusSessionRef.current(id), [])
-  const sessionState = useSessions(activateSession)
-  const { sessions, activity: sessionActivity, listed: sessionsListed } = sessionState
+  const focusSessionRef = useRef<(id: number) => void>(() => undefined);
+  const activateSession = useCallback(
+    (id: number) => focusSessionRef.current(id),
+    [],
+  );
+  const sessionState = useSessions(activateSession);
+  const {
+    sessions,
+    activity: sessionActivity,
+    listed: sessionsListed,
+  } = sessionState;
 
   /**
    * Whether sessions run in this PC's host this run, which the switch alone
@@ -808,45 +948,61 @@ export function App(): JSX.Element {
    * With it on, the sessions outlive this window and every device sees them,
    * so which have a tab here is this device's own layout.
    */
-  const [hostRunning, setHostRunning] = useState<boolean | null>(null)
+  const [hostRunning, setHostRunning] = useState<boolean | null>(null);
   useEffect(() => {
-    let live = true
+    let live = true;
     void sessionsInHost().then(
       (inHost) => live && setHostRunning(inHost),
-      () => live && setHostRunning(false)
-    )
+      () => live && setHostRunning(false),
+    );
     return () => {
-      live = false
-    }
-  }, [])
+      live = false;
+    };
+  }, []);
 
   const sessionsById = useMemo(() => {
-    const map = new Map<number, SessionRecord>()
-    for (const session of sessions) map.set(session.id, session)
-    return map
-  }, [sessions])
+    const map = new Map<number, SessionRecord>();
+    for (const session of sessions) map.set(session.id, session);
+    return map;
+  }, [sessions]);
 
-  const savedLayout = settings?.paneLayout ?? null
-  const settingsLoaded = settings !== null
+  const savedLayout = settings?.paneLayout ?? null;
+  const settingsLoaded = settings !== null;
 
   /** Another host's session by its id there, as the window last heard it. */
   const remoteSessionOf = useCallback(
     (host: string, id: number): SessionRecord | undefined =>
       hostWork.byHost.get(host)?.sessions.find((session) => session.id === id),
-    [hostWork.byHost]
-  )
+    [hostWork.byHost],
+  );
   /** Another host's project by its path there, as its scan found it. */
   const remoteProjectOf = (host: string, path: string): Project | undefined =>
-    hostWork.byHost.get(host)?.discovery?.projects.find((project) => project.path === path)
+    hostWork.byHost
+      .get(host)
+      ?.discovery?.projects.find((project) => project.path === path);
   /** A session tab's record and what it is doing, on whichever host it runs. */
-  const sessionAt = (ref: { id: number; host?: string }): { record: SessionRecord; indicator: TabIndicator } | null => {
-    const host = ref.host ?? LOCAL_HOST_KEY
-    const record = host === LOCAL_HOST_KEY ? sessionsById.get(ref.id) : remoteSessionOf(host, ref.id)
-    if (record === undefined) return null
+  const sessionAt = (ref: {
+    id: number;
+    host?: string;
+  }): { record: SessionRecord; indicator: TabIndicator } | null => {
+    const host = ref.host ?? LOCAL_HOST_KEY;
+    const record =
+      host === LOCAL_HOST_KEY
+        ? sessionsById.get(ref.id)
+        : remoteSessionOf(host, ref.id);
+    if (record === undefined) return null;
     const activity =
-      host === LOCAL_HOST_KEY ? sessionActivity.get(ref.id) : hostWork.byHost.get(host)?.activity.get(ref.id)
-    return { record, indicator: indicatorOf(record, record.status === 'running' ? activity : undefined) }
-  }
+      host === LOCAL_HOST_KEY
+        ? sessionActivity.get(ref.id)
+        : hostWork.byHost.get(host)?.activity.get(ref.id);
+    return {
+      record,
+      indicator: indicatorOf(
+        record,
+        record.status === "running" ? activity : undefined,
+      ),
+    };
+  };
 
   /**
    * Whether a tab's thing still exists. A rescan that no longer sees a project
@@ -862,31 +1018,41 @@ export function App(): JSX.Element {
         listed: listedHostIds,
         byHost: hostWork.byHost,
         pluginTab: (host, plugin, tab) =>
-          (remotePlugins.get(host)?.list ?? null) === null ? null : pluginsOn(host).get(plugin)?.tabs[tab] !== undefined
-      })
-      if (remote !== undefined) return remote
-      if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
+          (remotePlugins.get(host)?.list ?? null) === null
+            ? null
+            : pluginsOn(host).get(plugin)?.tabs[tab] !== undefined,
+      });
+      if (remote !== undefined) return remote;
+      if (ref.kind === "project")
+        return !discovery || projectsByPath.has(ref.path);
       // The Browser tab is there while it holds a page. Its last page closing
       // closes it, as closing a browser's last tab closes the window.
-      if (ref.kind === 'browser') return browserViews.size > 0
+      if (ref.kind === "browser") return browserViews.size > 0;
       // Until the first list, nothing has said which sessions there are: a
       // saved tab is kept rather than taken for a session that has gone.
-      if (ref.kind === 'session') return !sessionsListed || sessionsById.has(ref.id)
+      if (ref.kind === "session")
+        return !sessionsListed || sessionsById.has(ref.id);
       // Answered, it has nothing left to show.
-      if (ref.kind === 'restore') return restoreOffer !== null
+      if (ref.kind === "restore") return restoreOffer !== null;
       // Kept while the list is still being read, so a restored tab is not
       // dropped before its plugin has had a chance to load.
-      if (ref.kind === 'plugin') {
-        return pluginState.list === null || plugins.get(ref.plugin)?.tabs[ref.tab] !== undefined
+      if (ref.kind === "plugin") {
+        return (
+          pluginState.list === null ||
+          plugins.get(ref.plugin)?.tabs[ref.tab] !== undefined
+        );
       }
       // The same for a plugin's pages tab, kept while any page in it is one
       // the plugin still declares.
-      if (ref.kind === 'plugin-pages') {
-        if (pluginState.list === null) return true
-        const plugin = plugins.get(ref.plugin)
-        return plugin !== undefined && ref.pages.some((page) => plugin.tabs[page.tab] !== undefined)
+      if (ref.kind === "plugin-pages") {
+        if (pluginState.list === null) return true;
+        const plugin = plugins.get(ref.plugin);
+        return (
+          plugin !== undefined &&
+          ref.pages.some((page) => plugin.tabs[page.tab] !== undefined)
+        );
       }
-      return true
+      return true;
     },
     [
       discovery,
@@ -901,9 +1067,9 @@ export function App(): JSX.Element {
       listedHostIds,
       hostWork.byHost,
       remotePlugins,
-      pluginsOn
-    ]
-  )
+      pluginsOn,
+    ],
+  );
 
   /**
    * What must have a tab whether or not anything placed it: every session main
@@ -916,16 +1082,19 @@ export function App(): JSX.Element {
    * put one (`unplacedSessionTabs`). Until the window knows which it is, none
    * is given one unasked, and the derivation adds them once it knows.
    */
-  const hasPages = browserViews.size > 0
+  const hasPages = browserViews.size > 0;
   const extra = useMemo<PaneRef[]>(
-    () => [...unplacedSessionTabs(sessions, hostRunning !== false), ...(hasPages ? [BROWSER_TAB] : [])],
-    [sessions, hostRunning, hasPages]
-  )
+    () => [
+      ...unplacedSessionTabs(sessions, hostRunning !== false),
+      ...(hasPages ? [BROWSER_TAB] : []),
+    ],
+    [sessions, hostRunning, hasPages],
+  );
 
   const open = useMemo(
     () => reconcile(layout ?? fromSaved(savedLayout), keep, extra),
-    [layout, savedLayout, keep, extra]
-  )
+    [layout, savedLayout, keep, extra],
+  );
 
   /**
    * One way to change the panes.
@@ -936,19 +1105,22 @@ export function App(): JSX.Element {
    * render that started it. The first change of a run is what turns the saved
    * layout into this run's own.
    */
-  const latest = useRef({ saved: savedLayout, keep, extra })
+  const latest = useRef({ saved: savedLayout, keep, extra });
   useLayoutEffect(() => {
-    latest.current = { saved: savedLayout, keep, extra }
-  }, [savedLayout, keep, extra])
+    latest.current = { saved: savedLayout, keep, extra };
+  }, [savedLayout, keep, extra]);
   const commit = useCallback((op: (current: PaneLayout) => PaneLayout) => {
     setLayout((current) => {
-      const { saved, keep: exists, extra: unplaced } = latest.current
-      return op(reconcile(current ?? fromSaved(saved), exists, unplaced))
-    })
-  }, [])
+      const { saved, keep: exists, extra: unplaced } = latest.current;
+      return op(reconcile(current ?? fromSaved(saved), exists, unplaced));
+    });
+  }, []);
 
   /** With sessions in the local host, the running ones this device has no tab for. */
-  const notOpen = useMemo(() => (hostRunning === true ? notOpenHere(open, sessions) : []), [hostRunning, open, sessions])
+  const notOpen = useMemo(
+    () => (hostRunning === true ? notOpenHere(open, sessions) : []),
+    [hostRunning, open, sessions],
+  );
   /**
    * The window's connection carries the terminals of the sessions with a tab
    * here, and only those: one opened from the sessions pane starts on a new
@@ -957,41 +1129,54 @@ export function App(): JSX.Element {
   // The same for each host on another computer, told again each time the
   // window is connected to it again: a tab whose host dropped kept its last
   // screen, and reattaches here.
-  useShownSessionTabs(open, hostRunning === true, connectedHostIds, hostSessionTabs.show)
+  useShownSessionTabs(
+    open,
+    hostRunning === true,
+    connectedHostIds,
+    hostSessionTabs.show,
+  );
 
-  const shownMax = maximized !== null && groupById(open, maximized) !== undefined ? maximized : null
+  const shownMax =
+    maximized !== null && groupById(open, maximized) !== undefined
+      ? maximized
+      : null;
   const shownGroups = useMemo(
-    () => (shownMax === null ? open.groups.map((group) => group.id) : [shownMax]),
-    [open.groups, shownMax]
-  )
-  const sidebarShown = !sidebarHidden && shownMax === null
+    () =>
+      shownMax === null ? open.groups.map((group) => group.id) : [shownMax],
+    [open.groups, shownMax],
+  );
+  const sidebarShown = !sidebarHidden && shownMax === null;
   /**
    * The panes sharing the window's width with another: every page in one gets
    * the narrower layout. A pane stacked above or below another still has the
    * whole width, and keeps the wide one.
    */
   const narrow = useMemo(() => {
-    if (shownMax !== null) return new Set<number>()
-    const rects = paneRects(open)
-    return new Set(open.groups.flatMap((group) => ((rects.get(group.id)?.width ?? 1) < 0.999 ? [group.id] : [])))
-  }, [open, shownMax])
+    if (shownMax !== null) return new Set<number>();
+    const rects = paneRects(open);
+    return new Set(
+      open.groups.flatMap((group) =>
+        (rects.get(group.id)?.width ?? 1) < 0.999 ? [group.id] : [],
+      ),
+    );
+  }, [open, shownMax]);
   // Memoized rather than looked up in the body: a group looked up there is, to
   // the React Compiler, something that may be mutated later, which would cost
   // every callback that depends on it its memoization. A hook's result is
   // frozen.
-  const focusedGroup = useMemo(() => groupById(open, open.focused), [open])
-  const front = focusedGroup === undefined ? null : activeRef(focusedGroup)
-  const frontId = front === null ? null : paneId(front)
+  const focusedGroup = useMemo(() => groupById(open, open.focused), [open]);
+  const front = focusedGroup === undefined ? null : activeRef(focusedGroup);
+  const frontId = front === null ? null : paneId(front);
   /** The tab in front of each pane on screen. */
   const visible = useMemo(
     () =>
       shownGroups.flatMap((id) => {
-        const group = groupById(open, id)
-        const ref = group === undefined ? null : activeRef(group)
-        return ref === null ? [] : [ref]
+        const group = groupById(open, id);
+        const ref = group === undefined ? null : activeRef(group);
+        return ref === null ? [] : [ref];
       }),
-    [open, shownGroups]
-  )
+    [open, shownGroups],
+  );
 
   /**
    * The plugins Settings > Plugins lists: the host it shows. A remote host's
@@ -1004,39 +1189,43 @@ export function App(): JSX.Element {
       : (remotePlugins.get(pluginsHost) ?? {
           list: null,
           error: `${hostName(pluginsHost)} is not connected, so its plugins cannot be read.`,
-          live: NO_PLUGINS
-        })
+          live: NO_PLUGINS,
+        });
   /** Why a host's plugins cannot be read, or null while they can (or have not answered yet). */
   const pluginsUnreadOn = (host: string): string | null =>
     host === LOCAL_HOST_KEY
       ? pluginState.error
       : connectedHostIds.includes(host)
         ? (remotePlugins.get(host)?.error ?? null)
-        : `${hostName(host)} is not connected, so its plugins cannot be read.`
+        : `${hostName(host)} is not connected, so its plugins cannot be read.`;
   /** A plugin's Settings page, with Settings > Plugins showing the plugin's host. */
   const openPluginSettings = (host: string, path: string): void => {
-    showHostOn('plugins', host)
-    openSettings(pluginSection(path))
-  }
+    showHostOn("plugins", host);
+    openSettings(pluginSection(path));
+  };
   /** The plugin whose Settings page is chosen, and whether that page is on screen to be kept current. */
-  const settingsPlugin = settingsSection.startsWith('plugin:')
-    ? ((shownPluginState.list ?? []).find((plugin) => pluginSection(plugin.path) === settingsSection) ?? null)
-    : null
-  const settingsOnScreen = visible.some((ref) => ref.kind === 'settings')
+  const settingsPlugin = settingsSection.startsWith("plugin:")
+    ? ((shownPluginState.list ?? []).find(
+        (plugin) => pluginSection(plugin.path) === settingsSection,
+      ) ?? null)
+    : null;
+  const settingsOnScreen = visible.some((ref) => ref.kind === "settings");
   const pluginSettings = usePluginSettings(
     settingsOnScreen && settingsPlugin !== null ? settingsPlugin.path : null,
-    pluginsHost
-  )
+    pluginsHost,
+  );
   /** The secrets of the host whose plugin asks for one, whichever host Settings shows. */
-  const secretAsk = secretAsks[0] ?? null
-  const askSecrets = usePluginSettings(null, secretAsk?.host ?? LOCAL_HOST_KEY)
+  const secretAsk = secretAsks[0] ?? null;
+  const askSecrets = usePluginSettings(null, secretAsk?.host ?? LOCAL_HOST_KEY);
   /** Settings > Devices, read only while it is on screen with sessions in the local host. */
   const devicesSettings = useDevicesSettings(
     DEVICES_DEPS,
-    settingsOnScreen && settingsSection === 'devices' && settings?.sessionsInHost === true,
+    settingsOnScreen &&
+      settingsSection === "devices" &&
+      settings?.sessionsInHost === true,
     settings?.sessionsInHost === true ? settings.hosts : NO_HOSTS,
-    remoteView
-  )
+    remoteView,
+  );
 
   /**
    * Brings a tab forward from outside its pane - the tree, a notification, the
@@ -1045,25 +1234,29 @@ export function App(): JSX.Element {
    */
   const focusTab = useCallback(
     (id: string) => {
-      const at = findTab(open, id)
-      if (at === null) return
-      commit((current) => activateTab(current, id))
-      setMaximized((current) => (current === null || current === at.group ? current : null))
+      const at = findTab(open, id);
+      if (at === null) return;
+      commit((current) => activateTab(current, id));
+      setMaximized((current) =>
+        current === null || current === at.group ? current : null,
+      );
     },
-    [open, commit]
-  )
+    [open, commit],
+  );
 
   /** Opens a tab in the focused pane, or brings it forward where it already is. */
   const openPane = useCallback(
     (ref: PaneRef) => {
-      const at = findTab(open, paneId(ref))
-      commit((current) => openTab(current, ref))
+      const at = findTab(open, paneId(ref));
+      commit((current) => openTab(current, ref));
       if (at !== null) {
-        setMaximized((current) => (current === null || current === at.group ? current : null))
+        setMaximized((current) =>
+          current === null || current === at.group ? current : null,
+        );
       }
     },
-    [open, commit]
-  )
+    [open, commit],
+  );
 
   /**
    * What the window does with what a plugin page says to it: a key the page
@@ -1075,20 +1268,30 @@ export function App(): JSX.Element {
   useEffect(() => {
     setPluginFrameHooks({
       key: (_spec, element, key) => {
-        element.dispatchEvent(new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true }))
+        element.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            ...key,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
       },
       title: (spec, title) => {
-        if (spec.surface === 'tab') commit((current) => retitlePluginSurface(current, spec.key, title))
+        if (spec.surface === "tab")
+          commit((current) => retitlePluginSurface(current, spec.key, title));
       },
       // The page asked to stay: a page in a strip stops being its preview, a
       // plugin tab the pane's.
       keep: (spec) => {
-        if (spec.surface !== 'tab') return
-        if (isPluginPageId(spec.key)) setPagePreviews((current) => withoutPreview(current, spec.plugin, spec.key))
-        else setPreview((current) => (current === spec.key ? null : current))
-      }
-    })
-  }, [commit])
+        if (spec.surface !== "tab") return;
+        if (isPluginPageId(spec.key))
+          setPagePreviews((current) =>
+            withoutPreview(current, spec.plugin, spec.key),
+          );
+        else setPreview((current) => (current === spec.key ? null : current));
+      },
+    });
+  }, [commit]);
 
   /**
    * Opens one of a plugin's tabs, or brings it forward: as a page in the
@@ -1107,37 +1310,48 @@ export function App(): JSX.Element {
       params: PluginParams,
       title: string | null,
       asPreview: boolean,
-      host: string = LOCAL_HOST_KEY
+      host: string = LOCAL_HOST_KEY,
     ) => {
       // A remote host's plugin opens each of its tabs as a tab of its own,
       // naming the host; the page strip is this PC's plugins' only.
       if (host === LOCAL_HOST_KEY && plugins.get(plugin)?.pageStrip === true) {
-        const page = { tab, params, title }
-        const was = pagePreviews.get(plugin) ?? null
-        const at = findTab(open, pluginPagesId(plugin))
-        const placed = placePluginPage(open, plugin, page, was, !asPreview)
-        commit((current) => placePluginPage(current, plugin, page, was, !asPreview).layout)
-        setPagePreviews((current) => withPreview(current, plugin, placed.preview))
-        if (at !== null) setMaximized((current) => (current === null || current === at.group ? current : null))
-        return
+        const page = { tab, params, title };
+        const was = pagePreviews.get(plugin) ?? null;
+        const at = findTab(open, pluginPagesId(plugin));
+        const placed = placePluginPage(open, plugin, page, was, !asPreview);
+        commit(
+          (current) =>
+            placePluginPage(current, plugin, page, was, !asPreview).layout,
+        );
+        setPagePreviews((current) =>
+          withPreview(current, plugin, placed.preview),
+        );
+        if (at !== null)
+          setMaximized((current) =>
+            current === null || current === at.group ? current : null,
+          );
+        return;
       }
       const ref: PaneRef =
         host === LOCAL_HOST_KEY
-          ? { kind: 'plugin', plugin, tab, params, title }
-          : { kind: 'plugin', plugin, tab, params, title, host }
-      const id = paneId(ref)
-      const still = preview !== null && findTab(open, preview) !== null ? preview : null
-      const placed = openTabWithPreview(open, ref, still, !asPreview)
-      const landed = findTab(placed.layout, id)
+          ? { kind: "plugin", plugin, tab, params, title }
+          : { kind: "plugin", plugin, tab, params, title, host };
+      const id = paneId(ref);
+      const still =
+        preview !== null && findTab(open, preview) !== null ? preview : null;
+      const placed = openTabWithPreview(open, ref, still, !asPreview);
+      const landed = findTab(placed.layout, id);
       commit((current) => {
-        const next = openTabWithPreview(current, ref, still, !asPreview).layout
-        return title === null ? next : retitleTab(next, id, title)
-      })
-      setPreview(placed.preview)
-      setMaximized((current) => (current === null || current === landed?.group ? current : null))
+        const next = openTabWithPreview(current, ref, still, !asPreview).layout;
+        return title === null ? next : retitleTab(next, id, title);
+      });
+      setPreview(placed.preview);
+      setMaximized((current) =>
+        current === null || current === landed?.group ? current : null,
+      );
     },
-    [plugins, pagePreviews, preview, open, commit]
-  )
+    [plugins, pagePreviews, preview, open, commit],
+  );
 
   /**
    * A plugin tab that left the layout ends - closed, or replaced as the
@@ -1147,24 +1361,33 @@ export function App(): JSX.Element {
     () =>
       new Set(
         open.groups.flatMap((group) =>
-          group.tabs.flatMap((ref) => (ref.kind === 'plugin' ? [pluginTabKey(ref)] : []))
-        )
+          group.tabs.flatMap((ref) =>
+            ref.kind === "plugin" ? [pluginTabKey(ref)] : [],
+          ),
+        ),
       ),
-    [open]
-  )
+    [open],
+  );
   useEffect(() => {
-    disposePluginFrames((spec) => spec.surface === 'tab' && !isPluginPageId(spec.key) && !openPluginTabs.has(spec.key))
-  }, [openPluginTabs])
+    disposePluginFrames(
+      (spec) =>
+        spec.surface === "tab" &&
+        !isPluginPageId(spec.key) &&
+        !openPluginTabs.has(spec.key),
+    );
+  }, [openPluginTabs]);
 
   /**
    * A page that left its plugin's strip ends - closed, closed with its tab,
    * or let go to make room. Read off the layout rather than said at each of
    * those, so no way of leaving can leave a page running with nowhere to be.
    */
-  const openPages = useMemo(() => openPluginPageIds(open), [open])
+  const openPages = useMemo(() => openPluginPageIds(open), [open]);
   useEffect(() => {
-    disposePluginFrames((spec) => isPluginPageId(spec.key) && !openPages.has(spec.key))
-  }, [openPages])
+    disposePluginFrames(
+      (spec) => isPluginPageId(spec.key) && !openPages.has(spec.key),
+    );
+  }, [openPages]);
 
   /**
    * A plugin turned off or removed takes its pages with it, and a page from a
@@ -1173,18 +1396,24 @@ export function App(): JSX.Element {
    */
   useEffect(() => {
     disposePluginFrames((spec) => {
-      const host = spec.host ?? LOCAL_HOST_KEY
+      const host = spec.host ?? LOCAL_HOST_KEY;
       // Judged only against a list that has been read: a host that is away,
       // or has not answered yet, keeps its frames.
-      const listed = host === LOCAL_HOST_KEY ? pluginState.list : (remotePlugins.get(host)?.list ?? null)
-      if (listed === null) return host !== LOCAL_HOST_KEY && !listedHostIds.includes(host)
-      const plugin = pluginsOn(host).get(spec.plugin)
-      if (plugin === undefined || spec.revision !== plugin.revision) return true
-      if (spec.surface === 'tab') return plugin.tabs[spec.name] === undefined
-      if (spec.surface === 'panel') return plugin.panels[spec.name] === undefined
-      return true
-    })
-  }, [pluginsOn, pluginState.list, remotePlugins, listedHostIds])
+      const listed =
+        host === LOCAL_HOST_KEY
+          ? pluginState.list
+          : (remotePlugins.get(host)?.list ?? null);
+      if (listed === null)
+        return host !== LOCAL_HOST_KEY && !listedHostIds.includes(host);
+      const plugin = pluginsOn(host).get(spec.plugin);
+      if (plugin === undefined || spec.revision !== plugin.revision)
+        return true;
+      if (spec.surface === "tab") return plugin.tabs[spec.name] === undefined;
+      if (spec.surface === "panel")
+        return plugin.panels[spec.name] === undefined;
+      return true;
+    });
+  }, [pluginsOn, pluginState.list, remotePlugins, listedHostIds]);
 
   /**
    * The saved panes, written back whenever the arrangement changes.
@@ -1194,28 +1423,57 @@ export function App(): JSX.Element {
    * settings object would re-arm on its own write forever. Debounced because a
    * drag moves a tab at a time and every write is a settings round trip.
    */
-  const savedJson = useMemo(() => JSON.stringify(toSaved(open)), [open])
-  const storedJson = useMemo(() => JSON.stringify(savedLayout), [savedLayout])
+  const savedJson = useMemo(() => JSON.stringify(toSaved(open)), [open]);
+  const storedJson = useMemo(() => JSON.stringify(savedLayout), [savedLayout]);
   useEffect(() => {
-    if (!settingsLoaded || savedJson === storedJson) return undefined
+    if (!settingsLoaded || savedJson === storedJson) return undefined;
     const timer = setTimeout(() => {
-      writeSettings({ paneLayout: JSON.parse(savedJson) as SavedPaneLayout })
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [settingsLoaded, savedJson, storedJson, writeSettings])
+      writeSettings({ paneLayout: JSON.parse(savedJson) as SavedPaneLayout });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [settingsLoaded, savedJson, storedJson, writeSettings]);
 
   /*
    * The process pass runs only while the sessions pane is on screen. One
    * enumeration costs 400ms of a child process, so "off unless somebody is
    * looking" is the whole budget. Reference-counted in main.
    */
-  const sessionsPaneOpen = visible.some((ref) => ref.kind === 'sessions')
-  const watchResources = machineSessions.watch
+  const sessionsPaneOpen = visible.some((ref) => ref.kind === "sessions");
+  const watchResources = machineSessions.watch;
   useEffect(() => {
-    if (!sessionsPaneOpen) return undefined
-    watchResources(true)
-    return () => watchResources(false)
-  }, [sessionsPaneOpen, watchResources])
+    if (!sessionsPaneOpen) return undefined;
+    watchResources(true);
+    // Each connected host on another computer runs its own pass while the pane looks.
+    remoteHostLinks.watch(true);
+    return () => {
+      watchResources(false);
+      remoteHostLinks.watch(false);
+    };
+  }, [sessionsPaneOpen, watchResources]);
+
+  /**
+   * The ports of sessions on other computers main forwards to this PC's
+   * loopback now, so a port row can say where it is; and the sentence the last
+   * Open in browser that failed said, by session key, until another is pressed.
+   */
+  const [forwards, setForwards] = useState<readonly ForwardedPort[]>([]);
+  const [portProblems, setPortProblems] = useState<ReadonlyMap<string, string>>(
+    new Map(),
+  );
+  useEffect(() => {
+    let current = true;
+    const off = helm.on("forwards:changed", (list) => setForwards(list));
+    void helm.invoke("forwards:read").then(
+      (list) => {
+        if (current) setForwards(list);
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+      off();
+    };
+  }, []);
 
   /**
    * Which page is on screen, told to every view: the one in front of the
@@ -1224,21 +1482,24 @@ export function App(): JSX.Element {
    * Browser tab that goes behind another tab or into a pane the maximized one
    * hides, has to be stood down by something that is still rendering.
    */
-  const { setShowing: setBrowserShowing, active: frontPage } = browsers
-  const browserShown = visible.some((ref) => ref.kind === 'browser')
+  const { setShowing: setBrowserShowing, active: frontPage } = browsers;
+  const browserShown = visible.some((ref) => ref.kind === "browser");
   useEffect(() => {
-    for (const id of browserViews.keys()) setBrowserShowing(id, browserShown && id === frontPage)
-  }, [browserViews, browserShown, frontPage, setBrowserShowing])
+    for (const id of browserViews.keys())
+      setBrowserShowing(id, browserShown && id === frontPage);
+  }, [browserViews, browserShown, frontPage, setBrowserShowing]);
 
   // Main decides whether an exiting session is worth a notification, and that
   // turns on which sessions are actually on screen - which only this side knows.
-  const { reportFocus } = sessionState
+  const { reportFocus } = sessionState;
   const visibleSessionKey = visible
     .flatMap((ref) => (isSessionOn(ref, LOCAL_HOST_KEY) ? [ref.id] : []))
-    .join(',')
+    .join(",");
   useEffect(() => {
-    reportFocus(visibleSessionKey === '' ? [] : visibleSessionKey.split(',').map(Number))
-  }, [visibleSessionKey, reportFocus])
+    reportFocus(
+      visibleSessionKey === "" ? [] : visibleSessionKey.split(",").map(Number),
+    );
+  }, [visibleSessionKey, reportFocus]);
 
   /**
    * The project the focused pane is about, for a browser tab opened beside it.
@@ -1249,14 +1510,15 @@ export function App(): JSX.Element {
    * costs `openBrowser` its memoization.
    */
   const frontProject = useMemo(() => {
-    const group = groupById(open, open.focused)
-    const ref = group === undefined ? null : activeRef(group)
-    if (ref?.kind === 'project' || ref?.kind === 'terminal') return ref.path
-    if (ref?.kind === 'file') return ref.root
-    if (ref?.kind === 'session' && hostOf(ref) !== LOCAL_HOST_KEY) return null
-    if (ref?.kind === 'session') return sessionsById.get(ref.id)?.projectPath ?? null
-    return null
-  }, [open, sessionsById])
+    const group = groupById(open, open.focused);
+    const ref = group === undefined ? null : activeRef(group);
+    if (ref?.kind === "project" || ref?.kind === "terminal") return ref.path;
+    if (ref?.kind === "file") return ref.root;
+    if (ref?.kind === "session" && hostOf(ref) !== LOCAL_HOST_KEY) return null;
+    if (ref?.kind === "session")
+      return sessionsById.get(ref.id)?.projectPath ?? null;
+    return null;
+  }, [open, sessionsById]);
 
   // ---------------------------------------------------------------------------
   // Opening things
@@ -1264,13 +1526,22 @@ export function App(): JSX.Element {
 
   const openProject = useCallback(
     (project: Project | null) => {
-      if (project) openPane({ kind: 'project', path: project.path })
+      if (project) openPane({ kind: "project", path: project.path });
     },
-    [openPane]
-  )
-  const openSessions = useCallback(() => openPane({ kind: 'sessions' }), [openPane])
-  const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
-  const openConfig = useCallback(() => openPane({ kind: 'config' }), [openPane])
+    [openPane],
+  );
+  const openSessions = useCallback(
+    () => openPane({ kind: "sessions" }),
+    [openPane],
+  );
+  const openHistory = useCallback(
+    () => openPane({ kind: "history" }),
+    [openPane],
+  );
+  const openConfig = useCallback(
+    () => openPane({ kind: "config" }),
+    [openPane],
+  );
   /**
    * Settings is a tab like any other rather than a modal: it is a place, worth
    * leaving open beside a session, and a dialog over the window would be one
@@ -1279,13 +1550,13 @@ export function App(): JSX.Element {
    */
   const openSettings = useCallback(
     (section?: SettingsSectionId) => {
-      if (section !== undefined) setSettingsSection(section)
-      setSidebarView('settings')
-      setSidebarHidden(false)
-      openPane({ kind: 'settings' })
+      if (section !== undefined) setSettingsSection(section);
+      setSidebarView("settings");
+      setSidebarHidden(false);
+      openPane({ kind: "settings" });
     },
-    [openPane]
-  )
+    [openPane],
+  );
 
   /**
    * Config opened **on** a project - the project page's link. The pane arrives
@@ -1294,29 +1565,33 @@ export function App(): JSX.Element {
    * clears the open file. Skipped when the scope is already the one asked for,
    * so returning to a pane keeps what is open in it.
    */
-  const { scopePath: configScopePath, setScopePath: setConfigScope } = configState
+  const { scopePath: configScopePath, setScopePath: setConfigScope } =
+    configState;
   const openConfigAt = useCallback(
     (project: Project, host: string = LOCAL_HOST_KEY) => {
       if (configHost !== host) {
         // Config switches to the project's host, and the scope is pointed
         // once the switch has cleared what it showed.
-        showHostOn('config', host)
-        setPendingScope({ surface: 'config', path: project.path, host })
+        showHostOn("config", host);
+        setPendingScope({ surface: "config", path: project.path, host });
       } else if (configScopePath.toLowerCase() !== project.path.toLowerCase()) {
-        setConfigScope(project.path)
+        setConfigScope(project.path);
       }
-      openPane({ kind: 'config' })
+      openPane({ kind: "config" });
     },
-    [configHost, showHostOn, configScopePath, setConfigScope, openPane]
-  )
+    [configHost, showHostOn, configScopePath, setConfigScope, openPane],
+  );
   /**
    * Where the caret should go in the Browser tab - a page's address bar (Ctrl+L,
    * a new page) or its find field (Ctrl+F) - until that page's pane has put it
    * there and said so (`onFocusRequestDone`). Answered once, so a page coming
    * back to the front later does not take the caret again.
    */
-  const [browserFocus, setBrowserFocus] = useState<{ page: number; what: 'address' | 'find' } | null>(null)
-  const browserFocusDone = useCallback(() => setBrowserFocus(null), [])
+  const [browserFocus, setBrowserFocus] = useState<{
+    page: number;
+    what: "address" | "find";
+  } | null>(null);
+  const browserFocusDone = useCallback(() => setBrowserFocus(null), []);
 
   /**
    * A new page in the Browser tab, on whichever project the focused pane is
@@ -1331,25 +1606,31 @@ export function App(): JSX.Element {
   const openBrowser = useCallback(
     (
       request: {
-        url?: string
-        project?: string | null
-        into?: number
-        focusAddress?: boolean
-      } = {}
+        url?: string;
+        project?: string | null;
+        into?: number;
+        focusAddress?: boolean;
+      } = {},
     ) => {
-      const { url, project, into, focusAddress } = request
+      const { url, project, into, focusAddress } = request;
       void browsers
-        .open({ ...(url === undefined ? {} : { url }), project: project === undefined ? frontProject : project })
-        .then((state) => {
-          if (state === null) return
-          commit((current) =>
-            into === undefined ? openTab(current, BROWSER_TAB) : placeIn(current, BROWSER_TAB, into)
-          )
-          if (focusAddress === true) setBrowserFocus({ page: state.id, what: 'address' })
+        .open({
+          ...(url === undefined ? {} : { url }),
+          project: project === undefined ? frontProject : project,
         })
+        .then((state) => {
+          if (state === null) return;
+          commit((current) =>
+            into === undefined
+              ? openTab(current, BROWSER_TAB)
+              : placeIn(current, BROWSER_TAB, into),
+          );
+          if (focusAddress === true)
+            setBrowserFocus({ page: state.id, what: "address" });
+        });
     },
-    [browsers, commit, frontProject]
-  )
+    [browsers, commit, frontProject],
+  );
 
   /**
    * The rail's Browser: go to the Browser tab, opening a page only if it holds
@@ -1357,9 +1638,9 @@ export function App(): JSX.Element {
    * up to the cap; Ctrl+T and the strip's `+` are how another is asked for.
    */
   const showBrowser = useCallback(() => {
-    if (findTab(open, paneId(BROWSER_TAB)) === null) openBrowser()
-    else focusTab(paneId(BROWSER_TAB))
-  }, [open, openBrowser, focusTab])
+    if (findTab(open, paneId(BROWSER_TAB)) === null) openBrowser();
+    else focusTab(paneId(BROWSER_TAB));
+  }, [open, openBrowser, focusTab]);
 
   /**
    * A link in rendered content. A loopback URL is by definition a thing running
@@ -1370,11 +1651,43 @@ export function App(): JSX.Element {
    */
   const openLink = useCallback(
     (url: string) => {
-      if (isLoopbackUrl(url)) openBrowser({ url })
-      else void helmOpenExternal(url)
+      if (isLoopbackUrl(url)) openBrowser({ url });
+      else void helmOpenExternal(url);
     },
-    [openBrowser]
-  )
+    [openBrowser],
+  );
+
+  /**
+   * Open in browser on a port of a session on another computer: main forwards
+   * it to this PC's loopback, and the Browser tab opens that address through
+   * `browser:open`, so it meets the reach rule a typed one does. What went
+   * wrong is said under the session's row.
+   */
+  const openRemotePort = useCallback(
+    (host: string, session: number, key: string, port: number) => {
+      setPortProblems((last) => {
+        if (!last.has(key)) return last;
+        const next = new Map(last);
+        next.delete(key);
+        return next;
+      });
+      helm.invoke("forwards:open", { host, session, port }).then(
+        (forward) =>
+          openBrowser({
+            url: `http://localhost:${String(forward.local)}/`,
+            project: null,
+          }),
+        (error: unknown) =>
+          setPortProblems((last) =>
+            new Map(last).set(
+              key,
+              error instanceof Error ? error.message : String(error),
+            ),
+          ),
+      );
+    },
+    [openBrowser],
+  );
 
   /**
    * What a plugin asked main for that needs the window: a tab of its own
@@ -1385,39 +1698,49 @@ export function App(): JSX.Element {
   useEffect(() => {
     // Heard from every host: a remote host's plugin asks over that host's
     // connection, and is answered there.
-    const offs: Array<() => void> = []
+    const offs: Array<() => void> = [];
     const stop = eachHostBridge((host, bridge) => {
       offs.push(
-        bridge.on('plugins:ui', (request) => {
-          if (request.kind === 'secret') {
-            setSecretAsks((current) => [...current, { ...request, host }])
-            return
+        bridge.on("plugins:ui", (request) => {
+          if (request.kind === "secret") {
+            setSecretAsks((current) => [...current, { ...request, host }]);
+            return;
           }
-          if (request.kind === 'session') {
-            setSessionAsks((current) => [...current, { ...request, host }])
-            return
+          if (request.kind === "session") {
+            setSessionAsks((current) => [...current, { ...request, host }]);
+            return;
           }
-          if (request.kind === 'sessionWithdrawn') {
+          if (request.kind === "sessionWithdrawn") {
             setSessionAsks((current) =>
-              current.filter((ask) => ask.host !== host || ask.requestId !== request.requestId)
-            )
-            return
+              current.filter(
+                (ask) =>
+                  ask.host !== host || ask.requestId !== request.requestId,
+              ),
+            );
+            return;
           }
-          if (request.kind === 'link') {
+          if (request.kind === "link") {
             // A project of null: a plugin's link is not the address a project's
             // Browser tab should come back to.
-            openBrowser({ url: request.url, project: null })
-            return
+            openBrowser({ url: request.url, project: null });
+            return;
           }
-          openPluginTab(request.plugin, request.tab, request.params, request.title, request.preview, host)
-        })
-      )
-    })
+          openPluginTab(
+            request.plugin,
+            request.tab,
+            request.params,
+            request.title,
+            request.preview,
+            host,
+          );
+        }),
+      );
+    });
     return () => {
-      stop()
-      for (const off of offs) off()
-    }
-  }, [openPluginTab, openBrowser])
+      stop();
+      for (const off of offs) off();
+    };
+  }, [openPluginTab, openBrowser]);
 
   /**
    * A launched session lands in the focused pane and takes its front - or, from
@@ -1426,22 +1749,30 @@ export function App(): JSX.Element {
    * (`into`).
    */
   const placeSession = useCallback(
-    (id: number, beside = false, into?: number, host: string = LOCAL_HOST_KEY) => {
-      const ref = sessionRef(id, host)
+    (
+      id: number,
+      beside = false,
+      into?: number,
+      host: string = LOCAL_HOST_KEY,
+    ) => {
+      const ref = sessionRef(id, host);
       commit((current) =>
         into !== undefined
           ? placeIn(current, ref, into)
           : beside
             ? placeBeside(current, ref)
-            : openTab(current, ref)
-      )
-      const landing = into ?? open.focused
+            : openTab(current, ref),
+      );
+      const landing = into ?? open.focused;
       setMaximized((current) =>
-        (into === undefined && beside) || (current !== null && current !== landing) ? null : current
-      )
+        (into === undefined && beside) ||
+        (current !== null && current !== landing)
+          ? null
+          : current,
+      );
     },
-    [commit, open.focused]
-  )
+    [commit, open.focused],
+  );
 
   /**
    * Brings a session's tab forward, or - for a session running in the host
@@ -1450,168 +1781,221 @@ export function App(): JSX.Element {
    */
   const openSession = useCallback(
     (id: number) => {
-      if (findTab(open, `session:${String(id)}`) !== null) focusTab(`session:${String(id)}`)
-      else if (sessionsById.has(id)) placeSession(id)
+      if (findTab(open, `session:${String(id)}`) !== null)
+        focusTab(`session:${String(id)}`);
+      else if (sessionsById.has(id)) placeSession(id);
     },
-    [open, focusTab, sessionsById, placeSession]
-  )
+    [open, focusTab, sessionsById, placeSession],
+  );
   useEffect(() => {
-    focusSessionRef.current = openSession
-  }, [openSession])
+    focusSessionRef.current = openSession;
+  }, [openSession]);
 
   /** The same for a session on a host on another computer: its tab forward, or a tab here for it. */
   const openRemoteSession = useCallback(
     (host: string, id: number) => {
-      const tab = paneId(sessionRef(id, host))
-      if (findTab(open, tab) !== null) focusTab(tab)
-      else placeSession(id, false, undefined, host)
+      const tab = paneId(sessionRef(id, host));
+      if (findTab(open, tab) !== null) focusTab(tab);
+      else placeSession(id, false, undefined, host);
     },
-    [open, focusTab, placeSession]
-  )
+    [open, focusTab, placeSession],
+  );
 
   /**
    * A terminal tab in `path`: a plain shell, no `claude`. It lands where a
    * launched session would - the focused pane, the pane beside it, or `into`.
    * The id is this window's; the shell is opened when the tab first draws.
    */
-  const nextTerminalId = useRef(1)
+  const nextTerminalId = useRef(1);
   const openTerminal = useCallback(
-    (path: string, beside = false, into?: number, host: string = LOCAL_HOST_KEY) => {
-      const id = nextTerminalId.current++
-      const ref: PaneRef = host === LOCAL_HOST_KEY ? { kind: 'terminal', id, path } : { kind: 'terminal', id, path, host }
+    (
+      path: string,
+      beside = false,
+      into?: number,
+      host: string = LOCAL_HOST_KEY,
+    ) => {
+      const id = nextTerminalId.current++;
+      const ref: PaneRef =
+        host === LOCAL_HOST_KEY
+          ? { kind: "terminal", id, path }
+          : { kind: "terminal", id, path, host };
       commit((current) =>
         into !== undefined
           ? placeIn(current, ref, into)
           : beside
             ? placeBeside(current, ref)
-            : openTab(current, ref)
-      )
-      const landing = into ?? open.focused
+            : openTab(current, ref),
+      );
+      const landing = into ?? open.focused;
       setMaximized((current) =>
-        (into === undefined && beside) || (current !== null && current !== landing) ? null : current
-      )
+        (into === undefined && beside) ||
+        (current !== null && current !== landing)
+          ? null
+          : current,
+      );
     },
-    [commit, open.focused]
-  )
+    [commit, open.focused],
+  );
 
   /** The project on this PC whose launch from the tree or its page was the last, for the line over the panes. */
-  const [localLaunch, setLocalLaunch] = useState<{ path: string; name: string } | null>(null)
+  const [localLaunch, setLocalLaunch] = useState<{
+    path: string;
+    name: string;
+  } | null>(null);
   const launch = useCallback(
     async (project: Project) => {
-      setLocalLaunch({ path: project.path, name: project.name })
-      setLaunchingPath(project.path)
+      setLocalLaunch({ path: project.path, name: project.name });
+      setLaunchingPath(project.path);
       try {
-        const id = await sessionState.launch(project, bodyRefs.current.get(open.focused) ?? null)
-        if (id !== null) placeSession(id)
+        const id = await sessionState.launch(
+          project,
+          bodyRefs.current.get(open.focused) ?? null,
+        );
+        if (id !== null) placeSession(id);
       } finally {
-        setLaunchingPath(null)
+        setLaunchingPath(null);
       }
     },
-    [sessionState, placeSession, open.focused]
-  )
+    [sessionState, placeSession, open.focused],
+  );
 
   /**
    * A project's `+` or Start on a host on another computer: started there
    * through its own bridge, and given a tab here like any launch.
    */
-  const [remoteLaunchError, setRemoteLaunchError] = useState<TreeLaunchFailure | null>(null)
-  const { adopt: adoptThere, forget: forgetThere } = hostWork
+  const [remoteLaunchError, setRemoteLaunchError] =
+    useState<TreeLaunchFailure | null>(null);
+  const { adopt: adoptThere, forget: forgetThere } = hostWork;
   const launchOn = useCallback(
     async (host: string, project: Project) => {
       if (host === LOCAL_HOST_KEY) {
-        await launch(project)
-        return
+        await launch(project);
+        return;
       }
-      setLaunchingPath(project.path)
-      setRemoteLaunchError(null)
+      setLaunchingPath(project.path);
+      setRemoteLaunchError(null);
       try {
-        const { cols, rows } = estimateGrid(bodyRefs.current.get(open.focused) ?? null)
-        const record = await bridgeFor(host).invoke('session:start', {
+        const { cols, rows } = estimateGrid(
+          bodyRefs.current.get(open.focused) ?? null,
+        );
+        const record = await bridgeFor(host).invoke("session:start", {
           cwd: project.path,
           projectPath: project.path,
           name: project.name,
           cols,
-          rows
-        })
-        adoptThere(host, record)
-        placeSession(record.id, false, undefined, host)
+          rows,
+        });
+        adoptThere(host, record);
+        placeSession(record.id, false, undefined, host);
       } catch (err: unknown) {
-        setRemoteLaunchError({ host, path: project.path, name: project.name, text: readable(err) })
+        setRemoteLaunchError({
+          host,
+          path: project.path,
+          name: project.name,
+          text: readable(err),
+        });
       } finally {
-        setLaunchingPath(null)
+        setLaunchingPath(null);
       }
     },
-    [launch, adoptThere, placeSession, open.focused]
-  )
+    [launch, adoptThere, placeSession, open.focused],
+  );
 
   /**
    * The user's answer to the front session request. Main launches what it
    * holds for the request; the window sends only the answer and the grid of
    * the pane the session lands in, and places what comes back like any launch.
    */
-  const frontSessionAsk = sessionAsks[0] ?? null
+  const frontSessionAsk = sessionAsks[0] ?? null;
   const answerSessionAsk = useCallback(
     async (start: boolean) => {
-      if (frontSessionAsk === null) return
-      const { requestId } = frontSessionAsk
+      if (frontSessionAsk === null) return;
+      const { requestId } = frontSessionAsk;
       const next = (): void => {
-        setSessionAsks((current) => current.filter((ask) => ask.requestId !== requestId))
-        setSessionAskState({ busy: false, error: null })
-      }
+        setSessionAsks((current) =>
+          current.filter((ask) => ask.requestId !== requestId),
+        );
+        setSessionAskState({ busy: false, error: null });
+      };
       // A failed launch has spent the request; closing is all that is left.
       if (!start || sessionAskState.error !== null) {
         if (sessionAskState.error === null) {
           void bridgeFor(frontSessionAsk.host)
-            .invoke('plugins:session', { requestId, start: false, cols: 0, rows: 0 })
-            .catch(() => undefined)
+            .invoke("plugins:session", {
+              requestId,
+              start: false,
+              cols: 0,
+              rows: 0,
+            })
+            .catch(() => undefined);
         }
-        next()
-        return
+        next();
+        return;
       }
-      setSessionAskState({ busy: true, error: null })
+      setSessionAskState({ busy: true, error: null });
       try {
-        const { cols, rows } = estimateGrid(bodyRefs.current.get(open.focused) ?? null)
-        const on = frontSessionAsk.host
-        const record = await bridgeFor(on).invoke('plugins:session', { requestId, start: true, cols, rows })
+        const { cols, rows } = estimateGrid(
+          bodyRefs.current.get(open.focused) ?? null,
+        );
+        const on = frontSessionAsk.host;
+        const record = await bridgeFor(on).invoke("plugins:session", {
+          requestId,
+          start: true,
+          cols,
+          rows,
+        });
         if (record !== null) {
-          if (on === LOCAL_HOST_KEY) sessionState.adopt(record)
-          else adoptThere(on, record)
-          placeSession(record.id, false, undefined, on)
+          if (on === LOCAL_HOST_KEY) sessionState.adopt(record);
+          else adoptThere(on, record);
+          placeSession(record.id, false, undefined, on);
         }
-        next()
+        next();
       } catch (err: unknown) {
-        setSessionAskState({ busy: false, error: readable(err) })
+        setSessionAskState({ busy: false, error: readable(err) });
       }
     },
-    [frontSessionAsk, sessionAskState.error, sessionState, adoptThere, placeSession, open.focused]
-  )
+    [
+      frontSessionAsk,
+      sessionAskState.error,
+      sessionState,
+      adoptThere,
+      placeSession,
+      open.focused,
+    ],
+  );
 
   /** A profile launch lands exactly the way a project launch does - or in the pane `into`. */
   const launchProfile = useCallback(
     async (profile: Profile, into?: number) => {
-      const session = await profileState.launch(profile, bodyRefs.current.get(into ?? open.focused) ?? null)
-      if (!session) return
-      sessionState.adopt(session)
-      placeSession(session.id, false, into)
+      const session = await profileState.launch(
+        profile,
+        bodyRefs.current.get(into ?? open.focused) ?? null,
+      );
+      if (!session) return;
+      sessionState.adopt(session);
+      placeSession(session.id, false, into);
     },
-    [profileState, sessionState, placeSession, open.focused]
-  )
+    [profileState, sessionState, placeSession, open.focused],
+  );
 
   /** A profile from the `+` popover, on the host it was opened on: that host's own profile, started there. */
-  const { launch: launchHostProfile } = launcherProfiles
+  const { launch: launchHostProfile } = launcherProfiles;
   const launchProfileOn = useCallback(
     async (host: string, profile: Profile, into?: number) => {
       if (host === LOCAL_HOST_KEY) {
-        await launchProfile(profile, into)
-        return
+        await launchProfile(profile, into);
+        return;
       }
-      const record = await launchHostProfile(profile, bodyRefs.current.get(into ?? open.focused) ?? null)
-      if (record === null) return
-      adoptThere(host, record)
-      placeSession(record.id, false, into, host)
+      const record = await launchHostProfile(
+        profile,
+        bodyRefs.current.get(into ?? open.focused) ?? null,
+      );
+      if (record === null) return;
+      adoptThere(host, record);
+      placeSession(record.id, false, into, host);
     },
-    [launchProfile, launchHostProfile, adoptThere, placeSession, open.focused]
-  )
+    [launchProfile, launchHostProfile, adoptThere, placeSession, open.focused],
+  );
 
   /**
    * A resumed conversation is a session like any other once it exists; main
@@ -1620,15 +2004,25 @@ export function App(): JSX.Element {
   const resumeSession = useCallback(
     async (session: HistorySession) => {
       // On the host whose history it is, in a tab naming that host.
-      const on = historyHost
-      const record = await historyState.resume(session, bodyRefs.current.get(open.focused) ?? null)
-      if (!record) return
-      if (on === LOCAL_HOST_KEY) sessionState.adopt(record)
-      else adoptThere(on, record)
-      placeSession(record.id, false, undefined, on)
+      const on = historyHost;
+      const record = await historyState.resume(
+        session,
+        bodyRefs.current.get(open.focused) ?? null,
+      );
+      if (!record) return;
+      if (on === LOCAL_HOST_KEY) sessionState.adopt(record);
+      else adoptThere(on, record);
+      placeSession(record.id, false, undefined, on);
     },
-    [historyHost, historyState, sessionState, adoptThere, placeSession, open.focused]
-  )
+    [
+      historyHost,
+      historyState,
+      sessionState,
+      adoptThere,
+      placeSession,
+      open.focused,
+    ],
+  );
 
   /**
    * What a launcher was showing when Start was pressed: Ctrl+N's, or - with
@@ -1639,8 +2033,12 @@ export function App(): JSX.Element {
    */
   const startChosen = useCallback(
     async (choice: LaunchChoice, into?: number) => {
-      const on = newSession.host
-      const target = into ?? (choice.beside ? (besideOf(open, open.focused) ?? open.focused) : open.focused)
+      const on = newSession.host;
+      const target =
+        into ??
+        (choice.beside
+          ? (besideOf(open, open.focused) ?? open.focused)
+          : open.focused);
       const launched = await newSession.launch(
         {
           cwd: choice.project.path,
@@ -1648,46 +2046,61 @@ export function App(): JSX.Element {
           name: choice.project.name,
           profileId: choice.profileId,
           permissionMode: choice.permissionMode,
-          resume: choice.resume?.sessionId ?? null
+          resume: choice.resume?.sessionId ?? null,
         },
-        bodyRefs.current.get(target) ?? null
-      )
-      if (launched === null) return
-      if (on === LOCAL_HOST_KEY) sessionState.adopt(launched.session)
-      else adoptThere(on, launched.session)
-      placeSession(launched.session.id, choice.beside, into, on)
-      if (into === undefined) newSession.hide()
-      else setNewTab(null)
+        bodyRefs.current.get(target) ?? null,
+      );
+      if (launched === null) return;
+      if (on === LOCAL_HOST_KEY) sessionState.adopt(launched.session);
+      else adoptThere(on, launched.session);
+      placeSession(launched.session.id, choice.beside, into, on);
+      if (into === undefined) newSession.hide();
+      else setNewTab(null);
     },
-    [newSession, sessionState, adoptThere, placeSession, open]
-  )
+    [newSession, sessionState, adoptThere, placeSession, open],
+  );
 
   /*
    * A harness created whole ends in a session in it, not on a page: creating
    * one is a step on the way to working there. Not during first run, which
    * owns the window until it is finished.
    */
-  const setupNeeded = setup.needed
+  const setupNeeded = setup.needed;
   useEffect(() => {
     harnessCreatedRef.current = (path: string, host: string) => {
-      if (setupNeeded) return
+      if (setupNeeded) return;
       void newSession
         .launch(
-          { cwd: path, projectPath: path, profileId: null, permissionMode: null, resume: null },
+          {
+            cwd: path,
+            projectPath: path,
+            profileId: null,
+            permissionMode: null,
+            resume: null,
+          },
           bodyRefs.current.get(open.focused) ?? null,
-          host
+          host,
         )
         .then((launched) => {
-          if (launched === null) return
-          if (host === LOCAL_HOST_KEY) sessionState.adopt(launched.session)
-          else adoptThere(host, launched.session)
-          placeSession(launched.session.id, false, undefined, host)
-        })
-    }
-  }, [setupNeeded, newSession, sessionState, adoptThere, placeSession, open.focused])
+          if (launched === null) return;
+          if (host === LOCAL_HOST_KEY) sessionState.adopt(launched.session);
+          else adoptThere(host, launched.session);
+          placeSession(launched.session.id, false, undefined, host);
+        });
+    };
+  }, [
+    setupNeeded,
+    newSession,
+    sessionState,
+    adoptThere,
+    placeSession,
+    open.focused,
+  ]);
 
   /** The sessions a lost tab's Restore asked for, ticked when the Restore sessions tab opens. */
-  const [restoreChosen, setRestoreChosen] = useState<readonly number[] | null>(null)
+  const [restoreChosen, setRestoreChosen] = useState<readonly number[] | null>(
+    null,
+  );
 
   /**
    * Reopens sessions a crash took and puts each back in the pane and place it
@@ -1696,39 +2109,55 @@ export function App(): JSX.Element {
    */
   const resumeLost = useCallback(
     async (ids: readonly number[], unasked = false) => {
-      if (restoreOffer === null) return
-      const { layout } = restoreOffer
+      if (restoreOffer === null) return;
+      const { layout } = restoreOffer;
       // Sized for the pane at the saved one's place in reading order, when
       // there is one there now; the panes are rearranged around them after.
       const paneOf = (id: number): number =>
         savedGroups(layout).findIndex((group) =>
-          group.panes.some((pane) => pane.kind === 'session' && pane.id === id)
-        )
+          group.panes.some((pane) => pane.kind === "session" && pane.id === id),
+        );
       const picks = ids.map((id) => {
-        const there = open.groups[paneOf(id)]
-        const body = (there === undefined ? undefined : bodyRefs.current.get(there.id)) ?? bodyRefs.current.get(open.focused)
-        return { id, ...estimateGrid(body ?? null) }
-      })
-      const result = await restoreLost(picks, { unasked, ...(hostRunning === true ? { lostWith: LOCAL_HOST_NAME } : {}) })
-      if (result === null) return
-      for (const { launched } of result.restored) sessionState.adopt(launched.session)
-      const pairs = new Map(result.restored.map(({ from, launched }) => [from, launched.session.id]))
-      setRestoreChosen(null)
+        const there = open.groups[paneOf(id)];
+        const body =
+          (there === undefined ? undefined : bodyRefs.current.get(there.id)) ??
+          bodyRefs.current.get(open.focused);
+        return { id, ...estimateGrid(body ?? null) };
+      });
+      const result = await restoreLost(picks, {
+        unasked,
+        ...(hostRunning === true ? { lostWith: LOCAL_HOST_NAME } : {}),
+      });
+      if (result === null) return;
+      for (const { launched } of result.restored)
+        sessionState.adopt(launched.session);
+      const pairs = new Map(
+        result.restored.map(({ from, launched }) => [
+          from,
+          launched.session.id,
+        ]),
+      );
+      setRestoreChosen(null);
       commit((current) => {
         // A session lost with its host while its tab was open comes back in
         // that tab; one lost with Helm goes back where the saved layout had
         // it; one neither names still opens here: it was asked for.
-        const inPlace = replaceSessionTabs(closeTab(current, 'restore'), pairs)
-        const elsewhere = new Map([...pairs].filter(([from]) => findTab(current, `session:${String(from)}`) === null))
-        let placed = placeRestored(inPlace, layout, elsewhere)
+        const inPlace = replaceSessionTabs(closeTab(current, "restore"), pairs);
+        const elsewhere = new Map(
+          [...pairs].filter(
+            ([from]) => findTab(current, `session:${String(from)}`) === null,
+          ),
+        );
+        let placed = placeRestored(inPlace, layout, elsewhere);
         for (const id of pairs.values()) {
-          if (findTab(placed, `session:${String(id)}`) === null) placed = openTab(placed, { kind: 'session', id })
+          if (findTab(placed, `session:${String(id)}`) === null)
+            placed = openTab(placed, { kind: "session", id });
         }
-        return placed
-      })
+        return placed;
+      });
     },
-    [restoreOffer, restoreLost, sessionState, commit, open, hostRunning]
-  )
+    [restoreOffer, restoreLost, sessionState, commit, open, hostRunning],
+  );
 
   /*
    * The offer, acted on once settings say how: a tab in front of the focused
@@ -1736,8 +2165,9 @@ export function App(): JSX.Element {
    * away and the offer never drawn. Those that cannot come back are asked for
    * too, so main says why in the same answer.
    */
-  const restoreUnasked = settings === null ? null : settings.restoreWithoutAsking
-  const actedOn = useRef<RestoreOffer | null>(null)
+  const restoreUnasked =
+    settings === null ? null : settings.restoreWithoutAsking;
+  const actedOn = useRef<RestoreOffer | null>(null);
 
   /**
    * A lost tab's Restore: the Restore sessions tab, with only that session
@@ -1745,17 +2175,26 @@ export function App(): JSX.Element {
    */
   const restoreSession = useCallback(
     (id: number) => {
-      setRestoreChosen([id])
-      commit((current) => openTab(current, { kind: 'restore' }))
+      setRestoreChosen([id]);
+      commit((current) => openTab(current, { kind: "restore" }));
     },
-    [commit]
-  )
+    [commit],
+  );
   useEffect(() => {
-    if (restoreOffer === null || restoreUnasked === null || actedOn.current === restoreOffer) return
-    actedOn.current = restoreOffer
-    if (restoreUnasked) void resumeLost(restoreOffer.sessions.map((session) => session.id), true)
-    else commit((current) => openTab(current, { kind: 'restore' }))
-  }, [restoreOffer, restoreUnasked, resumeLost, commit])
+    if (
+      restoreOffer === null ||
+      restoreUnasked === null ||
+      actedOn.current === restoreOffer
+    )
+      return;
+    actedOn.current = restoreOffer;
+    if (restoreUnasked)
+      void resumeLost(
+        restoreOffer.sessions.map((session) => session.id),
+        true,
+      );
+    else commit((current) => openTab(current, { kind: "restore" }));
+  }, [restoreOffer, restoreUnasked, resumeLost, commit]);
 
   const blankProfile = useCallback(
     (root: string, name: string): ProfileDraft => ({
@@ -1769,24 +2208,28 @@ export function App(): JSX.Element {
       agent: null,
       mcp: [],
       openingPrompt: null,
-      pinnedOrder: null
+      pinnedOrder: null,
     }),
-    []
-  )
+    [],
+  );
 
   const saveAsProfileOn = useCallback(
     (host: string, project: Project) => {
       setProfileRequest((last) => ({
         host,
         // Seeded as this PC's page seeds it: the project as the root, itself composed.
-        draft: { ...blankProfile(project.path, project.name), overlays: [project.path], access: [project.path] },
-        nonce: (last?.nonce ?? 0) + 1
-      }))
-      setSidebarHidden(false)
-      setSidebarView('profiles')
+        draft: {
+          ...blankProfile(project.path, project.name),
+          overlays: [project.path],
+          access: [project.path],
+        },
+        nonce: (last?.nonce ?? 0) + 1,
+      }));
+      setSidebarHidden(false);
+      setSidebarView("profiles");
     },
-    [blankProfile]
-  )
+    [blankProfile],
+  );
 
   /**
    * What the profile editor's agent and MCP pickers offer: the same
@@ -1795,36 +2238,39 @@ export function App(): JSX.Element {
    */
   const predictProfile = useCallback(
     async (root: string, overlays: string[]): Promise<ProfilePrediction> => {
-      const view = await helm.invoke('config:effective', { cwd: root, overlays })
-      return { agents: view.agents, mcpServers: view.mcpServers }
+      const view = await helm.invoke("config:effective", {
+        cwd: root,
+        overlays,
+      });
+      return { agents: view.agents, mcpServers: view.mcpServers };
     },
-    []
-  )
+    [],
+  );
 
   const saveProfile = useCallback(
     async (draft: ProfileDraft) => {
-      setSaving(true)
+      setSaving(true);
       try {
-        const id = editing !== null && 'id' in editing ? editing.id : null
-        const { profile, problems } = await profileState.save(draft, id)
-        setSaveProblems(problems)
-        if (profile === null) return
-        setEditing(null)
+        const id = editing !== null && "id" in editing ? editing.id : null;
+        const { profile, problems } = await profileState.save(draft, id);
+        setSaveProblems(problems);
+        if (profile === null) return;
+        setEditing(null);
         // A new profile is made to be used: it ends in a session, not on the
         // list it was added to. An edit is only an edit.
-        if (id === null) void launchProfile(profile)
+        if (id === null) void launchProfile(profile);
       } finally {
-        setSaving(false)
+        setSaving(false);
       }
     },
-    [editing, profileState, launchProfile]
-  )
+    [editing, profileState, launchProfile],
+  );
 
   // Main asks the user first, so this can be fired and forgotten.
   const deleteProfile = useCallback(
     (profile: Profile) => void profileState.remove(profile.id),
-    [profileState]
-  )
+    [profileState],
+  );
 
   // ---------------------------------------------------------------------------
   // Closing and moving
@@ -1837,11 +2283,12 @@ export function App(): JSX.Element {
   const closeSession = useCallback(
     (id: number) => {
       void sessionState.close(id).then((closed) => {
-        if (closed) commit((current) => closeTab(current, `session:${String(id)}`))
-      })
+        if (closed)
+          commit((current) => closeTab(current, `session:${String(id)}`));
+      });
     },
-    [sessionState, commit]
-  )
+    [sessionState, commit],
+  );
 
   /**
    * Close tab, keep running: with sessions in the local host, the tab goes and
@@ -1856,76 +2303,88 @@ export function App(): JSX.Element {
   const closeRemoteSession = useCallback(
     (host: string, id: number) => {
       void bridgeFor(host)
-        .invoke('session:close', { id })
+        .invoke("session:close", { id })
         .then(({ closed }) => {
-          if (!closed) return
-          disposeTerminal(id, host)
-          forgetThere(host, id)
-          commit((current) => closeTab(current, paneId(sessionRef(id, host))))
-        })
+          if (!closed) return;
+          disposeTerminal(id, host);
+          forgetThere(host, id);
+          commit((current) => closeTab(current, paneId(sessionRef(id, host))));
+        });
     },
-    [forgetThere, commit]
-  )
+    [forgetThere, commit],
+  );
 
   const keepRunning = useCallback(
     (id: number, host: string = LOCAL_HOST_KEY) =>
-      closeKeepingRunning(id, host, { release: hostSessionTabs.release, disposeTerminal, commit }),
-    [commit]
-  )
+      closeKeepingRunning(id, host, {
+        release: hostSessionTabs.release,
+        disposeTerminal,
+        commit,
+      }),
+    [commit],
+  );
   /** The session a tab id names, on whichever host, or null for any other tab. */
   const sessionTabRef = useCallback(
     (tab: string): { id: number; host: string } | null => {
-      const at = findTab(open, tab)
-      const ref = at === null ? undefined : groupById(open, at.group)?.tabs[at.index]
-      return ref?.kind === 'session' ? { id: ref.id, host: hostOf(ref) } : null
+      const at = findTab(open, tab);
+      const ref =
+        at === null ? undefined : groupById(open, at.group)?.tabs[at.index];
+      return ref?.kind === "session" ? { id: ref.id, host: hostOf(ref) } : null;
     },
-    [open]
-  )
+    [open],
+  );
   /** A tab's menu: a running session's offers Close tab, keep running, with sessions in a host only. */
   const tabMenuFor = useCallback(
     (tab: string): MenuEntry[] => {
-      const ref = hostRunning === true ? sessionTabRef(tab) : null
-      if (ref === null) return []
-      const record = ref.host === LOCAL_HOST_KEY ? sessionsById.get(ref.id) : remoteSessionOf(ref.host, ref.id)
-      return record?.status === 'running' ? [{ kind: 'item', id: KEEP_RUNNING, label: 'Close tab, keep running' }] : []
+      const ref = hostRunning === true ? sessionTabRef(tab) : null;
+      if (ref === null) return [];
+      const record =
+        ref.host === LOCAL_HOST_KEY
+          ? sessionsById.get(ref.id)
+          : remoteSessionOf(ref.host, ref.id);
+      return record?.status === "running"
+        ? [{ kind: "item", id: KEEP_RUNNING, label: "Close tab, keep running" }]
+        : [];
     },
-    [hostRunning, sessionTabRef, sessionsById, remoteSessionOf]
-  )
+    [hostRunning, sessionTabRef, sessionsById, remoteSessionOf],
+  );
   const onTabMenu = useCallback(
     (tab: string, item: string) => {
-      const ref = sessionTabRef(tab)
-      if (item === KEEP_RUNNING && ref !== null) keepRunning(ref.id, ref.host)
+      const ref = sessionTabRef(tab);
+      if (item === KEEP_RUNNING && ref !== null) keepRunning(ref.id, ref.host);
     },
-    [keepRunning, sessionTabRef]
-  )
+    [keepRunning, sessionTabRef],
+  );
 
   const closeAny = useCallback(
     (id: string) => {
-      const at = findTab(open, id)
-      const ref = at === null ? undefined : groupById(open, at.group)?.tabs[at.index]
-      if (ref === undefined) return
-      if (ref.kind === 'session') {
-        if (hostOf(ref) === LOCAL_HOST_KEY) closeSession(ref.id)
-        else closeRemoteSession(hostOf(ref), ref.id)
-        return
+      const at = findTab(open, id);
+      const ref =
+        at === null ? undefined : groupById(open, at.group)?.tabs[at.index];
+      if (ref === undefined) return;
+      if (ref.kind === "session") {
+        if (hostOf(ref) === LOCAL_HOST_KEY) closeSession(ref.id);
+        else closeRemoteSession(hostOf(ref), ref.id);
+        return;
       }
       // The shell dies with its tab, not with a render: hiding the page keeps
       // it, closing the project ends it.
-      if (ref.kind === 'project') void disposeShell(ref.path, hostOf(ref))
-      if (ref.kind === 'terminal') void disposeShell(terminalShellKey(ref.id), hostOf(ref))
+      if (ref.kind === "project") void disposeShell(ref.path, hostOf(ref));
+      if (ref.kind === "terminal")
+        void disposeShell(terminalShellKey(ref.id), hostOf(ref));
       // Hiding the pane keeps the pages; closing the tab destroys them all.
-      if (ref.kind === 'browser') browsers.closeAll()
+      if (ref.kind === "browser") browsers.closeAll();
       // Closing the offer is "not now", the same as its button.
-      if (ref.kind === 'restore') dismissRestore()
-      commit((current) => closeTab(current, id))
+      if (ref.kind === "restore") dismissRestore();
+      commit((current) => closeTab(current, id));
     },
-    [open, closeSession, closeRemoteSession, browsers, commit, dismissRestore]
-  )
+    [open, closeSession, closeRemoteSession, browsers, commit, dismissRestore],
+  );
 
   const splitFocused = useCallback(() => {
-    commit(sendBeside)
-    setMaximized(null)
-  }, [commit])
+    commit(sendBeside);
+    setMaximized(null);
+  }, [commit]);
 
   /**
    * A tab dropped on a pane: in its middle, it joins that pane at the end of
@@ -1934,15 +2393,22 @@ export function App(): JSX.Element {
    */
   const dropTab = useCallback(
     (tab: string, group: number, zone: PaneDropZone) => {
-      if (zone === 'center') {
-        commit((current) => moveTab(current, tab, group, groupById(current, group)?.tabs.length ?? 0))
-        return
+      if (zone === "center") {
+        commit((current) =>
+          moveTab(
+            current,
+            tab,
+            group,
+            groupById(current, group)?.tabs.length ?? 0,
+          ),
+        );
+        return;
       }
-      commit((current) => splitWith(current, tab, group, zone))
-      setMaximized(null)
+      commit((current) => splitWith(current, tab, group, zone));
+      setMaximized(null);
     },
-    [commit]
-  )
+    [commit],
+  );
 
   /**
    * Which zones of a pane would do anything with the tab being dragged: not
@@ -1953,25 +2419,25 @@ export function App(): JSX.Element {
    */
   const dropAllows = useCallback(
     (group: PaneGroupState, zone: PaneDropZone): boolean => {
-      if (draggingTab === null) return false
-      const own = group.tabs.some((ref) => paneId(ref) === draggingTab)
-      if (zone === 'center') return !own
-      return !own || group.tabs.length > 1
+      if (draggingTab === null) return false;
+      const own = group.tabs.some((ref) => paneId(ref) === draggingTab);
+      if (zone === "center") return !own;
+      return !own || group.tabs.length > 1;
     },
-    [draggingTab]
-  )
+    [draggingTab],
+  );
 
   /** A tab drag starting or ending in any strip. */
-  const { setSuppressed: suppressBrowsers } = browsers
+  const { setSuppressed: suppressBrowsers } = browsers;
   const onTabDragging = useCallback(
     (tab: string | null) => {
-      setDraggingTab(tab)
+      setDraggingTab(tab);
       // A native view paints over the drop marks, the zones' preview and the
       // dragged tab's ghost, so it stands down for the length of the gesture.
-      suppressBrowsers('tab-drag', tab !== null)
+      suppressBrowsers("tab-drag", tab !== null);
     },
-    [suppressBrowsers]
-  )
+    [suppressBrowsers],
+  );
 
   /**
    * A pane divider held or let go. A native view takes the mouse at the OS
@@ -1980,9 +2446,9 @@ export function App(): JSX.Element {
    * for the gesture and the pointer stays with the window.
    */
   const onPaneResizing = useCallback(
-    (resizing: boolean) => suppressBrowsers('pane-resize', resizing),
-    [suppressBrowsers]
-  )
+    (resizing: boolean) => suppressBrowsers("pane-resize", resizing),
+    [suppressBrowsers],
+  );
 
   // ---------------------------------------------------------------------------
   // The keyboard
@@ -1996,56 +2462,66 @@ export function App(): JSX.Element {
    */
   const runBrowserCommand = useCallback(
     (id: number | null, command: BrowserCommand) => {
-      if (command === 'new-page') {
-        openBrowser({ project: null, focusAddress: true })
-        return
+      if (command === "new-page") {
+        openBrowser({ project: null, focusAddress: true });
+        return;
       }
-      if (command === 'reopen-page') {
+      if (command === "reopen-page") {
         void browsers.reopen().then((state) => {
-          if (state !== null) commit((current) => openTab(current, BROWSER_TAB))
-        })
-        return
+          if (state !== null)
+            commit((current) => openTab(current, BROWSER_TAB));
+        });
+        return;
       }
-      const page = id === null ? undefined : browserViews.get(id)
-      if (page === undefined) return
-      if (page.id !== frontPage) browsers.activate(page.id)
+      const page = id === null ? undefined : browserViews.get(id);
+      if (page === undefined) return;
+      if (page.id !== frontPage) browsers.activate(page.id);
       switch (command) {
-        case 'close-page':
-          browsers.close(page.id)
-          return
-        case 'find':
-        case 'address':
-          setBrowserFocus({ page: page.id, what: command })
-          return
-        case 'reload':
-        case 'hard-reload':
-          browsers.reload(page.id, command === 'hard-reload')
-          return
-        case 'back':
-          browsers.back(page.id)
-          return
-        case 'forward':
-          browsers.forward(page.id)
-          return
-        case 'zoom-in':
-          browsers.zoom(page.id, Math.min(BROWSER_ZOOM.max, page.zoomLevel + BROWSER_ZOOM.step))
-          return
-        case 'zoom-out':
-          browsers.zoom(page.id, Math.max(BROWSER_ZOOM.min, page.zoomLevel - BROWSER_ZOOM.step))
-          return
-        case 'zoom-reset':
-          browsers.zoom(page.id, 0)
-          return
-        case 'devtools':
-          browsers.devtools(page.id)
+        case "close-page":
+          browsers.close(page.id);
+          return;
+        case "find":
+        case "address":
+          setBrowserFocus({ page: page.id, what: command });
+          return;
+        case "reload":
+        case "hard-reload":
+          browsers.reload(page.id, command === "hard-reload");
+          return;
+        case "back":
+          browsers.back(page.id);
+          return;
+        case "forward":
+          browsers.forward(page.id);
+          return;
+        case "zoom-in":
+          browsers.zoom(
+            page.id,
+            Math.min(BROWSER_ZOOM.max, page.zoomLevel + BROWSER_ZOOM.step),
+          );
+          return;
+        case "zoom-out":
+          browsers.zoom(
+            page.id,
+            Math.max(BROWSER_ZOOM.min, page.zoomLevel - BROWSER_ZOOM.step),
+          );
+          return;
+        case "zoom-reset":
+          browsers.zoom(page.id, 0);
+          return;
+        case "devtools":
+          browsers.devtools(page.id);
       }
     },
-    [openBrowser, browsers, browserViews, frontPage, commit]
-  )
+    [openBrowser, browsers, browserViews, frontPage, commit],
+  );
   useEffect(
-    () => helm.on('browser:command', ({ id, command }) => runBrowserCommand(id, command)),
-    [runBrowserCommand]
-  )
+    () =>
+      helm.on("browser:command", ({ id, command }) =>
+        runBrowserCommand(id, command),
+      ),
+    [runBrowserCommand],
+  );
 
   /**
    * The browser's keys with the caret in Helm's own chrome, only while the
@@ -2055,9 +2531,9 @@ export function App(): JSX.Element {
    * stealing it from a session would be a worse bug than not having the
    * shortcut. A menu or a dialog open has the keys to itself.
    */
-  const browserInFront = front?.kind === 'browser'
+  const browserInFront = front?.kind === "browser";
   useEffect(() => {
-    if (!browserInFront) return undefined
+    if (!browserInFront) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
       const command = browserKeyCommand(
         {
@@ -2066,20 +2542,21 @@ export function App(): JSX.Element {
           control: event.ctrlKey,
           shift: event.shiftKey,
           alt: event.altKey,
-          meta: event.metaKey
+          meta: event.metaKey,
         },
-        hostOs()
-      )
-      if (command === null || overlayOpen()) return
-      if (document.activeElement?.closest('.xterm')) return
-      event.preventDefault()
-      event.stopPropagation()
-      if (event.repeat && !COMMANDS_THAT_REPEAT.has(command)) return
-      runBrowserCommand(frontPage, command)
-    }
-    window.addEventListener('keydown', onKeyDown, { capture: true })
-    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [browserInFront, frontPage, runBrowserCommand])
+        hostOs(),
+      );
+      if (command === null || overlayOpen()) return;
+      if (document.activeElement?.closest(".xterm")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat && !COMMANDS_THAT_REPEAT.has(command)) return;
+      runBrowserCommand(frontPage, command);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [browserInFront, frontPage, runBrowserCommand]);
 
   /**
    * Ctrl+W and Ctrl+F4 close the page in front of a plugin's strip, as they
@@ -2088,70 +2565,105 @@ export function App(): JSX.Element {
    * forwards a key it did not take. Gated as the browser's keys are, and never
    * taken from a terminal.
    */
-  const frontPages: PluginPagesRef | null = front?.kind === 'plugin-pages' ? front : null
-  const frontPagesPlugin = frontPages?.plugin ?? null
-  const frontStripPage = frontPages === null ? null : frontPluginPage(frontPages)
+  const frontPages: PluginPagesRef | null =
+    front?.kind === "plugin-pages" ? front : null;
+  const frontPagesPlugin = frontPages?.plugin ?? null;
+  const frontStripPage =
+    frontPages === null ? null : frontPluginPage(frontPages);
   const frontStripPageId =
-    frontPagesPlugin === null || frontStripPage === null ? null : pluginPageId(frontPagesPlugin, frontStripPage)
+    frontPagesPlugin === null || frontStripPage === null
+      ? null
+      : pluginPageId(frontPagesPlugin, frontStripPage);
   useEffect(() => {
-    if (frontPagesPlugin === null || frontStripPageId === null) return undefined
+    if (frontPagesPlugin === null || frontStripPageId === null)
+      return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!hasPrimaryModifier(event) || event.shiftKey || event.altKey) return
+      if (!hasPrimaryModifier(event) || event.shiftKey || event.altKey) return;
       // Ctrl+F4 is Windows' second close chord; a Mac has only Cmd+W.
-      if (event.key.toLowerCase() !== 'w' && (event.key !== 'F4' || isMac())) return
-      if (overlayOpen() || document.activeElement?.closest('.xterm')) return
-      event.preventDefault()
-      event.stopPropagation()
-      if (event.repeat) return
-      commit((current) => closePluginPage(current, frontPagesPlugin, frontStripPageId))
-    }
-    window.addEventListener('keydown', onKeyDown, { capture: true })
-    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [frontPagesPlugin, frontStripPageId, commit])
+      if (event.key.toLowerCase() !== "w" && (event.key !== "F4" || isMac()))
+        return;
+      if (overlayOpen() || document.activeElement?.closest(".xterm")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+      commit((current) =>
+        closePluginPage(current, frontPagesPlugin, frontStripPageId),
+      );
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [frontPagesPlugin, frontStripPageId, commit]);
 
   /** The folder the focused pane is about, for the launcher to open on. */
   const frontFolder = useMemo(() => {
-    const group = groupById(open, open.focused)
-    return folderOf(group === undefined ? null : activeRef(group), sessionsById, remoteSessionOf)
-  }, [open, sessionsById, remoteSessionOf])
+    const group = groupById(open, open.focused);
+    return folderOf(
+      group === undefined ? null : activeRef(group),
+      sessionsById,
+      remoteSessionOf,
+    );
+  }, [open, sessionsById, remoteSessionOf]);
   /** The host of the tab in front, while the window is connected to it; this PC otherwise. */
   const frontHost = useMemo(() => {
-    const group = groupById(open, open.focused)
-    const ref = group === undefined ? null : activeRef(group)
-    const host = ref === null ? LOCAL_HOST_KEY : hostOf(ref)
-    return host !== LOCAL_HOST_KEY && connectedHostIds.includes(host) ? host : LOCAL_HOST_KEY
-  }, [open, connectedHostIds])
-  const { show: showLauncher } = newSession
+    const group = groupById(open, open.focused);
+    const ref = group === undefined ? null : activeRef(group);
+    const host = ref === null ? LOCAL_HOST_KEY : hostOf(ref);
+    return host !== LOCAL_HOST_KEY && connectedHostIds.includes(host)
+      ? host
+      : LOCAL_HOST_KEY;
+  }, [open, connectedHostIds]);
+  const { show: showLauncher } = newSession;
   const openLauncher = useCallback(
-    () => showLauncher(frontHost === LOCAL_HOST_KEY ? frontFolder : null, frontHost),
-    [showLauncher, frontFolder, frontHost]
-  )
+    () =>
+      showLauncher(
+        frontHost === LOCAL_HOST_KEY ? frontFolder : null,
+        frontHost,
+      ),
+    [showLauncher, frontFolder, frontHost],
+  );
 
   /**
    * A pane's `+`: opens what it offers, hanging from it, or closes it when it
    * is already open. What it opens reads the session index afresh, as Ctrl+N
    * does.
    */
-  const { prepare: prepareLauncher, dismissError: dismissLaunchError } = newSession
+  const { prepare: prepareLauncher, dismissError: dismissLaunchError } =
+    newSession;
   const toggleNewTab = useCallback(
     (group: number, anchor: HTMLElement) => {
       if (newTab?.group === group) {
-        setNewTab(null)
-        return
+        setNewTab(null);
+        return;
       }
-      const pane = groupById(open, group)
-      const front = pane === undefined ? null : activeRef(pane)
+      const pane = groupById(open, group);
+      const front = pane === undefined ? null : activeRef(pane);
       // The host of what the pane shows, as Ctrl+N takes the front tab's.
-      const on = front !== null && connectedHostIds.includes(hostOf(front)) ? hostOf(front) : LOCAL_HOST_KEY
-      prepareLauncher(on)
-      setNewTab({ group, anchor, folder: folderOf(front, sessionsById, remoteSessionOf), host: on })
+      const on =
+        front !== null && connectedHostIds.includes(hostOf(front))
+          ? hostOf(front)
+          : LOCAL_HOST_KEY;
+      prepareLauncher(on);
+      setNewTab({
+        group,
+        anchor,
+        folder: folderOf(front, sessionsById, remoteSessionOf),
+        host: on,
+      });
     },
-    [newTab, open, sessionsById, remoteSessionOf, connectedHostIds, prepareLauncher]
-  )
+    [
+      newTab,
+      open,
+      sessionsById,
+      remoteSessionOf,
+      connectedHostIds,
+      prepareLauncher,
+    ],
+  );
   const closeNewTab = useCallback(() => {
-    setNewTab(null)
-    dismissLaunchError()
-  }, [dismissLaunchError])
+    setNewTab(null);
+    dismissLaunchError();
+  }, [dismissLaunchError]);
 
   // ---------------------------------------------------------------------------
   // Files
@@ -2161,58 +2673,64 @@ export function App(): JSX.Element {
   const shownFiles = useMemo(
     () =>
       visible.flatMap((ref) =>
-        ref.kind !== 'file'
+        ref.kind !== "file"
           ? []
           : hostOf(ref) === LOCAL_HOST_KEY
             ? [{ root: ref.root, path: ref.path }]
-            : [{ root: ref.root, path: ref.path, host: hostOf(ref) }]
+            : [{ root: ref.root, path: ref.path, host: hostOf(ref) }],
       ),
-    [visible]
-  )
+    [visible],
+  );
   /** The host of the tab in front, connected or not: the Files view follows its folder only on the host it shows. */
   const frontRefHost = useMemo(() => {
-    const group = groupById(open, open.focused)
-    const ref = group === undefined ? null : activeRef(group)
-    return ref === null ? LOCAL_HOST_KEY : hostOf(ref)
-  }, [open])
+    const group = groupById(open, open.focused);
+    const ref = group === undefined ? null : activeRef(group);
+    return ref === null ? LOCAL_HOST_KEY : hostOf(ref);
+  }, [open]);
   const files = useFiles({
     host: filesHost,
-    active: sidebarShown && sidebarView === 'files',
+    active: sidebarShown && sidebarView === "files",
     follow: frontRefHost === filesHost ? frontFolder : null,
     shown: shownFiles,
-    revision: discovery
-  })
-  const { noteOpened, loadListing, setRoot: setFilesRoot } = files
+    revision: discovery,
+  });
+  const { noteOpened, loadListing, setRoot: setFilesRoot } = files;
   // A project's Config or Files asked for while that surface showed another
   // host: pointed in the render that switches it to this PC, after the switch
   // has cleared what the other host's showed (adjusted while rendering, so
   // the scope is never painted against the wrong host).
   if (pendingScope !== null) {
-    if (pendingScope.surface === 'config' && configHost === pendingScope.host) {
-      setPendingScope(null)
-      setConfigScope(pendingScope.path)
-    } else if (pendingScope.surface === 'files' && filesHost === pendingScope.host) {
-      setPendingScope(null)
-      setFilesRoot(pendingScope.path)
+    if (pendingScope.surface === "config" && configHost === pendingScope.host) {
+      setPendingScope(null);
+      setConfigScope(pendingScope.path);
+    } else if (
+      pendingScope.surface === "files" &&
+      filesHost === pendingScope.host
+    ) {
+      setPendingScope(null);
+      setFilesRoot(pendingScope.path);
     }
   }
 
   /** Whether long lines wrap in a file - a setting, so it holds for the next file and the next start. */
-  const filesWrap = settings?.filesWrap ?? DEFAULT_SETTINGS.filesWrap
-  const setFilesWrap = useCallback((wrap: boolean) => writeSettings({ filesWrap: wrap }), [writeSettings])
+  const filesWrap = settings?.filesWrap ?? DEFAULT_SETTINGS.filesWrap;
+  const setFilesWrap = useCallback(
+    (wrap: boolean) => writeSettings({ filesWrap: wrap }),
+    [writeSettings],
+  );
 
   /** The project page's Files link: the sidebar's Files view, on that project, on the project's host. */
   const openFilesAt = useCallback(
     (project: Project, host: string = LOCAL_HOST_KEY) => {
       if (filesHost !== host) {
-        showHostOn('files', host)
-        setPendingScope({ surface: 'files', path: project.path, host })
-      } else setFilesRoot(project.path)
-      setSidebarView('files')
-      setSidebarHidden(false)
+        showHostOn("files", host);
+        setPendingScope({ surface: "files", path: project.path, host });
+      } else setFilesRoot(project.path);
+      setSidebarView("files");
+      setSidebarHidden(false);
     },
-    [filesHost, showHostOn, setFilesRoot]
-  )
+    [filesHost, showHostOn, setFilesRoot],
+  );
 
   /**
    * A tab clicked brings the sidebar it carries on from (`sidebarFor`), open
@@ -2224,27 +2742,29 @@ export function App(): JSX.Element {
    * across. A maximized pane keeps the window; the view still switches, for
    * when the window is given back.
    */
-  const { reveal: revealFile } = files
+  const { reveal: revealFile } = files;
   const bringSidebarFor = useCallback(
     (ref: PaneRef) => {
-      const view = sidebarFor(ref)
-      if (view === null) return
-      setSidebarView(view)
-      setSidebarHidden(false)
-      revealCount.current += 1
-      const seq = revealCount.current
-      if (ref.kind === 'file') {
+      const view = sidebarFor(ref);
+      if (view === null) return;
+      setSidebarView(view);
+      setSidebarHidden(false);
+      revealCount.current += 1;
+      const seq = revealCount.current;
+      if (ref.kind === "file") {
         // Revealed on the host the Files view shows; a file of another host
         // switches the view to it, which then follows the file's folder.
         if (hostOf(ref) === filesHost) {
-          revealFile(ref.root, ref.path)
-          setFilesRevealSeq(seq)
-        } else showHostOn('files', hostOf(ref))
-      } else if (ref.kind === 'session') setTreeReveal({ seq, kind: 'session', id: paneId(ref) })
-      else if (ref.kind === 'project') setTreeReveal({ seq, kind: 'project', path: ref.path })
+          revealFile(ref.root, ref.path);
+          setFilesRevealSeq(seq);
+        } else showHostOn("files", hostOf(ref));
+      } else if (ref.kind === "session")
+        setTreeReveal({ seq, kind: "session", id: paneId(ref) });
+      else if (ref.kind === "project")
+        setTreeReveal({ seq, kind: "project", path: ref.path });
     },
-    [revealFile, filesHost, showHostOn]
-  )
+    [revealFile, filesHost, showHostOn],
+  );
 
   /**
    * The folder a note is saved, snapshotted and wikilinked as part of: the
@@ -2255,35 +2775,41 @@ export function App(): JSX.Element {
   const scopeOf = useCallback(
     (ref: FileRef): string => {
       // The folders Helm knows are the Files view's host's.
-      if (hostOf(ref) !== files.host) return ref.root
-      const lower = ref.path.toLowerCase()
-      let best = ref.root
+      if (hostOf(ref) !== files.host) return ref.root;
+      const lower = ref.path.toLowerCase();
+      let best = ref.root;
       for (const scope of files.roots) {
-        const root = scope.path.replace(/[\\/]+$/, '')
-        if (root.length > best.length && (lower.startsWith(`${root.toLowerCase()}\\`) || lower.startsWith(`${root.toLowerCase()}/`))) {
-          best = scope.path
+        const root = scope.path.replace(/[\\/]+$/, "");
+        if (
+          root.length > best.length &&
+          (lower.startsWith(`${root.toLowerCase()}\\`) ||
+            lower.startsWith(`${root.toLowerCase()}/`))
+        ) {
+          best = scope.path;
         }
       }
-      return best
+      return best;
     },
-    [files.roots, files.host]
-  )
+    [files.roots, files.host],
+  );
 
   const setDocMode = (ref: FileRef, mode: DocumentMode): void => {
-    setDocModes((current) => new Map(current).set(fileKey(ref.path, hostOf(ref)), mode))
+    setDocModes((current) =>
+      new Map(current).set(fileKey(ref.path, hostOf(ref)), mode),
+    );
     // Editing a preview tab keeps it, as every editor does: the next single
     // click must not replace a tab with a draft in it.
-    if (mode === 'edit') keepTab(paneId(ref))
-  }
+    if (mode === "edit") keepTab(paneId(ref));
+  };
   const markDocDirty = useCallback((key: string, dirty: boolean) => {
     setDocDirty((current) => {
-      if (current.has(key) === dirty) return current
-      const next = new Set(current)
-      if (dirty) next.add(key)
-      else next.delete(key)
-      return next
-    })
-  }, [])
+      if (current.has(key) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
 
   /**
    * A file, opened to be read beside the session changing it (`openFile`): a
@@ -2293,76 +2819,89 @@ export function App(): JSX.Element {
    * rather than inside the update - an updater has to be pure, and React runs
    * it twice in development to check.
    */
-  const filesShownHost = files.host
+  const filesShownHost = files.host;
   const openFileAt = useCallback(
-    (root: string, path: string, keep: boolean, at?: QuickOpenAt, host: string = filesShownHost) => {
+    (
+      root: string,
+      path: string,
+      keep: boolean,
+      at?: QuickOpenAt,
+      host: string = filesShownHost,
+    ) => {
       // A file of another host's carries it, so its tab reads and writes there.
-      const ref: FileRef = host === LOCAL_HOST_KEY ? { kind: 'file', root, path } : { kind: 'file', root, path, host }
+      const ref: FileRef =
+        host === LOCAL_HOST_KEY
+          ? { kind: "file", root, path }
+          : { kind: "file", root, path, host };
       // A text match opens on its line; anything else opens where the file starts.
       setFileReveals((current) => {
-        const key = fileKey(path, host)
-        if (at === undefined && !current.has(key)) return current
-        const next = new Map(current)
-        if (at === undefined) next.delete(key)
-        else next.set(key, { ...at })
-        return next
-      })
-      const id = paneId(ref)
-      const still = preview !== null && findTab(open, preview) !== null ? preview : null
-      const placed = openFile(open, ref, still, keep)
-      const landed = findTab(placed.layout, id)
-      commit((current) => openFile(current, ref, still, keep).layout)
-      setPreview(placed.preview)
+        const key = fileKey(path, host);
+        if (at === undefined && !current.has(key)) return current;
+        const next = new Map(current);
+        if (at === undefined) next.delete(key);
+        else next.set(key, { ...at });
+        return next;
+      });
+      const id = paneId(ref);
+      const still =
+        preview !== null && findTab(open, preview) !== null ? preview : null;
+      const placed = openFile(open, ref, still, keep);
+      const landed = findTab(placed.layout, id);
+      commit((current) => openFile(current, ref, still, keep).layout);
+      setPreview(placed.preview);
       // A file sent to the pane a maximized one is hiding gives the window back.
-      setMaximized((current) => (current === null || current === landed?.group ? current : null))
-      if (host === filesShownHost) noteOpened(root, relativeTo(root, path))
+      setMaximized((current) =>
+        current === null || current === landed?.group ? current : null,
+      );
+      if (host === filesShownHost) noteOpened(root, relativeTo(root, path));
     },
-    [filesShownHost, open, preview, commit, noteOpened]
-  )
+    [filesShownHost, open, preview, commit, noteOpened],
+  );
 
   /** A preview tab double-clicked: it stays. */
   const keepTab = useCallback((id: string) => {
-    setPreview((current) => (current === id ? null : current))
-  }, [])
+    setPreview((current) => (current === id ? null : current));
+  }, []);
 
   const openInEditor = useCallback((path: string, line: number | null) => {
-    void helm.invoke('files:openInEditor', { path, line })
-  }, [])
+    void helm.invoke("files:openInEditor", { path, line });
+  }, []);
   /** True unless the clipboard refused it; a copy a later one replaced counts as done. */
   const copyPath = useCallback(
-    async (path: string) => (await helm.invoke('clipboard:write', path)).outcome !== 'refused',
-    []
-  )
+    async (path: string) =>
+      (await helm.invoke("clipboard:write", path)).outcome !== "refused",
+    [],
+  );
 
   /**
    * Ctrl+P: a file in the project the Files view is on, which follows the
    * pane in front. With nothing to search yet, the Files view opens instead,
    * and picks a project.
    */
-  const filesRoot = files.root
+  const filesRoot = files.root;
   const openQuickOpen = useCallback(
-    (mode: QuickOpenMode = 'files') => {
+    (mode: QuickOpenMode = "files") => {
       if (filesRoot === null) {
-        setSidebarView('files')
-        setSidebarHidden(false)
-        return
+        setSidebarView("files");
+        setSidebarHidden(false);
+        return;
       }
-      loadListing(filesRoot)
-      setQuickOpenMode(mode)
-      setQuickOpenRoot(filesRoot)
+      loadListing(filesRoot);
+      setQuickOpenMode(mode);
+      setQuickOpenRoot(filesRoot);
     },
-    [filesRoot, loadListing]
-  )
+    [filesRoot, loadListing],
+  );
   /** Ctrl+Shift+F's half: the text of the project Ctrl+P is on. */
   const searchText = useCallback(
     (query: string) =>
       quickOpenRoot === null
         ? Promise.resolve(null)
         : bridgeFor(filesShownHost)
-            .invoke('content:search', { scopePath: quickOpenRoot, query })
+            .invoke("content:search", { scopePath: quickOpenRoot, query })
             .catch(() => null),
-    [quickOpenRoot, filesShownHost]
-  )
+    [quickOpenRoot, filesShownHost],
+  );
 
   /**
    * Ctrl+N opens the launcher from anywhere in the window, a focused terminal
@@ -2375,17 +2914,18 @@ export function App(): JSX.Element {
    * own process, not this window, so Ctrl+N there is the page's.
    */
   useEffect(() => {
-    if (setupNeeded) return undefined
+    if (setupNeeded) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!hasPrimaryModifier(event) || event.altKey || event.shiftKey) return
-      if (event.key.toLowerCase() !== 'n') return
-      event.preventDefault()
-      event.stopPropagation()
-      if (!overlayOpen()) openLauncher()
-    }
-    window.addEventListener('keydown', onKeyDown, { capture: true })
-    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [setupNeeded, openLauncher])
+      if (!hasPrimaryModifier(event) || event.altKey || event.shiftKey) return;
+      if (event.key.toLowerCase() !== "n") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!overlayOpen()) openLauncher();
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [setupNeeded, openLauncher]);
 
   /**
    * Ctrl+P, from anywhere in the window, a focused terminal included - in
@@ -2396,36 +2936,43 @@ export function App(): JSX.Element {
    * Code or a shell binds it.
    */
   useEffect(() => {
-    if (setupNeeded) return undefined
+    if (setupNeeded) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!hasPrimaryModifier(event) || event.altKey) return
-      const key = event.key.toLowerCase()
-      const mode = !event.shiftKey && key === 'p' ? 'files' : event.shiftKey && key === 'f' ? 'text' : null
-      if (mode === null) return
-      event.preventDefault()
-      event.stopPropagation()
-      if (!overlayOpen()) openQuickOpen(mode)
-    }
-    window.addEventListener('keydown', onKeyDown, { capture: true })
-    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [setupNeeded, openQuickOpen])
+      if (!hasPrimaryModifier(event) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      const mode =
+        !event.shiftKey && key === "p"
+          ? "files"
+          : event.shiftKey && key === "f"
+            ? "text"
+            : null;
+      if (mode === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!overlayOpen()) openQuickOpen(mode);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [setupNeeded, openQuickOpen]);
 
   /**
    * Ctrl+Shift+P, the plugins' commands - in capture, as Ctrl+P is. Nothing in
    * Claude Code or a shell binds it.
    */
   useEffect(() => {
-    if (setupNeeded) return undefined
+    if (setupNeeded) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!hasPrimaryModifier(event) || !event.shiftKey || event.altKey) return
-      if (event.key.toLowerCase() !== 'p') return
-      event.preventDefault()
-      event.stopPropagation()
-      if (!overlayOpen()) setPaletteOpen(true)
-    }
-    window.addEventListener('keydown', onKeyDown, { capture: true })
-    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [setupNeeded])
+      if (!hasPrimaryModifier(event) || !event.shiftKey || event.altKey) return;
+      if (event.key.toLowerCase() !== "p") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!overlayOpen()) setPaletteOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [setupNeeded]);
 
   /**
    * Ctrl+Tab cycles every tab in every pane on screen as one ring, and Ctrl+\
@@ -2439,60 +2986,65 @@ export function App(): JSX.Element {
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.altKey) return
-      if (event.key === '\\' && !event.shiftKey && hasPrimaryModifier(event)) {
-        event.preventDefault()
-        event.stopPropagation()
-        splitFocused()
-        return
+      if (event.altKey) return;
+      if (event.key === "\\" && !event.shiftKey && hasPrimaryModifier(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        splitFocused();
+        return;
       }
-      if (event.key !== 'Tab' || !event.ctrlKey || event.metaKey) return
-      event.preventDefault()
-      event.stopPropagation()
-      const step = event.shiftKey ? -1 : 1
+      if (event.key !== "Tab" || !event.ctrlKey || event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const step = event.shiftKey ? -1 : 1;
       if (shownMax === null) {
-        commit((current) => cycleTab(current, step))
-        return
+        commit((current) => cycleTab(current, step));
+        return;
       }
       // A maximized pane is the whole window, so the ring is its tabs.
-      const group = groupById(open, shownMax)
-      const ids = group?.tabs.map(paneId) ?? []
-      if (group === undefined || ids.length < 2) return
-      const current = activeRef(group)
-      const at = current === null ? -1 : ids.indexOf(paneId(current))
-      const next = ids[(at + step + ids.length) % ids.length]
-      if (next !== undefined) commit((layoutNow) => activateTab(layoutNow, next))
-    }
-    window.addEventListener('keydown', onKeyDown, { capture: true })
-    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [commit, open, shownMax, splitFocused])
+      const group = groupById(open, shownMax);
+      const ids = group?.tabs.map(paneId) ?? [];
+      if (group === undefined || ids.length < 2) return;
+      const current = activeRef(group);
+      const at = current === null ? -1 : ids.indexOf(paneId(current));
+      const next = ids[(at + step + ids.length) % ids.length];
+      if (next !== undefined)
+        commit((layoutNow) => activateTab(layoutNow, next));
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [commit, open, shownMax, splitFocused]);
 
   // ---------------------------------------------------------------------------
   // What the tree, the tabs, the crumbs and the status bar say
   // ---------------------------------------------------------------------------
 
-  const now = useNow(30_000)
+  const now = useNow(30_000);
 
   /** Each of Helm's sessions' registry record, for how long it has been in its state. */
   const liveByHelmId = useMemo(() => {
-    const map = new Map<number, LiveSession>()
+    const map = new Map<number, LiveSession>();
     for (const live of machineSessions.sessions) {
-      if (live.helmSessionId !== null) map.set(live.helmSessionId, live)
+      if (live.helmSessionId !== null) map.set(live.helmSessionId, live);
     }
-    return map
-  }, [machineSessions.sessions])
+    return map;
+  }, [machineSessions.sessions]);
 
   const profileNames = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const profile of profileState.profiles) map.set(profile.id, profile.name)
-    return map
-  }, [profileState.profiles])
+    const map = new Map<number, string>();
+    for (const profile of profileState.profiles)
+      map.set(profile.id, profile.name);
+    return map;
+  }, [profileState.profiles]);
 
   const stateOf = (session: SessionRecord): TabIndicator =>
     indicatorOf(
       session,
-      session.status === 'running' ? sessionActivity.get(session.id) : undefined
-    )
+      session.status === "running"
+        ? sessionActivity.get(session.id)
+        : undefined,
+    );
 
   /**
    * The tree's sessions, under the project each is running in.
@@ -2504,56 +3056,75 @@ export function App(): JSX.Element {
    * uses, so the tree and the warning cannot disagree about whether two paths
    * are one folder.
    */
-  const visibleIds = new Set(visible.map(paneId))
-  const tree = ((): { byPath: Map<string, TreeSession[]>; elsewhere: TreeSession[] } => {
-    const byPath = new Map<string, TreeSession[]>()
-    const elsewhere: TreeSession[] = []
-    const known = new Set([...projectsByPath.keys()].map((path) => path.toLowerCase()))
+  const visibleIds = new Set(visible.map(paneId));
+  const tree = ((): {
+    byPath: Map<string, TreeSession[]>;
+    elsewhere: TreeSession[];
+  } => {
+    const byPath = new Map<string, TreeSession[]>();
+    const elsewhere: TreeSession[] = [];
+    const known = new Set(
+      [...projectsByPath.keys()].map((path) => path.toLowerCase()),
+    );
     const add = (key: string, row: TreeSession): void => {
-      const rows = byPath.get(key)
-      if (rows) rows.push(row)
-      else byPath.set(key, [row])
-    }
+      const rows = byPath.get(key);
+      if (rows) rows.push(row);
+      else byPath.set(key, [row]);
+    };
 
     for (const session of sessions) {
-      const activity = session.status === 'running' ? sessionActivity.get(session.id) : undefined
-      const state = indicatorOf(session, activity)
-      const live = liveByHelmId.get(session.id)
-      const waitingFor = activity?.waitingFor ?? null
-      const id = `session:${String(session.id)}`
-      const label = sessionLabel(session)
+      const activity =
+        session.status === "running"
+          ? sessionActivity.get(session.id)
+          : undefined;
+      const state = indicatorOf(session, activity);
+      const live = liveByHelmId.get(session.id);
+      const waitingFor = activity?.waitingFor ?? null;
+      const id = `session:${String(session.id)}`;
+      const label = sessionLabel(session);
       const row: TreeSession = {
         id,
         label,
         state,
         note: sessionNote(state, live?.statusSinceMs ?? null, now),
-        hint: waitingFor === null ? session.cwd : `${session.cwd}\nWaiting: ${waitingFor}`,
+        hint:
+          waitingFor === null
+            ? session.cwd
+            : `${session.cwd}\nWaiting: ${waitingFor}`,
         outside: false,
-        shown: id === frontId ? 'focused' : visibleIds.has(id) ? 'visible' : null
-      }
-      const key = (session.projectPath ?? session.cwd).toLowerCase()
-      if (known.has(key)) add(key, row)
-      else elsewhere.push({ ...row, label: `${label} · ${folderName(session.cwd)}` })
+        shown:
+          id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
+      };
+      const key = (session.projectPath ?? session.cwd).toLowerCase();
+      if (known.has(key)) add(key, row);
+      else
+        elsewhere.push({
+          ...row,
+          label: `${label} · ${folderName(session.cwd)}`,
+        });
     }
 
     for (const project of projectsByPath.values()) {
-      for (const live of liveSessionsIn(machineSessions.sessions, project.path)) {
-        if (live.helmSessionId !== null) continue
+      for (const live of liveSessionsIn(
+        machineSessions.sessions,
+        project.path,
+      )) {
+        if (live.helmSessionId !== null) continue;
         add(project.path.toLowerCase(), {
           id: `pid:${String(live.pid)}`,
-          label: live.name ?? 'claude',
+          label: live.name ?? "claude",
           state: live.activity,
-          note: 'outside Helm',
+          note: "outside Helm",
           hint:
             `Started outside Helm, in ${live.cwd ?? project.path}` +
-            (live.waitingFor === null ? '' : `\nWaiting: ${live.waitingFor}`),
+            (live.waitingFor === null ? "" : `\nWaiting: ${live.waitingFor}`),
           outside: true,
-          shown: null
-        })
+          shown: null,
+        });
       }
     }
-    return { byPath, elsewhere }
-  })()
+    return { byPath, elsewhere };
+  })();
 
   /**
    * Each host on another computer, under its name after this PC: its folders
@@ -2562,17 +3133,21 @@ export function App(): JSX.Element {
    * ended is listed while its tab is.
    */
   const treeHosts: TreeHost[] = listedHosts.map((host) => {
-    const work = hostWork.byHost.get(host.id)
-    const byPath = new Map<string, TreeSession[]>()
-    const elsewhere: TreeSession[] = []
-    const known = new Set((work?.discovery?.projects ?? []).map((project) => project.path.toLowerCase()))
-    const tabbed = sessionTabIds(open, host.id)
+    const work = hostWork.byHost.get(host.id);
+    const byPath = new Map<string, TreeSession[]>();
+    const elsewhere: TreeSession[] = [];
+    const known = new Set(
+      (work?.discovery?.projects ?? []).map((project) =>
+        project.path.toLowerCase(),
+      ),
+    );
+    const tabbed = sessionTabIds(open, host.id);
     for (const session of work?.sessions ?? []) {
-      if (session.status !== 'running' && !tabbed.has(session.id)) continue
-      const there = sessionAt({ id: session.id, host: host.id })
-      if (there === null) continue
-      const id = paneId(sessionRef(session.id, host.id))
-      const label = sessionLabel(session)
+      if (session.status !== "running" && !tabbed.has(session.id)) continue;
+      const there = sessionAt({ id: session.id, host: host.id });
+      if (there === null) continue;
+      const id = paneId(sessionRef(session.id, host.id));
+      const label = sessionLabel(session);
       const row: TreeSession = {
         id,
         label,
@@ -2580,14 +3155,19 @@ export function App(): JSX.Element {
         note: sessionNote(there.indicator, null, now),
         hint: session.cwd,
         outside: false,
-        shown: id === frontId ? 'focused' : visibleIds.has(id) ? 'visible' : null
-      }
-      const key = (session.projectPath ?? session.cwd).toLowerCase()
+        shown:
+          id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
+      };
+      const key = (session.projectPath ?? session.cwd).toLowerCase();
       if (known.has(key)) {
-        const rows = byPath.get(key)
-        if (rows) rows.push(row)
-        else byPath.set(key, [row])
-      } else elsewhere.push({ ...row, label: `${label} · ${folderName(session.cwd)}` })
+        const rows = byPath.get(key);
+        if (rows) rows.push(row);
+        else byPath.set(key, [row]);
+      } else
+        elsewhere.push({
+          ...row,
+          label: `${label} · ${folderName(session.cwd)}`,
+        });
     }
     return {
       id: host.id,
@@ -2599,67 +3179,77 @@ export function App(): JSX.Element {
       pinnedPaths: work?.pinnedProjects ?? [],
       sessionsByPath: byPath,
       elsewhere,
-      selectedPath: front?.kind === 'project' && hostOf(front) === host.id ? front.path : null,
-      launchingPath
-    }
-  })
+      selectedPath:
+        front?.kind === "project" && hostOf(front) === host.id
+          ? front.path
+          : null,
+      launchingPath,
+    };
+  });
 
   const openTreeSession = useCallback(
     (id: string) => {
-      if (id.startsWith('session:')) {
+      if (id.startsWith("session:")) {
         // One not open here opens in a tab here.
-        openSession(sessionIdOf(id))
-        return
+        openSession(sessionIdOf(id));
+        return;
       }
       // Somebody else's session has no tab; its row in the sessions pane is
       // where what Helm can know about it is.
-      setSelectedLivePid(Number(id.slice('pid:'.length)))
-      openSessions()
+      setSelectedLivePid(Number(id.slice("pid:".length)));
+      openSessions();
     },
-    [openSession, openSessions]
-  )
+    [openSession, openSessions],
+  );
 
   /** What each host's group in the tree asks for, through that host. */
   const treeHostActions = {
     onSelect: (host: string, project: Project) =>
-      host === LOCAL_HOST_KEY ? openProject(project) : openPane({ kind: 'project', path: project.path, host }),
+      host === LOCAL_HOST_KEY
+        ? openProject(project)
+        : openPane({ kind: "project", path: project.path, host }),
     onLaunch: (host: string, project: Project) => void launchOn(host, project),
     onOpenSession: (host: string, id: string) => {
       if (host === LOCAL_HOST_KEY) {
-        openTreeSession(id)
-        return
+        openTreeSession(id);
+        return;
       }
       const session = hostWork.byHost
         .get(host)
-        ?.sessions.find((each) => paneId(sessionRef(each.id, host)) === id)
-      if (session !== undefined) openRemoteSession(host, session.id)
+        ?.sessions.find((each) => paneId(sessionRef(each.id, host)) === id);
+      if (session !== undefined) openRemoteSession(host, session.id);
     },
     onTogglePin: (host: string, path: string) =>
-      host === LOCAL_HOST_KEY ? togglePin(path) : hostWork.togglePin(host, path),
-    onNewSession: (host: string) => showLauncher(host === LOCAL_HOST_KEY ? frontFolder : null, host),
-    onNewHarness: (host: string) => setup.openDialog('new', host),
+      host === LOCAL_HOST_KEY
+        ? togglePin(path)
+        : hostWork.togglePin(host, path),
+    onNewSession: (host: string) =>
+      showLauncher(host === LOCAL_HOST_KEY ? frontFolder : null, host),
+    onNewHarness: (host: string) => setup.openDialog("new", host),
     onRescan: rescanOn,
-    onAddHost: () => openSettings('hosts')
-  }
+    onAddHost: () => openSettings("hosts"),
+  };
 
   /** Helm's live sessions by what they are doing, for the status bar. */
-  const running = sessions.filter((session) => session.status === 'running')
-  const waiting = running.filter((session) => stateOf(session) === 'waiting')
-  const working = running.filter((session) => stateOf(session) === 'busy').length
+  const running = sessions.filter((session) => session.status === "running");
+  const waiting = running.filter((session) => stateOf(session) === "waiting");
+  const working = running.filter(
+    (session) => stateOf(session) === "busy",
+  ).length;
   const statusCounts = {
     working,
     waiting: waiting.length,
-    idle: running.length - waiting.length - working
-  }
+    idle: running.length - waiting.length - working,
+  };
 
   /** "Needs you", pressed: the next waiting session after the one in front. */
   const showWaiting = (): void => {
-    const ids = waiting.map((session) => `session:${String(session.id)}`)
-    if (ids.length === 0) return
-    const at = frontId === null ? -1 : ids.indexOf(frontId)
-    const next = ids[(at + 1) % ids.length]
-    if (next !== undefined) openSession(sessionIdOf(next))
-  }
+    const ids = waiting.map((session) => `session:${String(session.id)}`);
+    if (ids.length === 0) return;
+    const at = frontId === null ? -1 : ids.indexOf(frontId);
+    const next = ids[(at + 1) % ids.length];
+    if (next !== undefined) openSession(sessionIdOf(next));
+  };
 
   /**
    * The machine-wide line under the tree: how many sessions are running on
@@ -2667,47 +3257,57 @@ export function App(): JSX.Element {
    * what somebody does next, and the reason the listing behind it exists.
    */
   const sessionsSummaryLine = ((): string => {
-    const all = machineSessions.sessions
-    if (machineSessions.readAtMs === null) return 'Reading…'
-    if (all.length === 0) return 'Nothing running on this machine'
-    const outside = all.filter((session) => session.helmSessionId === null).length
-    const count = `${String(all.length)} on this machine`
-    return outside === 0 ? `${count} · all in Helm` : `${count} · ${String(outside)} outside Helm`
-  })()
+    const all = machineSessions.sessions;
+    if (machineSessions.readAtMs === null) return "Reading…";
+    if (all.length === 0) return "Nothing running on this machine";
+    const outside = all.filter(
+      (session) => session.helmSessionId === null,
+    ).length;
+    const count = `${String(all.length)} on this machine`;
+    return outside === 0
+      ? `${count} · all in Helm`
+      : `${count} · ${String(outside)} outside Helm`;
+  })();
 
   /** One tab, as its pane's strip draws it. */
   const tabFor = (ref: PaneRef): Tab[] => {
     switch (ref.kind) {
-      case 'session': {
+      case "session": {
         if (hostOf(ref) !== LOCAL_HOST_KEY) {
-          const there = sessionAt(ref)
-          if (there === null) return []
-          const label = sessionLabel(there.record)
-          const on = hostName(hostOf(ref))
+          const there = sessionAt(ref);
+          if (there === null) return [];
+          const label = sessionLabel(there.record);
+          const on = hostName(hostOf(ref));
           const waitingFor =
-            there.record.status === 'running'
-              ? (hostWork.byHost.get(hostOf(ref))?.activity.get(ref.id)?.waitingFor ?? null)
-              : null
+            there.record.status === "running"
+              ? (hostWork.byHost.get(hostOf(ref))?.activity.get(ref.id)
+                  ?.waitingFor ?? null)
+              : null;
           return [
             {
               id: paneId(ref),
               title: label,
               host: on,
-              hint: waitingFor === null ? `${label} · ${on} · ${there.record.cwd}` : `${label} · ${on} · ${there.record.cwd}\nWaiting: ${waitingFor}`,
+              hint:
+                waitingFor === null
+                  ? `${label} · ${on} · ${there.record.cwd}`
+                  : `${label} · ${on} · ${there.record.cwd}\nWaiting: ${waitingFor}`,
               indicator: there.indicator,
               // Its host's link is down: a warning ring until it is back.
-              away: there.record.status === 'running' && hostAway(hostOf(ref)) !== null,
-              renamable: true
-            }
-          ]
+              away:
+                there.record.status === "running" &&
+                hostAway(hostOf(ref)) !== null,
+              renamable: true,
+            },
+          ];
         }
-        const session = sessionsById.get(ref.id)
-        if (!session) return []
-        const label = sessionLabel(session)
+        const session = sessionsById.get(ref.id);
+        if (!session) return [];
+        const label = sessionLabel(session);
         const waitingFor =
-          session.status === 'running'
+          session.status === "running"
             ? (sessionActivity.get(session.id)?.waitingFor ?? null)
-            : null
+            : null;
         return [
           {
             id: paneId(ref),
@@ -2721,154 +3321,179 @@ export function App(): JSX.Element {
                 ? `${label} · ${session.cwd}`
                 : `${label} · ${session.cwd}\nWaiting: ${waitingFor}`,
             indicator: stateOf(session),
-            renamable: true
-          }
-        ]
+            renamable: true,
+          },
+        ];
       }
-      case 'terminal': {
-        const on = hostOf(ref)
+      case "terminal": {
+        const on = hostOf(ref);
         const name =
-          (on === LOCAL_HOST_KEY ? projectsByPath.get(ref.path) : remoteProjectOf(on, ref.path))?.name ??
-          folderName(ref.path)
+          (on === LOCAL_HOST_KEY
+            ? projectsByPath.get(ref.path)
+            : remoteProjectOf(on, ref.path)
+          )?.name ?? folderName(ref.path);
         return [
           {
             id: paneId(ref),
             title: truncate(name, 30),
             ...(on === LOCAL_HOST_KEY ? {} : { host: hostName(on) }),
-            hint: on === LOCAL_HOST_KEY ? `Terminal · ${ref.path}` : `Terminal · ${hostName(on)} · ${ref.path}`,
-            icon: <ConsoleIcon width={13} height={13} />
-          }
-        ]
+            hint:
+              on === LOCAL_HOST_KEY
+                ? `Terminal · ${ref.path}`
+                : `Terminal · ${hostName(on)} · ${ref.path}`,
+            icon: <ConsoleIcon width={13} height={13} />,
+          },
+        ];
       }
-      case 'sessions':
+      case "sessions":
         return [
           {
             id: paneId(ref),
-            title: 'Sessions',
+            title: "Sessions",
             hint: sessionsSummaryLine,
-            icon: <TerminalIcon width={13} height={13} />
-          }
-        ]
-      case 'history':
+            icon: <TerminalIcon width={13} height={13} />,
+          },
+        ];
+      case "history":
         return [
           {
             id: paneId(ref),
-            title: 'Session history',
+            title: "Session history",
             hint:
               historyHost === LOCAL_HOST_KEY
-                ? (historyState.summary?.historyFile ?? 'Every session on this machine')
+                ? (historyState.summary?.historyFile ??
+                  "Every session on this machine")
                 : `Every session on ${hostName(historyHost)}`,
-            icon: <HistoryIcon width={13} height={13} />
-          }
-        ]
-      case 'config':
+            icon: <HistoryIcon width={13} height={13} />,
+          },
+        ];
+      case "config":
         return [
           {
             id: paneId(ref),
-            title: 'Config',
+            title: "Config",
             hint:
               configHost === LOCAL_HOST_KEY
-                ? (configState.scope?.path ?? 'Browse and edit .claude configuration')
-                : `${hostName(configHost)} · ${configState.scope?.path ?? '.claude configuration'}`,
-            icon: <SlidersIcon width={13} height={13} />
-          }
-        ]
-      case 'settings':
+                ? (configState.scope?.path ??
+                  "Browse and edit .claude configuration")
+                : `${hostName(configHost)} · ${configState.scope?.path ?? ".claude configuration"}`,
+            icon: <SlidersIcon width={13} height={13} />,
+          },
+        ];
+      case "settings":
         return [
           {
             id: paneId(ref),
-            title: 'Settings',
+            title: "Settings",
             hint: "Helm's own settings",
-            icon: <GearIcon width={13} height={13} />
-          }
-        ]
-      case 'plugin': {
-        const on = hostOf(ref)
-        const plugin = pluginsOn(on).get(ref.plugin)
-        const surface = plugin?.tabs[ref.tab]
-        if (plugin === undefined || surface === undefined) return []
-        const title = ref.title ?? surface.title
-        const isPreview = paneId(ref) === preview
+            icon: <GearIcon width={13} height={13} />,
+          },
+        ];
+      case "plugin": {
+        const on = hostOf(ref);
+        const plugin = pluginsOn(on).get(ref.plugin);
+        const surface = plugin?.tabs[ref.tab];
+        if (plugin === undefined || surface === undefined) return [];
+        const title = ref.title ?? surface.title;
+        const isPreview = paneId(ref) === preview;
         // Another host's plugin tab names its host, as its session tabs do.
-        const owner = on === LOCAL_HOST_KEY ? plugin.name : `${plugin.name} · ${hostName(on)}`
+        const owner =
+          on === LOCAL_HOST_KEY
+            ? plugin.name
+            : `${plugin.name} · ${hostName(on)}`;
         return [
           {
             id: paneId(ref),
             title: truncate(title, 30),
             ...(on === LOCAL_HOST_KEY ? {} : { host: hostName(on) }),
-            hint: isPreview ? `${title} - ${owner}\n${PREVIEW_HINT}` : `${title} - ${owner}`,
+            hint: isPreview
+              ? `${title} - ${owner}\n${PREVIEW_HINT}`
+              : `${title} - ${owner}`,
             icon: <PluginIcon url={plugin.icon} size={13} />,
-            preview: isPreview
-          }
-        ]
+            preview: isPreview,
+          },
+        ];
       }
-      case 'plugin-pages': {
+      case "plugin-pages": {
         // One tab, named for the plugin, as the Browser tab is named for what
         // it is. The pages are in its own strip; the hint says what is in
         // front, for a tab that is not.
-        const plugin = plugins.get(ref.plugin)
-        if (plugin === undefined) return []
-        const count = ref.pages.length
-        const page = frontPluginPage(ref)
-        const showing = page === null ? '' : `, showing ${pluginPageTitle(page, plugin)}`
+        const plugin = plugins.get(ref.plugin);
+        if (plugin === undefined) return [];
+        const count = ref.pages.length;
+        const page = frontPluginPage(ref);
+        const showing =
+          page === null ? "" : `, showing ${pluginPageTitle(page, plugin)}`;
         return [
           {
             id: paneId(ref),
             title: truncate(plugin.name, 30),
-            hint: `${plugin.name}: ${String(count)} ${count === 1 ? 'page' : 'pages'}${showing}`,
-            icon: <PluginIcon url={plugin.icon} size={13} />
-          }
-        ]
+            hint: `${plugin.name}: ${String(count)} ${count === 1 ? "page" : "pages"}${showing}`,
+            icon: <PluginIcon url={plugin.icon} size={13} />,
+          },
+        ];
       }
-      case 'browser': {
+      case "browser": {
         // One tab, named for what it is. The pages, their titles and the
         // sessions that opened them are in its own strip; the hint says what
         // is in front, for a Browser tab that is not.
-        const front = frontPage === null ? undefined : browserViews.get(frontPage)
-        const count = browserViews.size
+        const front =
+          frontPage === null ? undefined : browserViews.get(frontPage);
+        const count = browserViews.size;
         const showing =
-          front === undefined ? '' : front.url === '' ? 'a new tab' : front.title === '' ? front.url : front.title
+          front === undefined
+            ? ""
+            : front.url === ""
+              ? "a new tab"
+              : front.title === ""
+                ? front.url
+                : front.title;
         return [
           {
             id: paneId(ref),
-            title: 'Browser',
-            hint: `${String(count)} ${count === 1 ? 'tab' : 'tabs'}${showing === '' ? '' : `, showing ${showing}`}`,
-            icon: <GlobeIcon width={13} height={13} />
-          }
-        ]
+            title: "Browser",
+            hint: `${String(count)} ${count === 1 ? "tab" : "tabs"}${showing === "" ? "" : `, showing ${showing}`}`,
+            icon: <GlobeIcon width={13} height={13} />,
+          },
+        ];
       }
-      case 'restore':
+      case "restore":
         return restoreOffer === null
           ? []
           : [
               {
                 id: paneId(ref),
-                title: 'Restore sessions',
+                title: "Restore sessions",
                 hint:
                   hostRunning === true
                     ? `What ${LOCAL_HOST_NAME} was running when it stopped`
-                    : 'What Helm was running when it closed',
-                icon: <HistoryIcon width={13} height={13} />
-              }
-            ]
-      case 'project': {
-        const remote = hostOf(ref) !== LOCAL_HOST_KEY
-        const project = remote ? remoteProjectOf(hostOf(ref), ref.path) : projectsByPath.get(ref.path)
-        if (!project) return []
-        const Icon = KIND_ICON[project.kind]
+                    : "What Helm was running when it closed",
+                icon: <HistoryIcon width={13} height={13} />,
+              },
+            ];
+      case "project": {
+        const remote = hostOf(ref) !== LOCAL_HOST_KEY;
+        const project = remote
+          ? remoteProjectOf(hostOf(ref), ref.path)
+          : projectsByPath.get(ref.path);
+        if (!project) return [];
+        const Icon = KIND_ICON[project.kind];
         return [
           {
             id: paneId(ref),
             title: project.name,
             ...(remote ? { host: hostName(hostOf(ref)) } : {}),
-            hint: remote ? `${hostName(hostOf(ref))} · ${project.path}` : project.path,
-            icon: <Icon width={13} height={13} />
-          }
-        ]
+            hint: remote
+              ? `${hostName(hostOf(ref))} · ${project.path}`
+              : project.path,
+            icon: <Icon width={13} height={13} />,
+          },
+        ];
       }
-      case 'file': {
-        const on = hostOf(ref)
-        const where = on === LOCAL_HOST_KEY ? ref.path : `${hostName(on)} · ${ref.path}`
+      case "file": {
+        const on = hostOf(ref);
+        const where =
+          on === LOCAL_HOST_KEY ? ref.path : `${hostName(on)} · ${ref.path}`;
         return [
           {
             id: paneId(ref),
@@ -2878,18 +3503,18 @@ export function App(): JSX.Element {
             icon: <DocIcon width={13} height={13} />,
             mono: true,
             preview: paneId(ref) === preview,
-            dirty: docDirty.has(fileKey(ref.path, on))
-          }
-        ]
+            dirty: docDirty.has(fileKey(ref.path, on)),
+          },
+        ];
       }
     }
-  }
+  };
 
   /** The crumb under a session's tab. */
   const crumbFor = (ref: PaneRef | null): ReactNode => {
-    if (ref?.kind === 'file') {
-      const view = files.tabs.get(fileKey(ref.path, hostOf(ref)))?.view ?? null
-      const kind = documentKind(ref.path)
+    if (ref?.kind === "file") {
+      const view = files.tabs.get(fileKey(ref.path, hostOf(ref)))?.view ?? null;
+      const kind = documentKind(ref.path);
       return (
         <FileCrumb
           relPath={view?.relPath ?? relativeTo(ref.root, ref.path)}
@@ -2898,57 +3523,67 @@ export function App(): JSX.Element {
             kind === null ? undefined : (
               <DocumentModeSwitch
                 kind={kind}
-                mode={docModes.get(fileKey(ref.path, hostOf(ref))) ?? 'preview'}
+                mode={docModes.get(fileKey(ref.path, hostOf(ref))) ?? "preview"}
                 onChange={(mode) => setDocMode(ref, mode)}
               />
             )
           }
         />
-      )
+      );
     }
-    if (ref?.kind === 'terminal') {
-      const on = hostOf(ref)
+    if (ref?.kind === "terminal") {
+      const on = hostOf(ref);
       return (
         <PaneCrumb
           place={
-            (on === LOCAL_HOST_KEY ? projectsByPath.get(ref.path) : remoteProjectOf(on, ref.path))?.name ??
-            folderName(ref.path)
+            (on === LOCAL_HOST_KEY
+              ? projectsByPath.get(ref.path)
+              : remoteProjectOf(on, ref.path)
+            )?.name ?? folderName(ref.path)
           }
-          hint={on === LOCAL_HOST_KEY ? ref.path : `${hostName(on)} · ${ref.path}`}
+          hint={
+            on === LOCAL_HOST_KEY ? ref.path : `${hostName(on)} · ${ref.path}`
+          }
         />
-      )
+      );
     }
-    if (ref?.kind !== 'session') return null
+    if (ref?.kind !== "session") return null;
     if (hostOf(ref) !== LOCAL_HOST_KEY) {
-      const there = sessionAt(ref)
-      if (there === null) return null
+      const there = sessionAt(ref);
+      if (there === null) return null;
       return (
         <PaneCrumb
           place={folderName(there.record.cwd)}
           hint={`${hostName(hostOf(ref))} · ${there.record.cwd}`}
           branch={there.record.branch}
         />
-      )
+      );
     }
-    const session = sessionsById.get(ref.id)
-    if (!session) return null
+    const session = sessionsById.get(ref.id);
+    if (!session) return null;
     const project =
-      session.projectPath === null ? undefined : projectsByPath.get(session.projectPath)
+      session.projectPath === null
+        ? undefined
+        : projectsByPath.get(session.projectPath);
     return (
       <PaneCrumb
         place={project?.name ?? folderName(session.cwd)}
         hint={session.cwd}
         branch={session.branch}
-        profile={session.profileId === null ? null : (profileNames.get(session.profileId) ?? null)}
+        profile={
+          session.profileId === null
+            ? null
+            : (profileNames.get(session.profileId) ?? null)
+        }
         status={crumbStatus(
           session,
           stateOf(session),
           liveByHelmId.get(session.id)?.statusSinceMs ?? null,
-          now
+          now,
         )}
       />
-    )
-  }
+    );
+  };
 
   // ---------------------------------------------------------------------------
   // Dialogs
@@ -2963,28 +3598,37 @@ export function App(): JSX.Element {
    */
   // Each host asks on its own bridge, and is answered on it: one on another
   // computer names itself in what it asks (`hostTabs.ts`).
-  const { ask: confirmAsk, answer: answerConfirm } = useSessionConfirm(HOST_BRIDGES)
-  const confirmRequest = confirmAsk?.request ?? null
+  const { ask: confirmAsk, answer: answerConfirm } =
+    useSessionConfirm(HOST_BRIDGES);
+  const confirmRequest = confirmAsk?.request ?? null;
 
   /**
    * Settings' Stop host: how many sessions it ends, asked here, then the stop.
    * The count is every session running in the host, whichever device started
    * it, read when the button is pressed.
    */
-  const [stopHostAsk, setStopHostAsk] = useState<number | null>(null)
-  const [stopHostError, setStopHostError] = useState<string | null>(null)
+  const [stopHostAsk, setStopHostAsk] = useState<number | null>(null);
+  const [stopHostError, setStopHostError] = useState<string | null>(null);
   const askStopHost = useCallback(() => {
-    setStopHostError(null)
-    helm.invoke('windowSessions:hostSessionCount').then(setStopHostAsk, (error: unknown) =>
-      setStopHostError(error instanceof Error ? error.message : String(error))
-    )
-  }, [])
+    setStopHostError(null);
+    helm
+      .invoke("windowSessions:hostSessionCount")
+      .then(setStopHostAsk, (error: unknown) =>
+        setStopHostError(
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+  }, []);
   const stopHost = useCallback(() => {
-    setStopHostAsk(null)
-    helm.invoke('windowSessions:stopHost').catch((error: unknown) =>
-      setStopHostError(error instanceof Error ? error.message : String(error))
-    )
-  }, [])
+    setStopHostAsk(null);
+    helm
+      .invoke("windowSessions:stopHost")
+      .catch((error: unknown) =>
+        setStopHostError(
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+  }, []);
 
   /**
    * Rendered by both branches below: main holds the window's `close` open on
@@ -3009,8 +3653,8 @@ export function App(): JSX.Element {
         kind="stop-host"
         message={
           stopHostAsk === 0
-            ? 'No session is running in this PC’s host.'
-            : `Stopping this PC’s host ends ${String(stopHostAsk)} session${stopHostAsk === 1 ? '' : 's'}.`
+            ? "No session is running in this PC’s host."
+            : `Stopping this PC’s host ends ${String(stopHostAsk)} session${stopHostAsk === 1 ? "" : "s"}.`
         }
         detail="Every session running in it ends, whichever device started it, and none is offered back. Helm starts the host again when it next needs it."
         confirmLabel="Stop host"
@@ -3018,14 +3662,16 @@ export function App(): JSX.Element {
         onConfirm={stopHost}
         onCancel={() => setStopHostAsk(null)}
       />
-    )
+    );
 
   /** Rendered by both branches: creating a harness is a first-run action and
    * an every-day one, and two copies of the dialog would drift apart. */
   const harnessDialog =
     setup.dialog === null || templates.managerOpen ? null : (
       <NewHarnessDialog
-        {...(setup.dialogHost === LOCAL_HOST_KEY ? {} : { host: hostName(setup.dialogHost) })}
+        {...(setup.dialogHost === LOCAL_HOST_KEY
+          ? {}
+          : { host: hostName(setup.dialogHost) })}
         onDirChange={setup.typeDialogDir}
         mode={setup.dialog}
         dir={setup.dialogDir}
@@ -3037,13 +3683,15 @@ export function App(): JSX.Element {
         template={setup.template}
         onTemplateChange={setup.chooseTemplate}
         templatesDir={setup.templatesDir}
-        {...(setup.dialogHost === LOCAL_HOST_KEY ? { onManageTemplates: templates.openManager } : {})}
+        {...(setup.dialogHost === LOCAL_HOST_KEY
+          ? { onManageTemplates: templates.openManager }
+          : {})}
         templateProblems={setup.templateProblems}
         preview={setup.templatePreview}
         onCreate={setup.createHarness}
         onCancel={setup.closeDialog}
       />
-    )
+    );
 
   /**
    * The template manager, and the dialog that freezes a folder into one. The
@@ -3055,7 +3703,7 @@ export function App(): JSX.Element {
       <SaveAsTemplateDialog
         kind={templates.saveDialog.kind}
         dir={templates.saveDialog.dir}
-        {...(templates.saveDialog.kind === 'folder'
+        {...(templates.saveDialog.kind === "folder"
           ? { onChooseDir: templates.chooseSaveDir }
           : {})}
         preview={templates.savePreview}
@@ -3087,13 +3735,13 @@ export function App(): JSX.Element {
         onImport={templates.importFiles}
         onImportFolder={templates.openImportFolder}
         onClose={() => {
-          templates.closeManager()
+          templates.closeManager();
           // The harness dialog behind this may be showing a picker built before
           // a template was created, renamed or deleted.
-          setup.refreshTemplates()
+          setup.refreshTemplates();
         }}
       />
-    ) : null
+    ) : null;
 
   /**
    * New, Rename and Delete for one entry in a `.claude` tree. Rendered beside
@@ -3101,8 +3749,9 @@ export function App(): JSX.Element {
    * that a split can narrow is a dialog that gets clipped.
    */
   const configEntryDialog =
-    configState.scope === null || configState.entryDialog === null ? null : configState
-      .entryDialog === 'new' ? (
+    configState.scope === null ||
+    configState.entryDialog === null ? null : configState.entryDialog ===
+      "new" ? (
       <ConfigNewDialog
         scope={configState.scope}
         files={configState.tree?.files ?? []}
@@ -3111,7 +3760,8 @@ export function App(): JSX.Element {
         onCreate={configState.createFile}
         onCancel={() => configState.openEntryDialog(null)}
       />
-    ) : configState.selected === null ? null : configState.entryDialog === 'rename' ? (
+    ) : configState.selected === null ? null : configState.entryDialog ===
+      "rename" ? (
       <ConfigRenameDialog
         scope={configState.scope}
         file={configState.selected}
@@ -3130,7 +3780,7 @@ export function App(): JSX.Element {
         onDelete={configState.deleteFile}
         onCancel={() => configState.openEntryDialog(null)}
       />
-    )
+    );
 
   /**
    * Setup owns the whole window rather than sitting in a tab: with no roots
@@ -3154,8 +3804,8 @@ export function App(): JSX.Element {
             onLocateClaude={setup.locateClaude}
             onAddFolder={launcher.addRoot}
             onAcceptSuggestion={setup.acceptSuggestion}
-            onCreateHarness={() => setup.openDialog('new')}
-            onConvertFolder={() => setup.openDialog('convert')}
+            onCreateHarness={() => setup.openDialog("new")}
+            onConvertFolder={() => setup.openDialog("convert")}
             onFinish={setup.finish}
           />
         </div>
@@ -3163,7 +3813,7 @@ export function App(): JSX.Element {
         {templateDialogs}
         {confirmDialog}
       </div>
-    )
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -3171,16 +3821,18 @@ export function App(): JSX.Element {
   // ---------------------------------------------------------------------------
 
   /** Whether `path` is one of the scanned folders - what removal can act on. */
-  const isRoot = (path: string): boolean => isScanRoot(settings?.scanRoots ?? [], path)
+  const isRoot = (path: string): boolean =>
+    isScanRoot(settings?.scanRoots ?? [], path);
 
   /** The harness a project *is*, when it is one - for its `template:`. */
   const harnessAt = (path: string): Harness | null =>
-    discovery?.harnesses.find((harness) => harness.path.toLowerCase() === path.toLowerCase()) ??
-    null
+    discovery?.harnesses.find(
+      (harness) => harness.path.toLowerCase() === path.toLowerCase(),
+    ) ?? null;
 
   const renderProject = (project: Project): JSX.Element => {
-    const harness = harnessAt(project.path)
-    const here = liveSessionsIn(machineSessions.sessions, project.path)
+    const harness = harnessAt(project.path);
+    const here = liveSessionsIn(machineSessions.sessions, project.path);
     return (
       <ProjectColumn
         path={project.path}
@@ -3199,10 +3851,14 @@ export function App(): JSX.Element {
           launchError={sessionState.launchError}
           liveHere={here.length === 0 ? EMPTY_LIVE : here}
           onSaveAsProfile={(p) => {
-            setSaveProblems([])
+            setSaveProblems([]);
             // Seeded with what is on screen: this project as the root, and
             // itself composed, which is the launch the button is beside.
-            setEditing({ ...blankProfile(p.path, p.name), overlays: [p.path], access: [p.path] })
+            setEditing({
+              ...blankProfile(p.path, p.name),
+              overlays: [p.path],
+              access: [p.path],
+            });
           }}
           onOpenConfig={openConfigAt}
           onOpenFiles={openFilesAt}
@@ -3221,15 +3877,15 @@ export function App(): JSX.Element {
                   // removing a folder takes it out of discovery, which drops its
                   // tab without going through the close button, and nothing
                   // else would end the pty.
-                  void disposeShell(p.path)
-                  launcher.removeRoot(p.path)
-                }
+                  void disposeShell(p.path);
+                  launcher.removeRoot(p.path);
+                },
               }
             : {})}
         />
       </ProjectColumn>
-    )
-  }
+    );
+  };
 
   /**
    * The hosts on other computers this device has added, kept in its own
@@ -3237,15 +3893,16 @@ export function App(): JSX.Element {
    * sessions in the local host" off there are none: Settings > Hosts is not
    * listed and nothing names them.
    */
-  const currentSettings = settings ?? DEFAULT_SETTINGS
-  const remoteHosts = listedHosts
-  const tabbedThere = (host: string): Set<number> => sessionTabIds(open, host)
+  const currentSettings = settings ?? DEFAULT_SETTINGS;
+  const remoteHosts = listedHosts;
+  const tabbedThere = (host: string): Set<number> => sessionTabIds(open, host);
   // Hosts and Devices are listed only with that setting on; a page left open
   // on one when the setting goes off shows Sessions, where the setting is.
   const shownSettingsSection: SettingsSectionId =
-    (settingsSection === 'hosts' || settingsSection === 'devices') && !currentSettings.sessionsInHost
-      ? 'sessions'
-      : settingsSection
+    (settingsSection === "hosts" || settingsSection === "devices") &&
+    !currentSettings.sessionsInHost
+      ? "sessions"
+      : settingsSection;
   /** What the status bar says about each host, this PC first: what quitting does there, and the setting that decides. */
   const statusHosts =
     hostRunning === true
@@ -3254,51 +3911,85 @@ export function App(): JSX.Element {
             id: LOCAL_HOST_KEY,
             name: LOCAL_HOST_LABEL,
             quitEnds: quitEndsSessions(currentSettings),
-            onOpen: () => openSettings('sessions')
+            onOpen: () => openSettings("sessions"),
           },
           ...remoteHosts.map((host) => {
-            const lastLine = failedLastLine(remoteView[host.id]?.connection ?? null)
+            const lastLine = failedLastLine(
+              remoteView[host.id]?.connection ?? null,
+            );
             return {
               id: host.id,
               name: host.name,
               quitEnds: quitEndsSessions(currentSettings, host.id),
-              retrying: remoteView[host.id]?.connection?.state !== 'connected',
+              retrying: remoteView[host.id]?.connection?.state !== "connected",
+              roundTripMs: remoteView[host.id]?.roundTripMs ?? null,
               // Its ssh or command could not get in: what it said, and the line to try by hand.
-              unreachable: lastLine === null ? null : { lastLine, tryLine: lineToTryByHand(host) },
-              onOpen: () => openSettings('hosts')
-            }
-          })
+              unreachable:
+                lastLine === null
+                  ? null
+                  : { lastLine, tryLine: lineToTryByHand(host) },
+              onOpen: () => openSettings("hosts"),
+            };
+          }),
         ]
-      : []
+      : [];
   /** The sessions pane's group for each remote host, in the order they were added; none with no remote host. */
   const sessionsPaneHosts = remoteHosts.map((host) => {
-    const connection = remoteView[host.id]?.connection ?? null
+    const connection = remoteView[host.id]?.connection ?? null;
     return {
       id: host.id,
       name: host.name,
-      connected: connection?.state === 'connected',
-      sessions: (remoteView[host.id]?.sessions ?? []).map((session) => ({
-        ...session,
-        openHere: tabbedThere(host.id).has(Number(session.key.slice(host.id.length + 1)))
-      })),
-      onOpenSession: (key: string) => openRemoteSession(host.id, Number(key.slice(host.id.length + 1))),
-      onEndSession: (key: string) => closeRemoteSession(host.id, Number(key.slice(host.id.length + 1))),
+      connected: connection?.state === "connected",
+      sessions: (remoteView[host.id]?.sessions ?? []).map((session) => {
+        const id = Number(session.key.slice(host.id.length + 1));
+        return {
+          ...session,
+          openHere: tabbedThere(host.id).has(id),
+          ports: remoteView[host.id]?.resources.get(id)?.ports ?? null,
+          forwarded: new Map(
+            forwards
+              .filter(
+                (forward) => forward.host === host.id && forward.session === id,
+              )
+              .map((forward) => [forward.port, forward.local] as const),
+          ),
+          portProblem: portProblems.get(session.key) ?? null,
+        };
+      }),
+      onOpenPort: (key: string, port: number) =>
+        openRemotePort(
+          host.id,
+          Number(key.slice(host.id.length + 1)),
+          key,
+          port,
+        ),
+      onOpenSession: (key: string) =>
+        openRemoteSession(host.id, Number(key.slice(host.id.length + 1))),
+      onEndSession: (key: string) =>
+        closeRemoteSession(host.id, Number(key.slice(host.id.length + 1))),
       // A floti too old or newer than this Helm, with both versions; too old
       // offers the same yes-first update Settings > Hosts does.
       floti:
-        connection?.state === 'tooOld' || connection?.state === 'newer'
-          ? { verdict: connection.state, host: connection.host, client: connection.client }
+        connection?.state === "tooOld" || connection?.state === "newer"
+          ? {
+              verdict: connection.state,
+              host: connection.host,
+              client: connection.client,
+            }
           : null,
       onUpdateFloti: () => {
-        openSettings('hosts')
-        setHostUpdateRequest((last) => ({ id: host.id, nonce: (last?.nonce ?? 0) + 1 }))
-      }
-    }
-  })
+        openSettings("hosts");
+        setHostUpdateRequest((last) => ({
+          id: host.id,
+          nonce: (last?.nonce ?? 0) + 1,
+        }));
+      },
+    };
+  });
 
   /** Settings > Plugins, Secrets and each plugin's page; every other section is `SettingsPane`'s. */
   const renderSettings = (): JSX.Element => {
-    if (settingsSection === 'secrets') {
+    if (settingsSection === "secrets") {
       return (
         <SecretsPage
           state={pluginSettings.secrets}
@@ -3306,10 +3997,10 @@ export function App(): JSX.Element {
           onSave={pluginSettings.saveSecret}
           onRemove={pluginSettings.removeSecret}
         />
-      )
+      );
     }
     if (settingsPlugin !== null) {
-      const { path, id } = settingsPlugin
+      const { path, id } = settingsPlugin;
       return (
         <PluginPage
           key={path}
@@ -3323,18 +4014,23 @@ export function App(): JSX.Element {
           onReload={() => pluginSettings.reload(path)}
           ownSecrets={() => pluginSettings.ownSecrets(path)}
           onRemove={(deleteSecrets) => {
-            pluginSettings.remove(path, deleteSecrets)
-            setSettingsSection('plugins')
+            pluginSettings.remove(path, deleteSecrets);
+            setSettingsSection("plugins");
           }}
           onSetSetting={(key, value) =>
-            id === null ? Promise.resolve('The plugin is not loaded.') : pluginSettings.setSetting(id, key, value)
+            id === null
+              ? Promise.resolve("The plugin is not loaded.")
+              : pluginSettings.setSetting(id, key, value)
           }
           onSaveSecret={pluginSettings.saveSecret}
           onRemoveSecret={pluginSettings.removeSecret}
         />
-      )
+      );
     }
-    if (settingsSection === 'plugins' || settingsSection.startsWith('plugin:')) {
+    if (
+      settingsSection === "plugins" ||
+      settingsSection.startsWith("plugin:")
+    ) {
       return (
         <PluginsPage
           plugins={shownPluginState.list}
@@ -3342,13 +4038,15 @@ export function App(): JSX.Element {
           addError={pluginSettings.addError}
           onAdd={pluginSettings.add}
           onOpen={(path) => setSettingsSection(pluginSection(path))}
-          hostChoice={hostChoiceFor('plugins')}
-          {...(pluginsHost === LOCAL_HOST_KEY ? {} : { remoteHost: hostName(pluginsHost) })}
+          hostChoice={hostChoiceFor("plugins")}
+          {...(pluginsHost === LOCAL_HOST_KEY
+            ? {}
+            : { remoteHost: hostName(pluginsHost) })}
         />
-      )
+      );
     }
-    return renderHelmSettings()
-  }
+    return renderHelmSettings();
+  };
 
   const renderHelmSettings = (): JSX.Element => (
     <SettingsPane
@@ -3363,7 +4061,9 @@ export function App(): JSX.Element {
       scanning={launcher.scanning}
       onAddRoot={launcher.addRoot}
       onRemoveRoot={launcher.removeRoot}
-      pinnedProjects={settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects}
+      pinnedProjects={
+        settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects
+      }
       // The same writer the tree's star goes through, so the two surfaces
       // cannot hold different ideas of what is pinned.
       onUnpinProject={togglePin}
@@ -3374,14 +4074,14 @@ export function App(): JSX.Element {
         paneGap: settings?.paneGap ?? DEFAULT_SETTINGS.paneGap,
         cornerRadius: settings?.cornerRadius ?? DEFAULT_SETTINGS.cornerRadius,
         density: settings?.density ?? DEFAULT_SETTINGS.density,
-        accentColor: settings?.accentColor ?? DEFAULT_SETTINGS.accentColor
+        accentColor: settings?.accentColor ?? DEFAULT_SETTINGS.accentColor,
       }}
       onAppearanceChange={writeSettings}
       themes={themes.listing}
       themeState={themes.state}
       onOpenThemesFolder={themes.openFolder}
       onDuplicateTheme={themes.duplicate}
-      usageDisplay={settings?.usageDisplay ?? 'percent'}
+      usageDisplay={settings?.usageDisplay ?? "percent"}
       updateCheck={settings?.updateCheck ?? DEFAULT_SETTINGS.updateCheck}
       onUpdateCheckChange={(updateCheck) => writeSettings({ updateCheck })}
       onUsageDisplayChange={launcher.setUsageDisplay}
@@ -3394,7 +4094,8 @@ export function App(): JSX.Element {
       updateChecking={check.checking}
       onCheckForUpdate={check.check}
       onOpenReleases={() => {
-        if (info?.releasesUrl !== undefined) void helmOpenExternal(info.releasesUrl)
+        if (info?.releasesUrl !== undefined)
+          void helmOpenExternal(info.releasesUrl);
       }}
       // The same fact the status bar's cycle turns on, from the same snapshot.
       hasCostEstimate={usage.snapshot?.spend != null}
@@ -3409,35 +4110,55 @@ export function App(): JSX.Element {
       // reads them from, so the two cannot disagree about how much is stored.
       archiveStats={historyState.archiveStats}
       transcriptArchiveMaxBytes={
-        settings?.transcriptArchiveMaxBytes ?? DEFAULT_SETTINGS.transcriptArchiveMaxBytes
+        settings?.transcriptArchiveMaxBytes ??
+        DEFAULT_SETTINGS.transcriptArchiveMaxBytes
       }
       // The authored templates, so the built-in Minimal row does not make an
       // empty templates folder read as one that has something in it.
-      templateCount={templates.templates.filter((choice) => !choice.builtIn).length}
+      templateCount={
+        templates.templates.filter((choice) => !choice.builtIn).length
+      }
       templatesDir={templates.templatesDir}
       onManageTemplates={templates.openManager}
       onRevealTemplates={() => launcher.reveal(templates.templatesDir)}
       browserReach={settings?.browserReach ?? DEFAULT_SETTINGS.browserReach}
       onBrowserReachChange={(browserReach) => writeSettings({ browserReach })}
       browserSearch={settings?.browserSearch ?? DEFAULT_SETTINGS.browserSearch}
-      onBrowserSearchChange={(browserSearch) => writeSettings({ browserSearch })}
+      onBrowserSearchChange={(browserSearch) =>
+        writeSettings({ browserSearch })
+      }
       browserMcp={settings?.browserMcp ?? DEFAULT_SETTINGS.browserMcp}
       onBrowserMcpChange={(browserMcp) => writeSettings({ browserMcp })}
-      browserMcpLocalOnly={settings?.browserMcpLocalOnly ?? DEFAULT_SETTINGS.browserMcpLocalOnly}
+      browserMcpLocalOnly={
+        settings?.browserMcpLocalOnly ?? DEFAULT_SETTINGS.browserMcpLocalOnly
+      }
       onBrowserMcpLocalOnlyChange={(browserMcpLocalOnly) =>
         writeSettings({ browserMcpLocalOnly })
       }
       sessionMcp={settings?.sessionMcp ?? DEFAULT_SETTINGS.sessionMcp}
       onSessionMcpChange={(sessionMcp) => writeSettings({ sessionMcp })}
-      restoreWithoutAsking={settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking}
-      onRestoreWithoutAskingChange={(restoreWithoutAsking) => writeSettings({ restoreWithoutAsking })}
-      sessionsInHost={settings?.sessionsInHost ?? DEFAULT_SETTINGS.sessionsInHost}
-      onSessionsInHostChange={(sessionsInHost) => writeSettings({ sessionsInHost })}
-      quitSessions={quitEndsSessions(settings ?? DEFAULT_SETTINGS) ? 'end' : 'keep'}
+      restoreWithoutAsking={
+        settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking
+      }
+      onRestoreWithoutAskingChange={(restoreWithoutAsking) =>
+        writeSettings({ restoreWithoutAsking })
+      }
+      sessionsInHost={
+        settings?.sessionsInHost ?? DEFAULT_SETTINGS.sessionsInHost
+      }
+      onSessionsInHostChange={(sessionsInHost) =>
+        writeSettings({ sessionsInHost })
+      }
+      quitSessions={
+        quitEndsSessions(settings ?? DEFAULT_SETTINGS) ? "end" : "keep"
+      }
       // Only this PC's entry: a later host's is its own, and Settings keeps it.
       onQuitSessionsChange={(choice) =>
         writeSettings({
-          quitSessions: { ...(settings ?? DEFAULT_SETTINGS).quitSessions, [LOCAL_HOST_KEY]: choice }
+          quitSessions: {
+            ...(settings ?? DEFAULT_SETTINGS).quitSessions,
+            [LOCAL_HOST_KEY]: choice,
+          },
         })
       }
       hostRunning={hostRunning === true}
@@ -3448,13 +4169,19 @@ export function App(): JSX.Element {
       hosts={remoteHosts.map((host) => ({
         host,
         quit: quitChoice(currentSettings, host.id),
-        connection: remoteView[host.id]?.connection ?? null
+        connection: remoteView[host.id]?.connection ?? null,
       }))}
-      onAddHost={(host) => writeSettings({ hosts: [...currentSettings.hosts, host] })}
+      onAddHost={(host) =>
+        writeSettings({ hosts: [...currentSettings.hosts, host] })
+      }
       // Forgets it on this device with its quit choice; nothing on it ends.
-      onRemoveHost={(id) => writeSettings(withoutRemoteHost(currentSettings, id))}
+      onRemoveHost={(id) =>
+        writeSettings(withoutRemoteHost(currentSettings, id))
+      }
       onHostQuitChange={(id, choice) =>
-        writeSettings({ quitSessions: { ...currentSettings.quitSessions, [id]: choice } })
+        writeSettings({
+          quitSessions: { ...currentSettings.quitSessions, [id]: choice },
+        })
       }
       // Main checks, installs and updates floti there, after the yes the
       // window asks for; the window never says what to run.
@@ -3463,7 +4190,9 @@ export function App(): JSX.Element {
       // starts with from now on.
       onHostInstalled={(id, floti) =>
         writeSettings({
-          hosts: currentSettings.hosts.map((host) => (host.id === id ? { ...host, floti } : host))
+          hosts: currentSettings.hosts.map((host) =>
+            host.id === id ? { ...host, floti } : host,
+          ),
         })
       }
       hostUpdateRequest={hostUpdateRequest}
@@ -3475,7 +4204,7 @@ export function App(): JSX.Element {
         writeSettings({ transcriptArchiveMaxBytes })
       }
     />
-  )
+  );
 
   /**
    * A plugin's one tab: its strip of pages, and the page in front under it.
@@ -3483,38 +4212,59 @@ export function App(): JSX.Element {
    * another does. A page whose tab the plugin no longer declares is not drawn.
    */
   const renderPluginPages = (ref: PluginPagesRef): ReactNode => {
-    const plugin = plugins.get(ref.plugin)
+    const plugin = plugins.get(ref.plugin);
     if (plugin === undefined) {
-      return pluginState.error === null ? null : <PluginsUnavailable reason={pluginState.error} className="absolute inset-0" />
+      return pluginState.error === null ? null : (
+        <PluginsUnavailable
+          reason={pluginState.error}
+          className="absolute inset-0"
+        />
+      );
     }
-    const pages = ref.pages.filter((page) => plugin.tabs[page.tab] !== undefined)
-    const shown = frontPluginPage({ ...ref, pages })
-    const surface = shown === null ? undefined : plugin.tabs[shown.tab]
-    const shownId = shown === null ? null : pluginPageId(ref.plugin, shown)
-    const holder = findTab(open, paneId(ref))
-    const icon = <PluginIcon url={plugin.icon} size={13} />
+    const pages = ref.pages.filter(
+      (page) => plugin.tabs[page.tab] !== undefined,
+    );
+    const shown = frontPluginPage({ ...ref, pages });
+    const surface = shown === null ? undefined : plugin.tabs[shown.tab];
+    const shownId = shown === null ? null : pluginPageId(ref.plugin, shown);
+    const holder = findTab(open, paneId(ref));
+    const icon = <PluginIcon url={plugin.icon} size={13} />;
     return (
       <div className="absolute inset-0 flex flex-col">
         <PluginPages
           label={`${plugin.name} pages`}
           pages={pages.map((page) => {
-            const title = pluginPageTitle(page, plugin)
-            const id = pluginPageId(ref.plugin, page)
-            const isPreview = id === pagePreviews.get(ref.plugin)
+            const title = pluginPageTitle(page, plugin);
+            const id = pluginPageId(ref.plugin, page);
+            const isPreview = id === pagePreviews.get(ref.plugin);
             return {
               id,
               title: truncate(title, 30),
-              hint: isPreview ? `${title} - ${plugin.name}\n${PREVIEW_HINT}` : `${title} - ${plugin.name}`,
-              preview: isPreview
-            }
+              hint: isPreview
+                ? `${title} - ${plugin.name}\n${PREVIEW_HINT}`
+                : `${title} - ${plugin.name}`,
+              preview: isPreview,
+            };
           })}
           activeId={shownId}
           icon={icon}
           focused={holder !== null && holder.group === open.focused}
-          onActivate={(id) => commit((current) => activatePluginPage(current, ref.plugin, id))}
-          onClose={(id) => commit((current) => closePluginPage(current, ref.plugin, id))}
-          onMove={(id, toIndex) => commit((current) => movePluginPage(current, ref.plugin, id, toIndex))}
-          onKeep={(id) => setPagePreviews((current) => withoutPreview(current, ref.plugin, id))}
+          onActivate={(id) =>
+            commit((current) => activatePluginPage(current, ref.plugin, id))
+          }
+          onClose={(id) =>
+            commit((current) => closePluginPage(current, ref.plugin, id))
+          }
+          onMove={(id, toIndex) =>
+            commit((current) =>
+              movePluginPage(current, ref.plugin, id, toIndex),
+            )
+          }
+          onKeep={(id) =>
+            setPagePreviews((current) =>
+              withoutPreview(current, ref.plugin, id),
+            )
+          }
         />
         {shown !== null && shownId !== null && surface !== undefined && (
           <PluginFrame
@@ -3523,10 +4273,10 @@ export function App(): JSX.Element {
               plugin: ref.plugin,
               revision: plugin.revision,
               url: surface.url,
-              surface: 'tab',
+              surface: "tab",
               name: shown.tab,
               params: shown.params,
-              title: shown.title ?? surface.title
+              title: shown.title ?? surface.title,
             }}
             pluginName={plugin.name}
             onOpenSettings={() => openSettings(pluginSection(plugin.path))}
@@ -3534,16 +4284,16 @@ export function App(): JSX.Element {
           />
         )}
       </div>
-    )
-  }
+    );
+  };
 
   /** Whatever a non-session tab shows, in a pane that is `compact` when it shares the width. */
   const renderPage = (ref: PaneRef, compact: boolean): ReactNode => {
     switch (ref.kind) {
-      case 'project': {
+      case "project": {
         if (hostOf(ref) !== LOCAL_HOST_KEY) {
-          const host = hostOf(ref)
-          const project = remoteProjectOf(host, ref.path)
+          const host = hostOf(ref);
+          const project = remoteProjectOf(host, ref.path);
           return project ? (
             <ProjectColumn
               path={project.path}
@@ -3553,38 +4303,40 @@ export function App(): JSX.Element {
               heightPct={savedShellHeight}
               onHeightChange={setShellHeight}
             >
-            <ProjectPane
-              key={paneId(ref)}
-              project={project}
-              host={hostName(host)}
-              onLaunch={(p) => void launchOn(host, p)}
-              onOpenConfig={(p) => openConfigAt(p, host)}
-              onOpenFiles={(p) => openFilesAt(p, host)}
-              onSaveAsProfile={(p) => saveAsProfileOn(host, p)}
-              launching={launchingPath === project.path}
-              launchError={
-                remoteLaunchError !== null && remoteLaunchError.host === host && remoteLaunchError.path === project.path
-                  ? remoteLaunchError.text
-                  : null
-              }
-            />
+              <ProjectPane
+                key={paneId(ref)}
+                project={project}
+                host={hostName(host)}
+                onLaunch={(p) => void launchOn(host, p)}
+                onOpenConfig={(p) => openConfigAt(p, host)}
+                onOpenFiles={(p) => openFilesAt(p, host)}
+                onSaveAsProfile={(p) => saveAsProfileOn(host, p)}
+                launching={launchingPath === project.path}
+                launchError={
+                  remoteLaunchError !== null &&
+                  remoteLaunchError.host === host &&
+                  remoteLaunchError.path === project.path
+                    ? remoteLaunchError.text
+                    : null
+                }
+              />
             </ProjectColumn>
-          ) : null
+          ) : null;
         }
-        const project = projectsByPath.get(ref.path)
-        return project ? renderProject(project) : null
+        const project = projectsByPath.get(ref.path);
+        return project ? renderProject(project) : null;
       }
-      case 'history':
+      case "history":
         return (
           <SessionHistory
             {...sessionHistoryProps(historyState)}
-            hostChoice={hostChoiceFor('history')}
+            hostChoice={hostChoiceFor("history")}
             onResume={(session) => void resumeSession(session)}
             onReveal={revealOn(historyHost)}
             compact={compact}
           />
-        )
-      case 'sessions':
+        );
+      case "sessions":
         return (
           <SessionsPane
             sessions={machineSessions.sessions}
@@ -3604,11 +4356,11 @@ export function App(): JSX.Element {
             compact={compact}
             remoteHosts={sessionsPaneHosts}
           />
-        )
-      case 'config':
+        );
+      case "config":
         return (
           <ConfigConsole
-            hostChoice={hostChoiceFor('config')}
+            hostChoice={hostChoiceFor("config")}
             scopes={configState.scopes}
             scopePath={configState.scopePath}
             onScopeChange={configState.setScopePath}
@@ -3626,7 +4378,9 @@ export function App(): JSX.Element {
             compact={compact}
             onBack={() => configState.select(null)}
             onNew={
-              configState.scope === null ? undefined : () => configState.openEntryDialog('new')
+              configState.scope === null
+                ? undefined
+                : () => configState.openEntryDialog("new")
             }
             notice={
               configState.deleted === null ? null : (
@@ -3640,7 +4394,7 @@ export function App(): JSX.Element {
               )
             }
           >
-            {configState.view === 'files' ? (
+            {configState.view === "files" ? (
               configState.selected === null ? (
                 <ConfigNothingSelected
                   scope={configState.scope}
@@ -3668,12 +4422,14 @@ export function App(): JSX.Element {
                   onOpenExternal={openLink}
                   onDirtyChange={configState.setDirty}
                   onHighlight={helmHighlight}
-                  onRename={() => configState.openEntryDialog('rename')}
-                  onDelete={() => configState.openEntryDialog('delete')}
-                  justCreated={configState.selected.path === configState.createdPath}
+                  onRename={() => configState.openEntryDialog("rename")}
+                  onDelete={() => configState.openEntryDialog("delete")}
+                  justCreated={
+                    configState.selected.path === configState.createdPath
+                  }
                 />
               )
-            ) : configState.view === 'effective' ? (
+            ) : configState.view === "effective" ? (
               <EffectiveViewPane
                 profiles={profileState.profiles}
                 profileId={configState.effectiveProfileId}
@@ -3686,12 +4442,13 @@ export function App(): JSX.Element {
                 onReveal={revealOn(configHost)}
                 onOpenFile={configState.openPath}
               />
-            ) : configState.view === 'mcp' ? (
+            ) : configState.view === "mcp" ? (
               <McpPanel
                 cwd={
-                  configState.scope?.kind === 'user'
-                    ? (configState.scopes.find((s) => s.kind !== 'user')?.path ?? '')
-                    : (configState.scope?.path ?? '')
+                  configState.scope?.kind === "user"
+                    ? (configState.scopes.find((s) => s.kind !== "user")
+                        ?.path ?? "")
+                    : (configState.scope?.path ?? "")
                 }
                 servers={configState.mcpServers}
                 listing={configState.mcpListing}
@@ -3719,16 +4476,17 @@ export function App(): JSX.Element {
               />
             )}
           </ConfigConsole>
-        )
-      case 'browser': {
-        const view = frontPage === null ? undefined : browserViews.get(frontPage)
-        const holder = findTab(open, paneId(ref))
+        );
+      case "browser": {
+        const view =
+          frontPage === null ? undefined : browserViews.get(frontPage);
+        const holder = findTab(open, paneId(ref));
         return (
           <div className="flex h-full min-h-0 flex-col">
             <BrowserPages
               pages={browsers.pages.flatMap((id) => {
-                const page = browserViews.get(id)
-                return page === undefined ? [] : [page]
+                const page = browserViews.get(id);
+                return page === undefined ? [] : [page];
               })}
               activeId={frontPage}
               focused={holder !== null && holder.group === open.focused}
@@ -3747,9 +4505,13 @@ export function App(): JSX.Element {
                   state={view}
                   entries={browsers.entries.get(view.id) ?? EMPTY_CONSOLE}
                   recent={browsers.recent}
-                  focusRequest={browserFocus?.page === view.id ? browserFocus.what : null}
+                  focusRequest={
+                    browserFocus?.page === view.id ? browserFocus.what : null
+                  }
                   onFocusRequestDone={browserFocusDone}
-                  searchEngine={browserSearchName(settings?.browserSearch ?? DEFAULT_SETTINGS.browserSearch)}
+                  searchEngine={browserSearchName(
+                    settings?.browserSearch ?? DEFAULT_SETTINGS.browserSearch,
+                  )}
                   still={browsers.stills.get(view.id) ?? null}
                   canShare={settings?.browserMcp ?? DEFAULT_SETTINGS.browserMcp}
                   onShareTargets={browsers.shareTargets}
@@ -3761,31 +4523,37 @@ export function App(): JSX.Element {
                   onReload={(hard) => browsers.reload(view.id, hard)}
                   onDevTools={() => browsers.devtools(view.id)}
                   onOpenExternal={(url) => void helmOpenExternal(url)}
-                  onFind={(query, forward) => browsers.find(view.id, query, forward)}
+                  onFind={(query, forward) =>
+                    browsers.find(view.id, query, forward)
+                  }
                   onStopFind={() => browsers.stopFind(view.id)}
                   onZoom={(level) => browsers.zoom(view.id, level)}
                   onClearStorage={() => browsers.clearStorage(view.id)}
                   onEvaluate={(source) => browsers.evaluate(view.id, source)}
                   // The address dropdown hangs over the page; the view stands
                   // down for it, the same way it does for a tab drag.
-                  onCovering={(covering) => browsers.setSuppressed('address-list', covering)}
+                  onCovering={(covering) =>
+                    browsers.setSuppressed("address-list", covering)
+                  }
                 />
               </div>
             )}
           </div>
-        )
+        );
       }
-      case 'settings':
-        return renderSettings()
-      case 'plugin': {
-        const on = hostOf(ref)
-        const plugin = pluginsOn(on).get(ref.plugin)
-        const surface = plugin?.tabs[ref.tab]
-        const unread = pluginsUnreadOn(on)
+      case "settings":
+        return renderSettings();
+      case "plugin": {
+        const on = hostOf(ref);
+        const plugin = pluginsOn(on).get(ref.plugin);
+        const surface = plugin?.tabs[ref.tab];
+        const unread = pluginsUnreadOn(on);
         if (plugin === undefined && unread !== null) {
-          return <PluginsUnavailable reason={unread} className="absolute inset-0" />
+          return (
+            <PluginsUnavailable reason={unread} className="absolute inset-0" />
+          );
         }
-        if (plugin === undefined || surface === undefined) return null
+        if (plugin === undefined || surface === undefined) return null;
         return (
           <PluginFrame
             spec={{
@@ -3794,53 +4562,58 @@ export function App(): JSX.Element {
               ...(on === LOCAL_HOST_KEY ? {} : { host: on }),
               revision: plugin.revision,
               url: surface.url,
-              surface: 'tab',
+              surface: "tab",
               name: ref.tab,
               params: ref.params,
-              title: ref.title ?? surface.title
+              title: ref.title ?? surface.title,
             }}
             pluginName={plugin.name}
             onOpenSettings={() => openPluginSettings(on, plugin.path)}
             className="absolute inset-0"
           />
-        )
+        );
       }
-      case 'plugin-pages':
-        return renderPluginPages(ref)
-      case 'restore':
+      case "plugin-pages":
+        return renderPluginPages(ref);
+      case "restore":
         return restoreOffer === null ? null : (
           <RestorePane
             // Opened again with what a lost tab asked for ticked.
-            key={restoreChosen === null ? 'every' : restoreChosen.join(',')}
+            key={restoreChosen === null ? "every" : restoreChosen.join(",")}
             {...(restoreChosen === null ? {} : { preselected: restoreChosen })}
             {...(hostRunning === true ? { lostWith: LOCAL_HOST_NAME } : {})}
             offer={restoreOffer}
-            withoutAsking={settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking}
-            onWithoutAskingChange={(restoreWithoutAsking) => writeSettings({ restoreWithoutAsking })}
+            withoutAsking={
+              settings?.restoreWithoutAsking ??
+              DEFAULT_SETTINGS.restoreWithoutAsking
+            }
+            onWithoutAskingChange={(restoreWithoutAsking) =>
+              writeSettings({ restoreWithoutAsking })
+            }
             busy={restoreState.busy}
             onResume={(ids) => void resumeLost(ids)}
             onNotNow={dismissRestore}
             now={now}
           />
-        )
-      case 'session':
-      case 'terminal':
-      case 'file':
+        );
+      case "session":
+      case "terminal":
+      case "file":
         // None is a page: a session or a terminal tab is its terminal and a
         // file its view, all drawn edge to edge by `renderGroup`.
-        return null
+        return null;
     }
-  }
+  };
 
   /**
    * A file tab's view: the code on the pane itself, no page gutter around it -
    * or, for a note or an artifact, the document, with the code as its Source.
    */
   const renderFile = (ref: FileRef): JSX.Element => {
-    const on = hostOf(ref)
-    const key = fileKey(ref.path, on)
-    const state = files.tabs.get(key)
-    const reveal = fileReveals.get(key) ?? null
+    const on = hostOf(ref);
+    const key = fileKey(ref.path, on);
+    const state = files.tabs.get(key);
+    const reveal = fileReveals.get(key) ?? null;
     const code = (
       <FileView
         key={paneId(ref)}
@@ -3859,9 +4632,9 @@ export function App(): JSX.Element {
             : () => openInEditor(ref.path, fileCarets.current.get(key) ?? null)
         }
       />
-    )
-    const kind = documentKind(ref.path)
-    if (kind === null) return code
+    );
+    const kind = documentKind(ref.path);
+    if (kind === null) return code;
     return (
       <DocumentTab
         key={paneId(ref)}
@@ -3869,7 +4642,7 @@ export function App(): JSX.Element {
         scopePath={scopeOf(ref)}
         path={ref.path}
         kind={kind}
-        mode={docModes.get(key) ?? 'preview'}
+        mode={docModes.get(key) ?? "preview"}
         source={code}
         highlight={reveal?.term ?? null}
         draftKey={key}
@@ -3879,8 +4652,8 @@ export function App(): JSX.Element {
         onOpenPath={(path) => openFileAt(ref.root, path, true, undefined, on)}
         onOpenExternal={openLink}
       />
-    )
-  }
+    );
+  };
 
   // ---------------------------------------------------------------------------
   // The frame
@@ -3888,15 +4661,16 @@ export function App(): JSX.Element {
 
   /** One pane, by its group's id: its strip, its crumb, its sessions' terminals, its front page and its drop zones. */
   const renderGroup = (id: number): JSX.Element | null => {
-    const index = open.groups.findIndex((candidate) => candidate.id === id)
-    const group = open.groups[index]
-    if (group === undefined) return null
-    const groupFront = activeRef(group)
-    const groupFrontId = groupFront === null ? null : paneId(groupFront)
+    const index = open.groups.findIndex((candidate) => candidate.id === id);
+    const group = open.groups[index];
+    if (group === undefined) return null;
+    const groupFront = activeRef(group);
+    const groupFrontId = groupFront === null ? null : paneId(groupFront);
     const attention = group.tabs.some(
-      (ref) => ref.kind === 'session' && sessionAt(ref)?.indicator === 'waiting'
-    )
-    const single = open.groups.length === 1
+      (ref) =>
+        ref.kind === "session" && sessionAt(ref)?.indicator === "waiting",
+    );
+    const single = open.groups.length === 1;
     return (
       <PaneGroup
         index={index}
@@ -3904,8 +4678,8 @@ export function App(): JSX.Element {
         focused={id === open.focused}
         attention={attention}
         bodyRef={(element) => {
-          if (element === null) bodyRefs.current.delete(id)
-          else bodyRefs.current.set(id, element)
+          if (element === null) bodyRefs.current.delete(id);
+          else bodyRefs.current.set(id, element);
         }}
         onFocus={() => commit((current) => focusGroup(current, id))}
         drop={
@@ -3921,20 +4695,23 @@ export function App(): JSX.Element {
             activeId={groupFrontId}
             focused={id === open.focused}
             onActivate={(id) => {
-              commit((current) => activateTab(current, id))
-              const ref = group.tabs.find((tab) => paneId(tab) === id)
-              if (ref !== undefined) bringSidebarFor(ref)
+              commit((current) => activateTab(current, id));
+              const ref = group.tabs.find((tab) => paneId(tab) === id);
+              if (ref !== undefined) bringSidebarFor(ref);
             }}
             onClose={closeAny}
-            onMove={(tab, toIndex) => commit((current) => moveTab(current, tab, id, toIndex))}
+            onMove={(tab, toIndex) =>
+              commit((current) => moveTab(current, tab, id, toIndex))
+            }
             onRename={(tab, label) => {
-              const ref = sessionTabRef(tab)
-              if (ref === null) return
-              if (ref.host === LOCAL_HOST_KEY) void sessionState.rename(ref.id, label)
+              const ref = sessionTabRef(tab);
+              if (ref === null) return;
+              if (ref.host === LOCAL_HOST_KEY)
+                void sessionState.rename(ref.id, label);
               else
                 void bridgeFor(ref.host)
-                  .invoke('session:rename', { id: ref.id, label })
-                  .then((record) => adoptThere(ref.host, record))
+                  .invoke("session:rename", { id: ref.id, label })
+                  .then((record) => adoptThere(ref.host, record));
             }}
             onKeep={keepTab}
             menuFor={tabMenuFor}
@@ -3944,16 +4721,19 @@ export function App(): JSX.Element {
             newTabOpen={newTab?.group === id}
             actions={
               <>
-                {groupFront?.kind === 'file' && (
+                {groupFront?.kind === "file" && (
                   <FileActions
                     path={groupFront.path}
                     onOpenInEditor={
-                      files.editor === null || hostOf(groupFront) !== LOCAL_HOST_KEY
+                      files.editor === null ||
+                      hostOf(groupFront) !== LOCAL_HOST_KEY
                         ? null
                         : () =>
                             openInEditor(
                               groupFront.path,
-                              fileCarets.current.get(fileKey(groupFront.path)) ?? null
+                              fileCarets.current.get(
+                                fileKey(groupFront.path),
+                              ) ?? null,
                             )
                     }
                     onReveal={revealOn(hostOf(groupFront))}
@@ -3961,23 +4741,25 @@ export function App(): JSX.Element {
                   />
                 )}
                 <PaneActions
-                split={single ? (group.tabs.length > 1 ? 'new' : null) : 'other'}
-                maximized={shownMax === id}
-                canMaximize={group.tabs.length > 0}
-                canClose={!single}
-                onSplit={() => {
-                  commit((current) => sendBeside(focusGroup(current, id)))
-                  setMaximized(null)
-                }}
-                onMaximize={() => {
-                  commit((current) => focusGroup(current, id))
-                  setMaximized((current) => (current === id ? null : id))
-                }}
-                onClose={() => {
-                  commit((current) => closeGroup(current, id))
-                  setMaximized(null)
-                }}
-              />
+                  split={
+                    single ? (group.tabs.length > 1 ? "new" : null) : "other"
+                  }
+                  maximized={shownMax === id}
+                  canMaximize={group.tabs.length > 0}
+                  canClose={!single}
+                  onSplit={() => {
+                    commit((current) => sendBeside(focusGroup(current, id)));
+                    setMaximized(null);
+                  }}
+                  onMaximize={() => {
+                    commit((current) => focusGroup(current, id));
+                    setMaximized((current) => (current === id ? null : id));
+                  }}
+                  onClose={() => {
+                    commit((current) => closeGroup(current, id));
+                    setMaximized(null);
+                  }}
+                />
               </>
             }
           />
@@ -3988,36 +4770,45 @@ export function App(): JSX.Element {
             shown. The terminal itself lives in terminals.ts and outlives any
             render, but a pane that is not mounted has nowhere to put it. */}
         {group.tabs.map((ref) => {
-          if (ref.kind === 'terminal') {
-            const isFront = groupFrontId === paneId(ref)
+          if (ref.kind === "terminal") {
+            const isFront = groupFrontId === paneId(ref);
             return (
               <div
                 key={paneId(ref)}
-                className={cn('absolute inset-0', isFront ? 'block' : 'hidden')}
+                className={cn("absolute inset-0", isFront ? "block" : "hidden")}
                 aria-hidden={!isFront}
               >
                 <TerminalTabPane
                   id={ref.id}
                   path={ref.path}
                   active={isFront}
-                  windowsBuild={hostOf(ref) === LOCAL_HOST_KEY ? (info?.windowsBuild ?? null) : null}
-                  {...(hostOf(ref) === LOCAL_HOST_KEY ? {} : { host: hostOf(ref), hostName: hostName(hostOf(ref)) })}
+                  windowsBuild={
+                    hostOf(ref) === LOCAL_HOST_KEY
+                      ? (info?.windowsBuild ?? null)
+                      : null
+                  }
+                  {...(hostOf(ref) === LOCAL_HOST_KEY
+                    ? {}
+                    : { host: hostOf(ref), hostName: hostName(hostOf(ref)) })}
                 />
               </div>
-            )
+            );
           }
-          if (ref.kind !== 'session') return null
+          if (ref.kind !== "session") return null;
           if (hostOf(ref) !== LOCAL_HOST_KEY) {
-            const there = remoteSessionOf(hostOf(ref), ref.id)
-            if (!there) return null
-            const remoteFront = groupFrontId === paneId(ref)
+            const there = remoteSessionOf(hostOf(ref), ref.id);
+            if (!there) return null;
+            const remoteFront = groupFrontId === paneId(ref);
             // A host that dropped keeps its tab's last screen, dimmed with input
             // off under a banner; the session is still running there, and the
             // terminal reattaches once it is back.
             return (
               <div
                 key={paneId(ref)}
-                className={cn('absolute inset-0', remoteFront ? 'block' : 'hidden')}
+                className={cn(
+                  "absolute inset-0",
+                  remoteFront ? "block" : "hidden",
+                )}
                 aria-hidden={!remoteFront}
               >
                 <TerminalPane
@@ -4029,15 +4820,15 @@ export function App(): JSX.Element {
                   hostLost={hostAway(hostOf(ref)) ?? undefined}
                 />
               </div>
-            )
+            );
           }
-          const session = sessionsById.get(ref.id)
-          if (!session) return null
-          const isFront = groupFrontId === paneId(ref)
+          const session = sessionsById.get(ref.id);
+          if (!session) return null;
+          const isFront = groupFrontId === paneId(ref);
           return (
             <div
               key={paneId(ref)}
-              className={cn('absolute inset-0', isFront ? 'block' : 'hidden')}
+              className={cn("absolute inset-0", isFront ? "block" : "hidden")}
               aria-hidden={!isFront}
             >
               <TerminalPane
@@ -4046,104 +4837,137 @@ export function App(): JSX.Element {
                 windowsBuild={info?.windowsBuild ?? null}
                 onClose={closeSession}
                 hostGone={hostRunning === true && hostLink.lost !== null}
-                {...(session.status === 'lost' && hostRunning === true
+                {...(session.status === "lost" && hostRunning === true
                   ? {
                       lost: {
                         hostName: LOCAL_HOST_NAME,
                         restoreReady:
                           hostLink.lost === null &&
-                          (restoreOffer?.sessions.some((each) => each.id === session.id && each.blocked === null) ??
+                          (restoreOffer?.sessions.some(
+                            (each) =>
+                              each.id === session.id && each.blocked === null,
+                          ) ??
                             false),
-                        onRestore: () => restoreSession(session.id)
-                      }
+                        onRestore: () => restoreSession(session.id),
+                      },
                     }
                   : {})}
               />
             </div>
-          )
+          );
         })}
-        {groupFront?.kind === 'file' && <div className="absolute inset-0">{renderFile(groupFront)}</div>}
-        {groupFront !== null &&
-          groupFront.kind !== 'session' &&
-          groupFront.kind !== 'terminal' &&
-          groupFront.kind !== 'file' && (
-          // On the pane itself: the pane is the island, and a page says what it
-          // has in sections with hairlines rather than islands of its own.
-          <div className="absolute inset-0">{renderPage(groupFront, narrow.has(id))}</div>
+        {groupFront?.kind === "file" && (
+          <div className="absolute inset-0">{renderFile(groupFront)}</div>
         )}
+        {groupFront !== null &&
+          groupFront.kind !== "session" &&
+          groupFront.kind !== "terminal" &&
+          groupFront.kind !== "file" && (
+            // On the pane itself: the pane is the island, and a page says what it
+            // has in sections with hairlines rather than islands of its own.
+            <div className="absolute inset-0">
+              {renderPage(groupFront, narrow.has(id))}
+            </div>
+          )}
       </PaneGroup>
-    )
-  }
+    );
+  };
 
   // A fact about the machine that qualifies the whole window: the CLI is
   // missing, or it is a version outside what this build was measured against.
   const versionWarning =
     setup.status !== null &&
     !setup.bannerDismissed &&
-    (setup.status.path === null || setup.status.version === null || !setup.status.tested)
+    (setup.status.path === null ||
+      setup.status.version === null ||
+      !setup.status.tested);
 
   const toggleView = (view: SidebarView): void => {
     if (sidebarShown && sidebarView === view) {
-      setSidebarHidden(true)
-      return
+      setSidebarHidden(true);
+      return;
     }
-    setSidebarView(view)
-    setSidebarHidden(false)
-    setMaximized(null)
-  }
+    setSidebarView(view);
+    setSidebarHidden(false);
+    setMaximized(null);
+  };
 
   /** A plugin's rail panel, brought up - never put away, as pressing its icon again would. */
   const showPluginPanel = (id: string): void => {
-    setSidebarView(pluginRailId(id))
-    setSidebarHidden(false)
-    setMaximized(null)
-  }
+    setSidebarView(pluginRailId(id));
+    setSidebarHidden(false);
+    setMaximized(null);
+  };
 
   /**
    * Every plugin with a rail icon: this PC's, then each connected host's in
    * the order the hosts were added, each by the sidebar view it opens.
    */
-  const railPluginEntries = [LOCAL_HOST_KEY, ...connectedHostIds].flatMap((host) =>
-    [...pluginsOn(host).entries()].flatMap(([id, plugin]) =>
-      plugin.rail === null ? [] : [{ host, id, plugin, rail: plugin.rail, view: railViewOf(host, id) }]
-    )
-  )
+  const railPluginEntries = [LOCAL_HOST_KEY, ...connectedHostIds].flatMap(
+    (host) =>
+      [...pluginsOn(host).entries()].flatMap(([id, plugin]) =>
+        plugin.rail === null
+          ? []
+          : [
+              {
+                host,
+                id,
+                plugin,
+                rail: plugin.rail,
+                view: railViewOf(host, id),
+              },
+            ],
+      ),
+  );
 
   /** The plugin panel the sidebar is showing, when it is showing one, on its host. */
   const sidebarPanel = (() => {
-    if (!sidebarView.startsWith('plugin:')) return null
-    const entry = railPluginEntries.find((candidate) => candidate.view === sidebarView)
-    if (entry === undefined) return null
-    const { host, id, plugin } = entry
-    const spec = railPanelSpec(id, plugin, host)
-    if (spec === null) return null
-    return { spec, host, name: plugin.name, path: plugin.path, actions: plugin.panels[spec.name]?.actions ?? [] }
-  })()
+    if (!sidebarView.startsWith("plugin:")) return null;
+    const entry = railPluginEntries.find(
+      (candidate) => candidate.view === sidebarView,
+    );
+    if (entry === undefined) return null;
+    const { host, id, plugin } = entry;
+    const spec = railPanelSpec(id, plugin, host);
+    if (spec === null) return null;
+    return {
+      spec,
+      host,
+      name: plugin.name,
+      path: plugin.path,
+      actions: plugin.panels[spec.name]?.actions ?? [],
+    };
+  })();
 
   /** Each plugin's status item; pressing one opens its panel, or its Settings page when it has none. */
-  const statusPlugins: StatusPluginItem[] = [...plugins.entries()].flatMap(([id, plugin]) =>
-    plugin.status === null
-      ? []
-      : [
-          {
-            id,
-            name: plugin.name,
-            text: plugin.status.text,
-            tone: plugin.status.tone ?? 'neutral',
-            tooltip: plugin.status.tooltip ?? null,
-            onSelect: () => (plugin.rail !== null ? showPluginPanel(id) : openSettings(pluginSection(plugin.path)))
-          }
-        ]
-  )
+  const statusPlugins: StatusPluginItem[] = [...plugins.entries()].flatMap(
+    ([id, plugin]) =>
+      plugin.status === null
+        ? []
+        : [
+            {
+              id,
+              name: plugin.name,
+              text: plugin.status.text,
+              tone: plugin.status.tone ?? "neutral",
+              tooltip: plugin.status.tooltip ?? null,
+              onSelect: () =>
+                plugin.rail !== null
+                  ? showPluginPanel(id)
+                  : openSettings(pluginSection(plugin.path)),
+            },
+          ],
+  );
 
-  const paletteCommands: PaletteCommand[] = [...plugins.entries()].flatMap(([id, plugin]) =>
-    plugin.commands.map((command) => ({
-      key: `${id}/${command.id}`,
-      title: command.title,
-      source: plugin.name,
-      icon: <PluginIcon url={plugin.icon} size={13} />
-    }))
-  )
+  const paletteCommands: PaletteCommand[] = [...plugins.entries()].flatMap(
+    ([id, plugin]) =>
+      plugin.commands.map((command) => ({
+        key: `${id}/${command.id}`,
+        title: command.title,
+        source: plugin.name,
+        icon: <PluginIcon url={plugin.icon} size={13} />,
+      })),
+  );
 
   /**
    * A command chosen in the palette. One with a tab opens it; one without is
@@ -4151,66 +4975,73 @@ export function App(): JSX.Element {
    * for its rail panel, which comes up to take it.
    */
   const runPluginCommand = (key: string): void => {
-    setPaletteOpen(false)
-    const slash = key.indexOf('/')
-    const id = key.slice(0, slash)
-    const plugin = plugins.get(id)
-    const command = plugin?.commands.find((candidate) => candidate.id === key.slice(slash + 1))
-    if (plugin === undefined || command === undefined) return
+    setPaletteOpen(false);
+    const slash = key.indexOf("/");
+    const id = key.slice(0, slash);
+    const plugin = plugins.get(id);
+    const command = plugin?.commands.find(
+      (candidate) => candidate.id === key.slice(slash + 1),
+    );
+    if (plugin === undefined || command === undefined) return;
     if (command.tab !== null) {
-      openPluginTab(id, command.tab, {}, null, false)
-      return
+      openPluginTab(id, command.tab, {}, null, false);
+      return;
     }
     if (plugin.background !== null) {
-      void helm.invoke('plugins:command', { plugin: id, id: command.id })
-      return
+      void helm.invoke("plugins:command", { plugin: id, id: command.id });
+      return;
     }
-    const spec = railPanelSpec(id, plugin)
-    if (spec === null) return
-    showPluginPanel(id)
-    queueToPluginFrame(spec, 'command', { id: command.id })
-  }
+    const spec = railPanelSpec(id, plugin);
+    if (spec === null) return;
+    showPluginPanel(id);
+    queueToPluginFrame(spec, "command", { id: command.id });
+  };
 
   /** The plugins a secret asked for may be shared with: those on the asking plugin's host. */
-  const secretChoices: SecretPluginChoice[] = [...pluginsOn(secretAsk?.host ?? LOCAL_HOST_KEY).entries()].map(
-    ([id, plugin]) => ({
-      id,
-      name: plugin.name,
-      network: plugin.network,
-      secrets: plugin.secrets.map((entry) => entry.key)
-    })
-  )
+  const secretChoices: SecretPluginChoice[] = [
+    ...pluginsOn(secretAsk?.host ?? LOCAL_HOST_KEY).entries(),
+  ].map(([id, plugin]) => ({
+    id,
+    name: plugin.name,
+    network: plugin.network,
+    secrets: plugin.secrets.map((entry) => entry.key),
+  }));
 
-  const inFront = (...kinds: PaneRef['kind'][]): boolean =>
-    front !== null && kinds.includes(front.kind)
+  const inFront = (...kinds: PaneRef["kind"][]): boolean =>
+    front !== null && kinds.includes(front.kind);
   const page = (
     id: string,
     label: string,
     icon: JSX.Element,
     onSelect: () => void,
     current: boolean,
-    hook: `data-${string}`
+    hook: `data-${string}`,
   ): RailItem => ({
     id,
     label,
     icon,
-    kind: 'page',
+    kind: "page",
     current,
     onSelect,
-    hooks: { [hook]: true } as Record<`data-${string}`, boolean>
-  })
+    hooks: { [hook]: true } as Record<`data-${string}`, boolean>,
+  });
 
-  const railHidden = settings?.railHidden ?? DEFAULT_SETTINGS.railHidden
+  const railHidden = settings?.railHidden ?? DEFAULT_SETTINGS.railHidden;
   /** A tick in the rail's right-click menu: hidden, or back where it was. */
   const toggleRailItem = (id: string): void => {
     const known: RailItemId | undefined =
-      RAIL_DESTINATIONS.find((destination) => destination === id) ?? (isPluginRailId(id) ? id : undefined)
-    if (known === undefined) return
-    const hiding = !railHidden.includes(known)
-    writeSettings({ railHidden: hiding ? [...railHidden, known] : railHidden.filter((item) => item !== known) })
+      RAIL_DESTINATIONS.find((destination) => destination === id) ??
+      (isPluginRailId(id) ? id : undefined);
+    if (known === undefined) return;
+    const hiding = !railHidden.includes(known);
+    writeSettings({
+      railHidden: hiding
+        ? [...railHidden, known]
+        : railHidden.filter((item) => item !== known),
+    });
     // Hiding the view the sidebar is showing puts the sidebar away with it.
-    if (hiding && sidebarShown && sidebarView === known) setSidebarHidden(true)
-  }
+    if (hiding && sidebarShown && sidebarView === known) setSidebarHidden(true);
+  };
 
   // Plugins with a rail icon, in a group of their own under a rule: each opens
   // its panel in the sidebar, the way Sessions and Files do.
@@ -4218,16 +5049,22 @@ export function App(): JSX.Element {
   const pluginRailItems = railPluginEntries.map(
     ({ host, id, plugin, rail, view }): RailItem => ({
       id: view,
-      label: host === LOCAL_HOST_KEY ? rail.title : `${rail.title} · ${hostName(host)}`,
+      label:
+        host === LOCAL_HOST_KEY
+          ? rail.title
+          : `${rail.title} · ${hostName(host)}`,
       icon: <PluginIcon url={plugin.icon} size={RAIL_ICON.width} />,
-      kind: 'view',
+      kind: "view",
       current: sidebarShown && sidebarView === view,
       badge: plugin.badge,
       onSelect: () => toggleView(view),
-      hooks: host === LOCAL_HOST_KEY ? { 'data-open-plugin': id } : { 'data-open-plugin': id, 'data-plugin-host': host }
-    })
-  )
-  const railPlugins = pluginRailItems.length === 0 ? [] : [pluginRailItems]
+      hooks:
+        host === LOCAL_HOST_KEY
+          ? { "data-open-plugin": id }
+          : { "data-open-plugin": id, "data-plugin-host": host },
+    }),
+  );
+  const railPlugins = pluginRailItems.length === 0 ? [] : [pluginRailItems];
 
   // Ordered by how often each is reached for (DESIGN.md "The rail"): the
   // daily three - sessions, profiles and history - then the rest under a rule.
@@ -4238,87 +5075,96 @@ export function App(): JSX.Element {
       groups={[
         [
           {
-            id: 'sessions',
-            label: 'Sessions',
+            id: "sessions",
+            label: "Sessions",
             icon: <TerminalIcon {...RAIL_ICON} />,
-            kind: 'view',
-            current: sidebarShown && sidebarView === 'sessions',
+            kind: "view",
+            current: sidebarShown && sidebarView === "sessions",
             attention: statusCounts.waiting > 0,
-            onSelect: () => toggleView('sessions')
+            onSelect: () => toggleView("sessions"),
           },
           {
-            id: 'profiles',
-            label: 'Profiles',
+            id: "profiles",
+            label: "Profiles",
             icon: <LayersIcon {...RAIL_ICON} />,
-            kind: 'view',
-            current: sidebarShown && sidebarView === 'profiles',
-            onSelect: () => toggleView('profiles'),
-            hooks: { 'data-open-profiles': true }
+            kind: "view",
+            current: sidebarShown && sidebarView === "profiles",
+            onSelect: () => toggleView("profiles"),
+            hooks: { "data-open-profiles": true },
           },
           page(
-            'history',
-            'Session history',
+            "history",
+            "Session history",
             <HistoryIcon {...RAIL_ICON} />,
             openHistory,
-            inFront('history'),
-            'data-open-history'
-          )
+            inFront("history"),
+            "data-open-history",
+          ),
         ],
         [
           {
-            id: 'files',
-            label: 'Files',
+            id: "files",
+            label: "Files",
             icon: <DocIcon {...RAIL_ICON} />,
-            kind: 'view',
-            current: sidebarShown && sidebarView === 'files',
-            onSelect: () => toggleView('files'),
-            hooks: { 'data-open-files': true }
+            kind: "view",
+            current: sidebarShown && sidebarView === "files",
+            onSelect: () => toggleView("files"),
+            hooks: { "data-open-files": true },
           },
           page(
-            'browser',
-            'Browser',
+            "browser",
+            "Browser",
             <GlobeIcon {...RAIL_ICON} />,
             showBrowser,
-            inFront('browser'),
-            'data-open-browser'
+            inFront("browser"),
+            "data-open-browser",
           ),
           page(
-            'config',
-            'Config',
+            "config",
+            "Config",
             <SlidersIcon {...RAIL_ICON} />,
             openConfig,
-            inFront('config'),
-            'data-open-config'
-          )
+            inFront("config"),
+            "data-open-config",
+          ),
         ],
-        ...railPlugins
+        ...railPlugins,
       ]}
       footer={[
         {
-          id: 'settings',
-          label: 'Settings',
+          id: "settings",
+          label: "Settings",
           icon: <GearIcon {...RAIL_ICON} />,
-          kind: 'view',
+          kind: "view",
           // A view, because its sections are: the sidebar lists them and the
           // pane shows the one picked. Pressed again it puts the sidebar away
           // and leaves the page open, as every view does.
-          current: sidebarShown && sidebarView === 'settings',
+          current: sidebarShown && sidebarView === "settings",
           hideable: false,
-          onSelect: () => (sidebarShown && sidebarView === 'settings' ? setSidebarHidden(true) : openSettings()),
-          hooks: { 'data-open-settings': true }
-        }
+          onSelect: () =>
+            sidebarShown && sidebarView === "settings"
+              ? setSidebarHidden(true)
+              : openSettings(),
+          hooks: { "data-open-settings": true },
+        },
       ]}
     />
-  )
+  );
 
   const sidebar = !sidebarShown ? null : (
     <>
-      <div className={cn('flex h-full', sidebarView !== 'sessions' && 'hidden')}>
+      <div
+        className={cn("flex h-full", sidebarView !== "sessions" && "hidden")}
+      >
         <Sidebar
           title="Sessions"
           actions={
             <>
-              <SidebarAction label={`New session (${shortcutLabel('N')})`} onClick={openLauncher} data-new-session>
+              <SidebarAction
+                label={`New session (${shortcutLabel("N")})`}
+                onClick={openLauncher}
+                data-new-session
+              >
                 <PlusIcon width={13} height={13} />
               </SidebarAction>
               <SidebarAction
@@ -4329,17 +5175,21 @@ export function App(): JSX.Element {
                 <RefreshIcon
                   width={13}
                   height={13}
-                  className={cn(launcher.scanning && 'animate-spin')}
+                  className={cn(launcher.scanning && "animate-spin")}
                 />
               </SidebarAction>
               <SidebarAction
                 label="Create a new harness"
-                onClick={() => setup.openDialog('new')}
+                onClick={() => setup.openDialog("new")}
                 data-create-harness
               >
                 <HarnessIcon width={13} height={13} />
               </SidebarAction>
-              <SidebarAction label="Add a folder to scan" onClick={launcher.addRoot} data-add-root>
+              <SidebarAction
+                label="Add a folder to scan"
+                onClick={launcher.addRoot}
+                data-add-root
+              >
                 <FolderPlusIcon width={13} height={13} />
               </SidebarAction>
             </>
@@ -4350,12 +5200,12 @@ export function App(): JSX.Element {
               data-open-sessions
               onClick={openSessions}
               title="Every Claude Code session running on this machine"
-              aria-current={inFront('sessions') ? 'true' : undefined}
+              aria-current={inFront("sessions") ? "true" : undefined}
               className={cn(
-                'flex h-7 w-full items-center gap-2 rounded-raised px-2 text-left text-[11.5px] transition-colors',
-                inFront('sessions')
-                  ? 'bg-hover text-fg hover:bg-active'
-                  : 'text-fg-subtle hover:bg-hover hover:text-fg'
+                "flex h-7 w-full items-center gap-2 rounded-raised px-2 text-left text-[11.5px] transition-colors",
+                inFront("sessions")
+                  ? "bg-hover text-fg hover:bg-active"
+                  : "text-fg-subtle hover:bg-hover hover:text-fg",
               )}
             >
               <TerminalIcon width={12} height={12} className="shrink-0" />
@@ -4367,8 +5217,10 @@ export function App(): JSX.Element {
             discovery={discovery}
             scanning={launcher.scanning}
             scanError={launcher.scanError}
-            selectedPath={front?.kind === 'project' ? front.path : null}
-            pinnedPaths={settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects}
+            selectedPath={front?.kind === "project" ? front.path : null}
+            pinnedPaths={
+              settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects
+            }
             onTogglePin={togglePin}
             sessionsByPath={tree.byPath}
             elsewhere={tree.elsewhere}
@@ -4380,7 +5232,12 @@ export function App(): JSX.Element {
             reveal={treeReveal}
             {...(listedHosts.length === 0
               ? {}
-              : { hosts: treeHosts, hostActions: treeHostActions, localName: LOCAL_HOST_LABEL, localKey: LOCAL_HOST_KEY })}
+              : {
+                  hosts: treeHosts,
+                  hostActions: treeHostActions,
+                  localName: LOCAL_HOST_LABEL,
+                  localKey: LOCAL_HOST_KEY,
+                })}
           />
         </Sidebar>
       </div>
@@ -4389,7 +5246,7 @@ export function App(): JSX.Element {
           is mounted only while it is the view: its rows are titled buttons
           inside the sidebar, and kept hidden in the DOM they would be counted
           by every `aside button[title]` that means "a project row". */}
-      {sidebarView === 'files' && (
+      {sidebarView === "files" && (
         <Sidebar
           title="Files"
           scope={
@@ -4397,7 +5254,7 @@ export function App(): JSX.Element {
               roots={files.roots}
               value={files.root}
               onChange={files.setRoot}
-              hostChoice={hostChoiceFor('files')}
+              hostChoice={hostChoiceFor("files")}
             />
           }
           actions={
@@ -4407,7 +5264,7 @@ export function App(): JSX.Element {
                   <SidebarAction
                     label="Reveal project in Explorer"
                     onClick={() => {
-                      if (files.root !== null) launcher.reveal(files.root)
+                      if (files.root !== null) launcher.reveal(files.root);
                     }}
                   >
                     <FolderIcon width={13} height={13} />
@@ -4417,7 +5274,7 @@ export function App(): JSX.Element {
                   <SidebarAction
                     label="Open project in VS Code"
                     onClick={() => {
-                      if (files.root !== null) openInEditor(files.root, null)
+                      if (files.root !== null) openInEditor(files.root, null);
                     }}
                   >
                     <CodeIcon width={13} height={13} />
@@ -4427,19 +5284,26 @@ export function App(): JSX.Element {
             )
           }
           footer={
-            files.status !== null && (files.status.repo === null || files.status.files === null) ? (
+            files.status !== null &&
+            (files.status.repo === null || files.status.files === null) ? (
               <FilesStatusNote status={files.status} />
             ) : undefined
           }
         >
           {files.rootsError !== null && (
-            <p data-files-roots-error role="alert" className="px-3.5 py-2 text-[12px] text-danger">
+            <p
+              data-files-roots-error
+              role="alert"
+              className="px-3.5 py-2 text-[12px] text-danger"
+            >
               {files.rootsError}
             </p>
           )}
           {files.root === null ? (
             files.rootsError === null && (
-              <p className="px-3.5 py-6 text-[12px] text-fg-subtle">Choose a project above to see its files.</p>
+              <p className="px-3.5 py-6 text-[12px] text-fg-subtle">
+                Choose a project above to see its files.
+              </p>
             )
           ) : (
             <FilesTree
@@ -4448,23 +5312,32 @@ export function App(): JSX.Element {
               expanded={files.expanded}
               loading={files.loadingDirs}
               status={files.status}
-              selectedPath={front?.kind === 'file' && hostOf(front) === files.host ? front.path : null}
-              {...(filesRevealSeq === undefined ? {} : { revealSeq: filesRevealSeq })}
+              selectedPath={
+                front?.kind === "file" && hostOf(front) === files.host
+                  ? front.path
+                  : null
+              }
+              {...(filesRevealSeq === undefined
+                ? {}
+                : { revealSeq: filesRevealSeq })}
               onToggleDir={files.toggleDir}
               onOpen={(path, keep) => {
-                if (files.root !== null) openFileAt(files.root, path, keep, undefined, files.host)
+                if (files.root !== null)
+                  openFileAt(files.root, path, keep, undefined, files.host);
               }}
               onReveal={revealOn(files.host)}
               onCopyPath={copyPath}
               onOpenInEditor={
-                files.editor === null || files.host !== LOCAL_HOST_KEY ? null : (path) => openInEditor(path, null)
+                files.editor === null || files.host !== LOCAL_HOST_KEY
+                  ? null
+                  : (path) => openInEditor(path, null)
               }
               onGoToFile={openQuickOpen}
             />
           )}
         </Sidebar>
       )}
-      {sidebarView === 'settings' && (
+      {sidebarView === "settings" && (
         <Sidebar title="Settings">
           <SettingsSections
             current={shownSettingsSection}
@@ -4472,16 +5345,20 @@ export function App(): JSX.Element {
             plugins={(pluginState.list ?? []).map((plugin) => ({
               path: plugin.path,
               name: plugin.name,
-              state: !plugin.enabled ? 'off' : plugin.error !== null ? 'error' : 'on'
+              state: !plugin.enabled
+                ? "off"
+                : plugin.error !== null
+                  ? "error"
+                  : "on",
             }))}
             onSelect={(section) => {
-              setSettingsSection(section)
-              openPane({ kind: 'settings' })
+              setSettingsSection(section);
+              openPane({ kind: "settings" });
             }}
           />
         </Sidebar>
       )}
-      {sidebarView === 'profiles' && (
+      {sidebarView === "profiles" && (
         <Sidebar
           title="Profiles"
           actions={
@@ -4495,8 +5372,8 @@ export function App(): JSX.Element {
               <SidebarAction
                 label="New profile"
                 onClick={() => {
-                  setSaveProblems([])
-                  setEditing(blankProfile(discovery?.roots[0] ?? '', ''))
+                  setSaveProblems([]);
+                  setEditing(blankProfile(discovery?.roots[0] ?? "", ""));
                 }}
               >
                 <PlusIcon width={13} height={13} />
@@ -4510,8 +5387,8 @@ export function App(): JSX.Element {
             launchingIds={profileState.launching}
             onLaunch={(profile) => void launchProfile(profile)}
             onEdit={(profile) => {
-              setSaveProblems([])
-              setEditing(profile)
+              setSaveProblems([]);
+              setEditing(profile);
             }}
             onDelete={deleteProfile}
             onExport={(profile) => void profileState.exportProfile(profile.id)}
@@ -4526,39 +5403,46 @@ export function App(): JSX.Element {
                     remote: false,
                     connected: true,
                     onNew: () => {
-                      setSaveProblems([])
-                      setEditing(blankProfile(discovery?.roots[0] ?? '', ''))
-                    }
-                  }
+                      setSaveProblems([]);
+                      setEditing(blankProfile(discovery?.roots[0] ?? "", ""));
+                    },
+                  },
                 })}
           />
           {listedHosts.map((host) => {
-            const scanned = hostWork.byHost.get(host.id)?.discovery ?? null
+            const scanned = hostWork.byHost.get(host.id)?.discovery ?? null;
             return (
               <HostProfiles
                 key={host.id}
                 host={host.id}
                 name={host.name}
-                request={profileRequest?.host === host.id ? profileRequest : null}
+                request={
+                  profileRequest?.host === host.id ? profileRequest : null
+                }
                 connected={connectedHostIds.includes(host.id)}
                 projects={scanned?.projects ?? EMPTY_PROJECTS}
                 harnesses={scanned?.harnesses ?? []}
                 blank={blankProfile}
                 paneSize={() => bodyRefs.current.get(open.focused) ?? null}
                 onLaunched={(record) => {
-                  adoptThere(host.id, record)
-                  placeSession(record.id, false, undefined, host.id)
+                  adoptThere(host.id, record);
+                  placeSession(record.id, false, undefined, host.id);
                 }}
               />
-            )
+            );
           })}
         </Sidebar>
       )}
-      {sidebarPanel === null && sidebarView.startsWith('plugin:') && pluginState.error !== null && (
-        <Sidebar title="Plugin">
-          <PluginsUnavailable reason={pluginState.error} className="min-h-0 flex-1" />
-        </Sidebar>
-      )}
+      {sidebarPanel === null &&
+        sidebarView.startsWith("plugin:") &&
+        pluginState.error !== null && (
+          <Sidebar title="Plugin">
+            <PluginsUnavailable
+              reason={pluginState.error}
+              className="min-h-0 flex-1"
+            />
+          </Sidebar>
+        )}
       {sidebarPanel !== null && (
         <Sidebar
           title={sidebarPanel.spec.title}
@@ -4566,16 +5450,20 @@ export function App(): JSX.Element {
             sidebarPanel.actions.length === 0 ? undefined : (
               <>
                 {sidebarPanel.actions.map((action) => {
-                  const Glyph = PANEL_ACTION_ICON[action.icon]
+                  const Glyph = PANEL_ACTION_ICON[action.icon];
                   return (
                     <SidebarAction
                       key={action.id}
                       label={action.title}
-                      onClick={() => emitToPluginFrame(sidebarPanel.spec.key, 'action', { id: action.id })}
+                      onClick={() =>
+                        emitToPluginFrame(sidebarPanel.spec.key, "action", {
+                          id: action.id,
+                        })
+                      }
                     >
                       <Glyph width={13} height={13} />
                     </SidebarAction>
-                  )
+                  );
                 })}
               </>
             )
@@ -4584,15 +5472,17 @@ export function App(): JSX.Element {
           <PluginFrame
             spec={sidebarPanel.spec}
             pluginName={sidebarPanel.name}
-            onOpenSettings={() => openPluginSettings(sidebarPanel.host, sidebarPanel.path)}
+            onOpenSettings={() =>
+              openPluginSettings(sidebarPanel.host, sidebarPanel.path)
+            }
             className="min-h-0 flex-1"
           />
         </Sidebar>
       )}
     </>
-  )
+  );
 
-  const empty = open.groups.length === 1 && open.groups[0]!.tabs.length === 0
+  const empty = open.groups.length === 1 && open.groups[0]!.tabs.length === 0;
 
   /**
    * One line over the panes, for what a launch composed and anything that went
@@ -4604,31 +5494,55 @@ export function App(): JSX.Element {
     remoteLaunchError ??
     (sessionState.launchError !== null && localLaunch !== null
       ? { host: LOCAL_HOST_KEY, ...localLaunch, text: sessionState.launchError }
-      : null)
-  const frontGroup = groupById(open, open.focused)
-  const treeNotice = treeLaunchNotice(treeLaunch, frontGroup === undefined ? null : activeRef(frontGroup), hostName)
+      : null);
+  const frontGroup = groupById(open, open.focused);
+  const treeNotice = treeLaunchNotice(
+    treeLaunch,
+    frontGroup === undefined ? null : activeRef(frontGroup),
+    hostName,
+  );
   const dismissTreeLaunch = (): void => {
-    setRemoteLaunchError(null)
-    sessionState.dismissLaunchError()
-  }
+    setRemoteLaunchError(null);
+    sessionState.dismissLaunchError();
+  };
   const toast: { text: string; failed: boolean; dismiss: () => void } | null =
     browsers.error !== null
       ? { text: browsers.error, failed: true, dismiss: browsers.dismissError }
       : stopHostError !== null
-      ? { text: stopHostError, failed: true, dismiss: () => setStopHostError(null) }
-      : !newSession.open && newTab === null && newSession.error !== null
-        ? { text: newSession.error, failed: true, dismiss: newSession.dismissError }
-        : treeNotice !== null
-        ? { text: treeNotice, failed: true, dismiss: dismissTreeLaunch }
-        : restoreState.report !== null
-          ? { ...restoreState.report, dismiss: restoreState.dismissReport }
-          : profileState.error !== null
-          ? { text: profileState.error, failed: true, dismiss: profileState.dismissError }
-          : newSession.warning !== null
-            ? { text: newSession.warning, failed: false, dismiss: newSession.dismissWarning }
-            : profileState.notice !== null
-              ? { text: profileState.notice, failed: false, dismiss: profileState.dismissNotice }
-              : null
+        ? {
+            text: stopHostError,
+            failed: true,
+            dismiss: () => setStopHostError(null),
+          }
+        : !newSession.open && newTab === null && newSession.error !== null
+          ? {
+              text: newSession.error,
+              failed: true,
+              dismiss: newSession.dismissError,
+            }
+          : treeNotice !== null
+            ? { text: treeNotice, failed: true, dismiss: dismissTreeLaunch }
+            : restoreState.report !== null
+              ? { ...restoreState.report, dismiss: restoreState.dismissReport }
+              : profileState.error !== null
+                ? {
+                    text: profileState.error,
+                    failed: true,
+                    dismiss: profileState.dismissError,
+                  }
+                : newSession.warning !== null
+                  ? {
+                      text: newSession.warning,
+                      failed: false,
+                      dismiss: newSession.dismissWarning,
+                    }
+                  : profileState.notice !== null
+                    ? {
+                        text: profileState.notice,
+                        failed: false,
+                        dismiss: profileState.dismissNotice,
+                      }
+                    : null;
 
   return (
     <AppShell
@@ -4646,10 +5560,16 @@ export function App(): JSX.Element {
             />
           ) : null}
           {ownData.unfinished !== null ? (
-            <OwnDataBanner reason={ownData.unfinished} onDismiss={ownData.dismiss} />
+            <OwnDataBanner
+              reason={ownData.unfinished}
+              onDismiss={ownData.dismiss}
+            />
           ) : null}
           {hostRunning === true && hostLink.lost !== null ? (
-            <HostStoppedBanner hostName={LOCAL_HOST_NAME} restarting={hostLink.lost.restarts} />
+            <HostStoppedBanner
+              hostName={LOCAL_HOST_NAME}
+              restarting={hostLink.lost.restarts}
+            />
           ) : null}
         </>
       }
@@ -4662,15 +5582,20 @@ export function App(): JSX.Element {
           // From the setup status before `app:info`, which is read once at
           // startup: after the CLI is relocated the strip would go on naming the
           // old version while Settings names the new one.
-          claudeVersion={setup.status?.semver ?? setup.status?.version ?? info?.claudeVersion ?? null}
+          claudeVersion={
+            setup.status?.semver ??
+            setup.status?.version ??
+            info?.claudeVersion ??
+            null
+          }
           // From the setup status, not from `app:info`, which is read once at
           // startup: after the CLI is relocated the strip would go on saying it
           // is missing while the banner above it says it was found.
           claudeMissing={setup.status !== null && setup.status.path === null}
           usage={usage.snapshot}
           usageError={usage.error}
-          usageHostChoice={hostChoiceFor('usage')}
-          usageDisplay={settings?.usageDisplay ?? 'percent'}
+          usageHostChoice={hostChoiceFor("usage")}
+          usageDisplay={settings?.usageDisplay ?? "percent"}
           onUsageDisplayChange={launcher.setUsageDisplay}
           update={update}
           onOpenUpdate={(url) => void helmOpenExternal(url)}
@@ -4688,7 +5613,7 @@ export function App(): JSX.Element {
               roots={settings?.scanRoots ?? []}
               projectCount={discovery?.projects.length ?? 0}
               onAddRoot={launcher.addRoot}
-              onCreateHarness={() => setup.openDialog('new')}
+              onCreateHarness={() => setup.openDialog("new")}
               onNewSession={openLauncher}
             />
           </div>
@@ -4698,7 +5623,9 @@ export function App(): JSX.Element {
             maximized={shownMax}
             gap={settings?.paneGap ?? DEFAULT_SETTINGS.paneGap}
             panes={new Map(shownGroups.map((id) => [id, renderGroup(id)]))}
-            onResize={(path, sizes) => commit((current) => resizeSplit(current, path, sizes))}
+            onResize={(path, sizes) =>
+              commit((current) => resizeSplit(current, path, sizes))
+            }
             onResizing={onPaneResizing}
           />
         )}
@@ -4710,16 +5637,24 @@ export function App(): JSX.Element {
         {quickOpenRoot !== null && (
           <QuickOpenDialog
             rootLabel={
-              files.roots.find((scope) => scope.path.toLowerCase() === quickOpenRoot.toLowerCase())?.label ??
-              folderName(quickOpenRoot)
+              files.roots.find(
+                (scope) =>
+                  scope.path.toLowerCase() === quickOpenRoot.toLowerCase(),
+              )?.label ?? folderName(quickOpenRoot)
             }
             listing={files.listing}
             recent={files.recentIn(quickOpenRoot)}
             initialMode={quickOpenMode}
             onSearchText={searchText}
             onOpen={(relPath, at) => {
-              setQuickOpenRoot(null)
-              openFileAt(quickOpenRoot, joinRoot(quickOpenRoot, relPath), true, at, files.host)
+              setQuickOpenRoot(null);
+              openFileAt(
+                quickOpenRoot,
+                joinRoot(quickOpenRoot, relPath),
+                true,
+                at,
+                files.host,
+              );
             }}
             onDismiss={() => setQuickOpenRoot(null)}
           />
@@ -4734,7 +5669,10 @@ export function App(): JSX.Element {
         {frontSessionAsk !== null && (
           <PluginSessionDialog
             key={frontSessionAsk.requestId}
-            pluginName={pluginsOn(frontSessionAsk.host).get(frontSessionAsk.plugin)?.name ?? frontSessionAsk.plugin}
+            pluginName={
+              pluginsOn(frontSessionAsk.host).get(frontSessionAsk.plugin)
+                ?.name ?? frontSessionAsk.plugin
+            }
             cwd={frontSessionAsk.cwd}
             name={frontSessionAsk.name}
             prompt={frontSessionAsk.prompt}
@@ -4747,18 +5685,26 @@ export function App(): JSX.Element {
         {secretAsk !== null && (
           <SecretDialog
             key={secretAsk.requestId}
-            existing={askSecrets.secrets?.secrets.find((entry) => entry.key === secretAsk.key) ?? null}
+            existing={
+              askSecrets.secrets?.secrets.find(
+                (entry) => entry.key === secretAsk.key,
+              ) ?? null
+            }
             presetKey={secretAsk.key}
             requester={{
               id: secretAsk.plugin,
-              name: pluginsOn(secretAsk.host).get(secretAsk.plugin)?.name ?? secretAsk.plugin
+              name:
+                pluginsOn(secretAsk.host).get(secretAsk.plugin)?.name ??
+                secretAsk.plugin,
             }}
             plugins={secretChoices}
             available={askSecrets.secrets?.available ?? true}
             onSave={askSecrets.saveSecret}
             onClose={() => {
-              bridgeFor(secretAsk.host).send('plugins:answer', { requestId: secretAsk.requestId })
-              setSecretAsks((current) => current.slice(1))
+              bridgeFor(secretAsk.host).send("plugins:answer", {
+                requestId: secretAsk.requestId,
+              });
+              setSecretAsks((current) => current.slice(1));
             }}
           />
         )}
@@ -4767,16 +5713,29 @@ export function App(): JSX.Element {
             // A host switched to is a new list of folders and profiles.
             key={newSession.host}
             {...(launcherHosts.length > 1
-              ? { hosts: launcherHosts, host: newSession.host, onHostChange: newSession.setHost }
+              ? {
+                  hosts: launcherHosts,
+                  host: newSession.host,
+                  onHostChange: newSession.setHost,
+                }
               : {})}
             projects={
               newSession.host === LOCAL_HOST_KEY
                 ? (discovery?.projects ?? EMPTY_PROJECTS)
-                : (hostWork.byHost.get(newSession.host)?.discovery?.projects ?? EMPTY_PROJECTS)
+                : (hostWork.byHost.get(newSession.host)?.discovery?.projects ??
+                  EMPTY_PROJECTS)
             }
             recency={newSession.recency}
-            live={newSession.host === LOCAL_HOST_KEY ? machineSessions.sessions : EMPTY_LIVE}
-            profiles={newSession.host === LOCAL_HOST_KEY ? profileState.profiles : launcherProfiles.profiles}
+            live={
+              newSession.host === LOCAL_HOST_KEY
+                ? machineSessions.sessions
+                : EMPTY_LIVE
+            }
+            profiles={
+              newSession.host === LOCAL_HOST_KEY
+                ? profileState.profiles
+                : launcherProfiles.profiles
+            }
             home={info?.home ?? null}
             initialPath={newSession.initialPath}
             resumable={newSession.resumable}
@@ -4786,8 +5745,8 @@ export function App(): JSX.Element {
             now={now}
             onStart={(choice) => void startChosen(choice)}
             onTerminal={(project, beside) => {
-              openTerminal(project.path, beside)
-              newSession.hide()
+              openTerminal(project.path, beside);
+              newSession.hide();
             }}
             onDismiss={newSession.hide}
           />
@@ -4802,19 +5761,32 @@ export function App(): JSX.Element {
                   hosts: launcherHosts,
                   host: newTab.host,
                   onHostChange: (next: string) => {
-                    newSession.setHost(next)
-                    setNewTab((current) => (current === null ? current : { ...current, host: next, folder: null }))
-                  }
+                    newSession.setHost(next);
+                    setNewTab((current) =>
+                      current === null
+                        ? current
+                        : { ...current, host: next, folder: null },
+                    );
+                  },
                 }
               : {})}
             projects={
               newTab.host === LOCAL_HOST_KEY
                 ? (discovery?.projects ?? EMPTY_PROJECTS)
-                : (hostWork.byHost.get(newTab.host)?.discovery?.projects ?? EMPTY_PROJECTS)
+                : (hostWork.byHost.get(newTab.host)?.discovery?.projects ??
+                  EMPTY_PROJECTS)
             }
             recency={newSession.recency}
-            live={newTab.host === LOCAL_HOST_KEY ? machineSessions.sessions : EMPTY_LIVE}
-            profiles={newTab.host === LOCAL_HOST_KEY ? profileState.profiles : launcherProfiles.profiles}
+            live={
+              newTab.host === LOCAL_HOST_KEY
+                ? machineSessions.sessions
+                : EMPTY_LIVE
+            }
+            profiles={
+              newTab.host === LOCAL_HOST_KEY
+                ? profileState.profiles
+                : launcherProfiles.profiles
+            }
             home={info?.home ?? null}
             initialPath={newTab.folder}
             resumable={newSession.resumable}
@@ -4823,11 +5795,19 @@ export function App(): JSX.Element {
             error={newSession.error}
             now={now}
             onStart={(choice) => void startChosen(choice, newTab.group)}
-            onProfile={(profile) => void launchProfileOn(newTab.host, profile, newTab.group)}
-            onBrowser={() => openBrowser({ project: null, into: newTab.group, focusAddress: true })}
+            onProfile={(profile) =>
+              void launchProfileOn(newTab.host, profile, newTab.group)
+            }
+            onBrowser={() =>
+              openBrowser({
+                project: null,
+                into: newTab.group,
+                focusAddress: true,
+              })
+            }
             onTerminal={(project) => {
-              openTerminal(project.path, false, newTab.group, newTab.host)
-              setNewTab(null)
+              openTerminal(project.path, false, newTab.group, newTab.host);
+              setNewTab(null);
             }}
             onDismiss={closeNewTab}
           />
@@ -4851,10 +5831,10 @@ export function App(): JSX.Element {
               <div
                 role="status"
                 className={cn(
-                  'flex items-start gap-3 rounded-raised border px-3 py-2 text-[12px]',
+                  "flex items-start gap-3 rounded-raised border px-3 py-2 text-[12px]",
                   toast.failed
-                    ? 'border-danger/30 bg-danger/10 text-danger'
-                    : 'border-border text-fg-muted'
+                    ? "border-danger/30 bg-danger/10 text-danger"
+                    : "border-border text-fg-muted",
                 )}
               >
                 <span className="min-w-0">{toast.text}</span>
@@ -4882,17 +5862,17 @@ export function App(): JSX.Element {
             onCancel={() => setEditing(null)}
             // Only for a profile that exists. The editor closes because the row
             // it edits is gone.
-            {...('id' in editing
+            {...("id" in editing
               ? {
                   onDelete: () => {
-                    deleteProfile(editing)
-                    setEditing(null)
-                  }
+                    deleteProfile(editing);
+                    setEditing(null);
+                  },
                 }
               : {})}
           />
         )}
       </div>
     </AppShell>
-  )
+  );
 }
