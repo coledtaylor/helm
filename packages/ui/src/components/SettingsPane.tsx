@@ -410,7 +410,8 @@ export function SettingsPane({
       hint={meta.hint}
       sole={sole}
       aside={
-        section === 'hosts' ? (
+        // With no host, the empty page offers it in its own place.
+        section === 'hosts' && hosts.length > 0 ? (
           <Action data-settings-add-host onClick={onAddHost}>
             <span className="flex items-center gap-1.5">
               <PlusIcon width={12} height={12} />
