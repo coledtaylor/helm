@@ -523,7 +523,8 @@ function recordPrompt(text) {
 /**
  * The script for `node -e` that `/serve` runs: an HTTP server on 127.0.0.1
  * at `port` (any free one for 0) that answers a GET with a line naming the
- * request and a POST with its body, byte for byte. It prints
+ * request, as an HTML page the way a dev server serves one (a browser shows
+ * it rather than downloading it), and a POST with its body, byte for byte. It prints
  * `listening <port>` once it listens, and exits with the test that owns it.
  */
 function serveScript(port) {
@@ -533,7 +534,7 @@ function serveScript(port) {
     `  const body = [];` +
     `  req.on('data', (chunk) => body.push(chunk));` +
     `  req.on('end', () => {` +
-    `    res.setHeader('content-type', 'application/octet-stream');` +
+    `    res.setHeader('content-type', req.method === 'POST' ? 'application/octet-stream' : 'text/html; charset=utf-8');` +
     `    res.end(req.method === 'POST' ? Buffer.concat(body) : 'fake dev server: ' + req.method + ' ' + req.url);` +
     `  });` +
     `});` +

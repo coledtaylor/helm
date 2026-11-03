@@ -380,13 +380,20 @@ fn answer_http(mut stream: std::net::TcpStream) {
             Ok(n) => got.extend_from_slice(&chunk[..n]),
         }
     }
-    let body = if method == "POST" {
-        got[head_end..head_end + length].to_vec()
+    // A GET is a page, as a dev server serves one; a POST is echoed as bytes.
+    let (body, kind) = if method == "POST" {
+        (
+            got[head_end..head_end + length].to_vec(),
+            "application/octet-stream",
+        )
     } else {
-        format!("fake dev server: {method} {path}").into_bytes()
+        (
+            format!("fake dev server: {method} {path}").into_bytes(),
+            "text/html; charset=utf-8",
+        )
     };
     let mut answer = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )
     .into_bytes();

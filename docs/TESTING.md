@@ -547,7 +547,7 @@ At its prompt: `/exit` and `/crash` end it with 0 and 3, `/wait` reports
 "waiting" until `y` or `n`, `/busy <ms>` reports "busy", `/child` starts a
 long-running child process, `/serve <port>` starts a child serving HTTP on
 127.0.0.1 at that port and answers `serving <port>` (a GET is answered with a
-line naming it, a POST with its body), `/flood <n>` writes `n` numbered lines
+line naming it, as an HTML page, a POST with its body), `/flood <n>` writes `n` numbered lines
 then `flood done`, `/links` asks for the mouse as the fullscreen CLI
 does and prints a hyperlink and a bare address (logging the mouse reports it
 is sent), and anything else is a prompt it records and answers.
