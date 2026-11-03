@@ -25,6 +25,8 @@ export function documentKind(path: string): 'markdown' | 'html' | null {
 }
 
 export interface DocumentTabProps {
+  /** The host the file is on, when it is not this PC: read, saved and snapshotted there only. */
+  host?: string | undefined
   /** The deepest folder Helm knows that holds the file - what it is saved and linked as part of. */
   scopePath: string
   path: string
@@ -43,6 +45,7 @@ export interface DocumentTabProps {
 }
 
 export function DocumentTab({
+  host,
   scopePath,
   path,
   kind,
@@ -61,7 +64,7 @@ export function DocumentTab({
   // editor while the tab stays.
   const [kept, setKept] = useState(() => drafts.get(draftKey))
   const [startedWith] = useState(kept)
-  const doc = useDocument({ scopePath, path, kind, editing, parked: startedWith })
+  const doc = useDocument({ ...(host === undefined ? {} : { host }), scopePath, path, kind, editing, parked: startedWith })
   const { setDraft, setDirty } = doc
 
   const loaded = doc.document?.content ?? null

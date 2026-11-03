@@ -7,6 +7,7 @@ import { copyPathLabel, useCopyFeedback } from '../lib/copyFeedback'
 import { shortcutLabel } from '../lib/platform'
 import { ROW_SELECTED_GROUP } from '../lib/rows'
 import { CaretIcon, CheckIcon, CodeIcon, CopyIcon, DocIcon, FolderIcon, HarnessIcon, LinkIcon, SearchIcon, WarnIcon } from './icons'
+import { HostSwitch, type HostChoice } from './HostSwitch'
 import { Menu } from './Menu'
 
 /**
@@ -132,11 +133,18 @@ export function FilesTree(props: FilesTreeProps): JSX.Element {
 export function FilesRootPicker({
   roots,
   value,
-  onChange
+  onChange,
+  hostChoice
 }: {
   roots: readonly ContentScope[]
   value: string | null
   onChange: (root: string) => void
+  /**
+   * Which host's folders these are, and the others to switch to, while more
+   * than one host is connected. Absent, it names no host: there is only this
+   * PC.
+   */
+  hostChoice?: HostChoice | undefined
 }): JSX.Element {
   const [open, setOpen] = useState<DOMRect | null>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -153,6 +161,7 @@ export function FilesRootPicker({
   }
   return (
     <>
+      <HostSwitch surface="Files" {...hostChoice} className="mr-1.5" />
       <button
         ref={buttonRef}
         type="button"

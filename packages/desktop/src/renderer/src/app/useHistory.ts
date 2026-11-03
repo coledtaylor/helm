@@ -9,8 +9,9 @@ import type {
   HistorySummary,
   SessionRecord
 } from '@helm/core'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import type { SessionHistoryProps } from '@helm/ui'
-import { helm } from './bridge'
+import { bridgeFor } from './bridge'
 import { readable } from './errors'
 import { estimateGrid } from './terminals'
 
@@ -88,7 +89,15 @@ interface Answered<T> {
   value: T
 }
 
-export function useHistory(): HistoryState {
+/**
+ * History on one host (this PC's by default): every read and write goes
+ * through that host's bridge only. Switched to another host, what was read
+ * from the last one is dropped before anything of the new one is asked for,
+ * so no row, prompt or conversation of one host is shown or acted on as
+ * another's.
+ */
+export function useHistory(host: string = LOCAL_HOST_KEY): HistoryState {
+  const helm = bridgeFor(host)
   const [summary, setSummary] = useState<HistorySummary | null>(null)
   const [answer, setAnswer] = useState<Answered<HistoryPage> | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -113,28 +122,64 @@ export function useHistory(): HistoryState {
   const [resuming, setResuming] = useState<string | null>(null)
   const [resumeError, setResumeError] = useState<string | null>(null)
 
+  // Another host: nothing read from the last one stays. Its folders are not
+  // this host's either, so a project filter goes with them.
+  const [shownHost, setShownHost] = useState(host)
+  if (shownHost !== host) {
+    setShownHost(host)
+    setSummary(null)
+    setAnswer(null)
+    setError(null)
+    setArchiveStats(null)
+    setConversationAnswer(null)
+    setProject(null)
+    setSelectedId(null)
+    setPromptAnswer(null)
+    setResumeError(null)
+  }
+
   // A read that fails says why in the pane's error line - with sessions in the
   // local host, that Helm could not reach it - rather than leaving the counts
   // blank as if there were nothing.
   useEffect(() => {
-    const off = helm.on('history:changed', setSummary)
+    let live = true
+    const off = helm.on('history:changed', (next) => {
+      if (live) setSummary(next)
+    })
     void helm
       .invoke('history:summary')
-      .then(setSummary)
-      .catch((err: unknown) => setError(readable(err)))
-    return off
-  }, [])
+      .then((next) => {
+        if (live) setSummary(next)
+      })
+      .catch((err: unknown) => {
+        if (live) setError(readable(err))
+      })
+    return () => {
+      live = false
+      off()
+    }
+  }, [helm])
 
   // Pushed, for the reason the summary is: a pass in the main process or the
   // local host captures a conversation without the window having asked.
   useEffect(() => {
-    const off = helm.on('archive:changed', setArchiveStats)
+    let live = true
+    const off = helm.on('archive:changed', (next) => {
+      if (live) setArchiveStats(next)
+    })
     void helm
       .invoke('archive:stats')
-      .then(setArchiveStats)
-      .catch((err: unknown) => setError(readable(err)))
-    return off
-  }, [])
+      .then((next) => {
+        if (live) setArchiveStats(next)
+      })
+      .catch((err: unknown) => {
+        if (live) setError(readable(err))
+      })
+    return () => {
+      live = false
+      off()
+    }
+  }, [helm])
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS)
@@ -153,6 +198,7 @@ export function useHistory(): HistoryState {
   // index pass does.
   const archiveVersion = `${String(archiveStats?.sessions ?? -1)}:${String(archiveStats?.messages ?? -1)}`
   const queryKey = JSON.stringify([
+    host,
     debouncedSearch,
     scope,
     resumableOnly,
@@ -182,11 +228,11 @@ export function useHistory(): HistoryState {
         if (ticket !== seq.current) return
         setError(readable(err))
       })
-  }, [debouncedSearch, scope, resumableOnly, project, queryKey])
+  }, [helm, debouncedSearch, scope, resumableOnly, project, queryKey])
 
   // Re-read on an index change too: a selected session that is still running
   // in a terminal gains prompts while its detail is on screen.
-  const promptKey = selectedId === null ? null : `${selectedId}:${indexVersion}`
+  const promptKey = selectedId === null ? null : `${host}:${selectedId}:${indexVersion}`
 
   useEffect(() => {
     if (promptKey === null || selectedId === null) return
@@ -197,7 +243,7 @@ export function useHistory(): HistoryState {
     return () => {
       live = false
     }
-  }, [promptKey, selectedId])
+  }, [helm, promptKey, selectedId])
 
   /*
    * The conversation, fetched on selection rather than with the list.
@@ -209,7 +255,7 @@ export function useHistory(): HistoryState {
    * take one away while somebody is reading it, which the pane then has to be
    * able to say.
    */
-  const conversationKey = selectedId === null ? null : `${selectedId}:${archiveVersion}`
+  const conversationKey = selectedId === null ? null : `${host}:${selectedId}:${archiveVersion}`
 
   useEffect(() => {
     if (conversationKey === null || selectedId === null) return
@@ -225,7 +271,7 @@ export function useHistory(): HistoryState {
     return () => {
       live = false
     }
-  }, [conversationKey, selectedId])
+  }, [helm, conversationKey, selectedId])
 
   /*
    * The renamed row, put back into the page and then asked for again.
@@ -245,7 +291,8 @@ export function useHistory(): HistoryState {
    * adopted - while the query the bump started reads the name back out of the
    * database, which is the same answer by a route that cannot be raced.
    */
-  const rename = useCallback(async (sessionId: string, name: string | null) => {
+  const rename = useCallback(
+    async (sessionId: string, name: string | null) => {
     const updated = await helm.invoke('history:rename', { sessionId, name })
     if (updated === null) return
     setAnswer((current) =>
@@ -262,16 +309,28 @@ export function useHistory(): HistoryState {
           }
     )
     setNameVersion((version) => version + 1)
-  }, [])
+    },
+    [helm]
+  )
+
+  /** The host shown now, for an answer that lands after a switch to know it is not this host's. */
+  const current = useRef(host)
+  useEffect(() => {
+    current.current = host
+  }, [host])
 
   const refresh = useCallback(() => {
     setRefreshing(true)
     void helm
       .invoke('history:refresh')
-      .then(setSummary)
-      .catch((err: unknown) => setError(readable(err)))
+      .then((next) => {
+        if (current.current === host) setSummary(next)
+      })
+      .catch((err: unknown) => {
+        if (current.current === host) setError(readable(err))
+      })
       .finally(() => setRefreshing(false))
-  }, [])
+  }, [helm, host])
 
   const resume = useCallback(
     async (session: HistorySession, paneSize: HTMLElement | null) => {
@@ -292,7 +351,7 @@ export function useHistory(): HistoryState {
         setResuming(null)
       }
     },
-    []
+    [helm]
   )
 
   // The page is only the answer to the query that is current. A stale one is

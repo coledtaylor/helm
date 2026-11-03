@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { UsageSnapshot } from '@helm/core/types'
-import { bridge } from './bridge.testkit'
+import { bridge, remoteBridge } from './bridge.testkit'
 import { useUsage } from './useUsage'
 
 vi.mock('./bridge', () => import('./bridge.testkit'))
@@ -21,19 +21,22 @@ const reading = (percent: number): UsageSnapshot => ({
   spend: null
 })
 
+const buildBox = remoteBridge('h1')
+
 afterEach(() => {
   bridge.reset()
+  buildBox.reset()
 })
 
 describe('useUsage', () => {
   it('reads once, then takes every reading main pushes', async () => {
     bridge.answer('usage:read', () => reading(10))
     const { result } = renderHook(() => useUsage())
-    await waitFor(() => expect(result.current?.limits[0]?.percent).toBe(10))
+    await waitFor(() => expect(result.current.snapshot?.limits[0]?.percent).toBe(10))
 
     act(() => bridge.emit('usage:changed', reading(42)))
 
-    expect(result.current?.limits[0]?.percent).toBe(42)
+    expect(result.current.snapshot?.limits[0]?.percent).toBe(42)
     expect(bridge.invoked('usage:read')).toHaveLength(1)
   })
 
@@ -49,6 +52,48 @@ describe('useUsage', () => {
       await Promise.resolve()
     })
 
-    expect(result.current?.limits[0]?.percent).toBe(42)
+    expect(result.current.snapshot?.limits[0]?.percent).toBe(42)
+  })
+})
+
+describe('useUsage on a host on another computer', () => {
+  it('reads and hears that host only, and never shows another host’s figures', async () => {
+    bridge.answer('usage:read', () => reading(10))
+    buildBox.answer('usage:read', () => reading(70))
+    const { result } = renderHook(() => useUsage('h1'))
+    await waitFor(() => expect(result.current.snapshot?.limits[0]?.percent).toBe(70))
+    expect(bridge.invocations).toEqual([])
+
+    // This PC's push is not build-box's reading.
+    act(() => bridge.emit('usage:changed', reading(5)))
+    expect(result.current.snapshot?.limits[0]?.percent).toBe(70)
+    act(() => buildBox.emit('usage:changed', reading(80)))
+    expect(result.current.snapshot?.limits[0]?.percent).toBe(80)
+  })
+
+  it('says why when the host cannot be read, with no figure', async () => {
+    buildBox.answer('usage:read', () => {
+      throw new Error('build-box is not connected.')
+    })
+    const { result } = renderHook(() => useUsage('h1'))
+    await waitFor(() => expect(result.current.error).toContain('build-box is not connected.'))
+    expect(result.current.snapshot).toBeNull()
+  })
+
+  it('switched back to this PC, shows nothing of build-box’s while this PC answers', async () => {
+    buildBox.answer('usage:read', () => reading(70))
+    let answer: (snapshot: UsageSnapshot) => void = () => undefined
+    bridge.answer('usage:read', () => new Promise<UsageSnapshot>((resolve) => (answer = resolve)))
+    const { result, rerender } = renderHook(({ host }) => useUsage(host), { initialProps: { host: 'h1' } })
+    await waitFor(() => expect(result.current.snapshot?.limits[0]?.percent).toBe(70))
+
+    rerender({ host: 'local' })
+    expect(result.current.snapshot).toBeNull()
+    await waitFor(() => expect(bridge.invoked('usage:read')).toHaveLength(1))
+    await act(async () => {
+      answer(reading(10))
+      await Promise.resolve()
+    })
+    expect(result.current.snapshot?.limits[0]?.percent).toBe(10)
   })
 })

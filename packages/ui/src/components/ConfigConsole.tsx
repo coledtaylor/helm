@@ -18,6 +18,7 @@ import { formatAge, formatBytes } from '../lib/time'
 import { isLiveWarning, LiveDot } from './ConfigLive'
 import { PaneBack } from './PaneBack'
 import { EmptyState } from './EmptyState'
+import { HostSwitch, type HostChoice } from './HostSwitch'
 import { PaneHeader } from './PaneHeader'
 import { CaretIcon, FolderIcon, PlusIcon, RefreshIcon, SearchIcon, SlidersIcon } from './icons'
 import { ICON_BUTTON, PAGE_LIST_BESIDE } from '../lib/page'
@@ -25,6 +26,12 @@ import { ICON_BUTTON, PAGE_LIST_BESIDE } from '../lib/page'
 export type ConfigViewKind = 'files' | 'effective' | 'mcp' | 'health'
 
 export interface ConfigConsoleProps {
+  /**
+   * Which host's agent config this is, and the others to switch to, while
+   * more than one host is connected. Absent, it names no host: there is only
+   * this PC.
+   */
+  hostChoice?: HostChoice | undefined
   scopes: ConfigScope[]
   scopePath: string
   onScopeChange: (path: string) => void
@@ -173,6 +180,7 @@ const VIEWS: Array<{ id: ConfigViewKind; label: string }> = [
  * answer about the session as a whole would suggest the two were related.
  */
 export function ConfigConsole({
+  hostChoice,
   scopes,
   scopePath,
   onScopeChange,
@@ -277,6 +285,9 @@ export function ConfigConsole({
     <div className="flex h-full min-h-0 flex-col">
       <PaneHeader
         name="config"
+        {...(hostChoice !== undefined && hostChoice.hosts.length > 1
+          ? { host: <HostSwitch surface="Config" {...hostChoice} /> }
+          : {})}
         scope={
           <label className="flex min-w-0 flex-1 items-center gap-2">
             <span className="sr-only">Scope</span>

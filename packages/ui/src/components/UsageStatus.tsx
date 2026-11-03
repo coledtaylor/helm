@@ -17,6 +17,7 @@ import {
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { formatMoment, formatResetsIn } from '../lib/time'
+import { HostSwitch, type HostChoice } from './HostSwitch'
 
 /**
  * How much of the plan has been used, in the status bar.
@@ -42,6 +43,17 @@ export interface UsageStatusProps {
   snapshot: UsageSnapshot | null
   mode: UsageDisplayMode
   onModeChange: (mode: UsageDisplayMode) => void
+  /**
+   * Why the shown host's usage could not be read, as a sentence. The segment
+   * then says Unknown and why, never a figure from another host or an older
+   * reading.
+   */
+  error?: string | null | undefined
+  /**
+   * Which host's usage this is, and the others to switch to, while more than
+   * one host is connected. Absent, it names no host: there is only this PC.
+   */
+  hostChoice?: HostChoice | undefined
 }
 
 /**
@@ -239,7 +251,28 @@ function Spend({ spend, now }: { spend: UsageSpend; now: number }): JSX.Element 
   )
 }
 
-export function UsageStatus({ snapshot, mode, onModeChange }: UsageStatusProps): JSX.Element {
+export function UsageStatus({ snapshot, mode, onModeChange, error = null, hostChoice }: UsageStatusProps): JSX.Element {
+  const segment = error === null ? (
+    <UsageSegment snapshot={snapshot} mode={mode} onModeChange={onModeChange} />
+  ) : (
+    <span
+      data-usage-segment="unknown"
+      title={`Usage could not be read: ${error}`}
+      className="shrink-0 underline decoration-border-strong decoration-dotted underline-offset-[3px]"
+    >
+      Unknown
+    </span>
+  )
+  if (hostChoice === undefined || hostChoice.hosts.length < 2) return segment
+  return (
+    <span className="flex shrink-0 items-center gap-2" data-usage-host={hostChoice.host}>
+      <HostSwitch surface="Usage" {...hostChoice} className="py-0 [&>button]:py-0" />
+      {segment}
+    </span>
+  )
+}
+
+function UsageSegment({ snapshot, mode, onModeChange }: UsageStatusProps): JSX.Element {
   const now = useNow()
   const view = usageView(snapshot, now)
 

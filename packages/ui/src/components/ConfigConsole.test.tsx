@@ -166,3 +166,26 @@ describe('ConfigConsole on its pane', () => {
     expectOnThePane(document.body, 'config')
   })
 })
+
+describe('ConfigConsole on more than one host', () => {
+  const HOSTS = [
+    { id: 'local', name: 'This PC', remote: false },
+    { id: 'h1', name: 'build-box', remote: true }
+  ]
+
+  it('says which host’s agent config it shows, with a switch to the other', async () => {
+    const onHostChange = vi.fn()
+    renderConsole({ hostChoice: { hosts: HOSTS, host: 'local', onHostChange } })
+    const header = document.querySelector('[data-pane-header="config"]') as HTMLElement
+    const group = within(header).getByRole('radiogroup', { name: 'Config host' })
+    expect(within(group).getByRole('radio', { checked: true })?.textContent).toContain('This PC')
+    await userEvent.click(within(group).getByRole('radio', { name: 'build-box' }))
+    expect(onHostChange).toHaveBeenCalledWith('h1')
+  })
+
+  it('has no switch with only this PC', () => {
+    renderConsole()
+    expect(screen.queryByRole('radiogroup', { name: 'Config host' })).toBeNull()
+    expect(document.querySelector('[data-head="host"]')).toBeNull()
+  })
+})

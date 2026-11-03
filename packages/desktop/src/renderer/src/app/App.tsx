@@ -190,12 +190,14 @@ import {
   type TreeSession,
   type TreeHost,
   type LauncherHost,
+  type HostChoice,
   type HostInstallActions
 } from '@helm/ui'
 import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
+import { hostFrameKey, hostLabel } from '../../../shared/plugins/origin'
 import {
   bridgeFor,
   devices,
@@ -237,7 +239,7 @@ import { useShells } from './useShells'
 import { useUpdate } from './useUpdate'
 import { useOwnDataCopy } from './useOwnDataCopy'
 import { useUsage } from './useUsage'
-import { usePlugins } from './usePlugins'
+import { useHostPlugins, usePlugins } from './usePlugins'
 import { PluginFrame, PluginsUnavailable } from './PluginFrame'
 import {
   disposePluginFrames,
@@ -352,14 +354,39 @@ const PANEL_ACTION_ICON: Record<PanelActionIcon, (props: { width: number; height
   eye: EyeIcon
 }
 
-/** The surface a plugin's rail icon opens: its rail panel, as the relay knows it. */
-function railPanelSpec(id: string, plugin: PluginInfo): SurfaceSpec | null {
+const NO_PLUGINS: ReadonlyMap<string, PluginInfo> = new Map()
+
+/** A plugin's request, with the host whose plugin made it. */
+type OnHost<T> = T & { host: string }
+
+/** The surfaces that show one host's data at a time, with a switch while more than one is connected. */
+type HostSurface = 'history' | 'usage' | 'config' | 'files' | 'plugins'
+const LOCAL_SURFACES: Readonly<Record<HostSurface, string>> = {
+  history: LOCAL_HOST_KEY,
+  usage: LOCAL_HOST_KEY,
+  config: LOCAL_HOST_KEY,
+  files: LOCAL_HOST_KEY,
+  plugins: LOCAL_HOST_KEY
+}
+
+/**
+ * The sidebar view of a plugin's rail panel: `plugin:<id>` for this PC's, as
+ * it always was, and `plugin:<id>.<host label>` for a remote host's. A plugin
+ * id holds no dot, so the two never meet.
+ */
+function railViewOf(host: string, id: string): SidebarView {
+  return host === LOCAL_HOST_KEY ? pluginRailId(id) : `plugin:${id}.${hostLabel(host)}`
+}
+
+/** The surface a plugin's rail icon opens: its rail panel on its host, as the relay knows it. */
+function railPanelSpec(id: string, plugin: PluginInfo, host: string = LOCAL_HOST_KEY): SurfaceSpec | null {
   if (plugin.rail === null) return null
   const panel = plugin.panels[plugin.rail.panel]
   if (panel === undefined) return null
   return {
-    key: `panel:${id}/${plugin.rail.panel}`,
+    key: hostFrameKey(host, `panel:${id}/${plugin.rail.panel}`),
     plugin: id,
+    ...(host === LOCAL_HOST_KEY ? {} : { host }),
     revision: plugin.revision,
     url: panel.url,
     surface: 'panel',
@@ -367,6 +394,15 @@ function railPanelSpec(id: string, plugin: PluginInfo): SurfaceSpec | null {
     params: {},
     title: panel.title
   }
+}
+
+/**
+ * The frame key of a plugin tab: its pane id on its host, with the host named
+ * the way every plugin frame names one (`hostFrameKey`).
+ */
+function pluginTabKey(ref: Extract<PaneRef, { kind: 'plugin' }>): string {
+  const { host, ...here } = ref
+  return hostFrameKey(host, paneId(here))
 }
 
 /** What a page in a plugin's strip is called: the title it was given, or its tab's in the manifest. */
@@ -480,10 +516,10 @@ export function App(): JSX.Element {
   const pluginState = usePlugins()
   /** The plugins that are on, by id: only these have tabs, panels and rail icons. */
   const plugins = pluginState.live
-  /** Plugins' secret requests, answered one dialog at a time, in order. */
-  const [secretAsks, setSecretAsks] = useState<Extract<PluginUiRequest, { kind: 'secret' }>[]>([])
-  /** Sessions plugins asked to start, put to the user one dialog at a time, in order. */
-  const [sessionAsks, setSessionAsks] = useState<Extract<PluginUiRequest, { kind: 'session' }>[]>([])
+  /** Plugins' secret requests, answered one dialog at a time, in order, each on the host whose plugin asked. */
+  const [secretAsks, setSecretAsks] = useState<OnHost<Extract<PluginUiRequest, { kind: 'secret' }>>[]>([])
+  /** Sessions plugins asked to start, put to the user one dialog at a time, in order, each on its plugin's host. */
+  const [sessionAsks, setSessionAsks] = useState<OnHost<Extract<PluginUiRequest, { kind: 'session' }>>[]>([])
   /** The front one's launch: under way, or why it did not start. */
   const [sessionAskState, setSessionAskState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
   /** Ctrl+Shift+P. */
@@ -530,6 +566,14 @@ export function App(): JSX.Element {
   )
   /** What the window has read of each: its folders, pins and sessions, each through its own bridge. */
   const hostWork = useHostWorkspaces(listedHostIds, connectedHostIds)
+  /** Each connected host's plugins, read through its own bridge: the rail lists their panels after this PC's. */
+  const remotePlugins = useHostPlugins(connectedHostIds)
+  /** A remote host's plugins that are on, by id; none for a host not connected. */
+  const pluginsOn = useCallback(
+    (host: string): ReadonlyMap<string, PluginInfo> =>
+      host === LOCAL_HOST_KEY ? plugins : (remotePlugins.get(host)?.live ?? NO_PLUGINS),
+    [plugins, remotePlugins]
+  )
   /** The hosts a launch can go to: this PC, then each connected host on another computer. */
   const launcherHosts: LauncherHost[] = useMemo(
     () => [
@@ -548,9 +592,46 @@ export function App(): JSX.Element {
   // Asked again each time the window gets its host back: the new host offers what the old one lost.
   const restoreState = useRestore(hostLink.reconnects)
   const { offer: restoreOffer, restore: restoreLost, dismiss: dismissRestore } = restoreState
-  const historyState = useHistory()
-  const configState = useConfig()
-  const usage = useUsage()
+  /**
+   * The host History, Usage, Config, Files and Settings > Plugins each show:
+   * kept in this window only and sent to no host, This PC until switched. A
+   * host removed from this device's list falls back to This PC; one that is
+   * listed but not connected stays chosen, and its surface says why it cannot
+   * be read rather than showing another host's.
+   */
+  const [surfaceHosts, setSurfaceHosts] = useState<Readonly<Record<HostSurface, string>>>(LOCAL_SURFACES)
+  /** A project's Config or Files asked for while that surface showed another host, pointed once it shows this PC. */
+  const [pendingScope, setPendingScope] = useState<{ surface: 'config' | 'files'; path: string } | null>(null)
+  const shownHostOf = (surface: HostSurface): string => {
+    const chosen = surfaceHosts[surface]
+    return chosen === LOCAL_HOST_KEY || listedHostIds.includes(chosen) ? chosen : LOCAL_HOST_KEY
+  }
+  const historyHost = shownHostOf('history')
+  const usageHost = shownHostOf('usage')
+  const configHost = shownHostOf('config')
+  const filesHost = shownHostOf('files')
+  const pluginsHost = shownHostOf('plugins')
+  const showHostOn = useCallback(
+    (surface: HostSurface, host: string) =>
+      setSurfaceHosts((current) => (current[surface] === host ? current : { ...current, [surface]: host })),
+    []
+  )
+  /**
+   * A surface's host switch: This PC and each connected host, and the one it
+   * shows when that has dropped. Absent while there is only one to choose,
+   * which leaves the surface as it always was.
+   */
+  const hostChoiceFor = (surface: HostSurface): HostChoice | undefined => {
+    const host = shownHostOf(surface)
+    const hosts =
+      launcherHosts.some((each) => each.id === host)
+        ? launcherHosts
+        : [...launcherHosts, { id: host, name: hostName(host), remote: true }]
+    return hosts.length < 2 ? undefined : { hosts, host, onHostChange: (next) => showHostOn(surface, next) }
+  }
+  const historyState = useHistory(historyHost)
+  const configState = useConfig(configHost)
+  const usage = useUsage(usageHost)
   const check = useUpdate()
   const ownData = useOwnDataCopy()
   const themes = useThemes()
@@ -747,6 +828,14 @@ export function App(): JSX.Element {
       if (ref.kind === 'restore') return restoreOffer !== null
       // Kept while the list is still being read, so a restored tab is not
       // dropped before its plugin has had a chance to load.
+      if (ref.kind === 'plugin' && hostOf(ref) !== LOCAL_HOST_KEY) {
+        // Another host's plugin tab is kept while that host is away, as its
+        // session tabs are, and dropped once its list says the tab is gone.
+        if (!settingsLoaded) return true
+        if (!listedHostIds.includes(hostOf(ref))) return false
+        const list = remotePlugins.get(hostOf(ref))?.list ?? null
+        return list === null || pluginsOn(hostOf(ref)).get(ref.plugin)?.tabs[ref.tab] !== undefined
+      }
       if (ref.kind === 'plugin') {
         return pluginState.list === null || plugins.get(ref.plugin)?.tabs[ref.tab] !== undefined
       }
@@ -770,7 +859,9 @@ export function App(): JSX.Element {
       pluginState.list,
       settingsLoaded,
       listedHostIds,
-      hostWork.byHost
+      hostWork.byHost,
+      remotePlugins,
+      pluginsOn
     ]
   )
 
@@ -883,12 +974,43 @@ export function App(): JSX.Element {
     [open, shownGroups]
   )
 
+  /**
+   * The plugins Settings > Plugins lists: the host it shows. A remote host's
+   * come through its own bridge while it is connected; while it is not, the
+   * page says so rather than listing another host's.
+   */
+  const shownPluginState =
+    pluginsHost === LOCAL_HOST_KEY
+      ? pluginState
+      : (remotePlugins.get(pluginsHost) ?? {
+          list: null,
+          error: `${hostName(pluginsHost)} is not connected, so its plugins cannot be read.`,
+          live: NO_PLUGINS
+        })
+  /** Why a host's plugins cannot be read, or null while they can (or have not answered yet). */
+  const pluginsUnreadOn = (host: string): string | null =>
+    host === LOCAL_HOST_KEY
+      ? pluginState.error
+      : connectedHostIds.includes(host)
+        ? (remotePlugins.get(host)?.error ?? null)
+        : `${hostName(host)} is not connected, so its plugins cannot be read.`
+  /** A plugin's Settings page, with Settings > Plugins showing the plugin's host. */
+  const openPluginSettings = (host: string, path: string): void => {
+    showHostOn('plugins', host)
+    openSettings(pluginSection(path))
+  }
   /** The plugin whose Settings page is chosen, and whether that page is on screen to be kept current. */
   const settingsPlugin = settingsSection.startsWith('plugin:')
-    ? ((pluginState.list ?? []).find((plugin) => pluginSection(plugin.path) === settingsSection) ?? null)
+    ? ((shownPluginState.list ?? []).find((plugin) => pluginSection(plugin.path) === settingsSection) ?? null)
     : null
   const settingsOnScreen = visible.some((ref) => ref.kind === 'settings')
-  const pluginSettings = usePluginSettings(settingsOnScreen && settingsPlugin !== null ? settingsPlugin.path : null)
+  const pluginSettings = usePluginSettings(
+    settingsOnScreen && settingsPlugin !== null ? settingsPlugin.path : null,
+    pluginsHost
+  )
+  /** The secrets of the host whose plugin asks for one, whichever host Settings shows. */
+  const secretAsk = secretAsks[0] ?? null
+  const askSecrets = usePluginSettings(null, secretAsk?.host ?? LOCAL_HOST_KEY)
   /** Settings > Devices, read only while it is on screen with sessions in the local host. */
   const devicesSettings = useDevicesSettings(
     DEVICES_DEPS,
@@ -960,8 +1082,17 @@ export function App(): JSX.Element {
    * `openFileAt` does, because an updater has to be pure.
    */
   const openPluginTab = useCallback(
-    (plugin: string, tab: string, params: PluginParams, title: string | null, asPreview: boolean) => {
-      if (plugins.get(plugin)?.pageStrip === true) {
+    (
+      plugin: string,
+      tab: string,
+      params: PluginParams,
+      title: string | null,
+      asPreview: boolean,
+      host: string = LOCAL_HOST_KEY
+    ) => {
+      // A remote host's plugin opens each of its tabs as a tab of its own,
+      // naming the host; the page strip is this PC's plugins' only.
+      if (host === LOCAL_HOST_KEY && plugins.get(plugin)?.pageStrip === true) {
         const page = { tab, params, title }
         const was = pagePreviews.get(plugin) ?? null
         const at = findTab(open, pluginPagesId(plugin))
@@ -971,7 +1102,10 @@ export function App(): JSX.Element {
         if (at !== null) setMaximized((current) => (current === null || current === at.group ? current : null))
         return
       }
-      const ref: PaneRef = { kind: 'plugin', plugin, tab, params, title }
+      const ref: PaneRef =
+        host === LOCAL_HOST_KEY
+          ? { kind: 'plugin', plugin, tab, params, title }
+          : { kind: 'plugin', plugin, tab, params, title, host }
       const id = paneId(ref)
       const still = preview !== null && findTab(open, preview) !== null ? preview : null
       const placed = openTabWithPreview(open, ref, still, !asPreview)
@@ -991,7 +1125,12 @@ export function App(): JSX.Element {
    * preview. Read off the layout, as the pages below are.
    */
   const openPluginTabs = useMemo(
-    () => new Set(open.groups.flatMap((group) => group.tabs.filter((ref) => ref.kind === 'plugin').map(paneId))),
+    () =>
+      new Set(
+        open.groups.flatMap((group) =>
+          group.tabs.flatMap((ref) => (ref.kind === 'plugin' ? [pluginTabKey(ref)] : []))
+        )
+      ),
     [open]
   )
   useEffect(() => {
@@ -1014,15 +1153,19 @@ export function App(): JSX.Element {
    * reloaded by its slot; this is for the ones parked off it.
    */
   useEffect(() => {
-    if (pluginState.list === null) return
     disposePluginFrames((spec) => {
-      const plugin = plugins.get(spec.plugin)
+      const host = spec.host ?? LOCAL_HOST_KEY
+      // Judged only against a list that has been read: a host that is away,
+      // or has not answered yet, keeps its frames.
+      const listed = host === LOCAL_HOST_KEY ? pluginState.list : (remotePlugins.get(host)?.list ?? null)
+      if (listed === null) return host !== LOCAL_HOST_KEY && !listedHostIds.includes(host)
+      const plugin = pluginsOn(host).get(spec.plugin)
       if (plugin === undefined || spec.revision !== plugin.revision) return true
       if (spec.surface === 'tab') return plugin.tabs[spec.name] === undefined
       if (spec.surface === 'panel') return plugin.panels[spec.name] === undefined
       return true
     })
-  }, [plugins, pluginState.list])
+  }, [pluginsOn, pluginState.list, remotePlugins, listedHostIds])
 
   /**
    * The saved panes, written back whenever the arrangement changes.
@@ -1135,12 +1278,17 @@ export function App(): JSX.Element {
   const { scopePath: configScopePath, setScopePath: setConfigScope } = configState
   const openConfigAt = useCallback(
     (project: Project) => {
-      if (configScopePath.toLowerCase() !== project.path.toLowerCase()) {
+      if (configHost !== LOCAL_HOST_KEY) {
+        // A project here is this PC's: Config switches back to it, and the
+        // scope is pointed once the switch has cleared what it showed.
+        showHostOn('config', LOCAL_HOST_KEY)
+        setPendingScope({ surface: 'config', path: project.path })
+      } else if (configScopePath.toLowerCase() !== project.path.toLowerCase()) {
         setConfigScope(project.path)
       }
       openPane({ kind: 'config' })
     },
-    [configScopePath, setConfigScope, openPane]
+    [configHost, showHostOn, configScopePath, setConfigScope, openPane]
   )
   /**
    * Where the caret should go in the Browser tab - a page's address bar (Ctrl+L,
@@ -1215,31 +1363,42 @@ export function App(): JSX.Element {
    * opened. Main has checked that the tab and the key are ones the plugin
    * declares, and that a link is an `https` address.
    */
-  useEffect(
-    () =>
-      helm.on('plugins:ui', (request) => {
-        if (request.kind === 'secret') {
-          setSecretAsks((current) => [...current, request])
-          return
-        }
-        if (request.kind === 'session') {
-          setSessionAsks((current) => [...current, request])
-          return
-        }
-        if (request.kind === 'sessionWithdrawn') {
-          setSessionAsks((current) => current.filter((ask) => ask.requestId !== request.requestId))
-          return
-        }
-        if (request.kind === 'link') {
-          // A project of null: a plugin's link is not the address a project's
-          // Browser tab should come back to.
-          openBrowser({ url: request.url, project: null })
-          return
-        }
-        openPluginTab(request.plugin, request.tab, request.params, request.title, request.preview)
-      }),
-    [openPluginTab, openBrowser]
-  )
+  useEffect(() => {
+    // Heard from every host: a remote host's plugin asks over that host's
+    // connection, and is answered there.
+    const offs: Array<() => void> = []
+    const stop = eachHostBridge((host, bridge) => {
+      offs.push(
+        bridge.on('plugins:ui', (request) => {
+          if (request.kind === 'secret') {
+            setSecretAsks((current) => [...current, { ...request, host }])
+            return
+          }
+          if (request.kind === 'session') {
+            setSessionAsks((current) => [...current, { ...request, host }])
+            return
+          }
+          if (request.kind === 'sessionWithdrawn') {
+            setSessionAsks((current) =>
+              current.filter((ask) => ask.host !== host || ask.requestId !== request.requestId)
+            )
+            return
+          }
+          if (request.kind === 'link') {
+            // A project of null: a plugin's link is not the address a project's
+            // Browser tab should come back to.
+            openBrowser({ url: request.url, project: null })
+            return
+          }
+          openPluginTab(request.plugin, request.tab, request.params, request.title, request.preview, host)
+        })
+      )
+    })
+    return () => {
+      stop()
+      for (const off of offs) off()
+    }
+  }, [openPluginTab, openBrowser])
 
   /**
    * A launched session lands in the focused pane and takes its front - or, from
@@ -1379,7 +1538,9 @@ export function App(): JSX.Element {
       // A failed launch has spent the request; closing is all that is left.
       if (!start || sessionAskState.error !== null) {
         if (sessionAskState.error === null) {
-          void helm.invoke('plugins:session', { requestId, start: false, cols: 0, rows: 0 }).catch(() => undefined)
+          void bridgeFor(frontSessionAsk.host)
+            .invoke('plugins:session', { requestId, start: false, cols: 0, rows: 0 })
+            .catch(() => undefined)
         }
         next()
         return
@@ -1387,17 +1548,19 @@ export function App(): JSX.Element {
       setSessionAskState({ busy: true, error: null })
       try {
         const { cols, rows } = estimateGrid(bodyRefs.current.get(open.focused) ?? null)
-        const record = await helm.invoke('plugins:session', { requestId, start: true, cols, rows })
+        const on = frontSessionAsk.host
+        const record = await bridgeFor(on).invoke('plugins:session', { requestId, start: true, cols, rows })
         if (record !== null) {
-          sessionState.adopt(record)
-          placeSession(record.id)
+          if (on === LOCAL_HOST_KEY) sessionState.adopt(record)
+          else adoptThere(on, record)
+          placeSession(record.id, false, undefined, on)
         }
         next()
       } catch (err: unknown) {
         setSessionAskState({ busy: false, error: readable(err) })
       }
     },
-    [frontSessionAsk, sessionAskState.error, sessionState, placeSession, open.focused]
+    [frontSessionAsk, sessionAskState.error, sessionState, adoptThere, placeSession, open.focused]
   )
 
   /** A profile launch lands exactly the way a project launch does - or in the pane `into`. */
@@ -1417,12 +1580,15 @@ export function App(): JSX.Element {
    */
   const resumeSession = useCallback(
     async (session: HistorySession) => {
+      // On the host whose history it is, in a tab naming that host.
+      const on = historyHost
       const record = await historyState.resume(session, bodyRefs.current.get(open.focused) ?? null)
       if (!record) return
-      sessionState.adopt(record)
-      placeSession(record.id)
+      if (on === LOCAL_HOST_KEY) sessionState.adopt(record)
+      else adoptThere(on, record)
+      placeSession(record.id, false, undefined, on)
     },
-    [historyState, sessionState, placeSession, open.focused]
+    [historyHost, historyState, sessionState, adoptThere, placeSession, open.focused]
   )
 
   /**
@@ -1940,29 +2106,59 @@ export function App(): JSX.Element {
 
   /** The file tabs on screen: the ones read, re-read and watched. */
   const shownFiles = useMemo(
-    () => visible.flatMap((ref) => (ref.kind === 'file' ? [{ root: ref.root, path: ref.path }] : [])),
+    () =>
+      visible.flatMap((ref) =>
+        ref.kind !== 'file'
+          ? []
+          : hostOf(ref) === LOCAL_HOST_KEY
+            ? [{ root: ref.root, path: ref.path }]
+            : [{ root: ref.root, path: ref.path, host: hostOf(ref) }]
+      ),
     [visible]
   )
+  /** The host of the tab in front, connected or not: the Files view follows its folder only on the host it shows. */
+  const frontRefHost = useMemo(() => {
+    const group = groupById(open, open.focused)
+    const ref = group === undefined ? null : activeRef(group)
+    return ref === null ? LOCAL_HOST_KEY : hostOf(ref)
+  }, [open])
   const files = useFiles({
+    host: filesHost,
     active: sidebarShown && sidebarView === 'files',
-    follow: frontFolder,
+    follow: frontRefHost === filesHost ? frontFolder : null,
     shown: shownFiles,
     revision: discovery
   })
   const { noteOpened, loadListing, setRoot: setFilesRoot } = files
+  // A project's Config or Files asked for while that surface showed another
+  // host: pointed in the render that switches it to this PC, after the switch
+  // has cleared what the other host's showed (adjusted while rendering, so
+  // the scope is never painted against the wrong host).
+  if (pendingScope !== null) {
+    if (pendingScope.surface === 'config' && configHost === LOCAL_HOST_KEY) {
+      setPendingScope(null)
+      setConfigScope(pendingScope.path)
+    } else if (pendingScope.surface === 'files' && filesHost === LOCAL_HOST_KEY) {
+      setPendingScope(null)
+      setFilesRoot(pendingScope.path)
+    }
+  }
 
   /** Whether long lines wrap in a file - a setting, so it holds for the next file and the next start. */
   const filesWrap = settings?.filesWrap ?? DEFAULT_SETTINGS.filesWrap
   const setFilesWrap = useCallback((wrap: boolean) => writeSettings({ filesWrap: wrap }), [writeSettings])
 
-  /** The project page's Files link: the sidebar's Files view, on that project. */
+  /** The project page's Files link: the sidebar's Files view, on that project, on this PC. */
   const openFilesAt = useCallback(
     (project: Project) => {
-      setFilesRoot(project.path)
+      if (filesHost !== LOCAL_HOST_KEY) {
+        showHostOn('files', LOCAL_HOST_KEY)
+        setPendingScope({ surface: 'files', path: project.path })
+      } else setFilesRoot(project.path)
       setSidebarView('files')
       setSidebarHidden(false)
     },
-    [setFilesRoot]
+    [filesHost, showHostOn, setFilesRoot]
   )
 
   /**
@@ -1985,12 +2181,16 @@ export function App(): JSX.Element {
       revealCount.current += 1
       const seq = revealCount.current
       if (ref.kind === 'file') {
-        revealFile(ref.root, ref.path)
-        setFilesRevealSeq(seq)
+        // Revealed on the host the Files view shows; a file of another host
+        // switches the view to it, which then follows the file's folder.
+        if (hostOf(ref) === filesHost) {
+          revealFile(ref.root, ref.path)
+          setFilesRevealSeq(seq)
+        } else showHostOn('files', hostOf(ref))
       } else if (ref.kind === 'session') setTreeReveal({ seq, kind: 'session', id: paneId(ref) })
       else if (ref.kind === 'project') setTreeReveal({ seq, kind: 'project', path: ref.path })
     },
-    [revealFile]
+    [revealFile, filesHost, showHostOn]
   )
 
   /**
@@ -2001,6 +2201,8 @@ export function App(): JSX.Element {
    */
   const scopeOf = useCallback(
     (ref: FileRef): string => {
+      // The folders Helm knows are the Files view's host's.
+      if (hostOf(ref) !== files.host) return ref.root
       const lower = ref.path.toLowerCase()
       let best = ref.root
       for (const scope of files.roots) {
@@ -2011,11 +2213,11 @@ export function App(): JSX.Element {
       }
       return best
     },
-    [files.roots]
+    [files.roots, files.host]
   )
 
   const setDocMode = (ref: FileRef, mode: DocumentMode): void => {
-    setDocModes((current) => new Map(current).set(fileKey(ref.path), mode))
+    setDocModes((current) => new Map(current).set(fileKey(ref.path, hostOf(ref)), mode))
     // Editing a preview tab keeps it, as every editor does: the next single
     // click must not replace a tab with a draft in it.
     if (mode === 'edit') keepTab(paneId(ref))
@@ -2038,12 +2240,14 @@ export function App(): JSX.Element {
    * rather than inside the update - an updater has to be pure, and React runs
    * it twice in development to check.
    */
+  const filesShownHost = files.host
   const openFileAt = useCallback(
-    (root: string, path: string, keep: boolean, at?: QuickOpenAt) => {
-      const ref: FileRef = { kind: 'file', root, path }
+    (root: string, path: string, keep: boolean, at?: QuickOpenAt, host: string = filesShownHost) => {
+      // A file of another host's carries it, so its tab reads and writes there.
+      const ref: FileRef = host === LOCAL_HOST_KEY ? { kind: 'file', root, path } : { kind: 'file', root, path, host }
       // A text match opens on its line; anything else opens where the file starts.
       setFileReveals((current) => {
-        const key = fileKey(path)
+        const key = fileKey(path, host)
         if (at === undefined && !current.has(key)) return current
         const next = new Map(current)
         if (at === undefined) next.delete(key)
@@ -2058,9 +2262,9 @@ export function App(): JSX.Element {
       setPreview(placed.preview)
       // A file sent to the pane a maximized one is hiding gives the window back.
       setMaximized((current) => (current === null || current === landed?.group ? current : null))
-      noteOpened(root, relativeTo(root, path))
+      if (host === filesShownHost) noteOpened(root, relativeTo(root, path))
     },
-    [open, preview, commit, noteOpened]
+    [filesShownHost, open, preview, commit, noteOpened]
   )
 
   /** A preview tab double-clicked: it stays. */
@@ -2101,8 +2305,10 @@ export function App(): JSX.Element {
     (query: string) =>
       quickOpenRoot === null
         ? Promise.resolve(null)
-        : helm.invoke('content:search', { scopePath: quickOpenRoot, query }).catch(() => null),
-    [quickOpenRoot]
+        : bridgeFor(filesShownHost)
+            .invoke('content:search', { scopePath: quickOpenRoot, query })
+            .catch(() => null),
+    [quickOpenRoot, filesShownHost]
   )
 
   /**
@@ -2489,7 +2695,10 @@ export function App(): JSX.Element {
           {
             id: paneId(ref),
             title: 'Session history',
-            hint: historyState.summary?.historyFile ?? 'Every session on this machine',
+            hint:
+              historyHost === LOCAL_HOST_KEY
+                ? (historyState.summary?.historyFile ?? 'Every session on this machine')
+                : `Every session on ${hostName(historyHost)}`,
             icon: <HistoryIcon width={13} height={13} />
           }
         ]
@@ -2498,7 +2707,10 @@ export function App(): JSX.Element {
           {
             id: paneId(ref),
             title: 'Config',
-            hint: configState.scope?.path ?? 'Browse and edit .claude configuration',
+            hint:
+              configHost === LOCAL_HOST_KEY
+                ? (configState.scope?.path ?? 'Browse and edit .claude configuration')
+                : `${hostName(configHost)} · ${configState.scope?.path ?? '.claude configuration'}`,
             icon: <SlidersIcon width={13} height={13} />
           }
         ]
@@ -2512,16 +2724,20 @@ export function App(): JSX.Element {
           }
         ]
       case 'plugin': {
-        const plugin = plugins.get(ref.plugin)
+        const on = hostOf(ref)
+        const plugin = pluginsOn(on).get(ref.plugin)
         const surface = plugin?.tabs[ref.tab]
         if (plugin === undefined || surface === undefined) return []
         const title = ref.title ?? surface.title
         const isPreview = paneId(ref) === preview
+        // Another host's plugin tab names its host, as its session tabs do.
+        const owner = on === LOCAL_HOST_KEY ? plugin.name : `${plugin.name} · ${hostName(on)}`
         return [
           {
             id: paneId(ref),
             title: truncate(title, 30),
-            hint: isPreview ? `${title} - ${plugin.name}\n${PREVIEW_HINT}` : `${title} - ${plugin.name}`,
+            ...(on === LOCAL_HOST_KEY ? {} : { host: hostName(on) }),
+            hint: isPreview ? `${title} - ${owner}\n${PREVIEW_HINT}` : `${title} - ${owner}`,
             icon: <PluginIcon url={plugin.icon} size={13} />,
             preview: isPreview
           }
@@ -2591,25 +2807,29 @@ export function App(): JSX.Element {
           }
         ]
       }
-      case 'file':
+      case 'file': {
+        const on = hostOf(ref)
+        const where = on === LOCAL_HOST_KEY ? ref.path : `${hostName(on)} · ${ref.path}`
         return [
           {
             id: paneId(ref),
             title: folderName(ref.path),
-            hint: paneId(ref) === preview ? `${ref.path}\n${PREVIEW_HINT}` : ref.path,
+            ...(on === LOCAL_HOST_KEY ? {} : { host: hostName(on) }),
+            hint: paneId(ref) === preview ? `${where}\n${PREVIEW_HINT}` : where,
             icon: <DocIcon width={13} height={13} />,
             mono: true,
             preview: paneId(ref) === preview,
-            dirty: docDirty.has(fileKey(ref.path))
+            dirty: docDirty.has(fileKey(ref.path, on))
           }
         ]
+      }
     }
   }
 
   /** The crumb under a session's tab. */
   const crumbFor = (ref: PaneRef | null): ReactNode => {
     if (ref?.kind === 'file') {
-      const view = files.tabs.get(fileKey(ref.path))?.view ?? null
+      const view = files.tabs.get(fileKey(ref.path, hostOf(ref)))?.view ?? null
       const kind = documentKind(ref.path)
       return (
         <FileCrumb
@@ -2619,7 +2839,7 @@ export function App(): JSX.Element {
             kind === null ? undefined : (
               <DocumentModeSwitch
                 kind={kind}
-                mode={docModes.get(fileKey(ref.path)) ?? 'preview'}
+                mode={docModes.get(fileKey(ref.path, hostOf(ref))) ?? 'preview'}
                 onChange={(mode) => setDocMode(ref, mode)}
               />
             )
@@ -3068,11 +3288,13 @@ export function App(): JSX.Element {
     if (settingsSection === 'plugins' || settingsSection.startsWith('plugin:')) {
       return (
         <PluginsPage
-          plugins={pluginState.list}
-          unavailable={pluginState.error}
+          plugins={shownPluginState.list}
+          unavailable={shownPluginState.error}
           addError={pluginSettings.addError}
           onAdd={pluginSettings.add}
           onOpen={(path) => setSettingsSection(pluginSection(path))}
+          hostChoice={hostChoiceFor('plugins')}
+          {...(pluginsHost === LOCAL_HOST_KEY ? {} : { remoteHost: hostName(pluginsHost) })}
         />
       )
     }
@@ -3126,7 +3348,7 @@ export function App(): JSX.Element {
         if (info?.releasesUrl !== undefined) void helmOpenExternal(info.releasesUrl)
       }}
       // The same fact the status bar's cycle turns on, from the same snapshot.
-      hasCostEstimate={usage?.spend != null}
+      hasCostEstimate={usage.snapshot?.spend != null}
       terminal={terminalSettings}
       onTerminalChange={launcher.writeSettings}
       // The stack the terminals are actually running, so the preview well
@@ -3290,6 +3512,7 @@ export function App(): JSX.Element {
         return (
           <SessionHistory
             {...sessionHistoryProps(historyState)}
+            hostChoice={hostChoiceFor('history')}
             onResume={(session) => void resumeSession(session)}
             onReveal={launcher.reveal}
             compact={compact}
@@ -3319,6 +3542,7 @@ export function App(): JSX.Element {
       case 'config':
         return (
           <ConfigConsole
+            hostChoice={hostChoiceFor('config')}
             scopes={configState.scopes}
             scopePath={configState.scopePath}
             onScopeChange={configState.setScopePath}
@@ -3488,17 +3712,20 @@ export function App(): JSX.Element {
       case 'settings':
         return renderSettings()
       case 'plugin': {
-        const plugin = plugins.get(ref.plugin)
+        const on = hostOf(ref)
+        const plugin = pluginsOn(on).get(ref.plugin)
         const surface = plugin?.tabs[ref.tab]
-        if (plugin === undefined && pluginState.error !== null) {
-          return <PluginsUnavailable reason={pluginState.error} className="absolute inset-0" />
+        const unread = pluginsUnreadOn(on)
+        if (plugin === undefined && unread !== null) {
+          return <PluginsUnavailable reason={unread} className="absolute inset-0" />
         }
         if (plugin === undefined || surface === undefined) return null
         return (
           <PluginFrame
             spec={{
-              key: paneId(ref),
+              key: pluginTabKey(ref),
               plugin: ref.plugin,
+              ...(on === LOCAL_HOST_KEY ? {} : { host: on }),
               revision: plugin.revision,
               url: surface.url,
               surface: 'tab',
@@ -3507,7 +3734,7 @@ export function App(): JSX.Element {
               title: ref.title ?? surface.title
             }}
             pluginName={plugin.name}
-            onOpenSettings={() => openSettings(pluginSection(plugin.path))}
+            onOpenSettings={() => openPluginSettings(on, plugin.path)}
             className="absolute inset-0"
           />
         )
@@ -3544,7 +3771,8 @@ export function App(): JSX.Element {
    * or, for a note or an artifact, the document, with the code as its Source.
    */
   const renderFile = (ref: FileRef): JSX.Element => {
-    const key = fileKey(ref.path)
+    const on = hostOf(ref)
+    const key = fileKey(ref.path, on)
     const state = files.tabs.get(key)
     const reveal = fileReveals.get(key) ?? null
     const code = (
@@ -3559,7 +3787,10 @@ export function App(): JSX.Element {
         onCaretChange={(caret) => fileCarets.current.set(key, caret.line)}
         onReveal={launcher.reveal}
         onOpenInEditor={
-          files.editor === null ? null : () => openInEditor(ref.path, fileCarets.current.get(key) ?? null)
+          // VS Code is this PC's: a file on another host has no editor here.
+          files.editor === null || on !== LOCAL_HOST_KEY
+            ? null
+            : () => openInEditor(ref.path, fileCarets.current.get(key) ?? null)
         }
       />
     )
@@ -3568,6 +3799,7 @@ export function App(): JSX.Element {
     return (
       <DocumentTab
         key={paneId(ref)}
+        host={on}
         scopePath={scopeOf(ref)}
         path={ref.path}
         kind={kind}
@@ -3578,7 +3810,7 @@ export function App(): JSX.Element {
         onDirtyChange={(dirty) => markDocDirty(key, dirty)}
         onHighlight={helmHighlight}
         // A wikilink opens beside it as a kept tab, in the same project.
-        onOpenPath={(path) => openFileAt(ref.root, path, true)}
+        onOpenPath={(path) => openFileAt(ref.root, path, true, undefined, on)}
         onOpenExternal={openLink}
       />
     )
@@ -3650,7 +3882,7 @@ export function App(): JSX.Element {
                   <FileActions
                     path={groupFront.path}
                     onOpenInEditor={
-                      files.editor === null
+                      files.editor === null || hostOf(groupFront) !== LOCAL_HOST_KEY
                         ? null
                         : () =>
                             openInEditor(
@@ -3798,14 +4030,25 @@ export function App(): JSX.Element {
     setMaximized(null)
   }
 
-  /** The plugin panel the sidebar is showing, when it is showing one. */
+  /**
+   * Every plugin with a rail icon: this PC's, then each connected host's in
+   * the order the hosts were added, each by the sidebar view it opens.
+   */
+  const railPluginEntries = [LOCAL_HOST_KEY, ...connectedHostIds].flatMap((host) =>
+    [...pluginsOn(host).entries()].flatMap(([id, plugin]) =>
+      plugin.rail === null ? [] : [{ host, id, plugin, rail: plugin.rail, view: railViewOf(host, id) }]
+    )
+  )
+
+  /** The plugin panel the sidebar is showing, when it is showing one, on its host. */
   const sidebarPanel = (() => {
     if (!sidebarView.startsWith('plugin:')) return null
-    const id = sidebarView.slice('plugin:'.length)
-    const plugin = plugins.get(id)
-    const spec = plugin === undefined ? null : railPanelSpec(id, plugin)
-    if (plugin === undefined || spec === null) return null
-    return { spec, name: plugin.name, path: plugin.path, actions: plugin.panels[spec.name]?.actions ?? [] }
+    const entry = railPluginEntries.find((candidate) => candidate.view === sidebarView)
+    if (entry === undefined) return null
+    const { host, id, plugin } = entry
+    const spec = railPanelSpec(id, plugin, host)
+    if (spec === null) return null
+    return { spec, host, name: plugin.name, path: plugin.path, actions: plugin.panels[spec.name]?.actions ?? [] }
   })()
 
   /** Each plugin's status item; pressing one opens its panel, or its Settings page when it has none. */
@@ -3859,13 +4102,15 @@ export function App(): JSX.Element {
     queueToPluginFrame(spec, 'command', { id: command.id })
   }
 
-  const secretChoices: SecretPluginChoice[] = [...plugins.entries()].map(([id, plugin]) => ({
-    id,
-    name: plugin.name,
-    network: plugin.network,
-    secrets: plugin.secrets.map((entry) => entry.key)
-  }))
-  const secretAsk = secretAsks[0] ?? null
+  /** The plugins a secret asked for may be shared with: those on the asking plugin's host. */
+  const secretChoices: SecretPluginChoice[] = [...pluginsOn(secretAsk?.host ?? LOCAL_HOST_KEY).entries()].map(
+    ([id, plugin]) => ({
+      id,
+      name: plugin.name,
+      network: plugin.network,
+      secrets: plugin.secrets.map((entry) => entry.key)
+    })
+  )
 
   const inFront = (...kinds: PaneRef['kind'][]): boolean =>
     front !== null && kinds.includes(front.kind)
@@ -3900,22 +4145,19 @@ export function App(): JSX.Element {
 
   // Plugins with a rail icon, in a group of their own under a rule: each opens
   // its panel in the sidebar, the way Sessions and Files do.
-  const pluginRailItems = [...plugins.entries()].flatMap(([id, plugin]): RailItem[] => {
-    if (plugin.rail === null) return []
-    const view = pluginRailId(id)
-    return [
-      {
-        id: view,
-        label: plugin.rail.title,
-        icon: <PluginIcon url={plugin.icon} size={RAIL_ICON.width} />,
-        kind: 'view',
-        current: sidebarShown && sidebarView === view,
-        badge: plugin.badge,
-        onSelect: () => toggleView(view),
-        hooks: { 'data-open-plugin': id }
-      }
-    ]
-  })
+  // Another host's say which host in their hover text.
+  const pluginRailItems = railPluginEntries.map(
+    ({ host, id, plugin, rail, view }): RailItem => ({
+      id: view,
+      label: host === LOCAL_HOST_KEY ? rail.title : `${rail.title} · ${hostName(host)}`,
+      icon: <PluginIcon url={plugin.icon} size={RAIL_ICON.width} />,
+      kind: 'view',
+      current: sidebarShown && sidebarView === view,
+      badge: plugin.badge,
+      onSelect: () => toggleView(view),
+      hooks: host === LOCAL_HOST_KEY ? { 'data-open-plugin': id } : { 'data-open-plugin': id, 'data-plugin-host': host }
+    })
+  )
   const railPlugins = pluginRailItems.length === 0 ? [] : [pluginRailItems]
 
   // Ordered by how often each is reached for (DESIGN.md "The rail"): the
@@ -4081,7 +4323,14 @@ export function App(): JSX.Element {
       {sidebarView === 'files' && (
         <Sidebar
           title="Files"
-          scope={<FilesRootPicker roots={files.roots} value={files.root} onChange={files.setRoot} />}
+          scope={
+            <FilesRootPicker
+              roots={files.roots}
+              value={files.root}
+              onChange={files.setRoot}
+              hostChoice={hostChoiceFor('files')}
+            />
+          }
           actions={
             files.root === null ? undefined : (
               <>
@@ -4093,7 +4342,7 @@ export function App(): JSX.Element {
                 >
                   <FolderIcon width={13} height={13} />
                 </SidebarAction>
-                {files.editor !== null && (
+                {files.editor !== null && files.host === LOCAL_HOST_KEY && (
                   <SidebarAction
                     label="Open project in VS Code"
                     onClick={() => {
@@ -4128,15 +4377,17 @@ export function App(): JSX.Element {
               expanded={files.expanded}
               loading={files.loadingDirs}
               status={files.status}
-              selectedPath={front?.kind === 'file' ? front.path : null}
+              selectedPath={front?.kind === 'file' && hostOf(front) === files.host ? front.path : null}
               {...(filesRevealSeq === undefined ? {} : { revealSeq: filesRevealSeq })}
               onToggleDir={files.toggleDir}
               onOpen={(path, keep) => {
-                if (files.root !== null) openFileAt(files.root, path, keep)
+                if (files.root !== null) openFileAt(files.root, path, keep, undefined, files.host)
               }}
               onReveal={launcher.reveal}
               onCopyPath={copyPath}
-              onOpenInEditor={files.editor === null ? null : (path) => openInEditor(path, null)}
+              onOpenInEditor={
+                files.editor === null || files.host !== LOCAL_HOST_KEY ? null : (path) => openInEditor(path, null)
+              }
               onGoToFile={openQuickOpen}
             />
           )}
@@ -4261,7 +4512,7 @@ export function App(): JSX.Element {
           <PluginFrame
             spec={sidebarPanel.spec}
             pluginName={sidebarPanel.name}
-            onOpenSettings={() => openSettings(pluginSection(sidebarPanel.path))}
+            onOpenSettings={() => openPluginSettings(sidebarPanel.host, sidebarPanel.path)}
             className="min-h-0 flex-1"
           />
         </Sidebar>
@@ -4331,7 +4582,9 @@ export function App(): JSX.Element {
           // startup: after the CLI is relocated the strip would go on saying it
           // is missing while the banner above it says it was found.
           claudeMissing={setup.status !== null && setup.status.path === null}
-          usage={usage}
+          usage={usage.snapshot}
+          usageError={usage.error}
+          usageHostChoice={hostChoiceFor('usage')}
           usageDisplay={settings?.usageDisplay ?? 'percent'}
           onUsageDisplayChange={launcher.setUsageDisplay}
           update={update}
@@ -4381,7 +4634,7 @@ export function App(): JSX.Element {
             onSearchText={searchText}
             onOpen={(relPath, at) => {
               setQuickOpenRoot(null)
-              openFileAt(quickOpenRoot, joinRoot(quickOpenRoot, relPath), true, at)
+              openFileAt(quickOpenRoot, joinRoot(quickOpenRoot, relPath), true, at, files.host)
             }}
             onDismiss={() => setQuickOpenRoot(null)}
           />
@@ -4396,7 +4649,7 @@ export function App(): JSX.Element {
         {frontSessionAsk !== null && (
           <PluginSessionDialog
             key={frontSessionAsk.requestId}
-            pluginName={plugins.get(frontSessionAsk.plugin)?.name ?? frontSessionAsk.plugin}
+            pluginName={pluginsOn(frontSessionAsk.host).get(frontSessionAsk.plugin)?.name ?? frontSessionAsk.plugin}
             cwd={frontSessionAsk.cwd}
             name={frontSessionAsk.name}
             prompt={frontSessionAsk.prompt}
@@ -4409,14 +4662,17 @@ export function App(): JSX.Element {
         {secretAsk !== null && (
           <SecretDialog
             key={secretAsk.requestId}
-            existing={pluginSettings.secrets?.secrets.find((entry) => entry.key === secretAsk.key) ?? null}
+            existing={askSecrets.secrets?.secrets.find((entry) => entry.key === secretAsk.key) ?? null}
             presetKey={secretAsk.key}
-            requester={{ id: secretAsk.plugin, name: plugins.get(secretAsk.plugin)?.name ?? secretAsk.plugin }}
+            requester={{
+              id: secretAsk.plugin,
+              name: pluginsOn(secretAsk.host).get(secretAsk.plugin)?.name ?? secretAsk.plugin
+            }}
             plugins={secretChoices}
-            available={pluginSettings.secrets?.available ?? true}
-            onSave={pluginSettings.saveSecret}
+            available={askSecrets.secrets?.available ?? true}
+            onSave={askSecrets.saveSecret}
             onClose={() => {
-              helm.send('plugins:answer', { requestId: secretAsk.requestId })
+              bridgeFor(secretAsk.host).send('plugins:answer', { requestId: secretAsk.requestId })
               setSecretAsks((current) => current.slice(1))
             }}
           />

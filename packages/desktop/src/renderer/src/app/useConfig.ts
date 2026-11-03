@@ -13,11 +13,11 @@ import type {
   McpResult,
   McpScope
 } from '@helm/core'
-import type { CreatableKind } from '@helm/core/types'
+import { LOCAL_HOST_KEY, type CreatableKind } from '@helm/core/types'
 // A value, so it comes from the entry point with no `node:` imports behind it.
 import { isRedactedConfigFile } from '@helm/core/types'
 import type { ConfigViewKind } from '@helm/ui'
-import { helm } from './bridge'
+import { bridgeFor } from './bridge'
 
 /**
  * The config console's renderer state.
@@ -168,7 +168,16 @@ interface Answered<T> {
   value: T
 }
 
-export function useConfig(): ConfigState {
+/**
+ * The config console on one host (this PC's by default). Every read and every
+ * write - a save, a restore, a new or renamed file, an MCP change - goes
+ * through that host's bridge only, so a write made while build-box is shown is
+ * snapshotted and written on build-box. Switched to another host, what was
+ * read from the last one is dropped first: its scopes, files and edits are
+ * never shown as, or saved to, the new one's.
+ */
+export function useConfig(host: string = LOCAL_HOST_KEY): ConfigState {
+  const helm = bridgeFor(host)
   const [scopes, setScopes] = useState<ConfigScope[]>([])
   const [scopesError, setScopesError] = useState<string | null>(null)
   const [scopePath, setScopePathState] = useState('')
@@ -203,6 +212,32 @@ export function useConfig(): ConfigState {
   const [doctor, setDoctor] = useState<DoctorReport | null>(null)
   const [doctorRunning, setDoctorRunning] = useState(false)
 
+  // Another host: nothing read from the last one stays, and nothing of it is
+  // left selected to be saved there.
+  const [shownHost, setShownHost] = useState(host)
+  if (shownHost !== host) {
+    setShownHost(host)
+    setScopes([])
+    setScopesError(null)
+    setScopePathState('')
+    setTreeAnswer(null)
+    setTreeError(null)
+    setSelectedPath(null)
+    setFileAnswer(null)
+    setSnapshotAnswer(null)
+    setEditorError(null)
+    setExternal(null)
+    setDirty(false)
+    setEffectiveProfileId(null)
+    setCwdOverride(null)
+    setEffectiveAnswer(null)
+    setEffectiveError(null)
+    setMcpPreview(null)
+    setMcpResult(null)
+    setMcpListing(null)
+    setDoctor(null)
+  }
+
   // -------------------------------------------------------------------------
   // Scopes
   // -------------------------------------------------------------------------
@@ -218,7 +253,7 @@ export function useConfig(): ConfigState {
       })
       // Could not look is said, never painted as a switcher with nothing in it.
       .catch((err: unknown) => setScopesError(readable(err)))
-  }, [])
+  }, [helm])
 
   useEffect(loadScopes, [loadScopes])
 
@@ -234,7 +269,7 @@ export function useConfig(): ConfigState {
       offDiscovery()
       offProfiles()
     }
-  }, [loadScopes])
+  }, [helm, loadScopes])
 
   const scope = useMemo(
     () => scopes.find((s) => s.path.toLowerCase() === scopePath.toLowerCase()) ?? null,
@@ -244,7 +279,7 @@ export function useConfig(): ConfigState {
   // -------------------------------------------------------------------------
   // The tree
   // -------------------------------------------------------------------------
-  const treeKey = `${scopePath}:${String(treeVersion)}`
+  const treeKey = `${host}:${scopePath}:${String(treeVersion)}`
   const treeSeq = useRef(0)
   useEffect(() => {
     if (scopePath === '') return
@@ -264,7 +299,7 @@ export function useConfig(): ConfigState {
       .finally(() => {
         if (ticket === treeSeq.current) setRefreshing(false)
       })
-  }, [scopePath, treeKey])
+  }, [helm, scopePath, treeKey])
 
   // A stale tree is still shown while the next one loads - a list that blanks
   // between scopes is worse than one that lags by a frame.
@@ -306,7 +341,7 @@ export function useConfig(): ConfigState {
   // -------------------------------------------------------------------------
   /** Bumped to re-read the same file after a write, a restore, or a reload. */
   const [fileVersion, setFileVersion] = useState(0)
-  const fileKey = `${selectedPath ?? ''}:${String(fileVersion)}`
+  const fileKey = `${host}:${selectedPath ?? ''}:${String(fileVersion)}`
 
   const readSelected = useCallback(
     (path: string, key: string) => {
@@ -322,7 +357,7 @@ export function useConfig(): ConfigState {
           .catch((err: unknown) => setEditorError(readable(err)))
       }
     },
-    [scopePath]
+    [helm, scopePath]
   )
 
   /**
@@ -343,7 +378,7 @@ export function useConfig(): ConfigState {
     void helm.invoke('config:watch', { path: redacted ? null : selectedPath })
     if (selectedPath === null || redacted) return
     readSelected(selectedPath, fileKey)
-  }, [selectedPath, fileKey, readSelected, redacted])
+  }, [helm, selectedPath, fileKey, readSelected, redacted])
 
   const loaded = fileAnswer?.key === fileKey ? fileAnswer.value : null
   const snapshots = snapshotAnswer?.key === fileKey ? snapshotAnswer.value : []
@@ -357,7 +392,7 @@ export function useConfig(): ConfigState {
    * covers a save, a restore and an external edit alike.
    */
   const [renderAnswer, setRenderAnswer] = useState<Answered<ConfigRendered> | null>(null)
-  const renderKey = `${selectedPath ?? ''}:${loaded?.hash ?? ''}`
+  const renderKey = `${host}:${selectedPath ?? ''}:${loaded?.hash ?? ''}`
   useEffect(() => {
     if (selectedPath === null || loaded === null || loaded.binary || !loaded.exists) return
     let live = true
@@ -374,7 +409,7 @@ export function useConfig(): ConfigState {
     return () => {
       live = false
     }
-  }, [selectedPath, renderKey, loaded])
+  }, [helm, selectedPath, renderKey, loaded])
 
   const rendered = renderAnswer?.key === renderKey ? renderAnswer.value : null
 
@@ -393,7 +428,7 @@ export function useConfig(): ConfigState {
           setExternal({ hash: content.hash, content: content.content, exists: content.exists })
         })
       }),
-    [selectedPath, loaded]
+    [helm, selectedPath, loaded]
   )
 
   const save = useCallback(
@@ -434,7 +469,7 @@ export function useConfig(): ConfigState {
         .catch((err: unknown) => setEditorError(readable(err)))
         .finally(() => setSaving(false))
     },
-    [selectedPath, scope, loaded]
+    [helm, selectedPath, scope, loaded]
   )
 
   const reload = useCallback(() => {
@@ -462,7 +497,7 @@ export function useConfig(): ConfigState {
         .catch((err: unknown) => setEditorError(readable(err)))
         .finally(() => setSaving(false))
     },
-    [selectedPath]
+    [helm, selectedPath]
   )
 
   const select = useCallback((file: ConfigFile | null) => {
@@ -543,7 +578,7 @@ export function useConfig(): ConfigState {
         .catch((err: unknown) => setEntryError(readable(err)))
         .finally(() => setEntryBusy(false))
     },
-    [scope, landOn]
+    [helm, scope, landOn]
   )
 
   const renameFile = useCallback(
@@ -564,7 +599,7 @@ export function useConfig(): ConfigState {
         .catch((err: unknown) => setEntryError(readable(err)))
         .finally(() => setEntryBusy(false))
     },
-    [scope, selectedPath, landOn]
+    [helm, scope, selectedPath, landOn]
   )
 
   const deleteFile = useCallback(() => {
@@ -589,7 +624,7 @@ export function useConfig(): ConfigState {
       })
       .catch((err: unknown) => setEntryError(readable(err)))
       .finally(() => setEntryBusy(false))
-  }, [scope, selectedPath, selected, landOn])
+  }, [helm, scope, selectedPath, selected, landOn])
 
   /**
    * Puts a deleted entry back, one `config:restore` per file.
@@ -613,7 +648,7 @@ export function useConfig(): ConfigState {
       })
       .catch((err: unknown) => setEditorError(readable(err)))
       .finally(() => setEntryBusy(false))
-  }, [deleted, landOn])
+  }, [helm, deleted, landOn])
 
   /**
    * Opens a file by path, from a link somewhere that is not the list - the
@@ -657,7 +692,7 @@ export function useConfig(): ConfigState {
       ? scope.path
       : (scopes.find((candidate) => candidate.kind !== 'user')?.path ?? ''))
 
-  const effectiveKey = `${String(effectiveProfileId)}:${effectiveCwd}:${String(treeVersion)}`
+  const effectiveKey = `${host}:${String(effectiveProfileId)}:${effectiveCwd}:${String(treeVersion)}`
   const effectiveSeq = useRef(0)
   /**
    * Computed for the Files view as well, and deliberately the *same* answer.
@@ -687,7 +722,7 @@ export function useConfig(): ConfigState {
         if (ticket !== effectiveSeq.current) return
         setEffectiveError(readable(err))
       })
-  }, [wantsEffective, effectiveProfileId, effectiveCwd, effectiveKey])
+  }, [helm, wantsEffective, effectiveProfileId, effectiveCwd, effectiveKey])
 
   const effective = effectiveAnswer?.value ?? null
   const effectiveLoading = wantsEffective && effectiveAnswer?.key !== effectiveKey
@@ -715,7 +750,7 @@ export function useConfig(): ConfigState {
   const mcpCwd = scope?.kind === 'user' ? (scopes.find((s) => s.kind !== 'user')?.path ?? '') : (scope?.path ?? '')
   const mcpSeq = useRef(0)
   const [mcpVersion, setMcpVersion] = useState(0)
-  const mcpKey = `${mcpCwd}:${String(mcpVersion)}`
+  const mcpKey = `${host}:${mcpCwd}:${String(mcpVersion)}`
   useEffect(() => {
     if (view !== 'mcp' || mcpCwd === '') return
     const ticket = ++mcpSeq.current
@@ -727,7 +762,7 @@ export function useConfig(): ConfigState {
       .catch(() => {
         if (ticket === mcpSeq.current) setMcpAnswer({ key: mcpKey, value: null })
       })
-  }, [view, mcpCwd, mcpKey])
+  }, [helm, view, mcpCwd, mcpKey])
 
   const requestMcpPreview = useCallback(() => {
     if (mcpCwd === '') return
@@ -744,7 +779,7 @@ export function useConfig(): ConfigState {
           error: readable(err)
         })
       )
-  }, [mcpDraft, mcpCwd])
+  }, [helm, mcpDraft, mcpCwd])
 
   const applyMcp = useCallback(() => {
     if (mcpCwd === '') return
@@ -764,7 +799,7 @@ export function useConfig(): ConfigState {
         setMcpResult({ ok: false, output: readable(err), exitCode: null, after: '', snapshotId: null })
       )
       .finally(() => setMcpApplying(false))
-  }, [mcpDraft, mcpCwd])
+  }, [helm, mcpDraft, mcpCwd])
 
   const removeMcp = useCallback(
     (server: EffectiveMcpServer) => {
@@ -780,7 +815,7 @@ export function useConfig(): ConfigState {
           setMcpResult({ ok: false, output: readable(err), exitCode: null, after: '', snapshotId: null })
         )
     },
-    [mcpCwd]
+    [helm, mcpCwd]
   )
 
   const approveMcp = useCallback(
@@ -805,7 +840,7 @@ export function useConfig(): ConfigState {
           setMcpResult({ ok: false, output: readable(err), exitCode: null, after: '', snapshotId: null })
         )
     },
-    [mcpCwd]
+    [helm, mcpCwd]
   )
 
   const runMcpList = useCallback(() => {
@@ -818,7 +853,7 @@ export function useConfig(): ConfigState {
         setMcpListing({ ok: false, output: readable(err), exitCode: null, after: '', snapshotId: null })
       )
       .finally(() => setMcpListingBusy(false))
-  }, [mcpCwd])
+  }, [helm, mcpCwd])
 
   // -------------------------------------------------------------------------
   // Health
@@ -839,7 +874,7 @@ export function useConfig(): ConfigState {
         })
       )
       .finally(() => setDoctorRunning(false))
-  }, [])
+  }, [helm])
 
   return {
     scopes,

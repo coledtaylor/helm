@@ -340,3 +340,25 @@ describe('SessionHistory on its pane', () => {
     expect(document.querySelector('[data-empty-state="history-detail"]')).not.toBeNull()
   })
 })
+
+describe('SessionHistory on more than one host', () => {
+  const HOSTS = [
+    { id: 'local', name: 'This PC', remote: false },
+    { id: 'h1', name: 'build-box', remote: true }
+  ]
+
+  it('says which host’s sessions it lists, with a switch to the other', async () => {
+    const onHostChange = vi.fn()
+    renderHistory({ hostChoice: { hosts: HOSTS, host: 'h1', onHostChange } }, [session('a')])
+    const header = document.querySelector('[data-pane-header="history"]') as HTMLElement
+    const group = within(header).getByRole('radiogroup', { name: 'History host' })
+    expect(within(group).getByRole('radio', { checked: true })?.textContent).toContain('build-box')
+    await userEvent.click(within(group).getByRole('radio', { name: 'This PC' }))
+    expect(onHostChange).toHaveBeenCalledWith('local')
+  })
+
+  it('has no switch with only this PC', () => {
+    renderHistory({}, [session('a')])
+    expect(screen.queryByRole('radiogroup', { name: 'History host' })).toBeNull()
+  })
+})

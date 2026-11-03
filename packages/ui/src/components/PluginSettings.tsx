@@ -12,6 +12,7 @@ import { formatBytes } from '../lib/time'
 import { Checkbox } from './Checkbox'
 import { DialogFooter, DialogHeader, secondaryButton } from './DialogParts'
 import { EmptyState } from './EmptyState'
+import { HostSwitch, type HostChoice } from './HostSwitch'
 import { PlugIcon, PlusIcon, RefreshIcon, TrashIcon } from './icons'
 import { Overlay } from './Overlay'
 import { PluginIcon } from './PluginIcon'
@@ -38,37 +39,120 @@ export interface PluginsPageProps {
   unavailable?: string | null | undefined
   /** Why the last folder picked was not added, as a sentence. */
   addError: string | null
-  onAdd: () => void
+  /** Add a folder: picked on this PC with no `path`, or the path typed for a host on another computer. */
+  onAdd: (path?: string) => void
   onOpen: (path: string) => void
+  /**
+   * Which host's plugins these are, and the others to switch to, while more
+   * than one host is connected. Absent, it names no host: there is only this
+   * PC.
+   */
+  hostChoice?: HostChoice | undefined
+  /**
+   * The name of the host on another computer whose plugins these are, or
+   * absent for this PC's. Its folder is typed, as the picker browses this PC
+   * only.
+   */
+  remoteHost?: string | undefined
 }
 
-export function PluginsPage({ plugins, unavailable = null, addError, onAdd, onOpen }: PluginsPageProps): JSX.Element {
+export function PluginsPage({
+  plugins,
+  unavailable = null,
+  addError,
+  onAdd,
+  onOpen,
+  hostChoice,
+  remoteHost
+}: PluginsPageProps): JSX.Element {
+  /** The folder typed for a host on another computer; null while the field is not open. */
+  const [typing, setTyping] = useState<string | null>(null)
+  // A switch to another host closes a field that was typing a path on the last one.
+  const [typingOn, setTypingOn] = useState(remoteHost)
+  if (typingOn !== remoteHost) {
+    setTypingOn(remoteHost)
+    setTyping(null)
+  }
+  const addTyped = (): void => {
+    const path = (typing ?? '').trim()
+    if (path === '') return
+    onAdd(path)
+    setTyping(null)
+  }
   return (
     <SettingsPage
       data-settings-section="plugins"
       title="Plugins"
       sole
       aside={
-        <Action primary onClick={onAdd} data-plugin-add>
-          <span className="flex items-center gap-1.5">
-            <PlusIcon width={11} height={11} />
-            Add folder
-          </span>
-        </Action>
+        <>
+          <HostSwitch surface="Plugins" {...hostChoice} />
+          <Action
+            primary
+            onClick={() => (remoteHost === undefined ? onAdd() : setTyping((current) => current ?? ''))}
+            data-plugin-add
+          >
+            <span className="flex items-center gap-1.5">
+              <PlusIcon width={11} height={11} />
+              Add folder
+            </span>
+          </Action>
+        </>
       }
     >
       <Group
         name="plugins"
         title="Plugins"
-        hint="Folders that hold a helm-plugin.json. Each runs in a process of its own and reaches only the hosts, programs and secrets its manifest declares."
+        hint={
+          remoteHost === undefined
+            ? 'Folders that hold a helm-plugin.json. Each runs in a process of its own and reaches only the hosts, programs and secrets its manifest declares.'
+            : `Folders on ${remoteHost} that hold a helm-plugin.json. Each runs there, in a process of its own, and reaches only the hosts, programs and secrets its manifest declares.`
+        }
       >
+        {remoteHost !== undefined && typing !== null && (
+          <form
+            className="flex items-center gap-2 pb-3"
+            data-plugin-add-path
+            onSubmit={(event) => {
+              event.preventDefault()
+              addTyped()
+            }}
+          >
+            <input
+              type="text"
+              autoFocus
+              aria-label={`Plugin folder on ${remoteHost}`}
+              placeholder={`The folder’s path on ${remoteHost}`}
+              value={typing}
+              spellCheck={false}
+              onChange={(event) => setTyping(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setTyping(null)
+              }}
+              className={cn(
+                'h-[30px] min-w-0 flex-1 rounded-well border border-border bg-surface-sunken px-2.5',
+                'font-mono text-[11.5px] text-fg select-text placeholder:font-sans placeholder:text-fg-subtle',
+                'focus:border-accent focus:outline-none'
+              )}
+            />
+            <Action primary onClick={addTyped} disabled={typing.trim() === ''} data-plugin-add-confirm>
+              Add
+            </Action>
+            <Action onClick={() => setTyping(null)}>Cancel</Action>
+          </form>
+        )}
         {addError !== null && (
           <div className="pb-3">
             <Verdict tone="warn" text={addError} data-plugin-add-error />
           </div>
         )}
         {plugins === null && unavailable !== null ? (
-          <EmptyState size="list" name="plugins-unavailable" icon={<PlugIcon width={18} height={18} />} title="The local host could not be reached">
+          <EmptyState
+            size="list"
+            name="plugins-unavailable"
+            icon={<PlugIcon width={18} height={18} />}
+            title={remoteHost === undefined ? 'The local host could not be reached' : `Unknown: ${remoteHost} could not be read`}
+          >
             {unavailable}
           </EmptyState>
         ) : plugins !== null && plugins.length === 0 ? (

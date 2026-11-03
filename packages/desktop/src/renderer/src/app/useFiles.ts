@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ContentDirListing, ContentScope, FileListing, FilesStatus, FileView } from '@helm/core'
-import { helm } from './bridge'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
+import { bridgeFor } from './bridge'
 import { readable } from './errors'
 
 /**
@@ -12,6 +13,11 @@ import { readable } from './errors'
  * the sidebar shows it, and the project of each file tab in front of a pane -
  * and main is told the whole set every time it changes, so nothing is watched
  * on behalf of a view nobody is looking at.
+ *
+ * The sidebar shows one host's folders (`host`, this PC's by default) and
+ * reads them through that host's bridge only. A file tab is read and watched
+ * on the host it was opened from, whichever host the sidebar shows, and each
+ * host is told only its own folders to watch.
  */
 
 /** A file tab's file, as last read. */
@@ -39,8 +45,10 @@ export interface FilesState {
   /** Points the tree at a file: its project, with every folder down to it open. */
   reveal: (root: string, path: string) => void
   status: FilesStatus | null
-  /** Each file tab's file, keyed by its lower-cased path. */
+  /** Each file tab's file, keyed by `fileKey`. */
   tabs: ReadonlyMap<string, FileTabState>
+  /** The host the sidebar's folders, and Ctrl+P's list, are on. */
+  host: string
   /** Every file in `listingRoot`, for Ctrl+P; null while listing. */
   listing: FileListing | null
   /** Lists a project's files for Ctrl+P, once per opening. */
@@ -52,13 +60,22 @@ export interface FilesState {
   editor: string | null
 }
 
+/** A file tab on screen: its project, its path, and its host when that is not this PC. */
+export interface ShownFile {
+  root: string
+  path: string
+  host?: string
+}
+
 export interface FilesOptions {
+  /** The host whose folders the sidebar shows: this PC's (`LOCAL_HOST_KEY`) when absent. */
+  host?: string
   /** The sidebar is showing the Files view. */
   active: boolean
-  /** The folder of whatever is in front of the focused pane; the sidebar follows it. */
+  /** The folder on `host` of whatever is in front of the focused pane; the sidebar follows it. */
   follow: string | null
   /** The file tabs in front of a pane - the ones worth reading and watching. */
-  shown: ReadonlyArray<{ root: string; path: string }>
+  shown: readonly ShownFile[]
   /**
    * Changes whenever the folders Helm knows may have - each scan's result. The
    * picker's list is read again on it: the first scan lands a moment after the
@@ -70,8 +87,13 @@ export interface FilesOptions {
 
 const keyOf = (path: string): string => path.replace(/[\\/]+$/, '').toLowerCase()
 
-/** The key a file tab's state is held under in `FilesState.tabs`. */
-export const fileKey = keyOf
+/**
+ * The key a file tab's state is held under in `FilesState.tabs`: its path, and
+ * its host when that is not this PC, so the same path on two hosts is two
+ * files.
+ */
+export const fileKey = (path: string, host: string = LOCAL_HOST_KEY): string =>
+  host === LOCAL_HOST_KEY ? keyOf(path) : `${host}\u0000${keyOf(path)}`
 
 /** How many recently opened files Ctrl+P offers before anything is typed. */
 const RECENT_MAX = 12
@@ -88,7 +110,10 @@ export function relativeTo(root: string, path: string): string {
   return path.slice(base.length + 1).split(/[\\/]/).join('/')
 }
 
-export function useFiles({ active, follow, shown, revision }: FilesOptions): FilesState {
+const hostOfShown = (tab: ShownFile): string => tab.host ?? LOCAL_HOST_KEY
+
+export function useFiles({ host = LOCAL_HOST_KEY, active, follow, shown, revision }: FilesOptions): FilesState {
+  const helm = bridgeFor(host)
   const [root, setRootState] = useState<string | null>(null)
   const [roots, setRoots] = useState<readonly ContentScope[]>([])
   const [rootsError, setRootsError] = useState<string | null>(null)
@@ -101,16 +126,37 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
   const [recent, setRecent] = useState<ReadonlyMap<string, readonly string[]>>(new Map())
   const [editor, setEditor] = useState<string | null>(null)
 
+  /*
+   * Another host: nothing of the last one's folders stays - its project, tree,
+   * status, Ctrl+P list and recent files are that host's, not this one's.
+   * Adjusted while rendering, as `follow` below is.
+   */
+  const [shownHost, setShownHost] = useState(host)
+  if (shownHost !== host) {
+    setShownHost(host)
+    setRootState(null)
+    setRoots([])
+    setRootsError(null)
+    setDirs(new Map())
+    setExpandedByRoot(new Map())
+    setStatus(null)
+    setListings(new Map())
+    setListingRoot(null)
+    setRecent(new Map())
+  }
+
   /**
-   * The root an answer has to be about to be kept. Read inside promise
-   * callbacks, where a value captured when the request went out is the root
-   * *then* - and a listing for the project somebody just switched away from
-   * must not land in the tree of the one they switched to.
+   * The root, and its host, an answer has to be about to be kept. Read inside
+   * promise callbacks, where a value captured when the request went out is the
+   * root *then* - and a listing for the project (or host) somebody just
+   * switched away from must not land in the tree of the one they switched to.
    */
   const rootRef = useRef(root)
+  const hostRef = useRef(host)
   useEffect(() => {
     rootRef.current = root
-  }, [root])
+    hostRef.current = host
+  }, [root, host])
 
   const setRoot = useCallback((next: string) => {
     if (rootRef.current !== null && keyOf(rootRef.current) === keyOf(next)) return
@@ -142,9 +188,10 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
     [root, expandedByRoot]
   )
 
-  // Once: what VS Code is called here, if it is here at all.
+  // Once: what VS Code is called on this computer, if it is here at all,
+  // whichever host the sidebar shows.
   useEffect(() => {
-    void helm
+    void bridgeFor(LOCAL_HOST_KEY)
       .invoke('files:editor')
       .then(({ name }) => setEditor(name))
       .catch(() => setEditor(null))
@@ -156,54 +203,64 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
   // Read whether or not the sidebar is showing it: a note opened from Ctrl+P
   // is saved as part of the deepest of these that holds it.
   useEffect(() => {
+    let live = true
     void helm
       .invoke('content:scopes')
       .then((list) => {
+        if (!live) return
         setRoots(list)
         setRootsError(null)
         const first = list[0]
         if (active && rootRef.current === null && first !== undefined) setRoot(first.path)
       })
-      .catch((err: unknown) => setRootsError(readable(err)))
-  }, [active, setRoot, revision])
-
-  const readDir = useCallback((relPath: string) => {
-    const at = rootRef.current
-    if (at === null) return
-    void helm
-      .invoke('files:dir', { root: at, relPath })
-      .catch(
-        (err: unknown): ContentDirListing => ({
-          // An answer that never arrives still has to be written down: a row
-          // that pulses for ever with nothing to say why is worse than an error.
-          scopePath: at,
-          relPath,
-          entries: [],
-          ignored: 0,
-          ignoreSource: 'default',
-          error: readable(err),
-          tookMs: 0
-        })
-      )
-      .then((listing) => {
-        if (rootRef.current === null || keyOf(rootRef.current) !== keyOf(at)) return
-        setDirs((current) => new Map(current).set(relPath, listing))
+      .catch((err: unknown) => {
+        if (live) setRootsError(readable(err))
       })
-  }, [])
+    return () => {
+      live = false
+    }
+  }, [helm, active, setRoot, revision])
+
+  /** Whether an answer about `at` on `on` is still about what the sidebar shows. */
+  const stillShown = (on: string, at: string): boolean =>
+    hostRef.current === on && rootRef.current !== null && keyOf(rootRef.current) === keyOf(at)
+
+  const readDir = useCallback(
+    (relPath: string) => {
+      const at = rootRef.current
+      if (at === null) return
+      void helm
+        .invoke('files:dir', { root: at, relPath })
+        .catch(
+          (err: unknown): ContentDirListing => ({
+            // An answer that never arrives still has to be written down: a row
+            // that pulses for ever with nothing to say why is worse than an error.
+            scopePath: at,
+            relPath,
+            entries: [],
+            ignored: 0,
+            ignoreSource: 'default',
+            error: readable(err),
+            tookMs: 0
+          })
+        )
+        .then((listing) => {
+          if (stillShown(host, at)) setDirs((current) => new Map(current).set(relPath, listing))
+        })
+    },
+    [helm, host]
+  )
 
   const readStatus = useCallback(() => {
     const at = rootRef.current
     if (at === null) return
     void helm
       .invoke('files:status', { root: at })
-      .catch(
-        (err: unknown): FilesStatus => ({ root: at, repo: null, files: null, error: readable(err) })
-      )
+      .catch((err: unknown): FilesStatus => ({ root: at, repo: null, files: null, error: readable(err) }))
       .then((next) => {
-        if (rootRef.current === null || keyOf(rootRef.current) !== keyOf(at)) return
-        setStatus(next)
+        if (stillShown(host, at)) setStatus(next)
       })
-  }, [])
+  }, [helm, host])
 
   // The tree's top and every folder left open, and the status - whenever the
   // sidebar is opened onto a project, or pointed at another one.
@@ -268,14 +325,16 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
   // File tabs
   // -------------------------------------------------------------------------
 
-  const readFile = useCallback((fileRoot: string, path: string) => {
-    void helm
+  /** A file tab's file, read on the host it was opened from. */
+  const readFile = useCallback((fileHost: string, fileRoot: string, path: string) => {
+    const key = fileKey(path, fileHost)
+    void bridgeFor(fileHost)
       .invoke('files:read', { root: fileRoot, path })
-      .then((view) => setTabs((current) => new Map(current).set(keyOf(path), { view, error: null })))
+      .then((view) => setTabs((current) => new Map(current).set(key, { view, error: null })))
       .catch((err: unknown) =>
         setTabs((current) => {
-          const before = current.get(keyOf(path))
-          return new Map(current).set(keyOf(path), { view: before?.view ?? null, error: readable(err) })
+          const before = current.get(key)
+          return new Map(current).set(key, { view: before?.view ?? null, error: readable(err) })
         })
       )
   }, [])
@@ -285,42 +344,73 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
    * tab that sat behind another while a session edited its file is current
    * the moment it is looked at - and again whenever the watch says it moved.
    */
-  const shownKey = shown.map((tab) => `${tab.root}\u0000${tab.path}`).join('\u0001')
+  const shownKey = shown.map((tab) => `${hostOfShown(tab)}\u0000${tab.root}\u0000${tab.path}`).join('\u0001')
   const shownRef = useRef(shown)
   useEffect(() => {
     shownRef.current = shown
   }, [shown])
   useEffect(() => {
-    for (const tab of shownRef.current) readFile(tab.root, tab.path)
+    for (const tab of shownRef.current) readFile(hostOfShown(tab), tab.root, tab.path)
   }, [shownKey, readFile])
 
   // -------------------------------------------------------------------------
   // Watching
   // -------------------------------------------------------------------------
 
+  /** What each host is to watch: the sidebar's project on its host, and each file tab's project on its own. */
   const watchedKey = useMemo(() => {
-    const set = new Map<string, string>()
-    if (active && root !== null) set.set(keyOf(root), root)
-    for (const tab of shown) set.set(keyOf(tab.root), tab.root)
-    return [...set.values()].sort().join('\u0000')
-  }, [active, root, shown])
+    const byHost = new Map<string, Map<string, string>>()
+    const add = (on: string, at: string): void => {
+      const set = byHost.get(on) ?? new Map<string, string>()
+      set.set(keyOf(at), at)
+      byHost.set(on, set)
+    }
+    if (active && root !== null) add(host, root)
+    for (const tab of shown) add(hostOfShown(tab), tab.root)
+    return JSON.stringify(
+      [...byHost.entries()]
+        .map(([on, set]): [string, string[]] => [on, [...set.values()].sort()])
+        .sort(([a], [b]) => a.localeCompare(b))
+    )
+  }, [active, host, root, shown])
 
+  /** The hosts told to watch something, each told to stop once it has nothing left. */
+  const watchingOn = useRef(new Set<string>())
   useEffect(() => {
-    const wanted = watchedKey === '' ? [] : watchedKey.split('\u0000')
-    void helm.invoke('files:watch', { roots: wanted }).catch(() => undefined)
+    const wanted = new Map(JSON.parse(watchedKey) as Array<[string, string[]]>)
+    // This PC is told every time, as it always was: an empty set stops its watches.
+    for (const on of new Set([LOCAL_HOST_KEY, ...watchingOn.current, ...wanted.keys()])) {
+      void bridgeFor(on)
+        .invoke('files:watch', { roots: wanted.get(on) ?? [] })
+        .catch(() => undefined)
+    }
+    watchingOn.current = new Set(wanted.keys())
   }, [watchedKey])
 
   // Nothing is watched for a window that has gone.
-  useEffect(() => () => void helm.invoke('files:watch', { roots: [] }).catch(() => undefined), [])
+  useEffect(() => {
+    const watching = watchingOn
+    return () => {
+      for (const on of new Set([LOCAL_HOST_KEY, ...watching.current])) {
+        void bridgeFor(on).invoke('files:watch', { roots: [] }).catch(() => undefined)
+      }
+    }
+  }, [])
 
   const activeRef = useRef(active)
   useEffect(() => {
     activeRef.current = active
   }, [active])
 
-  useEffect(
-    () =>
-      helm.on('files:changed', ({ root: changed, paths }) => {
+  /** The hosts whose changes are heard: the sidebar's, and each file tab's. */
+  const heardKey = useMemo(
+    () => [...new Set([host, ...shown.map(hostOfShown)])].sort().join('\u0000'),
+    [host, shown]
+  )
+
+  useEffect(() => {
+    const offs = heardKey.split('\u0000').map((on) =>
+      bridgeFor(on).on('files:changed', ({ root: changed, paths }) => {
         const changedKey = keyOf(changed)
         const named = paths === null ? null : new Set(paths.map((path) => path.toLowerCase()))
 
@@ -331,9 +421,10 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
         // drops its own cache on the same change, so the next opening lists
         // again; until then the list on screen is the one it opened with.
 
-        // The sidebar: the status, and each open folder something changed in.
+        // The sidebar, while it shows this host: the status, and each open
+        // folder something changed in.
         const at = rootRef.current
-        if (activeRef.current && at !== null && keyOf(at) === changedKey) {
+        if (on === hostRef.current && activeRef.current && at !== null && keyOf(at) === changedKey) {
           readStatus()
           const open = ['', ...expandedRef.current]
           for (const relPath of open) {
@@ -348,31 +439,39 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
           }
         }
 
-        // The files on screen: re-read one that changed, and every one when
-        // the repository itself moved - a commit clears the marks.
+        // The files on screen on this host: re-read one that changed, and
+        // every one when the repository itself moved - a commit clears the marks.
         for (const tab of shownRef.current) {
-          if (keyOf(tab.root) !== changedKey) continue
+          if (hostOfShown(tab) !== on || keyOf(tab.root) !== changedKey) continue
           const rel = relativeTo(tab.root, tab.path).toLowerCase()
-          if (named === null || named.has(rel) || named.has('.git')) readFile(tab.root, tab.path)
+          if (named === null || named.has(rel) || named.has('.git')) readFile(on, tab.root, tab.path)
         }
-      }),
-    [readDir, readFile, readStatus]
-  )
+      })
+    )
+    return () => {
+      for (const off of offs) off()
+    }
+  }, [heardKey, readDir, readFile, readStatus])
 
   // -------------------------------------------------------------------------
   // Ctrl+P
   // -------------------------------------------------------------------------
 
-  /** Asks main every opening, showing the last list for `at` until it answers. */
-  const loadListing = useCallback((at: string) => {
-    setListingRoot(at)
-    void helm
-      .invoke('files:list', { root: at })
-      .catch(
-        (err: unknown): FileListing => ({ root: at, files: [], source: 'walk', truncated: false, error: readable(err) })
-      )
-      .then((listing) => setListings((current) => new Map(current).set(keyOf(at), listing)))
-  }, [])
+  /** Asks the sidebar's host every opening, showing the last list for `at` until it answers. */
+  const loadListing = useCallback(
+    (at: string) => {
+      setListingRoot(at)
+      void helm
+        .invoke('files:list', { root: at })
+        .catch(
+          (err: unknown): FileListing => ({ root: at, files: [], source: 'walk', truncated: false, error: readable(err) })
+        )
+        .then((listing) => {
+          if (hostRef.current === host) setListings((current) => new Map(current).set(keyOf(at), listing))
+        })
+    },
+    [helm, host]
+  )
 
   const listing = listingRoot === null ? null : (listings.get(keyOf(listingRoot)) ?? null)
 
@@ -398,6 +497,7 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
     reveal,
     status,
     tabs,
+    host,
     listing,
     loadListing,
     recentIn,

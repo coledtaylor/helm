@@ -298,8 +298,11 @@ export function createPluginsAdapter(deps: PluginsAdapterDeps): HostAdapter {
   return {
     requests: {
       'plugins:list': async () => listed((await reach()).request('plugins:list', null)),
-      'plugins:add': async () => {
-        const { path } = await own.invoke('path:chooseDirectory', { title: 'Add a plugin folder' })
+      'plugins:add': async (request) => {
+        // A typed path is the host's own; with none, the picker browses this PC
+        // (and is refused for a host on another computer).
+        const typed = typeof request?.path === 'string' && request.path !== '' ? request.path : null
+        const path = typed ?? (await own.invoke('path:chooseDirectory', { title: 'Add a plugin folder' })).path
         if (path === null) {
           return { path: null, error: null, plugins: await listed((await reach()).request('plugins:list', null)) }
         }

@@ -1,6 +1,7 @@
 import { Fragment, type JSX } from 'react'
 import type { UsageDisplayMode, UsageSnapshot } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import type { HostChoice } from './HostSwitch'
 import { UsageStatus } from './UsageStatus'
 
 export interface StatusBarProps {
@@ -29,6 +30,10 @@ export interface StatusBarProps {
   claudeMissing: boolean
   /** Claude Code's cached plan-limit figures, or null before the first read. */
   usage: UsageSnapshot | null
+  /** Why the shown host's usage could not be read, while it could not: said as Unknown, never as a figure. */
+  usageError?: string | null | undefined
+  /** Which host's usage the bar shows, while more than one is connected. */
+  usageHostChoice?: HostChoice | undefined
   usageDisplay: UsageDisplayMode
   onUsageDisplayChange: (mode: UsageDisplayMode) => void
   /**
@@ -98,6 +103,8 @@ export function StatusBar({
   claudeVersion,
   claudeMissing,
   usage,
+  usageError = null,
+  usageHostChoice,
   usageDisplay,
   onUsageDisplayChange,
   update,
@@ -250,7 +257,13 @@ export function StatusBar({
       ))}
       {plugins.length > 0 && <Divider />}
 
-      <UsageStatus snapshot={usage} mode={usageDisplay} onModeChange={onUsageDisplayChange} />
+      <UsageStatus
+        snapshot={usage}
+        mode={usageDisplay}
+        onModeChange={onUsageDisplayChange}
+        error={usageError}
+        hostChoice={usageHostChoice}
+      />
     </footer>
   )
 }

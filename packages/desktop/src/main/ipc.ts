@@ -808,10 +808,11 @@ export function registerIpc(ctx: IpcContext): void {
      * where, what a page may open - is in `main/plugins/`; these delegate.
      */
     'plugins:list': () => ctx.plugins.list(),
-    'plugins:add': async () => {
+    'plugins:add': async (request) => {
       const title = 'Add a plugin folder'
       let path: string | null
-      if (ctx.chooseDirectory) path = ctx.chooseDirectory(title)
+      if (typeof request?.path === 'string' && request.path !== '') path = request.path
+      else if (ctx.chooseDirectory) path = ctx.chooseDirectory(title)
       else {
         const win = ctx.window()
         const options: Electron.OpenDialogOptions = { title, properties: ['openDirectory'] }

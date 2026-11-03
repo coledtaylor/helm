@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { SettingValue } from '@coledtaylor/helm-plugin-sdk'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import type { PluginLogLine, PluginMetrics, SecretInput, SecretsState } from '../../../shared/ipc'
-import { helm } from './bridge'
+import { bridgeFor } from './bridge'
 import { readable } from './errors'
 
 /** How often a plugin's page re-reads what it costs and what it printed, while it is on screen. */
@@ -12,7 +13,8 @@ export interface PluginSettingsState {
   secrets: SecretsState | null
   /** Why the last folder picked was not added. */
   addError: string | null
-  add: () => void
+  /** Picks a folder on this PC with no `path`; a host on another computer is given the path typed for it. */
+  add: (path?: string) => void
   setEnabled: (path: string, enabled: boolean) => void
   setTools: (path: string, enabled: boolean) => void
   reload: (path: string) => void
@@ -34,12 +36,21 @@ export interface PluginSettingsState {
  * are its figures and log read, every two seconds - the figures cost a walk of
  * every process, and nobody reads a log that is not in front of them.
  */
-export function usePluginSettings(watching: string | null): PluginSettingsState {
-  const [secrets, setSecrets] = useState<SecretsState | null>(null)
-  const [addError, setAddError] = useState<string | null>(null)
-  const [watched, setWatched] = useState<{ path: string; metrics: PluginMetrics | null; log: PluginLogLine[] | null } | null>(
-    null
-  )
+export function usePluginSettings(watching: string | null, host: string = LOCAL_HOST_KEY): PluginSettingsState {
+  const helm = bridgeFor(host)
+  /** The secrets read, and the host they are on: never shown for another. */
+  const [secretsRead, setSecretsRead] = useState<{ host: string; state: SecretsState } | null>(null)
+  const secrets = secretsRead !== null && secretsRead.host === host ? secretsRead.state : null
+  const setSecrets = useCallback((state: SecretsState) => setSecretsRead({ host, state }), [host])
+  const [addFailure, setAddFailure] = useState<{ host: string; error: string | null } | null>(null)
+  const addError = addFailure !== null && addFailure.host === host ? addFailure.error : null
+  const setAddError = useCallback((error: string | null) => setAddFailure({ host, error }), [host])
+  const [watched, setWatched] = useState<{
+    host: string
+    path: string
+    metrics: PluginMetrics | null
+    log: PluginLogLine[] | null
+  } | null>(null)
 
   useEffect(() => {
     let takeRead = true
@@ -57,7 +68,7 @@ export function usePluginSettings(watching: string | null): PluginSettingsState 
       takeRead = false
       off()
     }
-  }, [])
+  }, [helm, setSecrets])
 
   useEffect(() => {
     if (watching === null) return undefined
@@ -72,6 +83,7 @@ export function usePluginSettings(watching: string | null): PluginSettingsState 
       ]).then(([metrics, log]) => {
         if (!live) return
         setWatched({
+          host,
           path: watching,
           metrics: metrics?.find((entry) => entry.path === watching) ?? null,
           log
@@ -84,32 +96,47 @@ export function usePluginSettings(watching: string | null): PluginSettingsState 
       live = false
       if (timer !== null) clearTimeout(timer)
     }
-  }, [watching])
+  }, [watching, helm, host])
 
-  const add = useCallback(() => {
-    void helm.invoke('plugins:add').then(
-      (result) => setAddError(result.error),
-      (error: unknown) => setAddError(readable(error))
-    )
-  }, [])
+  const add = useCallback(
+    (path?: string) => {
+      void helm.invoke('plugins:add', path === undefined ? {} : { path }).then(
+        (result) => setAddError(result.error),
+        (error: unknown) => setAddError(readable(error))
+      )
+    },
+    [helm, setAddError]
+  )
 
-  const setEnabled = useCallback((path: string, enabled: boolean) => {
-    void helm.invoke('plugins:setEnabled', { path, enabled })
-  }, [])
+  const setEnabled = useCallback(
+    (path: string, enabled: boolean) => {
+      void helm.invoke('plugins:setEnabled', { path, enabled })
+    },
+    [helm]
+  )
 
-  const setTools = useCallback((path: string, enabled: boolean) => {
-    void helm.invoke('plugins:setTools', { path, enabled })
-  }, [])
+  const setTools = useCallback(
+    (path: string, enabled: boolean) => {
+      void helm.invoke('plugins:setTools', { path, enabled })
+    },
+    [helm]
+  )
 
-  const reload = useCallback((path: string) => {
-    void helm.invoke('plugins:reload', { path })
-  }, [])
+  const reload = useCallback(
+    (path: string) => {
+      void helm.invoke('plugins:reload', { path })
+    },
+    [helm]
+  )
 
-  const remove = useCallback((path: string, deleteSecrets: string[]) => {
-    void helm.invoke('plugins:remove', { path, deleteSecrets })
-  }, [])
+  const remove = useCallback(
+    (path: string, deleteSecrets: string[]) => {
+      void helm.invoke('plugins:remove', { path, deleteSecrets })
+    },
+    [helm]
+  )
 
-  const ownSecrets = useCallback((path: string) => helm.invoke('plugins:ownSecrets', { path }), [])
+  const ownSecrets = useCallback((path: string) => helm.invoke('plugins:ownSecrets', { path }), [helm])
 
   const setSetting = useCallback(
     (plugin: string, key: string, value: SettingValue) =>
@@ -117,7 +144,7 @@ export function usePluginSettings(watching: string | null): PluginSettingsState 
         () => null,
         (error: unknown) => readable(error)
       ),
-    []
+    [helm]
   )
 
   const saveSecret = useCallback(
@@ -129,7 +156,7 @@ export function usePluginSettings(watching: string | null): PluginSettingsState 
         },
         (error: unknown) => readable(error)
       ),
-    []
+    [helm, setSecrets]
   )
 
   const removeSecret = useCallback(
@@ -141,10 +168,10 @@ export function usePluginSettings(watching: string | null): PluginSettingsState 
         },
         (error: unknown) => readable(error)
       ),
-    []
+    [helm, setSecrets]
   )
 
-  const current = watched !== null && watched.path === watching ? watched : null
+  const current = watched !== null && watched.path === watching && watched.host === host ? watched : null
   return {
     secrets,
     addError,

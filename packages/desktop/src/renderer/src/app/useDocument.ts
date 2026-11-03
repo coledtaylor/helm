@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ConfigSnapshotMeta, ContentDocument, RenderedMarkdown } from '@helm/core'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import type { ArtifactConsoleEntry } from '@helm/ui'
-import { helm } from './bridge'
+import { bridgeFor } from './bridge'
 import { readable } from './errors'
 import { relativeTo } from './useFiles'
 
@@ -32,6 +33,12 @@ export interface ParkedDraft {
 }
 
 export interface DocumentOptions {
+  /**
+   * The host the file is on: this PC's (`LOCAL_HOST_KEY`) when absent. Every
+   * read and write of it - a save is snapshotted and written there - goes
+   * through that host's bridge only.
+   */
+  host?: string
   scopePath: string
   path: string
   kind: 'markdown' | 'html'
@@ -80,7 +87,15 @@ const inside = (root: string, path: string): boolean =>
 /** `helm-content://artifact/<token>/` - everything the artifact loaded is under it. */
 const artifactBase = (url: string): string => url.slice(0, url.lastIndexOf('/') + 1)
 
-export function useDocument({ scopePath, path, kind, editing, parked }: DocumentOptions): DocumentState {
+export function useDocument({
+  host = LOCAL_HOST_KEY,
+  scopePath,
+  path,
+  kind,
+  editing,
+  parked
+}: DocumentOptions): DocumentState {
+  const helm = bridgeFor(host)
   const [document, setDocument] = useState<ContentDocument | null>(null)
   const [version, setVersion] = useState(0)
   const [snapshots, setSnapshots] = useState<ConfigSnapshotMeta[]>([])
@@ -132,7 +147,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
       .catch((err: unknown) => {
         if (ticket === seq.current) setSnapshotsError(readable(err))
       })
-  }, [scopePath, path, version])
+  }, [helm, scopePath, path, version])
 
   // An artifact gets a URL its sandboxed frame may load - minted per read, so a
   // changed file is a fresh frame and an old token cannot outlive its page.
@@ -152,7 +167,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
     return () => {
       current = false
     }
-  }, [kind, scopePath, path, version])
+  }, [helm, kind, scopePath, path, version])
 
   // What this artifact logged, and nothing another tab's did.
   useEffect(() => {
@@ -162,7 +177,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
       if (!entry.source.startsWith(base) && !entry.source.endsWith('://unknown')) return
       setArtifactConsole((current) => [...current.slice(-(CONSOLE_MAX - 1)), entry])
     })
-  }, [artifactUrl])
+  }, [helm, artifactUrl])
 
   // The file changed on disk. Followed when nothing is typed over it; a
   // conflict, held until somebody decides, when something is.
@@ -185,7 +200,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
           })
           .catch(() => undefined)
       }),
-    [scopePath, path, kind]
+    [helm, scopePath, path, kind]
   )
 
   // -------------------------------------------------------------------------
@@ -210,7 +225,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
         if (ticket === previewSeq.current) setPreview({ source: debounced, rendered })
       })
       .catch(() => undefined)
-  }, [editing, kind, scopePath, path, debounced])
+  }, [helm, editing, kind, scopePath, path, debounced])
 
   // -------------------------------------------------------------------------
   // Writing
@@ -244,7 +259,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
         .catch((err: unknown) => setError(readable(err)))
         .finally(() => setSaving(false))
     },
-    [scopePath, path]
+    [helm, scopePath, path]
   )
 
   const reload = useCallback(() => {
@@ -269,7 +284,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
         .catch((err: unknown) => setError(readable(err)))
         .finally(() => setSaving(false))
     },
-    [path]
+    [helm, path]
   )
 
   const resolveWikilink = useCallback(
@@ -278,7 +293,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
         .invoke('content:wikilink', { scopePath, target, from: path })
         .then((answer) => answer.path)
         .catch(() => null),
-    [scopePath, path]
+    [helm, scopePath, path]
   )
 
   return {

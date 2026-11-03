@@ -19,6 +19,7 @@ import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
 import { Checkbox } from './Checkbox'
 import { EmptyState } from './EmptyState'
+import { HostSwitch, type HostChoice } from './HostSwitch'
 import { PaneBack } from './PaneBack'
 import { CloseIcon, HistoryIcon, RefreshIcon, ResumeIcon, SearchIcon } from './icons'
 import { ICON_BUTTON, PAGE_BAR, PAGE_LIST_BESIDE } from '../lib/page'
@@ -26,6 +27,12 @@ import { ICON_BUTTON, PAGE_BAR, PAGE_LIST_BESIDE } from '../lib/page'
 export type HistoryGrouping = 'recent' | 'project'
 
 export interface SessionHistoryProps {
+  /**
+   * Which host's sessions these are, and the others to switch to, while more
+   * than one host is connected. Absent, it names no host: there is only this
+   * PC.
+   */
+  hostChoice?: HostChoice | undefined
   summary: HistorySummary | null
   page: HistoryPage | null
   loading: boolean
@@ -171,6 +178,7 @@ const BADGE_CLASS: Record<Exclude<Blocked, null>, string> = {
  * badge and on the button, and the reaped ones show what is actually left.
  */
 export function SessionHistory({
+  hostChoice,
   summary,
   page,
   loading,
@@ -244,6 +252,7 @@ export function SessionHistory({
     // On the pane (DESIGN.md 3): the bar, then the list beside the detail.
     <div className="flex h-full min-h-0 flex-col">
       <header data-pane-header="history" className={PAGE_BAR}>
+        <HostSwitch surface="History" {...hostChoice} />
         {summary && (
           <p className="min-w-0 truncate text-[11px] text-fg-subtle">
             <Count n={summary.sessions} one="session" /> · <Count n={summary.prompts} one="prompt" />{' '}

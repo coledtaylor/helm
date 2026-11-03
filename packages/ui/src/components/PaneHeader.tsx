@@ -19,6 +19,8 @@ export interface PaneHeaderProps {
   controls?: ReactNode | undefined
   /** The trailing action, normally refresh. Never dropped. */
   action?: ReactNode | undefined
+  /** Which host the page shows, while there is more than one (`HostSwitch`). Leads the row and is never dropped. */
+  host?: ReactNode | undefined
 }
 
 /**
@@ -52,12 +54,18 @@ export interface PaneHeaderProps {
  * `controls` taking a full line below the threshold, so the wrap point is a
  * decision rather than whatever happened to fit.
  */
-export function PaneHeader({ name, scope, caption, meta, controls, action }: PaneHeaderProps): JSX.Element {
+export function PaneHeader({ name, scope, caption, meta, controls, action, host }: PaneHeaderProps): JSX.Element {
   return (
     <header
       data-pane-header={name}
       className={cn(PAGE_BAR, '@container flex-wrap gap-x-3 gap-y-1.5 py-1.5', '@[560px]:flex-nowrap @[560px]:py-0')}
     >
+      {host !== undefined && host !== null && (
+        <div data-head="host" className="order-2 flex shrink-0 items-center">
+          {host}
+        </div>
+      )}
+
       {scope !== undefined && (
         // Takes the row once the spacer has gone; its own width at every size
         // above that.

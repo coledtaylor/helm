@@ -1536,9 +1536,11 @@ export interface IpcRequests {
    * Settings > Plugins, "Add plugin folder": the native picker, then the folder
    * registered and read. A folder with no `helm-plugin.json` is refused; one
    * whose manifest is wrong is registered and shown with what is wrong, so it
-   * can be fixed in place and reloaded.
+   * can be fixed in place and reloaded. With `path`, that folder and no
+   * picker: a folder on a host on another computer is typed, as the picker
+   * browses this PC only.
    */
-  'plugins:add': { request: void; response: PluginAddResult }
+  'plugins:add': { request: { path?: string }; response: PluginAddResult }
   /** `deleteSecrets`: keys only this plugin could use, which the user chose to delete with it. */
   'plugins:remove': { request: { path: string; deleteSecrets: string[] }; response: PluginInfo[] }
   'plugins:setEnabled': { request: { path: string; enabled: boolean }; response: PluginInfo[] }
