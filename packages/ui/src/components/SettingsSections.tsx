@@ -17,7 +17,11 @@ export type SettingsSectionId =
   | 'sessions'
   /** The hosts on other computers. Listed only while sessions run in the local host. */
   | 'hosts'
-  /** The devices paired with each admin host. Listed only while sessions run in the local host. */
+  /**
+   * Who is attached to each connected host now and, where this device is an
+   * admin, the devices paired with it, their roles and its audit log. Listed
+   * only while sessions run in the local host.
+   */
   | 'devices'
   | 'workspace'
   | 'files'

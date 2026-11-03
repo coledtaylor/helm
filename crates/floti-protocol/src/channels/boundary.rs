@@ -98,6 +98,10 @@ pub const CLIENT_ONLY: &[Outside] = &[
         "asks the client's own computer to confirm its user (Windows Hello, Touch ID or the account password) before the client tells a host devices:presence; only the client's computer can check who is at it",
     ),
     outside(
+        "notification:*",
+        "OS notifications belong to the client: its window hears devices:connected over its own connection and asks its own main process to show one, and a click brings that window forward",
+    ),
+    outside(
         "ownSettings:*",
         "the settings the client keeps for itself: its window, theme, terminal and browser preferences, the programs it picked, which its main process tells the host, and its tabs, panes and splits, which are kept per device and never reach the host",
     ),

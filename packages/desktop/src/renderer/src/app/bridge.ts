@@ -1,6 +1,7 @@
 import { isClientOnly, isHostInternal } from '../../../shared/host/protocol'
 import type { HelmBridge } from '../../../shared/ipc'
 import { createConfigAdapter } from './host/config'
+import { createDeviceNotices, type DeviceNotices } from './host/deviceNotices'
 import { createDevices, type Devices } from './host/devices'
 import { createFilesAdapter } from './host/files'
 import { createHistoryAdapter } from './host/history'
@@ -64,12 +65,21 @@ export const hostState: HostStateStore = createHostState(link)
 export const remoteHosts: RemoteHostsStore = createRemoteHosts({ bridge: window.helm, log })
 
 /**
- * Settings > Devices: each admin host's devices, over the window's own
+ * Settings > Devices: each connected host's devices, over the window's own
  * connection to it, asking this computer for presence through main when a
  * host on another computer wants it (`host/devices.ts`).
  */
 export const devices: Devices = createDevices({
   confirmPresence: (reason) => window.helm.invoke('presence:confirm', { reason }),
+  log
+})
+
+/**
+ * Connection notices: another device attaching to a host the window is
+ * connected to, shown by main as an OS notification (`host/deviceNotices.ts`).
+ */
+export const deviceNotices: DeviceNotices = createDeviceNotices({
+  notify: (notice) => window.helm.send('notification:deviceAttached', notice),
   log
 })
 

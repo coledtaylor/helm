@@ -124,6 +124,9 @@ export {
   DEFAULT_APPROVE_ROLE,
   DevicesSettings,
   type DevicesSettingsProps,
+  type SettingsAttachedDevice,
+  type SettingsAuditEntry,
+  type SettingsAuditLog,
   type SettingsDevicesHost,
   type SettingsPairedDevice,
   type SettingsWaitingDevice

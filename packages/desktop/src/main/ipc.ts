@@ -35,6 +35,7 @@ import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from '
 import { updateSettings, type Services } from './services'
 import { localWorkspace, type WorkspaceService } from './workspace'
 import { registerConfirmAnswers, showExitNotification, type SessionHost } from './sessions'
+import { showDeviceNotification } from './notifications'
 import { isClientOnly, isHostInternal } from '../shared/host/protocol'
 import type { ActivityService } from './activity'
 import type { ResourcesService } from './resources'
@@ -884,6 +885,10 @@ export function registerIpc(ctx: IpcContext): void {
     // screen; only main can show the OS notification.
     'windowSessions:notify': (record) => {
       showExitNotification(ctx.window, record, 'windowSessions:activate')
+    },
+    // Another device attached to a host the window is connected to; only main can show the OS notification.
+    'notification:deviceAttached': (notice) => {
+      showDeviceNotification(ctx.window, notice)
     }
   }
 

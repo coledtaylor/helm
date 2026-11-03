@@ -1,4 +1,5 @@
 import type { HostState, HostStateStore } from './host/hostState'
+import type { DeviceNotices } from './host/deviceNotices'
 import type { Devices } from './host/devices'
 import type { RemoteHostsStore } from './host/remoteHosts'
 import type {
@@ -173,10 +174,21 @@ export const remoteHosts: RemoteHostsStore = {
 /** No devices anywhere, unless a test says otherwise (Settings > Devices). */
 export const devices: Devices = {
   list: (hosts) =>
-    Promise.resolve(hosts.map((host) => ({ ...host, thisDevice: null, paired: [], waiting: [], error: null }))),
+    Promise.resolve(
+      hosts.map((host) => ({ id: host.id, name: host.name, thisDevice: null, admin: false, paired: [], waiting: [], error: null }))
+    ),
   approve: () => Promise.resolve({ ok: true }),
-  revoke: () => Promise.resolve({ ok: true })
+  revoke: () => Promise.resolve({ ok: true }),
+  changeRole: () => Promise.resolve({ ok: false, message: 'No devices in this test.' }),
+  audit: () => Promise.resolve({ ok: true, page: { entries: [], more: false } }),
+  watchAttached: (_host, listener) => {
+    listener({ ok: true, devices: [] })
+    return () => undefined
+  }
 }
+
+/** Connection notices: none in these tests. */
+export const deviceNotices: DeviceNotices = { follow: () => undefined }
 
 /** The window's own connection to this PC's host: none in these tests. */
 export const localHostConnection = (): Promise<never> => Promise.reject(new Error('No host in this test.'))

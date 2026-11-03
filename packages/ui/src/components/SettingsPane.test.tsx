@@ -138,7 +138,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onAddHost: vi.fn(),
     onRemoveHost: vi.fn(),
     onHostQuitChange: vi.fn(),
-    devices: { hosts: [], onApprove: vi.fn(), onRevoke: vi.fn() },
+    devices: { hosts: [], onApprove: vi.fn(), onRevoke: vi.fn(), onRole: vi.fn(), onMoreAudit: vi.fn() },
     ...overrides
   }
   const view = render(<SettingsPane {...props} />)

@@ -77,7 +77,7 @@ import type {
   SecretInput,
   SecretsState
 } from '@helm/core'
-import type { RemoteHostConnection } from '@helm/core/types'
+import type { DeviceRoleName, RemoteHostConnection } from '@helm/core/types'
 import type { BrowserCommand } from './browserKeys'
 import type { ProbeOp, TermCreateOptions } from './protocol'
 
@@ -511,6 +511,25 @@ export type QuitAnswer = 'end' | 'keep' | 'cancel'
  * not be run.
  */
 export type PresenceAnswer = 'confirmed' | 'declined' | 'unavailable'
+
+/**
+ * Another device attached to a host the window is connected to, as the host
+ * said on `devices:connected`, for main to show as an OS notification.
+ * Only the device's name, as it gave it, is free text.
+ */
+export interface DeviceAttachedNotice {
+  /** The host's id: `local` for This PC's, a remote host's id otherwise. */
+  host: string
+  /** The host's name, as Helm lists it. */
+  hostName: string
+  /** Whether the host runs on this computer. */
+  hostOnThisComputer: boolean
+  /** The device's name. */
+  device: string
+  role: DeviceRoleName
+  /** Whether it came from another computer than the host's. */
+  away: boolean
+}
 
 // ---------------------------------------------------------------------------
 // The browser pane
@@ -1772,6 +1791,12 @@ export interface IpcSends {
    * notification, which only main can.
    */
   'windowSessions:notify': SessionRecord
+  /**
+   * Another device attached to a host the window is connected to. Main shows
+   * one OS notification for it; the host on this computer shows its own for a
+   * device from another computer, so the window never sends that one.
+   */
+  'notification:deviceAttached': DeviceAttachedNotice
   /** With sessions in the local host, the window's answer to main's `windowSessions:quitConfirm`. */
   'windowSessions:quitConfirmed': { id: number; answer: QuitAnswer }
 
@@ -1835,6 +1860,8 @@ export interface IpcEvents {
   'windowSessions:quitConfirm': SessionConfirmRequest
   /** With sessions in the local host, a click on a session's notification: bring its tab forward. */
   'windowSessions:activate': { id: number }
+  /** A click on a device's notification: bring Settings > Devices forward, at that host. */
+  'notification:openDevices': { host: string }
   /** With sessions in the local host, what the hidden plugin host window reports of the background pages it runs. */
   'pluginBackground:changed': PluginBackgroundReport[]
   /** With sessions in the local host, where the copy of Helm's own database into it stands, after each change. */
@@ -2242,6 +2269,7 @@ export const SEND_CHANNELS = Object.keys({
   'pterm:resize': true,
   'session:confirmed': true,
   'windowSessions:notify': true,
+  'notification:deviceAttached': true,
   'windowSessions:quitConfirmed': true,
   'pluginWindow:ask': true,
   'pluginWindow:answer': true,
@@ -2263,6 +2291,7 @@ export const EVENT_CHANNELS = Object.keys({
   'ownSettings:changed': true,
   'windowSessions:quitConfirm': true,
   'windowSessions:activate': true,
+  'notification:openDevices': true,
   'pluginBackground:changed': true,
   'ownData:changed': true,
   'remoteHosts:changed': true,

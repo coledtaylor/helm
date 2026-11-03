@@ -361,23 +361,30 @@ export function Select({
   onChange,
   label,
   children,
+  narrow = false,
+  disabled = false,
   ...rest
 }: {
   value: string
   onChange: (value: string) => void
   label: string
   children: ReactNode
+  /** Sized for a short word, such as a role, inside a list row. */
+  narrow?: boolean
+  disabled?: boolean
 } & Record<`data-${string}`, unknown>): JSX.Element {
   return (
     <span className="relative block">
       <select
         value={value}
         aria-label={label}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         {...rest}
         className={cn(
-          'h-[30px] w-[220px] appearance-none rounded-well border border-border bg-surface-sunken',
-          'pr-7 pl-2.5 text-[12px] text-fg transition-colors',
+          'appearance-none rounded-well border border-border bg-surface-sunken',
+          narrow ? 'h-[26px] w-[104px] text-[11.5px]' : 'h-[30px] w-[220px] text-[12px]',
+          'pr-7 pl-2.5 text-fg transition-colors disabled:opacity-50',
           'hover:border-border-strong focus:border-accent focus:outline-none'
         )}
       >

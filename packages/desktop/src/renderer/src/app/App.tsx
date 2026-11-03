@@ -191,6 +191,7 @@ import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
 import {
+  deviceNotices,
   devices,
   helm,
   hostSessionTabs,
@@ -200,6 +201,7 @@ import {
   sessionsInHost
 } from './bridge'
 import { useDevicesSettings } from './useDevicesSettings'
+import { useDeviceNotices } from './useDeviceNotices'
 import { LOCAL_HOST_NAME } from './host/sessions'
 import { ProjectColumn } from './ProjectColumn'
 import { disposeShell, terminalShellKey } from './pterms'
@@ -768,6 +770,15 @@ export function App(): JSX.Element {
     settings?.sessionsInHost === true ? settings.hosts : NO_HOSTS,
     remoteView
   )
+  /** Another device attaching to a host the window is connected to, said as an OS notification. */
+  useDeviceNotices(
+    deviceNotices,
+    DEVICES_DEPS,
+    settings?.sessionsInHost === true,
+    settings?.sessionsInHost === true ? settings.hosts : NO_HOSTS,
+    remoteView,
+    hostLink.reconnects
+  )
 
   /**
    * Brings a tab forward from outside its pane - the tree, a notification, the
@@ -995,6 +1006,8 @@ export function App(): JSX.Element {
     },
     [openPane]
   )
+  // A click on a device's notification: Settings > Devices, brought forward.
+  useEffect(() => helm.on('notification:openDevices', () => openSettings('devices')), [openSettings])
 
   /**
    * Config opened **on** a project - the project page's link. The pane arrives
