@@ -7,8 +7,9 @@ import {
   type HostFailureCause,
   type RemoteHost
 } from '@helm/core/types'
-import type { LocalHost } from './launcher'
-import { RemoteHostError } from './remote-launcher'
+import { rm } from 'node:fs/promises'
+import type { HostPlaces, LocalHost } from './launcher'
+import { RemoteHostError, remoteClientFolder, startRemoteHost, type RemoteLauncherDeps } from './remote-launcher'
 
 /**
  * Adding a host on another computer is connecting to it.
@@ -68,6 +69,37 @@ function failure(error: unknown): HostAddOutcome {
         : { kind: 'tooOld', host: refused.host, ours: refused.client }
   }
   return { kind: 'failed', lastLine, ...(cause !== undefined ? { cause } : {}) }
+}
+
+/**
+ * The adder main uses: each first connection is a `floti bridge` in the new
+ * host's own client folder (`remoteClientFolder`), the same one its link
+ * uses after, so the key it pins is the one the link holds the host to. A
+ * host not added has that folder removed, and with it the key it pinned.
+ */
+export function createClientFolderRemoteAdder(options: {
+  places: HostPlaces
+  launcher: RemoteLauncherDeps
+  deviceName: string
+  hosts: () => readonly RemoteHost[]
+  log: (line: string) => void
+  newId?: () => string
+}): RemoteHostAdder {
+  const folderOf = (id: string): string => remoteClientFolder(options.places, options.launcher.platform, id)
+  return createRemoteHostAdder({
+    hosts: options.hosts,
+    connect: (host, signal) =>
+      startRemoteHost(options.places, options.launcher, {
+        folder: folderOf(host.id),
+        transport: host.transport,
+        floti: host.floti,
+        deviceName: options.deviceName,
+        signal
+      }),
+    forget: (host) => rm(folderOf(host.id), { recursive: true, force: true }),
+    log: options.log,
+    ...(options.newId !== undefined ? { newId: options.newId } : {})
+  })
 }
 
 export function createRemoteHostAdder(deps: RemoteHostAdderDeps): RemoteHostAdder {

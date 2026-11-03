@@ -174,6 +174,8 @@ export {
 export { Rail, RAIL_ICON, type RailItem, type RailProps } from './components/Rail'
 export {
   SessionTree,
+  sessionTreeHostProps,
+  type SessionTreeHostProps,
   type SessionTreeProps,
   type TreeHost,
   type TreeHostActions,

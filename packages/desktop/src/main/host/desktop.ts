@@ -7,7 +7,7 @@ import { homedir, hostname, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { listProfiles, readPluginFolders, readPluginSettings } from '@helm/core'
 import { parseSums, type FlotiOs, type RemoteHost, type SshConfigHosts } from '@helm/core/types'
-import { createRemoteHostAdder, type RemoteHostAdder } from './remote-add'
+import { createClientFolderRemoteAdder, type RemoteHostAdder } from './remote-add'
 import { readSshConfigHosts } from './ssh-config'
 import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
 import { emit } from '../ipc'
@@ -244,22 +244,11 @@ export function createDesktopRemoteAdder(options: {
   hosts: () => readonly RemoteHost[]
   log: (line: string) => void
 }): RemoteHostAdder {
-  const folderOf = (id: string): string => remoteClientFolder(places(), process.platform, id)
-  return createRemoteHostAdder({
+  return createClientFolderRemoteAdder({
+    places: places(),
+    launcher: { ...programs, appVersion: app.getVersion(), log: options.log },
+    deviceName: hostname(),
     hosts: options.hosts,
-    connect: (host, signal) =>
-      startRemoteHost(
-        places(),
-        { ...programs, appVersion: app.getVersion(), log: options.log },
-        {
-          folder: folderOf(host.id),
-          transport: host.transport,
-          floti: host.floti,
-          deviceName: hostname(),
-          signal
-        }
-      ),
-    forget: (host) => rm(folderOf(host.id), { recursive: true, force: true }),
     log: options.log
   })
 }

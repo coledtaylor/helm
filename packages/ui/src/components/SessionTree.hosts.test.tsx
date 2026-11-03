@@ -2,7 +2,10 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { EMPTY_INVENTORY, type DiscoveryResult, type Project } from '@helm/core/types'
-import { SessionTree, type SessionTreeProps, type TreeHost, type TreeHostActions, type TreeSession } from './SessionTree'
+import {
+  SessionTree,
+  sessionTreeHostProps,
+  type SessionTreeProps, type TreeHost, type TreeHostActions, type TreeSession } from './SessionTree'
 
 const project = (path: string, harnessPath: string | null, kind: Project['kind'] = 'repo'): Project => ({
   path,
@@ -221,5 +224,47 @@ describe('SessionTree with hosts on other computers', () => {
     renderTree({ hosts: [] })
     fireEvent.contextMenu(screen.getByRole('navigation', { name: 'Projects and sessions' }), { clientX: 40, clientY: 80 })
     expect(screen.queryByRole('menuitem', { name: 'Add a host…' })).toBeNull()
+  })
+})
+
+describe('S21: what the window gives the tree about hosts, from Run sessions in the local host', () => {
+  const hostProps = (sessionsInHost: boolean, hosts: readonly TreeHost[], onAddHost = vi.fn()) => ({
+    onAddHost,
+    // The window always gives the tree its host actions and this PC's name;
+    // what the setting decides is which hosts it lists and the menu.
+    props: {
+      hostActions: actions(),
+      localName: 'This PC',
+      localKey: 'local',
+      ...sessionTreeHostProps({ sessionsInHost, hosts, onAddHost })
+    }
+  })
+  const rightClickList = () =>
+    fireEvent.contextMenu(screen.getByRole('navigation', { name: 'Projects and sessions' }), { clientX: 40, clientY: 80 })
+
+  it('S21: with the setting on and this PC the only host, right-clicking the list offers Add a host…, which opens the dialog', async () => {
+    const { onAddHost, props } = hostProps(true, [])
+    renderTree(props)
+    rightClickList()
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Add a host…' }))
+    expect(onAddHost).toHaveBeenCalledOnce()
+  })
+
+  it('S21: with the setting off, right-clicking the list shows no Add a host… item and no Add a host line', () => {
+    const { onAddHost, props } = hostProps(false, [buildBox()])
+    expect(sessionTreeHostProps({ sessionsInHost: false, hosts: [buildBox()], onAddHost })).toEqual({})
+    renderTree(props)
+    rightClickList()
+    expect(screen.queryByRole('menuitem', { name: 'Add a host…' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add a host' })).toBeNull()
+    expect(onAddHost).not.toHaveBeenCalled()
+  })
+
+  it('S20, S21: with the setting on and another host added, the list ends with Add a host and its right-click menu has none', () => {
+    const { props } = hostProps(true, [buildBox()])
+    renderTree(props)
+    rightClickList()
+    expect(screen.queryByRole('menuitem', { name: 'Add a host…' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Add a host' })).toBeTruthy()
   })
 })

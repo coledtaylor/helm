@@ -169,6 +169,7 @@ import {
   SessionHistory,
   SessionsPane,
   SessionTree,
+  sessionTreeHostProps,
   SettingsPane,
   SettingsSections,
   SetupPane,
@@ -5198,18 +5199,14 @@ export function App(): JSX.Element {
             onOpenSession={openTreeSession}
             onAddRoot={launcher.addRoot}
             reveal={treeReveal}
-            {...(listedHosts.length === 0
-              ? // This PC is the only host: the list's right-click menu adds
-                // one, while sessions run in the local host.
-                settings?.sessionsInHost === true
-                ? { onAddHostMenu: () => setAddingHost(true) }
-                : {}
-              : {
-                  hosts: treeHosts,
-                  hostActions: treeHostActions,
-                  localName: LOCAL_HOST_LABEL,
-                  localKey: LOCAL_HOST_KEY,
-                })}
+            hostActions={treeHostActions}
+            localName={LOCAL_HOST_LABEL}
+            localKey={LOCAL_HOST_KEY}
+            {...sessionTreeHostProps({
+              sessionsInHost: settings?.sessionsInHost === true,
+              hosts: treeHosts,
+              onAddHost: () => setAddingHost(true),
+            })}
           />
         </Sidebar>
       </div>
