@@ -46,7 +46,7 @@ impl World {
                 dirs.data.clone(),
                 backends,
                 Vec::new(),
-                Vec::new(),
+                None,
             )
             .unwrap(),
         );
@@ -58,6 +58,7 @@ impl World {
                 home: Some(dirs.home.clone()),
                 node: None,
                 desktop: false,
+                keeper: None,
             },
         )
         .unwrap();

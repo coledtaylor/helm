@@ -327,6 +327,7 @@ fn start_host(dirs: &TestDirs, endpoint: &Endpoint) -> RunningHost {
             home: Some(dirs.home.clone()),
             node: None,
             desktop: false,
+            keeper: None,
         },
     })
 }

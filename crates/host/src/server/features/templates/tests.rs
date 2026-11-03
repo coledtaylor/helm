@@ -64,9 +64,8 @@ impl World {
             claude,
         ];
         let store = Arc::new(Mutex::new(Store::open(&dirs.data).unwrap()));
-        let hosted = Arc::new(
-            Hosted::new(store, dirs.data.clone(), backends, Vec::new(), Vec::new()).unwrap(),
-        );
+        let hosted =
+            Arc::new(Hosted::new(store, dirs.data.clone(), backends, Vec::new(), None).unwrap());
         let features = Features::new(
             hosted,
             dirs.folders(),
@@ -75,6 +74,7 @@ impl World {
                 home: Some(dirs.home.clone()),
                 node: None,
                 desktop: false,
+                keeper: None,
             },
         )
         .unwrap();

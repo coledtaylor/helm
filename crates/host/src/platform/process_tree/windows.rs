@@ -33,8 +33,8 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, GetCurrentProcess, OpenProcess,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
 
 use super::{Ending, ProcessTree};
@@ -128,6 +128,10 @@ impl ProcessTree for Native {
 
     fn prepare_root(&self, command: &mut Command) {
         command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    fn prepare_lasting_root(&self, command: &mut Command) {
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
     }
 }
 

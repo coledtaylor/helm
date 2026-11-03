@@ -5,8 +5,11 @@
 //! device key in a Noise handshake with the host key they pinned, and speak
 //! `floti-protocol` inside that session. Sessions run in ptys, each screen kept off-screen so a
 //! client that attaches late draws it as it is, and they outlive their
-//! clients: closing every client ends nothing. They never outlive the host:
-//! stopping it ends them, and so does killing it. The host owns their
+//! clients: closing every client ends nothing. They outlive the host too:
+//! their ptys and process trees are the session keeper's ([`keeper`]), a
+//! second process the host starts, so a host that crashes, panics or is
+//! killed takes none with it and the next host takes them back. Only a
+//! deliberate stop ends them, and the keeper with them. The host owns their
 //! lifetime: a client quitting ends the sessions it started only when it
 //! asks to, a client crashing ends nothing, and a host a desktop started
 //! exits by itself once nothing runs and nobody is attached.
@@ -31,6 +34,9 @@
 //! - [`workspace`]: the user's folders as the host serves them: settings,
 //!   setup, discovery, profiles, templates and the Files view.
 //! - [`session`]: sessions in ptys and the screens kept for them.
+//! - [`keeper`]: `floti keeper`, the session keeper that holds every
+//!   session's and plain terminal's pty and process tree, and the host's
+//!   connection to it.
 //! - [`plugins`]: registered plugin folders; each one's background script in
 //!   a deno_core isolate of its own; and the call layer every `floti.*`
 //!   method goes through, with `floti.exec`, `floti.fetch`, settings and the
@@ -69,6 +75,7 @@ pub mod devices;
 pub mod error;
 pub mod history;
 pub mod host_log;
+pub mod keeper;
 pub mod keys;
 pub mod platform;
 pub mod plugins;

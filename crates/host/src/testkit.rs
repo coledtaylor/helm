@@ -403,9 +403,13 @@ impl RunningHost {
     }
 
     fn serve<T: Send + 'static>(
-        config: HostConfig,
+        mut config: HostConfig,
         look: impl FnOnce(&Host) -> T + Send + 'static,
     ) -> (Self, T) {
+        // Its sessions run in a session keeper, as an installed host's do.
+        if config.run.keeper.is_none() {
+            config.run.keeper = floti_exe();
+        }
         let (started_tx, started) = mpsc::channel::<Result<(Stopper, T)>>();
         let (done_tx, done) = mpsc::channel();
         let thread = std::thread::Builder::new()
@@ -506,6 +510,20 @@ impl Drop for RunningHost {
              sessions and lets go of its data folder{problem}"
         );
     }
+}
+
+/// The `floti` executable built beside the test binary, which a host runs
+/// its session keeper from: `None` where this build has none, such as a
+/// crate's own unit tests, whose hosts then run their sessions in process.
+pub fn floti_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let folder = exe.parent()?;
+    // An integration test runs from `deps`, beside which the binaries are.
+    [Some(folder), folder.parent()]
+        .into_iter()
+        .flatten()
+        .map(|folder| folder.join(format!("floti{}", std::env::consts::EXE_SUFFIX)))
+        .find(|candidate| candidate.is_file())
 }
 
 /// The author and committer every [`GitRepo`] commit is made by.

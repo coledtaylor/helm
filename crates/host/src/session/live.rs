@@ -1,18 +1,27 @@
 //! Running sessions: a program in a pty, its screen, and the clients
 //! attached to it.
 //!
-//! Each session has two threads. One reads the pty and hands every byte to
-//! the screen and to each attached client, under the same lock an attach
-//! takes, so a client attaching gets the screen as of one byte and the live
-//! output from the next, with nothing missing or repeated. The other waits
-//! for the program to exit, then releases the pty, lets the output drain,
-//! records the exit, tells the clients and drops the screen.
+//! A session's pty is held one of two ways. Run here, the program is in a
+//! pty of this process, tied to its life, with two threads: one reads the pty
+//! and hands every byte to the screen and to each attached client, under the
+//! same lock an attach takes, so a client attaching gets the screen as of one
+//! byte and the live output from the next, with nothing missing or repeated;
+//! the other waits for the program to exit, then releases the pty, lets the
+//! output drain, records the exit, tells the clients and drops the screen.
+//! That is how the session keeper runs every program it holds.
+//!
+//! Run in the keeper, which is how the host runs them, the program's pty and
+//! tree are the keeper's ([`crate::keeper`]), and outlive this process. The
+//! keeper sends every byte the program writes, which reaches the screen and
+//! the clients here the same way, and says when the program has ended; what
+//! is typed, a resize and an ending go to the keeper.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,6 +34,7 @@ use super::ledger::{NewSessionRow, SessionId, SessionLedger, SessionOrigin};
 use super::screen::{Screen, TermSize};
 use crate::agent::LaunchSpec;
 use crate::agent::launch_folder::remove_launch_folder;
+use crate::keeper::{Held, HeldKind, Keeper, KeeperLink, KeptTerminal, Label, StartPty};
 use crate::platform::process_tree::{Ending, ProcessTree};
 use crate::{Error, Result};
 
@@ -52,6 +62,13 @@ const READ_CHUNK: usize = 64 * 1024;
 /// screen.
 const CURSOR_REQUEST: &[u8] = b"\x1b[6n";
 const CURSOR_AT_START: &[u8] = b"\x1b[1;1R";
+
+/// What a session whose keeper died is recorded as having ended with: the
+/// host never learned how it ended.
+const LOST_EXIT: SessionExit = SessionExit {
+    code: 1,
+    signal: None,
+};
 
 enum Opening {
     /// Too little output yet to tell whether it opens with the request.
@@ -123,24 +140,48 @@ pub struct SessionHost {
 struct Shared {
     inherited_env: Vec<(OsString, OsString)>,
     ledger: Arc<dyn SessionLedger>,
-    tree: Arc<dyn ProcessTree + Send + Sync>,
+    spawner: Spawner,
     sessions: Mutex<BTreeMap<SessionId, Arc<Session>>>,
 }
 
+/// Where a host's programs run.
+enum Spawner {
+    /// In ptys of this process, each tree ended through `tree` and tied to
+    /// this process's life.
+    Here(Arc<dyn ProcessTree + Send + Sync>),
+    /// In the session keeper, labelled as `kind`.
+    Keeper { keeper: Arc<Keeper>, kind: HeldKind },
+}
+
 impl SessionHost {
-    /// A host whose sessions inherit `inherited_env` (the host's own
-    /// environment, less what [`session_env`] removes), record themselves in
-    /// `ledger` and are ended through `tree`.
+    /// A host whose sessions run in this process, inherit `inherited_env`
+    /// (the host's own environment, less what [`session_env`] removes),
+    /// record themselves in `ledger` and are ended through `tree`.
     pub fn new(
         inherited_env: Vec<(OsString, OsString)>,
         ledger: Arc<dyn SessionLedger>,
         tree: Arc<dyn ProcessTree + Send + Sync>,
     ) -> Self {
+        Self::with(inherited_env, ledger, Spawner::Here(tree))
+    }
+
+    /// A host whose sessions run in `keeper`, labelled as `kind`, and record
+    /// themselves in `ledger`. Their environment is the keeper's own, which
+    /// is the one `keeper` was made with.
+    pub fn kept(ledger: Arc<dyn SessionLedger>, keeper: Arc<Keeper>, kind: HeldKind) -> Self {
+        Self::with(Vec::new(), ledger, Spawner::Keeper { keeper, kind })
+    }
+
+    fn with(
+        inherited_env: Vec<(OsString, OsString)>,
+        ledger: Arc<dyn SessionLedger>,
+        spawner: Spawner,
+    ) -> Self {
         Self {
             shared: Arc::new(Shared {
                 inherited_env,
                 ledger,
-                tree,
+                spawner,
                 sessions: Mutex::new(BTreeMap::new()),
             }),
         }
@@ -149,6 +190,80 @@ impl SessionHost {
     /// Starts a session: its program in a new pty in its folder, its row
     /// written once it has spawned.
     pub fn start(&self, request: StartSession) -> Result<Arc<Session>> {
+        match &self.shared.spawner {
+            Spawner::Here(tree) => self
+                .start_here(request, Arc::clone(tree), None)
+                .map(|(session, _)| session),
+            Spawner::Keeper { keeper, kind } => self.start_kept(request, keeper, *kind),
+        }
+    }
+
+    /// Starts a session here with `client` attached from its first byte, so
+    /// that client is sent everything the program writes and no screen.
+    pub fn start_attached(
+        &self,
+        request: StartSession,
+        client: ClientId,
+    ) -> Result<(Arc<Session>, Attachment)> {
+        let Spawner::Here(tree) = &self.shared.spawner else {
+            return Err(Error::Refused(
+                "Sessions held by the session keeper are attached through it.".to_owned(),
+            ));
+        };
+        let (session, attachment) = self.start_here(request, Arc::clone(tree), Some(client))?;
+        let attachment = attachment.ok_or_else(|| {
+            Error::Refused(format!("Session {} could not be attached.", session.id))
+        })?;
+        Ok((session, attachment))
+    }
+
+    /// Takes back a program the keeper held when this host started: a
+    /// session, or a plain terminal, running under the id its label gives,
+    /// with the screen the keeper drew and its output from then on.
+    pub fn adopt(&self, held: Held, label: &Label) -> Result<Arc<Session>> {
+        let Spawner::Keeper { keeper, .. } = &self.shared.spawner else {
+            return Err(Error::Refused(
+                "Only sessions run in the session keeper are taken back.".to_owned(),
+            ));
+        };
+        let link = keeper.link()?;
+        let mut screen = Screen::new(held.size);
+        screen.feed(&held.redraw);
+        let session = Arc::new(Session {
+            id: SessionId(label.id),
+            pid: held.pid,
+            name: label.name.clone(),
+            host: Arc::downgrade(&self.shared),
+            ender: Ender::Kept {
+                link: Arc::clone(&link),
+                handle: held.handle,
+            },
+            launch_folder: label.launch_folder.clone(),
+            state: Mutex::new(State {
+                screen: Some(screen),
+                clients: BTreeMap::new(),
+                size: held.size,
+                typist: None,
+                exit: None,
+                opening: None,
+            }),
+            ended: Condvar::new(),
+            pty: Mutex::new(Some(Pty::Kept {
+                link: Arc::clone(&link),
+                handle: held.handle,
+            })),
+        });
+        lock(&self.shared.sessions).insert(session.id, Arc::clone(&session));
+        link.route(held.handle, kept_terminal(&session));
+        Ok(session)
+    }
+
+    fn start_here(
+        &self,
+        request: StartSession,
+        tree: Arc<dyn ProcessTree + Send + Sync>,
+        attach: Option<ClientId>,
+    ) -> Result<(Arc<Session>, Option<Attachment>)> {
         let StartSession {
             spec,
             name,
@@ -183,7 +298,7 @@ impl SessionHost {
         drop(pair.slave);
         let master = pair.master;
         let pid = child.process_id().unwrap_or(0);
-        let tied = TiedTree::new(Arc::clone(&self.shared.tree), pid);
+        let tied = TiedTree::new(Arc::clone(&tree), pid);
 
         let opened = master
             .try_clone_reader()
@@ -197,22 +312,11 @@ impl SessionHost {
             }
         };
 
-        let row = NewSessionRow {
-            name: name.clone(),
-            cwd: spec.cwd.clone(),
-            argv: spec
-                .args
-                .iter()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect(),
-            conversation_id,
-            backend,
-            origin,
-        };
+        let row = new_row(&spec, name.clone(), conversation_id, backend, origin);
         let id = match self.shared.ledger.started(&row) {
             Ok(id) => id,
             Err(err) => {
-                let _ = self.shared.tree.end_tree(pid, Ending::Forced);
+                let _ = tree.end_tree(pid, Ending::Forced);
                 let _ = child.kill();
                 return Err(err);
             }
@@ -222,7 +326,9 @@ impl SessionHost {
             id,
             pid,
             name,
-            tree: Arc::clone(&self.shared.tree),
+            host: Arc::downgrade(&self.shared),
+            ender: Ender::Here(Arc::clone(&tree)),
+            launch_folder,
             state: Mutex::new(State {
                 screen: Some(Screen::new(size)),
                 clients: BTreeMap::new(),
@@ -232,8 +338,14 @@ impl SessionHost {
                 opening: Some(Vec::new()),
             }),
             ended: Condvar::new(),
-            pty: Mutex::new(Some(Pty { master, writer })),
+            pty: Mutex::new(Some(Pty::Here { master, writer })),
         });
+        // Before the output thread starts: a client attached here misses
+        // nothing the program writes.
+        let attachment = match attach {
+            Some(client) => Some(session.attach(client, size)?),
+            None => None,
+        };
         lock(&self.shared.sessions).insert(id, Arc::clone(&session));
 
         let (drained_tx, drained) = mpsc::channel();
@@ -242,7 +354,6 @@ impl SessionHost {
             output.read_output(reader);
             let _ = drained_tx.send(());
         })?;
-        let shared = Arc::clone(&self.shared);
         let waiting = Arc::clone(&session);
         spawn_thread(format!("session {id} exit"), move || {
             let waited = child.wait();
@@ -257,14 +368,81 @@ impl SessionHost {
                     signal: None,
                 },
             };
-            waiting.ended(exit, &drained, &shared);
-            // The launch's files, the agent tool token among them, go with it.
-            if let Some(folder) = launch_folder
-                && let Err(err) = remove_launch_folder(&folder)
-            {
-                log_line!("floti host: {err}");
-            }
+            waiting.finish(exit, Some(&drained), Finish::Exited);
         })?;
+        Ok((session, attachment))
+    }
+
+    /// Starts a session in the keeper: the keeper spawns it, then its row is
+    /// written and the keeper is told what it is.
+    fn start_kept(
+        &self,
+        request: StartSession,
+        keeper: &Keeper,
+        kind: HeldKind,
+    ) -> Result<Arc<Session>> {
+        let StartSession {
+            spec,
+            name,
+            size,
+            client,
+            conversation_id,
+            backend,
+            origin,
+        } = request;
+        let link = keeper.link()?;
+        let (handle, pid) = link.start(StartPty {
+            program: spec.program.clone(),
+            args: spec.args.clone(),
+            cwd: spec.cwd.clone(),
+            env: spec.env.clone(),
+            size,
+        })?;
+        let row = new_row(&spec, name.clone(), conversation_id, backend, origin);
+        let id = match self.shared.ledger.started(&row) {
+            Ok(id) => id,
+            Err(err) => {
+                link.discard(handle);
+                return Err(err);
+            }
+        };
+        link.label(
+            handle,
+            Label {
+                kind,
+                id: id.0,
+                name: name.clone(),
+                cwd: spec.cwd.clone(),
+                launch_folder: spec.launch_folder.clone(),
+            },
+        );
+        let session = Arc::new(Session {
+            id,
+            pid,
+            name,
+            host: Arc::downgrade(&self.shared),
+            ender: Ender::Kept {
+                link: Arc::clone(&link),
+                handle,
+            },
+            launch_folder: spec.launch_folder,
+            state: Mutex::new(State {
+                screen: Some(Screen::new(size)),
+                clients: BTreeMap::new(),
+                size,
+                typist: client,
+                exit: None,
+                // The keeper answers a request that opens the output.
+                opening: None,
+            }),
+            ended: Condvar::new(),
+            pty: Mutex::new(Some(Pty::Kept {
+                link: Arc::clone(&link),
+                handle,
+            })),
+        });
+        lock(&self.shared.sessions).insert(id, Arc::clone(&session));
+        link.route(handle, kept_terminal(&session));
         Ok(session)
     }
 
@@ -277,6 +455,33 @@ impl SessionHost {
     pub fn list(&self) -> Vec<Arc<Session>> {
         lock(&self.shared.sessions).values().cloned().collect()
     }
+}
+
+/// The row a new session's spawn writes.
+fn new_row(
+    spec: &LaunchSpec,
+    name: String,
+    conversation_id: Option<String>,
+    backend: BackendId,
+    origin: SessionOrigin,
+) -> NewSessionRow {
+    NewSessionRow {
+        name,
+        cwd: spec.cwd.clone(),
+        argv: spec
+            .args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect(),
+        conversation_id,
+        backend,
+        origin,
+    }
+}
+
+fn kept_terminal(session: &Arc<Session>) -> Weak<dyn KeptTerminal> {
+    let terminal: Arc<dyn KeptTerminal> = Arc::clone(session) as Arc<dyn KeptTerminal>;
+    Arc::downgrade(&terminal)
 }
 
 /// A program the host started, its tree tied to the host's life
@@ -305,7 +510,12 @@ pub struct Session {
     id: SessionId,
     pid: u32,
     name: String,
-    tree: Arc<dyn ProcessTree + Send + Sync>,
+    /// The sessions it is one of, which it leaves when it ends.
+    host: Weak<Shared>,
+    /// How its tree is ended.
+    ender: Ender,
+    /// The launch's own folder, removed when the session ends.
+    launch_folder: Option<PathBuf>,
     state: Mutex<State>,
     ended: Condvar,
     /// Taken when the session is closed or its program exits. Lock order:
@@ -313,9 +523,49 @@ pub struct Session {
     pty: Mutex<Option<Pty>>,
 }
 
-struct Pty {
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+/// Who ends a session's tree.
+enum Ender {
+    /// This process, through the OS.
+    Here(Arc<dyn ProcessTree + Send + Sync>),
+    /// The keeper that holds it.
+    Kept { link: Arc<KeeperLink>, handle: u64 },
+}
+
+/// A session's way to its terminal.
+enum Pty {
+    Here {
+        master: Box<dyn MasterPty + Send>,
+        writer: Box<dyn Write + Send>,
+    },
+    Kept {
+        link: Arc<KeeperLink>,
+        handle: u64,
+    },
+}
+
+impl Pty {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Here { writer, .. } => writer.write_all(bytes).and_then(|()| writer.flush()),
+            Self::Kept { link, handle } => link.input(*handle, bytes),
+        }
+    }
+
+    fn resize(&self, size: TermSize) -> io::Result<()> {
+        match self {
+            Self::Here { master, .. } => master.resize(pty_size(size)).map_err(io::Error::other),
+            Self::Kept { link, handle } => link.resize(*handle, size),
+        }
+    }
+}
+
+/// How a session came to an end.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Finish {
+    /// Its program exited.
+    Exited,
+    /// Its keeper died, taking it along, and how it ended is not known.
+    Lost,
 }
 
 struct State {
@@ -418,30 +668,39 @@ impl Session {
         }
         let mut pty = lock(&self.pty);
         let pty = pty.as_mut().ok_or_else(|| self.has_ended())?;
-        pty.writer
-            .write_all(bytes)
-            .and_then(|()| pty.writer.flush())
+        pty.write(bytes)
             .map_err(|err| Error::io(format!("type into session {}", self.id), err))
     }
 
     /// Asks the program to end, as closing its tab does: its tree is asked
     /// politely and its terminal is closed, and whatever is still running
-    /// after [`GRACE`] is ended outright.
+    /// after [`GRACE`] is ended outright. A session in the keeper is closed
+    /// there, so the grace runs out even if this host does not.
     pub fn close(self: &Arc<Self>) {
         if self.exit().is_some() {
             return;
         }
-        let _ = self.tree.end_tree(self.pid, Ending::Polite);
-        drop(lock(&self.pty).take());
-        let session = Arc::clone(self);
-        let _ = spawn_thread(format!("session {} grace", self.id), move || {
-            end_after_grace(
-                |grace| session.wait_exit(grace).is_some(),
-                || {
-                    let _ = session.tree.end_tree(session.pid, Ending::Forced);
-                },
-            );
-        });
+        match &self.ender {
+            Ender::Here(tree) => {
+                let _ = tree.end_tree(self.pid, Ending::Polite);
+                drop(lock(&self.pty).take());
+                let session = Arc::clone(self);
+                let _ = spawn_thread(format!("session {} grace", self.id), move || {
+                    end_after_grace(
+                        |grace| session.wait_exit(grace).is_some(),
+                        || {
+                            if let Ender::Here(tree) = &session.ender {
+                                let _ = tree.end_tree(session.pid, Ending::Forced);
+                            }
+                        },
+                    );
+                });
+            }
+            Ender::Kept { link, handle } => {
+                link.close(*handle);
+                drop(lock(&self.pty).take());
+            }
+        }
     }
 
     /// Ends the program and everything it started, now, as stopping the
@@ -452,7 +711,13 @@ impl Session {
         if self.exit().is_some() {
             return Ok(());
         }
-        let ended = self.tree.end_tree(self.pid, Ending::Forced);
+        let ended = match &self.ender {
+            Ender::Here(tree) => tree.end_tree(self.pid, Ending::Forced),
+            Ender::Kept { link, handle } => {
+                link.end_now(*handle);
+                Ok(())
+            }
+        };
         drop(lock(&self.pty).take());
         ended
     }
@@ -475,11 +740,14 @@ impl Session {
         }
     }
 
-    /// The size the pty itself reports.
+    /// The size the pty itself reports, for a pty of this process.
     #[cfg(test)]
     pub(crate) fn pty_size(&self) -> Option<TermSize> {
         let pty = lock(&self.pty);
-        let size = pty.as_ref()?.master.get_size().ok()?;
+        let Some(Pty::Here { master, .. }) = pty.as_ref() else {
+            return None;
+        };
+        let size = master.get_size().ok()?;
         Some(TermSize::new(size.cols, size.rows))
     }
 
@@ -494,9 +762,8 @@ impl Session {
             return Ok(());
         }
         if let Some(pty) = lock(&self.pty).as_ref() {
-            pty.master.resize(pty_size(size)).map_err(|err| {
-                Error::io(format!("resize session {}", self.id), io::Error::other(err))
-            })?;
+            pty.resize(size)
+                .map_err(|err| Error::io(format!("resize session {}", self.id), err))?;
         }
         if let Some(screen) = state.screen.as_mut() {
             screen.resize(size);
@@ -561,43 +828,74 @@ impl Session {
         if opening.starts_with(CURSOR_REQUEST) {
             opening.drain(..CURSOR_REQUEST.len());
             if let Some(pty) = lock(&self.pty).as_mut() {
-                let _ = pty
-                    .writer
-                    .write_all(CURSOR_AT_START)
-                    .and_then(|()| pty.writer.flush());
+                let _ = pty.write(CURSOR_AT_START);
             }
         }
         Opening::Done
     }
 
-    /// The program has exited: the pty is released and its output drained,
-    /// the exit recorded, the clients told, and the screen dropped.
-    fn ended(&self, exit: SessionExit, drained: &mpsc::Receiver<()>, shared: &Shared) {
+    /// The program has ended: the pty is released and its output drained,
+    /// the end recorded, the clients told, the screen dropped and the
+    /// launch's own folder removed. Once only.
+    fn finish(&self, exit: SessionExit, drained: Option<&mpsc::Receiver<()>>, how: Finish) {
+        if self.exit().is_some() {
+            return;
+        }
         // Closing the pty ends the output on every OS, including a Windows
         // pseudoconsole, which keeps it open after its program has gone.
         drop(lock(&self.pty).take());
-        let _ = drained.recv_timeout(DRAIN);
+        if let Some(drained) = drained {
+            let _ = drained.recv_timeout(DRAIN);
+        }
 
-        // Unlisted first: recording the exit tells the clients, and one that
+        // Unlisted first: recording the end tells the clients, and one that
         // lists again on hearing it must not find the session still there.
-        lock(&shared.sessions).remove(&self.id);
-        if let Err(err) = shared.ledger.finished(self.id, &exit) {
+        if let Some(shared) = self.host.upgrade() {
+            lock(&shared.sessions).remove(&self.id);
+            let recorded = match how {
+                Finish::Exited => shared.ledger.finished(self.id, &exit),
+                Finish::Lost => shared.ledger.lost(self.id),
+            };
+            if let Err(err) = recorded {
+                log_line!("floti host: {err}");
+            }
+        }
+
+        {
+            let mut state = lock(&self.state);
+            if let Some(opening) = state.opening.take().filter(|bytes| !bytes.is_empty()) {
+                broadcast(&mut state, SessionOutput::Data(Arc::from(opening)));
+            }
+            state.screen = None;
+            state.exit = Some(exit.clone());
+            broadcast(&mut state, SessionOutput::Exited(exit));
+            state.clients.clear();
+            self.ended.notify_all();
+        }
+        // The launch's files, the agent tool token among them, go with it.
+        if let Some(folder) = &self.launch_folder
+            && let Err(err) = remove_launch_folder(folder)
+        {
             log_line!("floti host: {err}");
         }
-
-        let mut state = lock(&self.state);
-        if let Some(opening) = state.opening.take().filter(|bytes| !bytes.is_empty()) {
-            broadcast(&mut state, SessionOutput::Data(Arc::from(opening)));
-        }
-        state.screen = None;
-        state.exit = Some(exit.clone());
-        broadcast(&mut state, SessionOutput::Exited(exit));
-        state.clients.clear();
-        self.ended.notify_all();
     }
 
     fn has_ended(&self) -> Error {
         Error::Refused(format!("Session {} has ended.", self.id))
+    }
+}
+
+impl KeptTerminal for Session {
+    fn output(&self, bytes: &[u8]) {
+        Session::output(self, bytes);
+    }
+
+    fn exited(&self, exit: SessionExit) {
+        self.finish(exit, None, Finish::Exited);
+    }
+
+    fn lost(&self) {
+        self.finish(LOST_EXIT, None, Finish::Lost);
     }
 }
 

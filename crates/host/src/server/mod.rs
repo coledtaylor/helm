@@ -88,6 +88,7 @@ use tokio::task::JoinHandle;
 use crate::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
 use crate::agent::{AgentBackend, PlainCommandBackend, sweep_launch_folders};
 use crate::devices::DeviceRegistry;
+use crate::keeper::Keeper;
 use crate::keys::{load_or_create_key_pair, read_key_pair};
 use crate::platform::folders::{self, Folders, UserEnv};
 use crate::platform::node_runtime;
@@ -240,6 +241,11 @@ pub struct HostRun {
     /// Whether a desktop started it (`floti host --desktop`), so that a
     /// desktop that loses it may start another in its place.
     pub desktop: bool,
+    /// The `floti` executable the host runs its session keeper from
+    /// (`floti keeper`), which holds every session and plain terminal so
+    /// they outlive the host. `None` runs them in the host itself, ending
+    /// with it.
+    pub keeper: Option<PathBuf>,
 }
 
 impl HostRun {
@@ -259,6 +265,7 @@ impl HostRun {
             home: env.home.clone(),
             node: node_runtime::runtime(env, exe.as_deref(), &node_runtime::Native),
             desktop: false,
+            keeper: exe,
         }
     }
 }
@@ -272,6 +279,7 @@ impl Default for HostRun {
             home: None,
             node: None,
             desktop: false,
+            keeper: None,
         }
     }
 }
@@ -371,7 +379,12 @@ impl Host {
         sweep_launch_folders(&folders.data, &process_tree::Native);
         let listener = socket::Native.bind(&endpoint)?;
         let store = Store::open(&folders.data)?;
-        let lost = records::reconcile_running(&store)?;
+        // Sessions run in the keeper, which outlives this host; without one
+        // they run here and end with it.
+        let keeper = run
+            .keeper
+            .clone()
+            .map(|program| Arc::new(Keeper::new(program, &folders, inherited_env.clone())));
         let identity = Arc::new(HostIdentity {
             protocol: PROTOCOL_VERSION,
             host_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -387,8 +400,10 @@ impl Host {
             folders.data.clone(),
             backends,
             inherited_env,
-            lost,
+            keeper,
         )?);
+        // What the keeper still runs keeps the host busy from its start.
+        hosted.settle();
         let features = Arc::new(Features::new(Arc::clone(&hosted), folders, run)?);
         let agent_tools = start_agent_tools(&hosted, &features)?;
 

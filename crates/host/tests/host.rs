@@ -1032,8 +1032,26 @@ fn host_a_desktop_started(dirs: &TestDirs) -> HostProcess {
     )
 }
 
+/// The process in `pids` run as `floti keeper`, the session keeper, if any.
+fn keeper_among(pids: &[u32]) -> Option<u32> {
+    use floti_host::platform::process_table::{self, ProcessTable};
+    let table = process_table::Native
+        .processes()
+        .expect("read the process table");
+    pids.iter().copied().find(|pid| {
+        table.iter().any(|row| {
+            row.pid == *pid
+                && row
+                    .command_line
+                    .as_deref()
+                    .is_some_and(|line| line.contains(" keeper "))
+        })
+    })
+}
+
 /// Starts a shell session in a new folder through `client`, and every
-/// process the host `child` has started once it has started one.
+/// process the host `child` has started for it once it has started one:
+/// what runs in the session keeper, the keeper aside.
 async fn a_session_and_its_processes(
     dirs: &TestDirs,
     client: &mut TestClient,
@@ -1047,8 +1065,13 @@ async fn a_session_and_its_processes(
     let deadline = Instant::now() + PATIENCE;
     loop {
         let started = started_by(child);
-        if !started.is_empty() {
-            return (session, started);
+        let keeper = keeper_among(&started);
+        let held: Vec<u32> = started
+            .into_iter()
+            .filter(|pid| Some(*pid) != keeper)
+            .collect();
+        if keeper.is_some() && !held.is_empty() {
+            return (session, held);
         }
         assert!(
             Instant::now() < deadline,
@@ -1463,13 +1486,14 @@ fn a_host_test_on_a_multi_threaded_runtime_that_never_stops_its_host_leaves_noth
     assert_an_unstopped_host_test_fails_after_leaving_nothing_behind(multi_thread_runtime());
 }
 
-/// A host that is killed, with no stop and nothing recorded, takes with it
-/// every process its sessions and plain terminals started, as a stop does:
-/// their programs, each terminal's own host process, and what the programs
-/// started, among them a program with no console, which on Windows the
-/// pseudoconsole closing does not reach.
+/// A host that is killed, with no stop and nothing recorded, takes none of
+/// what its sessions and plain terminals started with it: their programs,
+/// each terminal's own host process, and what the programs started, among
+/// them a program with no console, all run on in the session keeper. A
+/// deliberate stop of the next host ends every one of them.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_killed_floti_host_takes_every_process_its_sessions_and_terminals_started_with_it() {
+async fn a_killed_floti_host_leaves_what_its_sessions_and_terminals_started_to_its_keeper_until_a_stop()
+ {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let (log_var, log_dir) = agent.log_env();
@@ -1536,7 +1560,21 @@ async fn a_killed_floti_host_takes_every_process_its_sessions_and_terminals_star
     }
     drop(client);
 
-    kill_host(&mut host, &started).await;
+    kill_alone(&mut host);
+    let ended: Vec<u32> = started
+        .iter()
+        .copied()
+        .filter(|pid| NativeTree.is_alive(*pid) == Knowable::Known(false))
+        .collect();
+    assert!(ended.is_empty(), "ended with the host: {ended:?}");
+
+    let again = RunningHost::start(fake_config(&dirs, &binary_endpoint(&dirs), &agent, &[]));
+    again.stop(HostStopReason::Stop).await;
+    let left = running_after_patience(&started).await;
+    if !left.is_empty() {
+        end_all(&left);
+        panic!("a stop left what the killed host started running: {left:?}");
+    }
 }
 
 /// The owner watch every fake uses, put beside a plugin's service script.
@@ -1726,7 +1764,7 @@ async fn s12_after_a_stop_for_an_update_the_next_start_offers_the_sessions_once_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s12_after_floti_host_is_killed_the_next_start_offers_its_sessions_and_starts_none() {
+async fn s12_after_floti_host_is_killed_the_next_start_takes_its_sessions_back_and_offers_none() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let mut host = HostProcess::spawn(&mut floti_host_command(&dirs));
@@ -1739,27 +1777,24 @@ async fn s12_after_floti_host_is_killed_the_next_start_offers_its_sessions_and_s
         .unwrap();
     drop(client);
 
-    // Killed: no stop, nothing recorded, and nothing it started left running.
-    let started = started_by(&host);
-    kill_host(&mut host, &started).await;
+    // Killed: no stop and nothing recorded; the session runs on in the
+    // keeper.
+    kill_alone(&mut host);
     assert_eq!(rows(&dirs.data)[0].status, "running");
 
     let again = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
-    let offer = client
-        .request::<SessionRestorable>(&())
-        .await
-        .unwrap()
-        .expect("the killed host's session is offered");
-    assert_eq!(offer.sessions.len(), 1);
-    assert_eq!(offer.sessions[0].id, session.id);
-    // A shell session has no conversation to reopen, and the offer says so
-    // before anything runs.
-    assert!(offer.sessions[0].blocked.is_some(), "{offer:?}");
-    assert_eq!(rows(&dirs.data)[0].status, "lost");
-    assert_eq!(client.request::<SessionList>(&()).await.unwrap(), vec![]);
-    assert!(agent.records().is_empty(), "nothing was started");
+    assert_eq!(
+        client.request::<SessionRestorable>(&()).await.unwrap(),
+        None,
+        "a session taken back is not offered"
+    );
+    let listed = client.request::<SessionList>(&()).await.unwrap();
+    assert_eq!(listed.iter().map(id_of).collect::<Vec<_>>(), [session.id]);
+    assert_eq!(rows(&dirs.data)[0].status, "running");
+    assert!(agent.records().is_empty(), "nothing new was started");
     again.stop(HostStopReason::Stop).await;
+    assert_eq!(rows(&dirs.data)[0].status, "exited");
 }
 
 // ---------------------------------------------------------------------------

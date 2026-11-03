@@ -68,6 +68,19 @@ pub trait SessionLedger: Send + Sync {
     /// running is left as it is. The host no longer lists the session by
     /// then.
     fn finished(&self, id: SessionId, exit: &SessionExit) -> Result<()>;
+
+    /// Records that session `id` was lost: the session keeper holding it went
+    /// away, and how it ended is not known. Where nothing tells the two
+    /// apart, it ended with code 1.
+    fn lost(&self, id: SessionId) -> Result<()> {
+        self.finished(
+            id,
+            &SessionExit {
+                code: 1,
+                signal: None,
+            },
+        )
+    }
 }
 
 /// The SQL for "now" in the store's timestamp format, as today's app writes.

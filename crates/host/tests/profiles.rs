@@ -581,6 +581,7 @@ impl HostWorld {
                 home: Some(dirs.home.clone()),
                 node: None,
                 desktop: false,
+                keeper: None,
             },
         });
         let client = TestClient::connect(&endpoint, &[]).await;

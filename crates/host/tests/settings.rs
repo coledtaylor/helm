@@ -74,6 +74,7 @@ fn config(dirs: &TestDirs, endpoint: &Endpoint) -> HostConfig {
             home: Some(dirs.home.clone()),
             node: None,
             desktop: false,
+            keeper: None,
         },
     }
 }

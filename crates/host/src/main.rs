@@ -9,6 +9,9 @@
 //! `floti devices` lists the devices paired with the host on this computer
 //! and those waiting to pair, and `floti devices approve <code> [--role
 //! viewer|operator|admin]` pairs the one waiting under the code it shows.
+//! `floti keeper <data folder> <runtime folder>` is the session keeper a
+//! host starts for itself, which holds its sessions so they outlive it; it
+//! is not run by hand.
 
 mod devices_shell;
 mod update_stop;
@@ -24,6 +27,14 @@ const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|first| first == "keeper") {
+        return match &args[1..] {
+            [data, runtime] if !data.is_empty() && !runtime.is_empty() => {
+                keeper(Path::new(data), Path::new(runtime))
+            }
+            _ => usage(),
+        };
+    }
     if args.first().is_some_and(|first| first == "host") {
         return match host_options(&args[1..]) {
             Some(options) => host(options),
@@ -87,6 +98,16 @@ fn host_options(args: &[OsString]) -> Option<HostOptions> {
         }
     }
     Some(HostOptions { desktop })
+}
+
+fn keeper(data: &Path, runtime: &Path) -> ExitCode {
+    match floti_host::keeper::run_keeper(data, runtime) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err((status, err)) => {
+            log_line!("floti keeper: {err}");
+            ExitCode::from(status)
+        }
+    }
 }
 
 fn host(options: HostOptions) -> ExitCode {

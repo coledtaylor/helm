@@ -30,6 +30,8 @@
 //! - `--fake-tick=<ms>`: writes `tick <n>` every `<ms>` milliseconds while it
 //!   runs, counting from 1, whether or not anyone types, and records the last
 //!   `n` written in `<pid>.ticks` beside its record.
+//! - `--fake-exit-on=<file>`: exits 0 once `file` exists, whether or not
+//!   anyone is attached or typing.
 //! - `--fake-env-search=<file>`: records as `envHolding` the names of the
 //!   variables whose values hold any line of `file`, ignoring case, so a test
 //!   learns whether a secret reached the environment without any value being
@@ -196,6 +198,15 @@ fn main() {
     }
     if let Some(code) = flag_value(&argv, "--fake-exit") {
         std::process::exit(code.parse().unwrap_or(1));
+    }
+    if let Some(file) = flag_value(&argv, "--fake-exit-on") {
+        let file = PathBuf::from(file);
+        thread::spawn(move || {
+            while !file.exists() {
+                thread::sleep(Duration::from_millis(20));
+            }
+            std::process::exit(0);
+        });
     }
     if let Some(ms) = flag_value(&argv, "--fake-tick") {
         let every = Duration::from_millis(parse_ms(ms));

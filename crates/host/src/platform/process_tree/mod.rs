@@ -5,7 +5,11 @@
 //! The same concern ties the host's own tree to its life
 //! ([`ProcessTree::end_tree_with_this_process`]), so a host that is killed or
 //! crashes takes its sessions with it, as a stop does: a job object on
-//! Windows, a guard process on macOS and Linux.
+//! Windows, a guard process on macOS and Linux. The host itself ties only
+//! its plugins' programs this way; every session's and plain terminal's
+//! tree is the session keeper's (`crate::keeper`), which ties them to its
+//! own life instead and is started to outlive the host
+//! ([`ProcessTree::prepare_lasting_root`]).
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -86,6 +90,15 @@ pub trait ProcessTree {
     /// standard three. Nothing else about how it starts changes.
     fn prepare_root(&self, command: &mut std::process::Command) {
         let _ = command;
+    }
+
+    /// Makes `command` the root of a tree as [`ProcessTree::prepare_root`]
+    /// does, and one that outlives this process: it is not tied to this
+    /// process's life ([`ProcessTree::end_tree_with_this_process`]). The
+    /// session keeper starts this way. On Windows it leaves this process's
+    /// job; on macOS and Linux a program outside a terminal is never tied.
+    fn prepare_lasting_root(&self, command: &mut std::process::Command) {
+        self.prepare_root(command);
     }
 }
 

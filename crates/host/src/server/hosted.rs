@@ -43,6 +43,7 @@ use crate::agent::{
     AgentBackend, Composition, Launch, LaunchFolder, LaunchRequest, LiveRecord, ResumeRequest,
 };
 use crate::agent_tools::Grant;
+use crate::keeper::{HeldKind, Keeper};
 use crate::platform::process_tree;
 use crate::session::{
     ClientId, HostedView, Session, SessionHost, SessionId, SessionOrigin, StartSession, TermSize,
@@ -82,8 +83,9 @@ pub(crate) struct Hosted {
     backends: Vec<Arc<dyn AgentBackend>>,
     /// Floti's data folder, which holds each launch's own folder.
     data: PathBuf,
-    /// What the start reconciled to lost, until a client answers the offer.
-    offer: Mutex<Option<Vec<LostRow>>>,
+    /// The session keeper that holds every session and plain terminal, or
+    /// `None` when they run in this process.
+    keeper: Option<Arc<Keeper>>,
     /// Set by the first stop; a host dropped without one stops as it goes.
     stopped: AtomicBool,
     /// The host's agent tools, once it has built them. A launch before then,
@@ -123,13 +125,16 @@ struct Presence {
 }
 
 impl Hosted {
-    /// `lost` is what the start reconciled; it is offered until answered.
+    /// Sessions and plain terminals run in `keeper`, when there is one: what
+    /// the keeper the last host left still runs is taken back, under the
+    /// ids it had. Every other row the last run left running is lost, and
+    /// offered until a client answers.
     pub fn new(
         store: Arc<Mutex<Store>>,
         data: PathBuf,
         backends: Vec<Arc<dyn AgentBackend>>,
         inherited_env: Vec<(OsString, OsString)>,
-        lost: Vec<LostRow>,
+        keeper: Option<Arc<Keeper>>,
     ) -> Result<Self> {
         if backends.is_empty() {
             return Err(Error::Refused(
@@ -137,18 +142,34 @@ impl Hosted {
             ));
         }
         let ledger = Arc::new(HostLedger::new(store));
-        let sessions = SessionHost::new(
-            inherited_env.clone(),
-            Arc::clone(&ledger) as Arc<dyn crate::session::SessionLedger>,
-            Arc::new(process_tree::Native),
-        );
+        let session_ledger = Arc::clone(&ledger) as Arc<dyn crate::session::SessionLedger>;
+        let (sessions, terminals) = match &keeper {
+            Some(keeper) => (
+                SessionHost::kept(session_ledger, Arc::clone(keeper), HeldKind::Session),
+                Terminals::kept(inherited_env, Arc::clone(keeper)),
+            ),
+            None => (
+                SessionHost::new(
+                    inherited_env.clone(),
+                    session_ledger,
+                    Arc::new(process_tree::Native),
+                ),
+                Terminals::new(inherited_env, Arc::new(process_tree::Native)),
+            ),
+        };
+        let held = match &keeper {
+            Some(keeper) => take_back(keeper, &ledger, &sessions, &terminals)?,
+            None => Vec::new(),
+        };
+        let lost = records::reconcile_running(&ledger.store(), &held)?;
+        *ledger.offer() = Some(lost);
         Ok(Self {
             sessions,
-            terminals: Terminals::new(inherited_env, Arc::new(process_tree::Native)),
+            terminals,
             ledger,
             data,
             backends,
-            offer: Mutex::new(Some(lost)),
+            keeper,
             stopped: AtomicBool::new(false),
             agent_tools: OnceLock::new(),
             presence: Mutex::new(Presence::default()),
@@ -753,6 +774,8 @@ impl Hosted {
             warnings,
             not_taken,
         };
+        #[cfg(any(test, feature = "testkit"))]
+        crate::host_log::crash_after_session_if_asked(&self.data);
         Ok((launched, session.id()))
     }
 
@@ -863,7 +886,7 @@ impl Hosted {
     /// What the last run left running, until a client answers for it; null
     /// when there was nothing or it has been answered.
     pub fn restorable(&self) -> Option<RestoreOffer> {
-        let offer = lock(&self.offer);
+        let offer = self.ledger.offer();
         let lost = offer.as_ref().filter(|lost| !lost.is_empty())?;
         let store = self.ledger.store();
         let sessions = lost
@@ -932,7 +955,7 @@ impl Hosted {
         client: ClientId,
         request: RestoreSessionsRequest,
     ) -> RestoreSessionsResult {
-        let answered = lock(&self.offer).take();
+        let answered = self.ledger.offer().take();
         let mut result = RestoreSessionsResult {
             restored: Vec::new(),
             failed: Vec::new(),
@@ -1053,17 +1076,81 @@ impl Hosted {
         for terminal in self.terminals.list() {
             terminal.wait_exit(STOP_WAIT);
         }
+        // A deliberate stop ends the keeper too, and anything it still held.
+        if let Some(keeper) = &self.keeper {
+            keeper.shutdown();
+        }
     }
 }
 
 /// A host that goes away without being stopped, such as one whose run was
-/// dropped by a panic, still ends every process it started: nothing it ran
-/// outlives it. The rows are left running, as a stop for an update leaves
+/// dropped by a panic, leaves its sessions running in the keeper for the
+/// next host to take back. Without a keeper it ends every process it
+/// started, and leaves the rows running, as a stop for an update leaves
 /// them, so the next start offers them back.
 impl Drop for Hosted {
     fn drop(&mut self) {
-        self.stop(HostStopReason::Update);
+        if self.keeper.is_none() {
+            self.stop(HostStopReason::Update);
+        }
     }
+}
+
+/// Takes back what the keeper the last host left holds: each session whose
+/// row is still running and each plain terminal, under the id it had. A
+/// program that ended while no host was there has its end recorded, and one
+/// nothing here knows is ended. The ids of the sessions taken back.
+fn take_back(
+    keeper: &Keeper,
+    ledger: &HostLedger,
+    sessions: &SessionHost,
+    terminals: &Terminals,
+) -> Result<Vec<SessionId>> {
+    use crate::session::SessionLedger as _;
+    let held = keeper.reattach();
+    if held.is_empty() {
+        return Ok(Vec::new());
+    }
+    let running = records::running_ids(&ledger.store())?;
+    let link = keeper.link()?;
+    let mut taken = Vec::new();
+    for program in held {
+        let handle = program.handle;
+        let Some(label) = program.label.clone() else {
+            match program.exit {
+                Some(_) => link.forget(handle),
+                None => link.discard(handle),
+            }
+            continue;
+        };
+        let id = SessionId(label.id);
+        if let Some(exit) = &program.exit {
+            if label.kind == HeldKind::Session
+                && let Err(err) = ledger.finished(id, exit)
+            {
+                log_line!("floti host: {err}");
+            }
+            link.forget(handle);
+            continue;
+        }
+        let adopted = match label.kind {
+            HeldKind::Session if running.contains(&id) => sessions.adopt(program, &label),
+            HeldKind::Terminal => terminals.adopt(program, &label),
+            HeldKind::Session => {
+                link.discard(handle);
+                continue;
+            }
+        };
+        match adopted {
+            Ok(session) if label.kind == HeldKind::Session => taken.push(session.id()),
+            Ok(_) => {}
+            Err(err) => {
+                log_line!("floti host: {err}");
+                link.discard(handle);
+            }
+        }
+    }
+    Ok(taken)
 }
 
 /// What a profile gives a launch: its overlays, its access as further

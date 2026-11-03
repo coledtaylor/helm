@@ -23,6 +23,7 @@ use super::{
 };
 use crate::Result;
 use crate::agent::LaunchSpec;
+use crate::keeper::{Held, HeldKind, Keeper, Label};
 use crate::platform::process_tree::ProcessTree;
 
 /// A plain terminal whose shell ended, with its exit code.
@@ -57,6 +58,7 @@ impl SessionLedger for TerminalLedger {
 /// The plain terminals the host runs.
 pub struct Terminals {
     host: SessionHost,
+    numbering: Arc<TerminalLedger>,
     exits: broadcast::Sender<TerminalExit>,
     env: Vec<(OsString, OsString)>,
     /// Each folder's own shell, by its lower-cased path.
@@ -67,18 +69,50 @@ pub struct Terminals {
 impl Terminals {
     /// Terminals whose shells inherit `env` and are ended through `tree`.
     pub fn new(env: Vec<(OsString, OsString)>, tree: Arc<dyn ProcessTree + Send + Sync>) -> Self {
+        let inherited = env.clone();
+        Self::with(env, move |ledger| SessionHost::new(inherited, ledger, tree))
+    }
+
+    /// Terminals whose shells run in `keeper`, which `env` was given to.
+    pub fn kept(env: Vec<(OsString, OsString)>, keeper: Arc<Keeper>) -> Self {
+        Self::with(env, |ledger| {
+            SessionHost::kept(ledger, keeper, HeldKind::Terminal)
+        })
+    }
+
+    fn with(
+        env: Vec<(OsString, OsString)>,
+        host: impl FnOnce(Arc<dyn SessionLedger>) -> SessionHost,
+    ) -> Self {
         let (exits, _) = broadcast::channel(256);
         let ledger = Arc::new(TerminalLedger {
             next: AtomicI64::new(1),
             exits: exits.clone(),
         });
+        let numbering = Arc::clone(&ledger);
+        let host = host(ledger);
         Self {
-            host: SessionHost::new(env.clone(), ledger, tree),
+            host,
+            numbering,
             exits,
             env,
             by_folder: Mutex::new(HashMap::new()),
             shells: OnceLock::new(),
         }
+    }
+
+    /// Takes back a shell the keeper held when the host started, under the
+    /// number it had, which new terminals' numbers continue past. It is its
+    /// folder's own shell unless the folder has one already.
+    pub fn adopt(&self, held: Held, label: &Label) -> Result<Arc<Session>> {
+        self.numbering
+            .next
+            .fetch_max(label.id.saturating_add(1), Ordering::SeqCst);
+        let session = self.host.adopt(held, label)?;
+        lock(&self.by_folder)
+            .entry(label.cwd.to_string_lossy().to_lowercase())
+            .or_insert(session.id());
+        Ok(session)
     }
 
     /// Terminals ending from now on.

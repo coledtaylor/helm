@@ -26,7 +26,8 @@ examples/sample-plugin/  # every plugin surface; the plugin the E2E tests drive
 crates/
 ├── floti-protocol/  # the host-client protocol; generates JSON Schema and TypeScript into generated/
 └── host/            # floti-host: the `floti` binary (`floti host`); per-OS code only in src/platform/*/{windows,macos,linux}.rs
-    └── src/agent/   # the AgentBackend trait; one module per agent (claude_code/), plain.rs for any command line
+    ├── src/agent/   # the AgentBackend trait; one module per agent (claude_code/), plain.rs for any command line
+    └── src/keeper/  # `floti keeper`: the session keeper holding every session's and plain terminal's pty and tree
 test/fake-agents/    # one fake CLI per agent backend, sharing common.mjs; tests drive these, never a real agent
 ```
 
@@ -137,9 +138,15 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   `before-quit` ends sessions, `will-quit` releases the database, and nothing
   else closes the store.
 - With "Run sessions in the local host" on, the host owns process lifetime.
-  Quitting a client ends the sessions it started only where its setting for
-  that host says so; a crash ends nothing; stopping the host ends every
-  session. Helm's setting is `quitSessions`, kept in `helm.db` keyed by host
+  Every session's and plain terminal's pty and process tree is held by the
+  session keeper (`floti keeper`, `crates/host/src/keeper`), a process the
+  host starts outside its own tie, which holds nothing else: a host that
+  crashes, panics or is killed takes no session with it, and the next host
+  takes them back under the same ids. A keeper that dies ends what it holds,
+  and the host offers those sessions back. Only a deliberate stop ends the
+  keeper. Quitting a client ends the sessions it started only where its
+  setting for that host says so; a crash ends nothing; stopping the host
+  ends every session. Helm's setting is `quitSessions`, kept in `helm.db` keyed by host
   (this PC's is `local`, End when absent). Quitting with sessions it would
   end asks first: End and quit, Keep running and quit (this quit only, never
   written to the setting), or Cancel. Helm never stops the host on its own:

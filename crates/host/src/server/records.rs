@@ -58,6 +58,9 @@ pub(crate) struct ExitNotice {
 /// for the next start to find lost.
 pub(crate) struct HostLedger {
     store: Arc<Mutex<Store>>,
+    /// What was lost, a crash's or an update's at the start and a keeper's
+    /// since, until a client answers the offer.
+    offer: Mutex<Option<Vec<LostRow>>>,
     frozen: AtomicBool,
     next_seq: AtomicU64,
     exits: broadcast::Sender<ExitNotice>,
@@ -68,6 +71,7 @@ impl HostLedger {
         let (exits, _) = broadcast::channel(256);
         Self {
             store,
+            offer: Mutex::new(None),
             frozen: AtomicBool::new(false),
             next_seq: AtomicU64::new(1),
             exits,
@@ -86,6 +90,24 @@ impl HostLedger {
     /// Exits from now on, for one connection.
     pub fn exits(&self) -> broadcast::Receiver<ExitNotice> {
         self.exits.subscribe()
+    }
+
+    /// The restore offer: what has been lost and not yet answered for.
+    pub fn offer(&self) -> MutexGuard<'_, Option<Vec<LostRow>>> {
+        self.offer.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Adds `lost` to the restore offer, which is made again if it had been
+    /// answered.
+    pub fn offer_lost(&self, lost: Vec<LostRow>) {
+        if lost.is_empty() {
+            return;
+        }
+        let mut offer = self.offer();
+        let rows = offer.get_or_insert_with(Vec::new);
+        rows.extend(lost);
+        rows.sort_by_key(|row| row.id);
+        rows.dedup_by_key(|row| row.id);
     }
 
     /// Records nothing more: the rows are settled for this stop.
@@ -110,10 +132,28 @@ impl SessionLedger for HostLedger {
         } else {
             self.store.as_ref().finished(id, exit)
         };
+        self.notify(id);
+        written
+    }
+
+    /// The session's keeper went away with it: its row is lost and offered
+    /// for restore, as a crash's are at the next start.
+    fn lost(&self, id: SessionId) -> Result<()> {
+        let written = if self.frozen.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            record_lost(&self.store(), id).map(|lost| self.offer_lost(lost.into_iter().collect()))
+        };
+        self.notify(id);
+        written
+    }
+}
+
+impl HostLedger {
+    fn notify(&self, id: SessionId) {
         let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
         // Nobody listening is not a failure.
         let _ = self.exits.send(ExitNotice { seq, session: id });
-        written
     }
 }
 
@@ -136,41 +176,76 @@ pub(crate) struct LostRow {
     pub backend: BackendId,
 }
 
+/// What an update to `lost` returns, in [`lost_row`]'s order.
+const LOST_COLUMNS: &str = "id, name, label, cwd, branch, profile_id, \
+     coalesce(last_claude_session_id, claude_session_id), backend, project_path, permission_mode";
+
+fn lost_row(row: &Row<'_>) -> rusqlite::Result<LostRow> {
+    let name: String = row.get(1)?;
+    let label: Option<String> = row.get(2)?;
+    Ok(LostRow {
+        id: SessionId(row.get(0)?),
+        name: label
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or(name),
+        cwd: row.get(3)?,
+        branch: row.get(4)?,
+        profile_id: row.get(5)?,
+        conversation_id: row.get(6)?,
+        backend: recorded_backend(row.get(7)?),
+        project_path: row.get(8)?,
+        permission_mode: named(row.get(9)?),
+    })
+}
+
 /// Records every row still `running` as `lost`, as the start after a crash
-/// or an update does, and returns them oldest first. Stamping an end time
-/// would invent a duration nobody measured, so none is written.
-pub(crate) fn reconcile_running(store: &Store) -> Result<Vec<LostRow>> {
+/// or an update does, but those in `held`, which the session keeper still
+/// runs, and returns them oldest first. Stamping an end time would invent a
+/// duration nobody measured, so none is written.
+pub(crate) fn reconcile_running(store: &Store, held: &[SessionId]) -> Result<Vec<LostRow>> {
+    let held = serde_json::to_string(&held.iter().map(|id| id.0).collect::<Vec<_>>())
+        .map_err(|err| Error::io("list the sessions still held", io::Error::other(err)))?;
     let mut statement = store
         .connection()
-        .prepare(
+        .prepare(&format!(
             "UPDATE sessions SET status = 'lost' WHERE status = 'running' \
-             RETURNING id, name, label, cwd, branch, profile_id, \
-             coalesce(last_claude_session_id, claude_session_id), backend, project_path, \
-             permission_mode",
-        )
+             AND id NOT IN (SELECT value FROM json_each(?1)) RETURNING {LOST_COLUMNS}"
+        ))
         .map_err(sql("reconcile the sessions the last run left running"))?;
     let mut lost = statement
-        .query_map([], |row| {
-            let name: String = row.get(1)?;
-            let label: Option<String> = row.get(2)?;
-            Ok(LostRow {
-                id: SessionId(row.get(0)?),
-                name: label
-                    .filter(|label| !label.trim().is_empty())
-                    .unwrap_or(name),
-                cwd: row.get(3)?,
-                branch: row.get(4)?,
-                profile_id: row.get(5)?,
-                conversation_id: row.get(6)?,
-                backend: recorded_backend(row.get(7)?),
-                project_path: row.get(8)?,
-                permission_mode: named(row.get(9)?),
-            })
-        })
+        .query_map(params![held], lost_row)
         .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
         .map_err(sql("reconcile the sessions the last run left running"))?;
     lost.sort_by_key(|row| row.id);
     Ok(lost)
+}
+
+/// Records session `id` as `lost`, when it is still running.
+pub(crate) fn record_lost(store: &Store, id: SessionId) -> Result<Option<LostRow>> {
+    store
+        .connection()
+        .query_row(
+            &format!(
+                "UPDATE sessions SET status = 'lost' WHERE id = ?1 AND status = 'running' \
+                 RETURNING {LOST_COLUMNS}"
+            ),
+            params![id.0],
+            lost_row,
+        )
+        .optional()
+        .map_err(sql("record the lost session"))
+}
+
+/// The ids of every row still `running`.
+pub(crate) fn running_ids(store: &Store) -> Result<Vec<SessionId>> {
+    let mut statement = store
+        .connection()
+        .prepare("SELECT id FROM sessions WHERE status = 'running'")
+        .map_err(sql("read the running sessions"))?;
+    statement
+        .query_map([], |row| row.get(0).map(SessionId))
+        .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+        .map_err(sql("read the running sessions"))
 }
 
 /// Records `ids` as exited now, with no exit code, as a deliberate stop does
