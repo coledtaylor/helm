@@ -20,6 +20,13 @@
 //! way out and opened on the way in; one that does not open ends the
 //! connection.
 //!
+//! Once its answer is written, the host gives the client its own deadline
+//! to say `hello` ([`HELLO_DEADLINE`](super::HELLO_DEADLINE) in a host). A
+//! connection that has not by then is closed without another byte, and the
+//! log's line names the device's fingerprint and that no hello came in time.
+//! A new device waiting there holds the code; being cut off lets go of it
+//! with nothing paired, so another device can enrol with it.
+//!
 //! The role a device is paired with, read at its handshake (an admin for
 //! the first admin enrolling), goes with each of its requests to the
 //! features, which say what it may change.
@@ -50,7 +57,7 @@ use std::time::Duration;
 use floti_protocol::channel::{RequestChannel, Routed, Router};
 use floti_protocol::channels::host::{HostStop, HostStopReason};
 use floti_protocol::message::{
-    ErrorCode, ErrorReply, Event, Request, Snapshot, StreamClose, StreamCredit, StreamData,
+    ErrorCode, ErrorReply, Event, Hello, Request, Snapshot, StreamClose, StreamCredit, StreamData,
     StreamOpen, Subscribe, SubscriptionError,
 };
 use floti_protocol::noise::{
@@ -113,14 +120,15 @@ pub(crate) fn served_channels(features: &Features) -> BTreeSet<&'static str> {
 }
 
 /// What the handshake needs: the host's key, the registry it checks each
-/// device against, the enrolment of a first admin, and how long a
-/// connection has to finish it.
+/// device against, the enrolment of a first admin, how long a connection
+/// has to finish it, and how long it then has to say `hello`.
 #[derive(Clone)]
 pub(crate) struct Admission {
     pub host_key: Arc<KeyPair>,
     pub devices: Arc<DeviceRegistry>,
     pub enrolment: Arc<Enrolment>,
     pub deadline: Duration,
+    pub hello_deadline: Duration,
 }
 
 /// A device the handshake let in.
@@ -144,6 +152,9 @@ enum Refusal {
     Unchecked(PublicKey, crate::Error),
     Failed(NoiseError),
     TimedOut(Duration),
+    /// The device finished the handshake and said no `hello` within the
+    /// deadline.
+    NoHello(PublicKey, Duration),
     Ended,
     ReadFailed(std::io::Error),
 }
@@ -162,6 +173,11 @@ impl fmt::Display for Refusal {
             Self::TimedOut(deadline) => {
                 write!(f, "the handshake did not finish in time ({deadline:?})")
             }
+            Self::NoHello(key, deadline) => write!(
+                f,
+                "device {} did not say hello in time ({deadline:?})",
+                key.fingerprint()
+            ),
             Self::Ended => write!(f, "the connection ended before the handshake finished"),
             Self::ReadFailed(err) => write!(f, "the handshake could not be read: {err}"),
         }
@@ -230,7 +246,13 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
         return;
     }
     let Some(channels) = connection
-        .hello(&context.identity, enrolling, &mut shutdown)
+        .hello(
+            &context.identity,
+            device,
+            enrolling,
+            context.admission.hello_deadline,
+            &mut shutdown,
+        )
         .await
     else {
         return;
@@ -320,6 +342,52 @@ async fn admit(
     }
 }
 
+/// [`read_hello`], cut off `deadline` after it starts, which is as soon as
+/// the host's answer to `device`'s handshake has been written. The error is
+/// why the device was refused, or `None` when it went, sent something other
+/// than `hello`, or the host is stopping. Nothing is written either way.
+async fn hello_within_deadline(
+    reader: &mut (impl AsyncRead + Unpin),
+    opener: &mut Opener,
+    decoder: &mut FrameDecoder,
+    device: PublicKey,
+    deadline: Duration,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<Hello, Option<Refusal>> {
+    match tokio::time::timeout(deadline, read_hello(reader, opener, decoder, shutdown)).await {
+        Ok(Some(hello)) => Ok(hello),
+        Ok(None) => Err(None),
+        Err(_) => Err(Some(Refusal::NoHello(device, deadline))),
+    }
+}
+
+/// Reads the client's first message, opened and decoded after whatever
+/// `decoder` already holds: its `hello`, or `None` when it went, sent
+/// anything else first (a client that does not speak the protocol), sent a
+/// frame that does not open, or the host is stopping.
+async fn read_hello(
+    reader: &mut (impl AsyncRead + Unpin),
+    opener: &mut Opener,
+    decoder: &mut FrameDecoder,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Option<Hello> {
+    let mut buf = vec![0; READ_CHUNK];
+    loop {
+        match decoder.next_message() {
+            Ok(Some(Message::Hello(hello))) => return Some(hello),
+            Ok(Some(_)) | Err(_) => return None,
+            Ok(None) => {}
+        }
+        tokio::select! {
+            read = reader.read(&mut buf) => match read {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => decoder.push(&opener.open(&buf[..n]).ok()?),
+            },
+            _ = shutdown.changed() => return None,
+        }
+    }
+}
+
 /// A read error that is the client having gone: what a pipe reports on
 /// Windows where a Unix socket reads as ended.
 fn is_closed(err: &std::io::Error) -> bool {
@@ -376,46 +444,50 @@ impl Connection {
         Ok(())
     }
 
-    /// Waits for `hello` and answers it. The capabilities the client was
-    /// welcomed with, or `None` when it was refused or went away.
+    /// Waits up to `deadline` for `device`'s `hello` and answers it. The
+    /// capabilities the client was welcomed with, or `None` when it was
+    /// refused, went away or said nothing in time, which the log says
+    /// naming the device.
     ///
     /// A device `enrolling` is paired as the first admin when its `hello` is
     /// welcomed, before the welcome is written: by then it has read the
-    /// host's answer and pinned the key. Going away or being refused before
-    /// that drops the claim, which keeps the code.
+    /// host's answer and pinned the key. Going away, being refused or
+    /// running out of time before that drops the claim, which keeps the code.
     async fn hello(
         &mut self,
         identity: &HostIdentity,
+        device: PublicKey,
         enrolling: Option<Claim>,
+        deadline: Duration,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Option<ClientChannels<'static>> {
-        let mut buf = vec![0; READ_CHUNK];
-        loop {
-            match self.decoder.next_message() {
-                Ok(Some(Message::Hello(hello))) => {
-                    let (answer, capabilities) = identity.answer(&hello);
-                    if capabilities.is_some()
-                        && let Some(claim) = enrolling
-                        && !self.enrol(claim)
-                    {
-                        return None;
-                    }
-                    self.write(&answer).await.ok()?;
-                    return capabilities.map(|caps| ClientChannels::new(&CATALOGUE, caps));
+        let hello = match hello_within_deadline(
+            &mut self.reader,
+            &mut self.opener,
+            &mut self.decoder,
+            device,
+            deadline,
+            shutdown,
+        )
+        .await
+        {
+            Ok(hello) => hello,
+            Err(refusal) => {
+                if let Some(refusal) = refusal {
+                    eprintln!("floti host: refused client {}: {refusal}", self.client.0);
                 }
-                // Anything before hello is a client that does not speak the
-                // protocol; it is not answered.
-                Ok(Some(_)) | Err(_) => return None,
-                Ok(None) => {}
+                return None;
             }
-            tokio::select! {
-                read = self.reader.read(&mut buf) => match read {
-                    Ok(0) | Err(_) => return None,
-                    Ok(n) => self.received(&buf[..n]).ok()?,
-                },
-                _ = shutdown.changed() => return None,
-            }
+        };
+        let (answer, capabilities) = identity.answer(&hello);
+        if capabilities.is_some()
+            && let Some(claim) = enrolling
+            && !self.enrol(claim)
+        {
+            return None;
         }
+        self.write(&answer).await.ok()?;
+        capabilities.map(|caps| ClientChannels::new(&CATALOGUE, caps))
     }
 
     /// Pairs the device holding `claim` as the first admin and says so in the

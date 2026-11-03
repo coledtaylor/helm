@@ -6,6 +6,12 @@
 //! integration test (`tests/noise_sessions.rs`) shows the same refusals logged
 //! by the executable while another client is served, on a short deadline.
 //!
+//! The wait for `hello` after it, on the same clock: a device that finished
+//! the handshake and says nothing is refused at the hello deadline exactly,
+//! counted from the host's answer, naming its fingerprint; one whose hello
+//! comes just inside it is read. A new device cut off there pairs nothing
+//! and the next device enrols with the code.
+//!
 //! Enrolment: while no admin exists, a new device carrying the host's code
 //! is answered, once, and paired as the first admin at its `hello`; every
 //! other device carrying a code is refused as it would be without one,
@@ -15,16 +21,21 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use floti_protocol::noise::{EnrolmentCode, Initiator, InitiatorStep, KeyPair, PublicKey};
+use floti_protocol::message::{ClientInfo, ClientKind, Hello};
+use floti_protocol::noise::{
+    EnrolmentCode, Initiator, InitiatorStep, KeyPair, Opener, PublicKey, Transport,
+};
+use floti_protocol::{FrameDecoder, Message, PROTOCOL_VERSION, encode_frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use super::{Admission, Refusal, admit_within_deadline};
+use super::{Admission, Refusal, admit_within_deadline, hello_within_deadline};
 use crate::devices::{DeviceRegistry, Role, Standing};
-use crate::server::enrolment::{Enrolment, FIRST_ADMIN_NAME, read_enrolment};
+use crate::server::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME, read_enrolment};
 use crate::server::{
-    ENROLMENT_FILE, HANDSHAKE_DEADLINE, TEST_HANDSHAKE_DEADLINE_MARKER, handshake_deadline,
+    ENROLMENT_FILE, HANDSHAKE_DEADLINE, HELLO_DEADLINE, TEST_HANDSHAKE_DEADLINE_MARKER,
+    handshake_deadline, hello_deadline,
 };
 use crate::testkit::TestDirs;
 
@@ -70,6 +81,7 @@ fn fixture_with(role: Role) -> Fixture {
             devices,
             enrolment,
             deadline: HANDSHAKE_DEADLINE,
+            hello_deadline: HELLO_DEADLINE,
         },
         device,
         shutdown: watch::channel(false).0,
@@ -213,11 +225,245 @@ fn the_log_names_the_deadline_a_connection_ran_out_of() {
 }
 
 #[test]
-fn a_host_gives_the_real_deadline_unless_a_test_build_finds_its_marker() {
+fn a_host_gives_the_real_deadlines_unless_a_test_build_finds_its_marker() {
     let dirs = TestDirs::new();
     assert_eq!(handshake_deadline(&dirs.data), HANDSHAKE_DEADLINE);
+    assert_eq!(hello_deadline(&dirs.data), HELLO_DEADLINE);
     std::fs::write(dirs.data.join(TEST_HANDSHAKE_DEADLINE_MARKER), "250").unwrap();
     assert_eq!(handshake_deadline(&dirs.data), Duration::from_millis(250));
+    assert_eq!(hello_deadline(&dirs.data), Duration::from_millis(250));
+}
+
+/// A device's handshake with the host, answered, on a pipe both ends keep
+/// open: the host's side as it stands once its answer is written, and the
+/// device's session.
+struct Answered {
+    host: DuplexStream,
+    client: DuplexStream,
+    /// Opens what the device sends, as the host's connection does.
+    opener: Opener,
+    decoder: FrameDecoder,
+    device: PublicKey,
+    /// The code the device holds while the host waits for its `hello`.
+    enrolling: Option<Claim>,
+    /// The device's half of the session.
+    transport: Transport,
+}
+
+impl Fixture {
+    /// Runs `initiator`'s handshake, whose first message is `first`, to the
+    /// host's answer, and finishes it on the device's side.
+    async fn answered(&self, initiator: Initiator, first: &[u8]) -> Answered {
+        let (mut client, mut host) = duplex(PIPE);
+        client.write_all(first).await.unwrap();
+        let mut shutdown = self.shutdown.subscribe();
+        let admitted = admit_within_deadline(&mut host, &self.admission, &mut shutdown)
+            .await
+            .unwrap_or_else(|_| panic!("the device was refused"));
+        let (_, opener) = admitted.transport.split();
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&admitted.rest);
+        let transport = finish_handshake(&mut client, initiator).await;
+        Answered {
+            host,
+            client,
+            opener,
+            decoder,
+            device: admitted.device,
+            enrolling: admitted.enrolling,
+            transport,
+        }
+    }
+
+    /// Waits for `device`'s hello on `host` as the host's connection does,
+    /// from now.
+    async fn hello_from(
+        &self,
+        host: &mut DuplexStream,
+        opener: &mut Opener,
+        decoder: &mut FrameDecoder,
+        device: PublicKey,
+    ) -> Result<Hello, Option<Refusal>> {
+        let mut shutdown = self.shutdown.subscribe();
+        hello_within_deadline(
+            host,
+            opener,
+            decoder,
+            device,
+            self.admission.hello_deadline,
+            &mut shutdown,
+        )
+        .await
+    }
+}
+
+/// Reads the host's answer on `client` until it finishes `initiator`'s
+/// handshake: the device's session.
+async fn finish_handshake(client: &mut DuplexStream, mut initiator: Initiator) -> Transport {
+    let mut buf = vec![0; PIPE];
+    loop {
+        let n = client.read(&mut buf).await.unwrap();
+        assert_ne!(n, 0, "the host closed the connection instead of answering");
+        match initiator.push(&buf[..n]).expect("the host proves its key") {
+            InitiatorStep::Done { transport, .. } => return transport,
+            InitiatorStep::Pending(next) => initiator = next,
+        }
+    }
+}
+
+/// A client's `hello`, sealed under its session's keys.
+fn sealed_hello(transport: &mut Transport) -> Vec<u8> {
+    let hello = encode_frame(&Message::Hello(Hello {
+        protocol: PROTOCOL_VERSION,
+        client: ClientInfo {
+            name: "a late client".to_owned(),
+            kind: ClientKind::Tui,
+        },
+        capabilities: vec!["terminal".to_owned()],
+    }))
+    .unwrap();
+    transport.seal(&hello).unwrap()
+}
+
+fn no_hello(device: &KeyPair, deadline: Duration) -> Option<String> {
+    Some(format!(
+        "device {} did not say hello in time ({deadline:?})",
+        device.public().fingerprint()
+    ))
+}
+
+#[tokio::test(start_paused = true)]
+async fn s1_s4_a_paired_device_that_says_no_hello_is_refused_at_the_hello_deadline_by_its_fingerprint()
+ {
+    let fx = fixture();
+    let (initiator, first) = Initiator::start(&fx.device, &fx.host()).unwrap();
+    let Answered {
+        mut host,
+        mut client,
+        mut opener,
+        mut decoder,
+        device,
+        ..
+    } = fx.answered(initiator, &first).await;
+
+    let answered_at = Instant::now();
+    let refused = fx
+        .hello_from(&mut host, &mut opener, &mut decoder, device)
+        .await;
+
+    assert_eq!(
+        answered_at.elapsed(),
+        HELLO_DEADLINE,
+        "closed at the deadline, not before"
+    );
+    let line = refused
+        .as_ref()
+        .err()
+        .and_then(|refusal| refusal.as_ref())
+        .map(ToString::to_string);
+    assert_eq!(line, no_hello(&fx.device, HELLO_DEADLINE));
+    let line = line.unwrap();
+    assert!(!line.contains(&fx.device.public().to_hex()), "{line}");
+    drop(host);
+    assert!(
+        written(&mut client).await.is_empty(),
+        "nothing written after the answer"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn s3_a_hello_just_inside_the_hello_deadline_is_read_and_an_enrolling_device_is_paired_as_the_first_admin()
+ {
+    let fx = waiting_fixture();
+    let desk = KeyPair::generate().unwrap();
+    let (initiator, first) = enrolling(&desk, &fx.host(), &fx.code());
+    let Answered {
+        mut host,
+        mut client,
+        mut opener,
+        mut decoder,
+        device,
+        enrolling,
+        mut transport,
+    } = fx.answered(initiator, &first).await;
+
+    let hello = sealed_hello(&mut transport);
+    let say_late = async {
+        tokio::time::sleep(HELLO_DEADLINE - Duration::from_millis(1)).await;
+        client.write_all(&hello).await.unwrap();
+    };
+    let (heard, ()) = tokio::join!(
+        fx.hello_from(&mut host, &mut opener, &mut decoder, device),
+        say_late
+    );
+
+    let heard = heard.unwrap_or_else(|_| panic!("the hello in time was refused"));
+    assert_eq!(heard.client.name, "a late client");
+    let claim = enrolling.expect("the device holds the code");
+    assert_eq!(
+        claim.commit().unwrap().map(|paired| paired.role),
+        Some(Role::Admin)
+    );
+    assert_eq!(fx.role_of(&desk.public()), Some(Role::Admin));
+    assert!(!fx.admission.enrolment.waiting());
+}
+
+#[tokio::test(start_paused = true)]
+async fn s2_a_new_device_that_says_no_hello_in_time_pairs_nothing_and_another_device_enrols_with_the_code()
+ {
+    let fx = waiting_fixture();
+    let code = fx.code();
+    let desk = KeyPair::generate().unwrap();
+    let (initiator, first) = enrolling(&desk, &fx.host(), &code);
+    let answered = fx.answered(initiator, &first).await;
+    let Answered {
+        mut host,
+        mut opener,
+        mut decoder,
+        device,
+        enrolling,
+        ..
+    } = answered;
+
+    // While it waits it holds the code: another device is refused.
+    let laptop = KeyPair::generate().unwrap();
+    let (admitted, _) = fx.admit(&enrolling_first(&laptop, &fx.host(), &code)).await;
+    assert_eq!(refusal(&admitted), unknown(&laptop));
+
+    let refused = fx
+        .hello_from(&mut host, &mut opener, &mut decoder, device)
+        .await;
+    assert_eq!(
+        refused.err().flatten().map(|refusal| refusal.to_string()),
+        no_hello(&desk, HELLO_DEADLINE)
+    );
+    // The connection ends with the wait, and lets go of the code.
+    drop(enrolling);
+    drop(host);
+
+    assert_eq!(fx.role_of(&desk.public()), None);
+    assert!(fx.admission.enrolment.waiting());
+    assert!(fx.dirs.data.join(ENROLMENT_FILE).exists());
+    assert!(fx.code().matches(&code));
+    let (admitted, _) = fx.admit(&enrolling_first(&laptop, &fx.host(), &code)).await;
+    assert_eq!(say_hello(admitted), Some(Role::Admin));
+    assert_eq!(fx.role_of(&laptop.public()), Some(Role::Admin));
+}
+
+fn enrolling_first(device: &KeyPair, host: &PublicKey, code: &EnrolmentCode) -> Vec<u8> {
+    enrolling(device, host, code).1
+}
+
+#[test]
+fn the_log_names_the_device_that_said_no_hello_in_time_by_its_fingerprint() {
+    let device = KeyPair::generate().unwrap();
+    assert_eq!(
+        Refusal::NoHello(device.public(), Duration::from_millis(1500)).to_string(),
+        format!(
+            "device {} did not say hello in time (1.5s)",
+            device.public().fingerprint()
+        )
+    );
 }
 
 #[tokio::test]
