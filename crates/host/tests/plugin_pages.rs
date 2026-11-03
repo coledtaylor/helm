@@ -94,13 +94,14 @@ impl World {
         }
     }
 
-    /// Helm's window on the testkit's admin device, listening for what the
+    /// Helm's window on the testkit's device, listening for what the
     /// host sends plugin pages.
     async fn window(&self) -> TestClient {
         listening(TestClient::connect(&self.endpoint, WINDOW).await).await
     }
 
-    /// A window on a device of its own, paired as `role`.
+    /// A window on a device of its own, a key the host has never seen,
+    /// named `name`.
     async fn window_as(&self, name: &str) -> TestClient {
         listening(TestClient::connect_as(&self.endpoint, name, WINDOW).await).await
     }

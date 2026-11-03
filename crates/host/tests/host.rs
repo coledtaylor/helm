@@ -206,8 +206,8 @@ fn runs_in(agent: &FakeAgent, cwd: &Path, except: &[u32]) -> Vec<FakeAgentRecord
 }
 
 /// The `floti host` executable, with every folder in `dirs`, and the
-/// testkit's device paired with the host it will be, so a [`TestClient`] at
-/// [`binary_endpoint`] is let in.
+/// host it will be recorded for the testkit, so a [`TestClient`] at
+/// [`binary_endpoint`] holds it to the key in its data folder.
 fn floti_host_command(dirs: &TestDirs) -> Command {
     record_test_host(&binary_endpoint(dirs), &dirs.data);
     let mut command = Command::new(env!("CARGO_BIN_EXE_floti"));

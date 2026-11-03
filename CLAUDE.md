@@ -170,7 +170,9 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   (`hostLink:open` names it). Floti adds no ssh option, never skips a
   host-key check, reads or writes nothing under `~/.ssh` and holds no SSH
   secret: a transport that needs a password or a key accepted fails with its
-  last line, and the fix is `ssh <target>` in a terminal. The link never
+  last line, and the fix is `ssh <target>` in a terminal. Adding a host is
+  connecting to it: the first connection pins the key it proves, and
+  nothing is approved or typed on the host. The link never
   starts that host and a drop ends nothing there; Remove ends the link and
   removes the host's client folder, and ends nothing on the host.
 - With "Run sessions in the local host" on, every client sees every session
@@ -219,41 +221,30 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   `safeStorage` and refuses to store when encryption is unavailable; a value is
   filled in by main, for a host and a plugin the user allowed, and never sent
   to any window. Helm never reads a Claude or GitHub credential to put there.
-- Floti also keeps its host key (`host.key`) and device registry
-  (`devices.json`, each device with its role) in its data folder, and each
-  client keeps its device key (`device.key`) and the host key it pinned.
-  While no device is an admin, the host also keeps `enrolment.json` there:
-  its public key and a one-time code, fresh at every start, that lets one
-  client on this computer enrol as the first admin inside the Noise
-  handshake, then is removed. Each is an owner-only file
-  (`platform/private_files`): `0600` on macOS and Linux, an access list naming
-  only the user on Windows. Any other device pairs by asking in its
-  handshake: the host tells it a short code to show, keeps the request in
-  memory only, for ten minutes, and pairs it, with the role chosen, once an
-  admin device approves the code (`devices:approve`) or `floti devices
-  approve <code>` is run on the host's computer. That command proves the
-  host's own key, read from `host.key`; `approve -` reads the code from
-  standard input, which is how `floti bridge --pair <name> --approve <role>`
-  approves itself in one step through the same ssh target or command,
-  keeping the code out of every command line. One table
-  (`server/access.rs`) gives every channel its least role (viewer, operator,
-  admin) and is checked before any feature; a channel with no rule is served
-  to no device, and a viewer's keystrokes reach no session. `floti connect`
-  opens the host's relay endpoint beside its local one, and an admin
-  connected there is asked for presence (`devices:presence`, confirmed on the
-  device by Windows Hello or Touch ID) within five minutes on the host's
-  clock before an admin action; neither a local admin nor `floti devices` is
-  asked, and presence never raises a role. Helm confirms it with `floti
-  presence` (`platform/presence`, one file per OS; Linux answers
-  Unavailable), run by main over `presence:confirm`, and its answer says
-  nothing of who the user is. Revoking a device (an admin
-  device, `floti devices revoke <fingerprint>`, or the device itself, with no
-  presence) closes every live connection of its key at once and leaves its
-  sessions running. A private
-  key or either code is never logged, printed, sent to another client or
-  put in a session's environment (a pairing code goes only to the device it
-  was made for); logs name a key by its fingerprint. Keys and the Noise sessions they prove come
-  from snow, through `floti_protocol::noise`; never hand-rolled crypto.
+- The user's login is the access to Floti. The host serves whatever reaches
+  its local socket, which only the user's OS account can open, once its Noise
+  handshake completes: a client on the host's computer, or one that comes
+  through `floti connect` over the user's own ssh or command. Every such
+  device is served every channel, as the user could at the host; Floti adds
+  no approval, code, role or prompt of its own, and keeps no list of allowed
+  devices. The host keeps its host key (`host.key`) in its data folder and
+  no device list; at start it deletes the `devices.json` and `enrolment.json`
+  an earlier version kept (`RETIRED_FILES` in `server/mod.rs`). Each client
+  keeps its device key (`device.key`) and the host key it pinned
+  (`host.pub`) at its first connection, and refuses a host that proves
+  another, naming the host, until the user removes it and adds it again.
+  Each is an owner-only file (`platform/private_files`): `0600` on macOS and
+  Linux, an access list naming only the user on Windows. The device key
+  names the device in the attached list (`devices:attached`, Settings >
+  Devices) and records which sessions it started, so quitting a client ends
+  only its own. Disconnect there (`devices:disconnect`) closes every
+  connection of a device's key to that host at once and leaves its sessions
+  running; taking its SSH key away is what keeps it out. A private key is
+  never logged, printed, sent to another client or put in a session's
+  environment; logs name a key by its fingerprint, and a client that fails
+  the handshake is closed without a byte. Keys and the Noise sessions they
+  prove come from snow, through `floti_protocol::noise`; never hand-rolled
+  crypto.
 - The network posture is stated identically in README, docs/PACKAGING.md, the
   `update:check` comment in `shared/ipc.ts` and SPEC 5; change all four
   together. Helm contacts nothing on its own except the update check, and it

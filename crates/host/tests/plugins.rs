@@ -475,7 +475,7 @@ async fn any_device_adds_removes_and_switches_a_plugin_and_each_switch_is_stored
     // A device the host has never seen switches its tools off; the desktop
     // does the rest.
     let mut device = TestClient::connect_as(&world.endpoint, "a phone", &[]).await;
-    // The desktop, this computer's admin, does each.
+    // The desktop on this computer does each.
     let off = PluginSwitchRequest {
         path: text(&kept),
         enabled: false,

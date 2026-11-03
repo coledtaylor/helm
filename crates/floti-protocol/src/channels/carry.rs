@@ -19,8 +19,8 @@
 //! leaves no conversation showing part of its messages, and the part numbered
 //! 0 of a retried one first clears whatever an earlier attempt left of it.
 //!
-//! Every channel needs an admin device: each writes the host's database.
-//! What a batch carries is the user's own conversation text; the host logs
+//! Every channel writes the host's database, and every device that completes
+//! the handshake may call it. What a batch carries is the user's own conversation text; the host logs
 //! how many rows it merged, never what they said.
 
 use schemars::JsonSchema;

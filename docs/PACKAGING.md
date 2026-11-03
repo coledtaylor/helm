@@ -211,7 +211,7 @@ untouched one; deleting the directory is what puts the originals back.
   `update-stop` asks too.
   `floti update-stop "%APPDATA%\Helm\host-client" --ask` connects with Helm's
   client folder keys, as `floti bridge` does, so the device key never leaves
-  that process, and it never pairs or enrols. When the host runs sessions it
+  that process, and it never pins a host. When the host runs sessions it
   prints the question ("Installing this update stops the local host on this
   PC, ending 2 sessions. Helm offers them back when it next starts.") and the
   installer shows it with OK and Cancel. Cancel quits the installer and every
@@ -221,7 +221,7 @@ untouched one; deleting the directory is what puts the originals back.
   exited. A host running no session (status 7) is stopped the same way with
   no question. Anything else asks nothing and leaves the host to the default
   check: no `floti.exe` installed yet, no host answering (status 3), a client
-  folder Helm never paired (status 4) or a host it cannot talk to. Then electron-builder's own check runs, which the macro
+  folder that has pinned no host yet (status 4) or a host it cannot talk to. Then electron-builder's own check runs, which the macro
   still inserts, with the `getProcessInfo.nsh` include and `Var pid` that
   defining the macro drops. A silent install (`/S`) answers OK, as that check
   does. The uninstaller runs the default check alone. On macOS and Linux files

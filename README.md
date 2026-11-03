@@ -194,6 +194,15 @@ your own ssh, or the command you gave.** There is no telemetry, no crash reporti
 fonts and no CDN, and with the tick off Helm asks nothing at all unless you
 press something.
 
+A host on another computer is reached through your own ssh login, or a command
+you choose, running `floti connect` there as you. That login is the access:
+adding a host is connecting to it, with no pairing code, approval or role, and
+every device that gets in can do what you can at that host. Helm pins the
+host's key at the first connection and refuses a host that proves another.
+**Settings → Devices** shows who is attached to each connected host, with
+Disconnect beside each; to keep a lost device out, take its SSH key away as you
+would for any machine.
+
 Helm does **listen** in one place, and it is worth saying out loud because it is
 the only one. A Claude session Helm hosts can reach two sets of tools - one that
 drives the browser pane (open a page, read it, screenshot it, click and type),

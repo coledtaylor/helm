@@ -133,12 +133,21 @@ desktop against a backend waits until the desktop talks to the Rust host.
 
 The host process itself is tested in `crates/host/tests/host.rs`, through
 `TestClient` (`testkit/client.rs`): a protocol client that connects on the
-local socket, runs the Noise handshake as the testkit's device, paired with
-that host and pinned to its key, says `hello`, makes typed requests and reads
-a session's terminal, granting credit as it reads. `RunningHost` pairs the
-device into its host's registry before serving, and `pair_test_device` does
-the same for the executable, so a test still connects with an endpoint and
-its capabilities alone. `noise_sessions.rs` tests the handshake itself: what
+local socket, runs the Noise handshake as the testkit's device, pinned to
+that host's key, says `hello`, makes typed requests and reads a session's
+terminal, granting credit as it reads. The host serves any key that
+completes the handshake, so the device simply connects: `RunningHost`
+records where its host keeps its key, and `record_test_host` does the same
+for the executable, so a test connects with an endpoint and its
+capabilities alone. A test that needs devices of its own makes them with
+`TestClient::new_device` and connects with `connect_as`, `connect_device`
+or, as `floti connect` does from another computer, `connect_device_away`.
+`attached_devices.rs` tests the attached list and Disconnect: an unseen key
+served every request, a device with several connections as one entry that
+leaves with its last, Disconnect closing every connection of a key with its
+sessions still running, the retired device channels answered as unknown,
+and the files an earlier version kept deleted at start.
+`noise_sessions.rs` tests the handshake itself: what
 crosses the socket, read through a tap that relays one endpoint to another,
 and clients that misbehave, built as raw sockets from the protocol's Noise
 layer, against the executable, whose log is `host.log` in the `TestDirs`
@@ -155,15 +164,7 @@ a deadline of their own (`TestDirs::with_handshake_deadline`, a marker in the
 data folder that only a test build reads, which sets the handshake's deadline
 and the hello's); the real deadlines' lengths are stepped on tokio's paused
 clock in `server/connection/tests.rs`, where the wait for `hello` runs over
-in-memory pipes after a real handshake. `pairing.rs` pairs devices by code
-against the executable, running `floti devices` beside it as its own process
-with the same folders (`TestDirs::floti_command`, `run_floti`); a request's
-ten minutes are stepped, never waited out, with `TestDirs::step_host_clock`
-(another marker only a test build reads, moving the host's clock
-ahead), and the expiry's exact edge is stepped on the paused clock in
-`server/pairing/tests.rs`. A device's presence (five minutes) is stepped
-the same way in `roles.rs`, through the host's relay endpoint, and its edge
-on the paused clock in `server/access/tests.rs`. Most tests run a `Host` in the test
+in-memory pipes after a real handshake. Most tests run a `Host` in the test
 process on a `TestDirs`; the ones about the executable (one instance per data
 folder and socket, the SSH refusal, Ctrl+C and SIGTERM, a killed host) run the
 built `floti host` with `FLOTI_DATA_DIR`, `FLOTI_RUNTIME_DIR` and the other
@@ -442,7 +443,7 @@ over the window, or Electron's own guards on a page.
 | `browser` | browsing; the security posture; the refusals; a cookie surviving a restart |
 | `agent-tools` | a session drives the browser pane through its own token, and only its own tabs |
 | `plugins` | the sample plugin against a server of its own: its background page, a secret it asks for, its panel, badge, status and a tab with parameters; `helm.fetch` held to the manifest's origins on every redirect; Helm's shortcuts from inside a plugin page and its commands from Ctrl+Shift+P; a crashed plugin page and Reload; an unsupported `apiVersion` said in Settings, and a plugin turned off and on; a theme change reaching a page without reloading it; a session calling the plugin's tools, answered by its background page, and losing them when they are turned off in Settings |
-| `host-sessions` | with "Run sessions in the local host" on: the first start enrolling as the host's first admin; a session and a project terminal in the host, drawn again after a reload; the sessions pane showing a host session's process tree and ports as the host read them; a host session's browser tools, a profile's and a plugin's sessions, and the plugin's and Helm's session tools through the host; quitting, and Helm killed outright; an ended session listed in history and archived by the host, nothing of it in `helm.db`, and resumed through the host where it ran; the status bar showing the usage the host read, and a rewritten reading reaching it |
+| `host-sessions` | with "Run sessions in the local host" on: the first start pinning the host's key and served in full; a session and a project terminal in the host, drawn again after a reload; the sessions pane showing a host session's process tree and ports as the host read them; a host session's browser tools, a profile's and a plugin's sessions, and the plugin's and Helm's session tools through the host; quitting, and Helm killed outright; an ended session listed in history and archived by the host, nothing of it in `helm.db`, and resumed through the host where it ran; the status bar showing the usage the host read, and a rewritten reading reaching it |
 
 - **Each test gets a world** (`test/world.ts`): a temporary root with a space in
   its path, in the run's root, named owner of its fake agents (a `test-owner`
