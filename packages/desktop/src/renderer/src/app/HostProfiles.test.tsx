@@ -63,4 +63,29 @@ describe('HostProfiles', () => {
     expect(remoteBridge('h1').invoked('profile:launch')).toEqual([expect.objectContaining({ profileId: 5 })])
     expect(bridge.invocations).toEqual([])
   })
+
+  it('opens build-box’s profile editor with the draft a build-box project page asked to save, once per request', async () => {
+    const draft = { ...INFRA, name: 'api', root: '/srv/api', overlays: ['/srv/api'], access: ['/srv/api'] }
+    const props = {
+      host: 'h1',
+      name: 'build-box',
+      connected: true,
+      projects: [],
+      harnesses: [],
+      blank: (root: string, name: string) => ({ ...INFRA, root, name }),
+      onLaunched: vi.fn(),
+      paneSize: () => null
+    }
+    const { rerender } = render(<HostProfiles {...props} request={{ draft, nonce: 1 }} />)
+    expect((screen.getByLabelText('Profile name') as HTMLInputElement).value).toBe('api')
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.queryByLabelText('Profile name')).toBeNull()
+
+    // The same request again is not a new one.
+    rerender(<HostProfiles {...props} request={{ draft, nonce: 1 }} />)
+    expect(screen.queryByLabelText('Profile name')).toBeNull()
+    rerender(<HostProfiles {...props} request={{ draft, nonce: 2 }} />)
+    expect((screen.getByLabelText('Profile name') as HTMLInputElement).value).toBe('api')
+    expect(bridge.invocations).toEqual([])
+  })
 })

@@ -33,7 +33,8 @@ export interface FileViewProps {
   /** Tokenises for the editor's underlay. Must be stable across renders. */
   onHighlight: ((path: string, source: string) => Promise<EditorHighlight>) | null
   onCaretChange?: ((caret: { line: number; column: number }) => void) | undefined
-  onReveal: (path: string) => void
+  /** Shows a path in this PC's file manager; absent for a host on another computer, whose paths are not here. */
+  onReveal?: ((path: string) => void) | undefined
   /** Null where VS Code is not installed. */
   onOpenInEditor: (() => void) | null
   /**
@@ -120,10 +121,12 @@ export function FileView({
           Open in VS Code
         </HandOff>
       )}
-      <HandOff onClick={() => onReveal(view.path)}>
-        <FolderIcon width={13} height={13} />
-        Reveal in Explorer
-      </HandOff>
+      {onReveal !== undefined && (
+        <HandOff onClick={() => onReveal(view.path)}>
+          <FolderIcon width={13} height={13} />
+          Reveal in Explorer
+        </HandOff>
+      )}
     </div>
   )
 
@@ -298,7 +301,8 @@ export function FileActions({
   path: string
   /** Null where VS Code is not installed; the button says so rather than vanishing. */
   onOpenInEditor: (() => void) | null
-  onReveal: (path: string) => void
+  /** Shows a path in this PC's file manager; absent for a host on another computer, whose paths are not here. */
+  onReveal?: ((path: string) => void) | undefined
   /** Resolves false when the clipboard refused it. */
   onCopyPath: (path: string) => Promise<boolean>
 }): JSX.Element {
@@ -324,9 +328,11 @@ export function FileActions({
         <CodeIcon width={13} height={13} />
         Open in VS Code
       </button>
-      <IconAction label="Reveal in Explorer" onClick={() => onReveal(path)}>
-        <FolderIcon width={14} height={14} />
-      </IconAction>
+      {onReveal !== undefined && (
+        <IconAction label="Reveal in Explorer" onClick={() => onReveal(path)}>
+          <FolderIcon width={14} height={14} />
+        </IconAction>
+      )}
       <IconAction label={copyPathLabel(copy)} onClick={pressCopy}>
         {copy === 'copied' ? (
           <CheckIcon width={14} height={14} className="text-success" />

@@ -47,6 +47,11 @@ export interface NewSessionPopoverProps {
   now: number
   onStart: (choice: LaunchChoice) => void
   onDismiss: () => void
+  /**
+   * The host on another computer it starts on, by name; its folders and
+   * profiles are the ones listed. Absent for this PC, which it does not name.
+   */
+  hostName?: string | undefined
 }
 
 /** Recent folders offered at the foot. */
@@ -98,7 +103,8 @@ export function NewSessionPopover({
   error,
   now,
   onStart,
-  onDismiss
+  onDismiss,
+  hostName
 }: NewSessionPopoverProps): JSX.Element {
   const ids = useId()
   const popupRef = useRef<HTMLDivElement>(null)
@@ -231,6 +237,11 @@ export function NewSessionPopover({
     >
       <div className="mb-3 flex items-center">
         <span className="text-[13px] font-medium">New session</span>
+        {hostName !== undefined && (
+          <span data-popover-host className="ml-1.5 truncate text-[12px] text-fg-subtle">
+            on <span className="font-mono">{hostName}</span>
+          </span>
+        )}
         <span className="flex-1" />
         <span
           title="The launcher, from the keyboard"

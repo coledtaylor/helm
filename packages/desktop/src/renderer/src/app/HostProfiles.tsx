@@ -19,6 +19,11 @@ export interface HostProfilesProps {
   onLaunched: (record: SessionRecord) => void
   /** The pane a launched session is sized for. */
   paneSize: () => HTMLElement | null
+  /**
+   * A draft to open in the editor, from that host's project page (Save as
+   * profile). Each new nonce opens it once; null or the same nonce does nothing.
+   */
+  request?: { draft: ProfileDraft; nonce: number } | null | undefined
 }
 
 /**
@@ -35,11 +40,20 @@ export function HostProfiles({
   harnesses,
   blank,
   onLaunched,
-  paneSize
+  paneSize,
+  request = null
 }: HostProfilesProps): JSX.Element {
   const state = useProfiles(host)
   const [editing, setEditing] = useState<Profile | ProfileDraft | null>(null)
   const [problems, setProblems] = useState<string[]>([])
+  // A request opens the editor once, as it arrives: adjusted while rendering,
+  // so the editor is open in the same commit that brought the request.
+  const [answered, setAnswered] = useState<number | null>(null)
+  if (request !== null && request.nonce !== answered) {
+    setAnswered(request.nonce)
+    setProblems([])
+    setEditing(request.draft)
+  }
   const [saving, setSaving] = useState(false)
 
   const launch = useCallback(

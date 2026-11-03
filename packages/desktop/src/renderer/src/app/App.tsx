@@ -195,7 +195,7 @@ import {
 } from '@helm/ui'
 import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
-import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
+import type { AppMode, PluginInfo, PluginUiRequest } from '../../../shared/ipc'
 import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
 import { hostFrameKey, hostLabel } from '../../../shared/plugins/origin'
 import {
@@ -236,6 +236,8 @@ import { useTemplates } from './useTemplates'
 import { useThemes } from './useThemes'
 import { useBrowsers } from './useBrowsers'
 import { useShells } from './useShells'
+import { treeLaunchNotice, type TreeLaunchFailure } from './launchNotice'
+import { closeKeepingRunning, keepRemoteTab, useSessionConfirm, useShownSessionTabs } from './hostTabs'
 import { useUpdate } from './useUpdate'
 import { useOwnDataCopy } from './useOwnDataCopy'
 import { useUsage } from './useUsage'
@@ -432,6 +434,8 @@ const sessionIdOf = (id: string): number => Number(id.slice('session:'.length))
 
 /** The session tab menu's Close tab, keep running. */
 const KEEP_RUNNING = 'keep-running'
+/** Every host's bridge, for the question a host asks before a running session's tab closes. */
+const HOST_BRIDGES = { each: eachHostBridge, bridgeFor }
 
 /** The last segment of a path, for a session in no project the scan found. */
 const folderName = (path: string): string =>
@@ -449,6 +453,13 @@ const NO_HOSTS: readonly RemoteHost[] = []
 
 export function App(): JSX.Element {
   const launcher = useLauncher()
+  /**
+   * Show in Explorer for a path on `host`: this PC's file manager shows this
+   * PC's folders only, so a surface showing a host on another computer offers
+   * none rather than a button that does nothing.
+   */
+  const revealOn = (host: string): ((path: string) => void) | undefined =>
+    host === LOCAL_HOST_KEY ? launcher.reveal : undefined
   const { discovery, settings, info } = launcher
 
   /**
@@ -478,7 +489,13 @@ export function App(): JSX.Element {
    * button it hangs from, and the folder that pane is about, read once when it
    * opened.
    */
-  const [newTab, setNewTab] = useState<{ group: number; anchor: HTMLElement; folder: string | null } | null>(
+  const [newTab, setNewTab] = useState<{
+    group: number
+    anchor: HTMLElement
+    folder: string | null
+    /** The host it opens on: the pane's front tab's while connected, else this PC. */
+    host: string
+  } | null>(
     null
   )
   /**
@@ -601,7 +618,9 @@ export function App(): JSX.Element {
    */
   const [surfaceHosts, setSurfaceHosts] = useState<Readonly<Record<HostSurface, string>>>(LOCAL_SURFACES)
   /** A project's Config or Files asked for while that surface showed another host, pointed once it shows this PC. */
-  const [pendingScope, setPendingScope] = useState<{ surface: 'config' | 'files'; path: string } | null>(null)
+  const [pendingScope, setPendingScope] = useState<{ surface: 'config' | 'files'; path: string; host: string } | null>(
+    null
+  )
   const shownHostOf = (surface: HostSurface): string => {
     const chosen = surfaceHosts[surface]
     return chosen === LOCAL_HOST_KEY || listedHostIds.includes(chosen) ? chosen : LOCAL_HOST_KEY
@@ -730,6 +749,16 @@ export function App(): JSX.Element {
    * when the dialog is closed. */
   const [editing, setEditing] = useState<Profile | ProfileDraft | null>(null)
   const [saveProblems, setSaveProblems] = useState<string[]>([])
+  /**
+   * A remote project page's Save as profile: a draft for that host's own
+   * profile editor in the Profiles sidebar, which keeps it on that host.
+   * The nonce makes the same project asked twice a second request.
+   */
+  const [profileRequest, setProfileRequest] = useState<{
+    host: string
+    draft: ProfileDraft
+    nonce: number
+  } | null>(null)
   const [saving, setSaving] = useState(false)
 
   const projectsByPath = useMemo(() => {
@@ -802,40 +831,27 @@ export function App(): JSX.Element {
    */
   const keep = useCallback(
     (ref: PaneRef): boolean => {
-      if (ref.kind === 'project' && hostOf(ref) !== LOCAL_HOST_KEY) {
-        // Another host's folder: kept until its own scan says it is gone.
-        if (!settingsLoaded) return true
-        if (!listedHostIds.includes(hostOf(ref))) return false
-        const scanned = hostWork.byHost.get(hostOf(ref))?.discovery ?? null
-        return scanned === null || scanned.projects.some((project) => project.path === ref.path)
-      }
+      // Another host's folder, session or plugin tab: kept while that host is
+      // away, until its own word says its thing is gone (`hostTabs.ts`).
+      const remote = keepRemoteTab(ref, {
+        settingsLoaded,
+        listed: listedHostIds,
+        byHost: hostWork.byHost,
+        pluginTab: (host, plugin, tab) =>
+          (remotePlugins.get(host)?.list ?? null) === null ? null : pluginsOn(host).get(plugin)?.tabs[tab] !== undefined
+      })
+      if (remote !== undefined) return remote
       if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
       // The Browser tab is there while it holds a page. Its last page closing
       // closes it, as closing a browser's last tab closes the window.
       if (ref.kind === 'browser') return browserViews.size > 0
       // Until the first list, nothing has said which sessions there are: a
       // saved tab is kept rather than taken for a session that has gone.
-      if (ref.kind === 'session' && hostOf(ref) !== LOCAL_HOST_KEY) {
-        // Another host's session keeps its tab while that host is away: it is
-        // still running there, and its tab reattaches when the host is back.
-        if (!settingsLoaded) return true
-        if (!listedHostIds.includes(hostOf(ref))) return false
-        const work = hostWork.byHost.get(hostOf(ref))
-        return work === undefined || !work.listed || work.sessions.some((session) => session.id === ref.id)
-      }
       if (ref.kind === 'session') return !sessionsListed || sessionsById.has(ref.id)
       // Answered, it has nothing left to show.
       if (ref.kind === 'restore') return restoreOffer !== null
       // Kept while the list is still being read, so a restored tab is not
       // dropped before its plugin has had a chance to load.
-      if (ref.kind === 'plugin' && hostOf(ref) !== LOCAL_HOST_KEY) {
-        // Another host's plugin tab is kept while that host is away, as its
-        // session tabs are, and dropped once its list says the tab is gone.
-        if (!settingsLoaded) return true
-        if (!listedHostIds.includes(hostOf(ref))) return false
-        const list = remotePlugins.get(hostOf(ref))?.list ?? null
-        return list === null || pluginsOn(hostOf(ref)).get(ref.plugin)?.tabs[ref.tab] !== undefined
-      }
       if (ref.kind === 'plugin') {
         return pluginState.list === null || plugins.get(ref.plugin)?.tabs[ref.tab] !== undefined
       }
@@ -914,31 +930,10 @@ export function App(): JSX.Element {
    * here, and only those: one opened from the sessions pane starts on a new
    * stream that draws its screen as it is.
    */
-  const tabbedSessions = useMemo(() => [...sessionTabIds(open)].sort((a, b) => a - b).join(','), [open])
-  useEffect(() => {
-    if (hostRunning !== true || tabbedSessions === '') return
-    hostSessionTabs.show(tabbedSessions.split(',').map(Number))
-  }, [hostRunning, tabbedSessions])
-  /**
-   * The same for each host on another computer, told again each time the
-   * window is connected to it again: a tab whose host dropped kept its last
-   * screen, and reattaches here.
-   */
-  const remoteTabbed = useMemo(
-    () =>
-      connectedHostIds
-        .map((host) => `${host}=${[...sessionTabIds(open, host)].sort((a, b) => a - b).join(',')}`)
-        .join('\n'),
-    [connectedHostIds, open]
-  )
-  useEffect(() => {
-    if (remoteTabbed === '') return
-    for (const line of remoteTabbed.split('\n')) {
-      const at = line.lastIndexOf('=')
-      const ids = line.slice(at + 1)
-      if (ids !== '') hostSessionTabs.show(ids.split(',').map(Number), line.slice(0, at))
-    }
-  }, [remoteTabbed])
+  // The same for each host on another computer, told again each time the
+  // window is connected to it again: a tab whose host dropped kept its last
+  // screen, and reattaches here.
+  useShownSessionTabs(open, hostRunning === true, connectedHostIds, hostSessionTabs.show)
 
   const shownMax = maximized !== null && groupById(open, maximized) !== undefined ? maximized : null
   const shownGroups = useMemo(
@@ -1277,12 +1272,12 @@ export function App(): JSX.Element {
    */
   const { scopePath: configScopePath, setScopePath: setConfigScope } = configState
   const openConfigAt = useCallback(
-    (project: Project) => {
-      if (configHost !== LOCAL_HOST_KEY) {
-        // A project here is this PC's: Config switches back to it, and the
-        // scope is pointed once the switch has cleared what it showed.
-        showHostOn('config', LOCAL_HOST_KEY)
-        setPendingScope({ surface: 'config', path: project.path })
+    (project: Project, host: string = LOCAL_HOST_KEY) => {
+      if (configHost !== host) {
+        // Config switches to the project's host, and the scope is pointed
+        // once the switch has cleared what it showed.
+        showHostOn('config', host)
+        setPendingScope({ surface: 'config', path: project.path, host })
       } else if (configScopePath.toLowerCase() !== project.path.toLowerCase()) {
         setConfigScope(project.path)
       }
@@ -1457,8 +1452,9 @@ export function App(): JSX.Element {
    */
   const nextTerminalId = useRef(1)
   const openTerminal = useCallback(
-    (path: string, beside = false, into?: number) => {
-      const ref = { kind: 'terminal', id: nextTerminalId.current++, path } as const
+    (path: string, beside = false, into?: number, host: string = LOCAL_HOST_KEY) => {
+      const id = nextTerminalId.current++
+      const ref: PaneRef = host === LOCAL_HOST_KEY ? { kind: 'terminal', id, path } : { kind: 'terminal', id, path, host }
       commit((current) =>
         into !== undefined
           ? placeIn(current, ref, into)
@@ -1474,8 +1470,11 @@ export function App(): JSX.Element {
     [commit, open.focused]
   )
 
+  /** The project on this PC whose launch from the tree or its page was the last, for the line over the panes. */
+  const [localLaunch, setLocalLaunch] = useState<{ path: string; name: string } | null>(null)
   const launch = useCallback(
     async (project: Project) => {
+      setLocalLaunch({ path: project.path, name: project.name })
       setLaunchingPath(project.path)
       try {
         const id = await sessionState.launch(project, bodyRefs.current.get(open.focused) ?? null)
@@ -1491,7 +1490,7 @@ export function App(): JSX.Element {
    * A project's `+` or Start on a host on another computer: started there
    * through its own bridge, and given a tab here like any launch.
    */
-  const [remoteLaunchError, setRemoteLaunchError] = useState<string | null>(null)
+  const [remoteLaunchError, setRemoteLaunchError] = useState<TreeLaunchFailure | null>(null)
   const { adopt: adoptThere, forget: forgetThere } = hostWork
   const launchOn = useCallback(
     async (host: string, project: Project) => {
@@ -1513,7 +1512,7 @@ export function App(): JSX.Element {
         adoptThere(host, record)
         placeSession(record.id, false, undefined, host)
       } catch (err: unknown) {
-        setRemoteLaunchError(readable(err))
+        setRemoteLaunchError({ host, path: project.path, name: project.name, text: readable(err) })
       } finally {
         setLaunchingPath(null)
       }
@@ -1572,6 +1571,22 @@ export function App(): JSX.Element {
       placeSession(session.id, false, into)
     },
     [profileState, sessionState, placeSession, open.focused]
+  )
+
+  /** A profile from the `+` popover, on the host it was opened on: that host's own profile, started there. */
+  const { launch: launchHostProfile } = launcherProfiles
+  const launchProfileOn = useCallback(
+    async (host: string, profile: Profile, into?: number) => {
+      if (host === LOCAL_HOST_KEY) {
+        await launchProfile(profile, into)
+        return
+      }
+      const record = await launchHostProfile(profile, bodyRefs.current.get(into ?? open.focused) ?? null)
+      if (record === null) return
+      adoptThere(host, record)
+      placeSession(record.id, false, into, host)
+    },
+    [launchProfile, launchHostProfile, adoptThere, placeSession, open.focused]
   )
 
   /**
@@ -1735,6 +1750,20 @@ export function App(): JSX.Element {
     []
   )
 
+  const saveAsProfileOn = useCallback(
+    (host: string, project: Project) => {
+      setProfileRequest((last) => ({
+        host,
+        // Seeded as this PC's page seeds it: the project as the root, itself composed.
+        draft: { ...blankProfile(project.path, project.name), overlays: [project.path], access: [project.path] },
+        nonce: (last?.nonce ?? 0) + 1
+      }))
+      setSidebarHidden(false)
+      setSidebarView('profiles')
+    },
+    [blankProfile]
+  )
+
   /**
    * What the profile editor's agent and MCP pickers offer: the same
    * `config:effective` the config console calls, asked about the composition
@@ -1815,11 +1844,8 @@ export function App(): JSX.Element {
   )
 
   const keepRunning = useCallback(
-    (id: number, host: string = LOCAL_HOST_KEY) => {
-      hostSessionTabs.release(id, host)
-      disposeTerminal(id, host)
-      commit((current) => closeTab(current, paneId(sessionRef(id, host))))
-    },
+    (id: number, host: string = LOCAL_HOST_KEY) =>
+      closeKeepingRunning(id, host, { release: hostSessionTabs.release, disposeTerminal, commit }),
     [commit]
   )
   /** The session a tab id names, on whichever host, or null for any other tab. */
@@ -1861,8 +1887,8 @@ export function App(): JSX.Element {
       }
       // The shell dies with its tab, not with a render: hiding the page keeps
       // it, closing the project ends it.
-      if (ref.kind === 'project') void disposeShell(ref.path)
-      if (ref.kind === 'terminal') void disposeShell(terminalShellKey(ref.id))
+      if (ref.kind === 'project') void disposeShell(ref.path, hostOf(ref))
+      if (ref.kind === 'terminal') void disposeShell(terminalShellKey(ref.id), hostOf(ref))
       // Hiding the pane keeps the pages; closing the tab destroys them all.
       if (ref.kind === 'browser') browsers.closeAll()
       // Closing the offer is "not now", the same as its button.
@@ -2090,10 +2116,13 @@ export function App(): JSX.Element {
         return
       }
       const pane = groupById(open, group)
-      prepareLauncher()
-      setNewTab({ group, anchor, folder: folderOf(pane === undefined ? null : activeRef(pane), sessionsById) })
+      const front = pane === undefined ? null : activeRef(pane)
+      // The host of what the pane shows, as Ctrl+N takes the front tab's.
+      const on = front !== null && connectedHostIds.includes(hostOf(front)) ? hostOf(front) : LOCAL_HOST_KEY
+      prepareLauncher(on)
+      setNewTab({ group, anchor, folder: folderOf(front, sessionsById, remoteSessionOf), host: on })
     },
-    [newTab, open, sessionsById, prepareLauncher]
+    [newTab, open, sessionsById, remoteSessionOf, connectedHostIds, prepareLauncher]
   )
   const closeNewTab = useCallback(() => {
     setNewTab(null)
@@ -2135,10 +2164,10 @@ export function App(): JSX.Element {
   // has cleared what the other host's showed (adjusted while rendering, so
   // the scope is never painted against the wrong host).
   if (pendingScope !== null) {
-    if (pendingScope.surface === 'config' && configHost === LOCAL_HOST_KEY) {
+    if (pendingScope.surface === 'config' && configHost === pendingScope.host) {
       setPendingScope(null)
       setConfigScope(pendingScope.path)
-    } else if (pendingScope.surface === 'files' && filesHost === LOCAL_HOST_KEY) {
+    } else if (pendingScope.surface === 'files' && filesHost === pendingScope.host) {
       setPendingScope(null)
       setFilesRoot(pendingScope.path)
     }
@@ -2148,12 +2177,12 @@ export function App(): JSX.Element {
   const filesWrap = settings?.filesWrap ?? DEFAULT_SETTINGS.filesWrap
   const setFilesWrap = useCallback((wrap: boolean) => writeSettings({ filesWrap: wrap }), [writeSettings])
 
-  /** The project page's Files link: the sidebar's Files view, on that project, on this PC. */
+  /** The project page's Files link: the sidebar's Files view, on that project, on the project's host. */
   const openFilesAt = useCallback(
-    (project: Project) => {
-      if (filesHost !== LOCAL_HOST_KEY) {
-        showHostOn('files', LOCAL_HOST_KEY)
-        setPendingScope({ surface: 'files', path: project.path })
+    (project: Project, host: string = LOCAL_HOST_KEY) => {
+      if (filesHost !== host) {
+        showHostOn('files', host)
+        setPendingScope({ surface: 'files', path: project.path, host })
       } else setFilesRoot(project.path)
       setSidebarView('files')
       setSidebarHidden(false)
@@ -2671,12 +2700,16 @@ export function App(): JSX.Element {
         ]
       }
       case 'terminal': {
-        const name = projectsByPath.get(ref.path)?.name ?? folderName(ref.path)
+        const on = hostOf(ref)
+        const name =
+          (on === LOCAL_HOST_KEY ? projectsByPath.get(ref.path) : remoteProjectOf(on, ref.path))?.name ??
+          folderName(ref.path)
         return [
           {
             id: paneId(ref),
             title: truncate(name, 30),
-            hint: `Terminal · ${ref.path}`,
+            ...(on === LOCAL_HOST_KEY ? {} : { host: hostName(on) }),
+            hint: on === LOCAL_HOST_KEY ? `Terminal · ${ref.path}` : `Terminal · ${hostName(on)} · ${ref.path}`,
             icon: <ConsoleIcon width={13} height={13} />
           }
         ]
@@ -2848,10 +2881,14 @@ export function App(): JSX.Element {
       )
     }
     if (ref?.kind === 'terminal') {
+      const on = hostOf(ref)
       return (
         <PaneCrumb
-          place={projectsByPath.get(ref.path)?.name ?? folderName(ref.path)}
-          hint={ref.path}
+          place={
+            (on === LOCAL_HOST_KEY ? projectsByPath.get(ref.path) : remoteProjectOf(on, ref.path))?.name ??
+            folderName(ref.path)
+          }
+          hint={on === LOCAL_HOST_KEY ? ref.path : `${hostName(on)} · ${ref.path}`}
         />
       )
     }
@@ -2898,29 +2935,10 @@ export function App(): JSX.Element {
    * while a request is pending: a second reply to an id main has resolved is a
    * reply for a decision that has been taken.
    */
-  const [confirmAsk, setConfirmAsk] = useState<{ host: string; request: SessionConfirmRequest } | null>(null)
-  const confirmRequest = confirmAsk?.request ?? null
   // Each host asks on its own bridge, and is answered on it: one on another
-  // computer names itself in what it asks.
-  useEffect(() => {
-    const offs: (() => void)[] = []
-    const stop = eachHostBridge((host, bridge) => {
-      offs.push(bridge.on('session:confirm', (request) => setConfirmAsk({ host, request })))
-    })
-    return () => {
-      stop()
-      for (const off of offs) off()
-    }
-  }, [])
-  const answerConfirm = useCallback(
-    (agreed: boolean, keep = false) => {
-      if (confirmAsk === null) return
-      const { host, request } = confirmAsk
-      bridgeFor(host).send('session:confirmed', keep ? { id: request.id, agreed, keep } : { id: request.id, agreed })
-      setConfirmAsk(null)
-    },
-    [confirmAsk]
-  )
+  // computer names itself in what it asks (`hostTabs.ts`).
+  const { ask: confirmAsk, answer: answerConfirm } = useSessionConfirm(HOST_BRIDGES)
+  const confirmRequest = confirmAsk?.request ?? null
 
   /**
    * Settings' Stop host: how many sessions it ends, asked here, then the stop.
@@ -2993,7 +3011,7 @@ export function App(): JSX.Element {
         template={setup.template}
         onTemplateChange={setup.chooseTemplate}
         templatesDir={setup.templatesDir}
-        onManageTemplates={templates.openManager}
+        {...(setup.dialogHost === LOCAL_HOST_KEY ? { onManageTemplates: templates.openManager } : {})}
         templateProblems={setup.templateProblems}
         preview={setup.templatePreview}
         onCreate={setup.createHarness}
@@ -3495,14 +3513,30 @@ export function App(): JSX.Element {
           const host = hostOf(ref)
           const project = remoteProjectOf(host, ref.path)
           return project ? (
+            <ProjectColumn
+              path={project.path}
+              host={host}
+              hostName={hostName(host)}
+              windowsBuild={null}
+              heightPct={savedShellHeight}
+              onHeightChange={setShellHeight}
+            >
             <ProjectPane
               key={paneId(ref)}
               project={project}
               host={hostName(host)}
               onLaunch={(p) => void launchOn(host, p)}
+              onOpenConfig={(p) => openConfigAt(p, host)}
+              onOpenFiles={(p) => openFilesAt(p, host)}
+              onSaveAsProfile={(p) => saveAsProfileOn(host, p)}
               launching={launchingPath === project.path}
-              launchError={remoteLaunchError}
+              launchError={
+                remoteLaunchError !== null && remoteLaunchError.host === host && remoteLaunchError.path === project.path
+                  ? remoteLaunchError.text
+                  : null
+              }
             />
+            </ProjectColumn>
           ) : null
         }
         const project = projectsByPath.get(ref.path)
@@ -3514,7 +3548,7 @@ export function App(): JSX.Element {
             {...sessionHistoryProps(historyState)}
             hostChoice={hostChoiceFor('history')}
             onResume={(session) => void resumeSession(session)}
-            onReveal={launcher.reveal}
+            onReveal={revealOn(historyHost)}
             compact={compact}
           />
         )
@@ -3597,7 +3631,7 @@ export function App(): JSX.Element {
                   onSave={configState.save}
                   onReload={configState.reload}
                   onRestore={configState.restore}
-                  onReveal={launcher.reveal}
+                  onReveal={revealOn(configHost)}
                   onOpenPath={configState.openPath}
                   onOpenExternal={openLink}
                   onDirtyChange={configState.setDirty}
@@ -3617,7 +3651,7 @@ export function App(): JSX.Element {
                 view={configState.effective}
                 loading={configState.effectiveLoading}
                 error={configState.effectiveError}
-                onReveal={launcher.reveal}
+                onReveal={revealOn(configHost)}
                 onOpenFile={configState.openPath}
               />
             ) : configState.view === 'mcp' ? (
@@ -3785,7 +3819,7 @@ export function App(): JSX.Element {
         reveal={reveal}
         onHighlight={helmHighlight}
         onCaretChange={(caret) => fileCarets.current.set(key, caret.line)}
-        onReveal={launcher.reveal}
+        onReveal={revealOn(on)}
         onOpenInEditor={
           // VS Code is this PC's: a file on another host has no editor here.
           files.editor === null || on !== LOCAL_HOST_KEY
@@ -3890,7 +3924,7 @@ export function App(): JSX.Element {
                               fileCarets.current.get(fileKey(groupFront.path)) ?? null
                             )
                     }
-                    onReveal={launcher.reveal}
+                    onReveal={revealOn(hostOf(groupFront))}
                     onCopyPath={copyPath}
                   />
                 )}
@@ -3934,7 +3968,8 @@ export function App(): JSX.Element {
                   id={ref.id}
                   path={ref.path}
                   active={isFront}
-                  windowsBuild={info?.windowsBuild ?? null}
+                  windowsBuild={hostOf(ref) === LOCAL_HOST_KEY ? (info?.windowsBuild ?? null) : null}
+                  {...(hostOf(ref) === LOCAL_HOST_KEY ? {} : { host: hostOf(ref), hostName: hostName(hostOf(ref)) })}
                 />
               </div>
             )
@@ -4334,14 +4369,16 @@ export function App(): JSX.Element {
           actions={
             files.root === null ? undefined : (
               <>
-                <SidebarAction
-                  label="Reveal project in Explorer"
-                  onClick={() => {
-                    if (files.root !== null) launcher.reveal(files.root)
-                  }}
-                >
-                  <FolderIcon width={13} height={13} />
-                </SidebarAction>
+                {files.host === LOCAL_HOST_KEY && (
+                  <SidebarAction
+                    label="Reveal project in Explorer"
+                    onClick={() => {
+                      if (files.root !== null) launcher.reveal(files.root)
+                    }}
+                  >
+                    <FolderIcon width={13} height={13} />
+                  </SidebarAction>
+                )}
                 {files.editor !== null && files.host === LOCAL_HOST_KEY && (
                   <SidebarAction
                     label="Open project in VS Code"
@@ -4383,7 +4420,7 @@ export function App(): JSX.Element {
               onOpen={(path, keep) => {
                 if (files.root !== null) openFileAt(files.root, path, keep, undefined, files.host)
               }}
-              onReveal={launcher.reveal}
+              onReveal={revealOn(files.host)}
               onCopyPath={copyPath}
               onOpenInEditor={
                 files.editor === null || files.host !== LOCAL_HOST_KEY ? null : (path) => openInEditor(path, null)
@@ -4468,6 +4505,7 @@ export function App(): JSX.Element {
                 key={host.id}
                 host={host.id}
                 name={host.name}
+                request={profileRequest?.host === host.id ? profileRequest : null}
                 connected={connectedHostIds.includes(host.id)}
                 projects={scanned?.projects ?? EMPTY_PROJECTS}
                 harnesses={scanned?.harnesses ?? []}
@@ -4528,6 +4566,17 @@ export function App(): JSX.Element {
    * launcher while it is open; this is for a launch with nowhere else to say it
    * - a new harness's first session, a profile from the sidebar.
    */
+  const treeLaunch: TreeLaunchFailure | null =
+    remoteLaunchError ??
+    (sessionState.launchError !== null && localLaunch !== null
+      ? { host: LOCAL_HOST_KEY, ...localLaunch, text: sessionState.launchError }
+      : null)
+  const frontGroup = groupById(open, open.focused)
+  const treeNotice = treeLaunchNotice(treeLaunch, frontGroup === undefined ? null : activeRef(frontGroup), hostName)
+  const dismissTreeLaunch = (): void => {
+    setRemoteLaunchError(null)
+    sessionState.dismissLaunchError()
+  }
   const toast: { text: string; failed: boolean; dismiss: () => void } | null =
     browsers.error !== null
       ? { text: browsers.error, failed: true, dismiss: browsers.dismissError }
@@ -4535,6 +4584,8 @@ export function App(): JSX.Element {
       ? { text: stopHostError, failed: true, dismiss: () => setStopHostError(null) }
       : !newSession.open && newTab === null && newSession.error !== null
         ? { text: newSession.error, failed: true, dismiss: newSession.dismissError }
+        : treeNotice !== null
+        ? { text: treeNotice, failed: true, dismiss: dismissTreeLaunch }
         : restoreState.report !== null
           ? { ...restoreState.report, dismiss: restoreState.dismissReport }
           : profileState.error !== null
@@ -4712,10 +4763,24 @@ export function App(): JSX.Element {
             // A new `+` is a new menu, from its first step.
             key={newTab.group}
             anchor={newTab.anchor}
-            projects={discovery?.projects ?? EMPTY_PROJECTS}
+            {...(launcherHosts.length > 1
+              ? {
+                  hosts: launcherHosts,
+                  host: newTab.host,
+                  onHostChange: (next: string) => {
+                    newSession.setHost(next)
+                    setNewTab((current) => (current === null ? current : { ...current, host: next, folder: null }))
+                  }
+                }
+              : {})}
+            projects={
+              newTab.host === LOCAL_HOST_KEY
+                ? (discovery?.projects ?? EMPTY_PROJECTS)
+                : (hostWork.byHost.get(newTab.host)?.discovery?.projects ?? EMPTY_PROJECTS)
+            }
             recency={newSession.recency}
-            live={machineSessions.sessions}
-            profiles={profileState.profiles}
+            live={newTab.host === LOCAL_HOST_KEY ? machineSessions.sessions : EMPTY_LIVE}
+            profiles={newTab.host === LOCAL_HOST_KEY ? profileState.profiles : launcherProfiles.profiles}
             home={info?.home ?? null}
             initialPath={newTab.folder}
             resumable={newSession.resumable}
@@ -4724,10 +4789,10 @@ export function App(): JSX.Element {
             error={newSession.error}
             now={now}
             onStart={(choice) => void startChosen(choice, newTab.group)}
-            onProfile={(profile) => void launchProfile(profile, newTab.group)}
+            onProfile={(profile) => void launchProfileOn(newTab.host, profile, newTab.group)}
             onBrowser={() => openBrowser({ project: null, into: newTab.group, focusAddress: true })}
             onTerminal={(project) => {
-              openTerminal(project.path, false, newTab.group)
+              openTerminal(project.path, false, newTab.group, newTab.host)
               setNewTab(null)
             }}
             onDismiss={closeNewTab}

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { ShellLostBar } from '@helm/ui'
 import { estimateGrid } from './terminals'
 import { getShell, mountShell, onShellsChange, reopenShell, shellLost, terminalShellKey } from './pterms'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import { LOCAL_HOST_NAME } from './host/sessions'
 
 export interface TerminalTabPaneProps {
@@ -13,6 +14,10 @@ export interface TerminalTabPaneProps {
   /** Whether this is the tab the user is looking at. */
   active: boolean
   windowsBuild: number | null
+  /** The host the folder is on, by id; this PC's when absent. */
+  host?: string | undefined
+  /** That host's name, for the bar a lost shell shows; this PC's host's when absent. */
+  hostName?: string | undefined
 }
 
 /**
@@ -28,10 +33,17 @@ export interface TerminalTabPaneProps {
  * Which executable runs is the `terminalShell` setting. A shell that went with
  * the host it ran in keeps its screen, dimmed, under a bar offering a new one.
  */
-export function TerminalTabPane({ id, path, active, windowsBuild }: TerminalTabPaneProps): JSX.Element {
+export function TerminalTabPane({
+  id,
+  path,
+  active,
+  windowsBuild,
+  host = LOCAL_HOST_KEY,
+  hostName = LOCAL_HOST_NAME
+}: TerminalTabPaneProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
   const key = terminalShellKey(id)
-  const lost = useSyncExternalStore(onShellsChange, () => shellLost(key))
+  const lost = useSyncExternalStore(onShellsChange, () => shellLost(key, host))
 
   useEffect(() => {
     const box = boxRef.current
@@ -41,31 +53,32 @@ export function TerminalTabPane({ id, path, active, windowsBuild }: TerminalTabP
       windowsBuild,
       cols: grid.cols,
       rows: grid.rows,
-      key: terminalShellKey(id)
+      key: terminalShellKey(id),
+      host
     })
-  }, [id, path, windowsBuild])
+  }, [id, path, windowsBuild, host])
 
   // Hidden, its box was 0x0 and every resize in the meantime was skipped.
   useEffect(() => {
     if (!active) return
-    const host = getShell(terminalShellKey(id))
-    if (!host) return
-    host.refit()
-    host.term.focus()
-  }, [active, id])
+    const shell = getShell(terminalShellKey(id), host)
+    if (!shell) return
+    shell.refit()
+    shell.term.focus()
+  }, [active, id, host])
 
   const newShell = useCallback(() => {
     const box = boxRef.current
     if (!box) return
     const grid = estimateGrid(box)
-    void reopenShell(path, box, { windowsBuild, cols: grid.cols, rows: grid.rows, key }).then((opened) => {
+    void reopenShell(path, box, { windowsBuild, cols: grid.cols, rows: grid.rows, key, host }).then((opened) => {
       if (opened !== null && active) opened.host.term.focus()
     })
-  }, [path, windowsBuild, key, active])
+  }, [path, windowsBuild, key, active, host])
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-terminal" data-terminal-tab={id}>
-      {lost && <ShellLostBar hostName={LOCAL_HOST_NAME} onNewShell={newShell} />}
+      {lost && <ShellLostBar hostName={hostName} onNewShell={newShell} />}
       {/* A wrapper rather than padding on the terminal's container, for the
           reason `TerminalPane` gives: xterm measures that container's box. */}
       <div

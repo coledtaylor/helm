@@ -26,7 +26,8 @@ export interface EffectiveViewPaneProps {
   view: EffectiveView | null
   loading: boolean
   error: string | null
-  onReveal: (path: string) => void
+  /** Shows a path in this PC's file manager; absent for a host on another computer, whose paths are not here. */
+  onReveal?: ((path: string) => void) | undefined
   onOpenFile: (path: string) => void
 }
 
@@ -166,13 +167,17 @@ export function EffectiveViewPane({
 
             <p className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[11px] text-fg-subtle">
               <span>cwd</span>
-              <button
-                type="button"
-                onClick={() => onReveal(view.cwd)}
-                className="max-w-full truncate font-mono text-fg-muted transition-colors hover:text-accent-text"
-              >
-                {view.cwd}
-              </button>
+              {onReveal === undefined ? (
+                <span className="max-w-full truncate font-mono text-fg-muted">{view.cwd}</span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onReveal(view.cwd)}
+                  className="max-w-full truncate font-mono text-fg-muted transition-colors hover:text-accent-text"
+                >
+                  {view.cwd}
+                </button>
+              )}
             </p>
 
             {view.warnings.length > 0 && (
@@ -209,13 +214,19 @@ export function EffectiveViewPane({
                       <span className="shrink-0 rounded-sm bg-accent-soft px-1.5 py-px font-mono text-[11px] text-fg">
                         {overlay.name}:
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => onReveal(overlay.projectPath)}
-                        className="min-w-0 flex-1 truncate text-left font-mono text-[10px] text-fg-subtle transition-colors hover:text-accent-text"
-                      >
-                        {overlay.projectPath}
-                      </button>
+                      {onReveal === undefined ? (
+                        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-fg-subtle">
+                          {overlay.projectPath}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onReveal(overlay.projectPath)}
+                          className="min-w-0 flex-1 truncate text-left font-mono text-[10px] text-fg-subtle transition-colors hover:text-accent-text"
+                        >
+                          {overlay.projectPath}
+                        </button>
+                      )}
                       {overlay.exists ? (
                         <span className="shrink-0 text-[10px] tabular-nums text-fg-muted">
                           <Plural n={overlay.skills} one="skill" /> ·{' '}

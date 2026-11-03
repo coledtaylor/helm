@@ -47,8 +47,20 @@ export type PaneRef =
   | WorkspaceTab
   | { kind: 'browser' }
   | SessionRef
-  | { kind: 'terminal'; id: number; path: string }
+  | TerminalRef
   | { kind: 'restore' }
+
+/**
+ * A terminal tab: a plain shell in `path`, on the host by its id in the
+ * `hosts` setting, absent for this PC's. Never written down: its shell does
+ * not outlive the window's run.
+ */
+export interface TerminalRef {
+  kind: 'terminal'
+  id: number
+  path: string
+  host?: string
+}
 
 /**
  * A session's tab: its row id on its host, and the host by its id in the

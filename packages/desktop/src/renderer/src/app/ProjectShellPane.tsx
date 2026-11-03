@@ -4,6 +4,7 @@ import type { DetectedShell } from '@helm/core'
 import { CaretIcon, cn, ShellLostBar, WarnIcon } from '@helm/ui'
 import { estimateGrid } from './terminals'
 import { getShell, mountShell, onShellsChange, reopenShell, shellLost, type MountedShell } from './pterms'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import { LOCAL_HOST_NAME } from './host/sessions'
 
 /**
@@ -42,6 +43,10 @@ export interface ProjectShellPaneProps {
    * change to the height arrives as `heightPct` and is rendered normally.
    */
   ref?: Ref<HTMLDivElement>
+  /** The host the folder is on, by id; this PC's when absent. */
+  host?: string | undefined
+  /** That host's name, for the bar a lost shell shows; this PC's host's when absent. */
+  hostName?: string | undefined
 }
 
 /**
@@ -62,7 +67,9 @@ export function ProjectShellPane({
   visible,
   shells,
   heightPct,
-  ref
+  ref,
+  host = LOCAL_HOST_KEY,
+  hostName = LOCAL_HOST_NAME
 }: ProjectShellPaneProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
   const [running, setRunning] = useState<MountedShell | null>(null)
@@ -70,20 +77,20 @@ export function ProjectShellPane({
   const [override, setOverride] = useState('')
   const [swapping, setSwapping] = useState(false)
   /** Whether the shell went with the host it ran in: its screen stays, dimmed, until a new one opens. */
-  const lost = useSyncExternalStore(onShellsChange, () => shellLost(path))
+  const lost = useSyncExternalStore(onShellsChange, () => shellLost(path, host))
 
   useEffect(() => {
     const box = boxRef.current
     if (!box) return
     setOverride('')
     const grid = estimateGrid(box)
-    void mountShell(path, box, { windowsBuild, cols: grid.cols, rows: grid.rows }).then(setRunning)
-  }, [path, windowsBuild])
+    void mountShell(path, box, { windowsBuild, cols: grid.cols, rows: grid.rows, host }).then(setRunning)
+  }, [path, windowsBuild, host])
 
   useEffect(() => {
     if (!visible) return
-    getShell(path)?.refit()
-  }, [visible, path])
+    getShell(path, host)?.refit()
+  }, [visible, path, host])
 
   /**
    * A height that arrived as a render re-measures the terminal.
@@ -107,8 +114,8 @@ export function ProjectShellPane({
    * row, the handle's double-click, and the height a restart comes back with.
    */
   useEffect(() => {
-    getShell(path)?.refit()
-  }, [heightPct, path])
+    getShell(path, host)?.refit()
+  }, [heightPct, path, host])
 
   /**
    * Switching shells is a kill and a respawn - a running shell cannot become a
@@ -127,12 +134,13 @@ export function ProjectShellPane({
         windowsBuild,
         cols: grid.cols,
         rows: grid.rows,
+        host,
         ...(shell === '' ? {} : { shell })
       })
         .then(setRunning)
         .finally(() => setSwapping(false))
     },
-    [path, windowsBuild]
+    [path, windowsBuild, host]
   )
 
   const current = running?.shell ?? null
@@ -234,7 +242,7 @@ export function ProjectShellPane({
         </span>
       </div>
       {/* A new shell is the same shell this pane was told to run. */}
-      {lost && <ShellLostBar hostName={LOCAL_HOST_NAME} onNewShell={() => swap(override)} />}
+      {lost && <ShellLostBar hostName={hostName} onNewShell={() => swap(override)} />}
       <div
         data-terminal-lost={lost ? true : undefined}
         className={lost ? 'min-h-0 flex-1 p-2.5 opacity-60' : 'min-h-0 flex-1 p-2.5'}

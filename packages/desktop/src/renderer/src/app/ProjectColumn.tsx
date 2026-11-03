@@ -1,22 +1,28 @@
 import type { JSX, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { useCallback, useRef } from 'react'
 import type { DetectedShell } from '@helm/core'
-import { DEFAULT_SETTINGS, PROJECT_SHELL_HEIGHT_PCT } from '@helm/core/types'
+import { DEFAULT_SETTINGS, LOCAL_HOST_KEY, PROJECT_SHELL_HEIGHT_PCT } from '@helm/core/types'
 import { cn } from '@helm/ui'
 import { getShell } from './pterms'
+import { useShells } from './useShells'
 import { PROJECT_SHELL_MIN_PX, ProjectShellPane } from './ProjectShellPane'
 
 export interface ProjectColumnProps {
   /** The project directory - the shell's working directory and registry key. */
   path: string
   windowsBuild: number | null
-  shells: DetectedShell[]
+  /** This PC's shells, for a project on this PC; a host on another computer's are asked of it here. */
+  shells?: DetectedShell[] | undefined
   /** `projectShellHeightPct`, as last written. */
   heightPct: number
   /** One write at the end of a drag, or a reset. */
   onHeightChange: (pct: number) => void
   /** The project's page, above the shell. */
   children: ReactNode
+  /** The host the project is on, by id, whose shell this is; this PC's when absent. */
+  host?: string | undefined
+  /** That host's name, for the bar a lost shell shows. */
+  hostName?: string | undefined
 }
 
 /**
@@ -60,9 +66,13 @@ export function ProjectColumn({
   shells,
   heightPct,
   onHeightChange,
-  children
+  children,
+  host = LOCAL_HOST_KEY,
+  hostName
 }: ProjectColumnProps): JSX.Element {
   const columnRef = useRef<HTMLDivElement>(null)
+  // A host on another computer's own shells: this PC's are the caller's.
+  const hostShells = useShells(host === LOCAL_HOST_KEY ? null : host)
   const shellRef = useRef<HTMLDivElement>(null)
   /**
    * Where inside the handle it was grabbed, and what the drag has reached. The
@@ -101,9 +111,9 @@ export function ProjectColumn({
       // The pane moved its own box, so the code that moved it is the code that
       // knows the grid is stale - the same contract `park` keeps in pterms.ts.
       // `refit` tells the pty only when the answer actually changed.
-      getShell(path)?.refit()
+      getShell(path, host)?.refit()
     },
-    [path]
+    [path, host]
   )
 
   const end = useCallback(
@@ -153,17 +163,19 @@ export function ProjectColumn({
             border rather than as something to hold. */}
         <span className="h-[min(3px,var(--helm-gap))] w-10 rounded-full bg-border-strong transition-colors group-hover:bg-accent" />
       </div>
-      {/* Keyed by path: this is one project's shell, and handing the same
+      {/* Keyed by host and path: this is one project's shell, and handing the same
           component a different project re-mounted someone else's terminal
           into a box that still held the last one. */}
       <ProjectShellPane
-        key={path}
+        key={JSON.stringify([host, path])}
         ref={shellRef}
         path={path}
         windowsBuild={windowsBuild}
         visible
-        shells={shells}
+        shells={host === LOCAL_HOST_KEY ? (shells ?? hostShells) : hostShells}
         heightPct={heightPct}
+        host={host}
+        hostName={hostName}
       />
     </div>
   )

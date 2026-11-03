@@ -7,9 +7,10 @@ import type { PopupAnchor } from '../lib/popup'
 import { PROJECT_KIND_ICON } from '../lib/projectIcons'
 import { ConsoleIcon, GlobeIcon, LayersIcon, TerminalIcon } from './icons'
 import { Menu, type MenuEntry } from './Menu'
+import type { LauncherHost } from './NewSessionDialog'
 import { NewSessionPopover, type NewSessionPopoverProps } from './NewSessionPopover'
 
-export interface NewTabMenuProps extends Omit<NewSessionPopoverProps, 'at' | 'anchorRef'> {
+export interface NewTabMenuProps extends Omit<NewSessionPopoverProps, 'at' | 'anchorRef' | 'hostName'> {
   /** The `+` that was pressed. Everything here hangs from it. */
   anchor: HTMLElement
   /** One click on a profile starts it, in its own folder. */
@@ -18,7 +19,21 @@ export interface NewTabMenuProps extends Omit<NewSessionPopoverProps, 'at' | 'an
   onBrowser: () => void
   /** A plain terminal in a folder - a shell, no `claude`. */
   onTerminal: (project: Project) => void
+  /**
+   * The hosts a session, a profile or a terminal can open on, this PC first,
+   * while more than one is connected. The menu names the one it opens on
+   * (`host`) and offers the others; the folders and profiles it is given are
+   * that host's. Absent, it names no host: there is only this PC.
+   */
+  hosts?: readonly LauncherHost[] | undefined
+  /** The id of the host it opens on, one of `hosts`. */
+  host?: string | undefined
+  /** Another host was chosen: the caller gives that host's folders and profiles instead. */
+  onHostChange?: ((host: string) => void) | undefined
 }
+
+/** A host entry's id in the first step's list; no kind's id starts so. */
+const HOST_ENTRY = 'host:'
 
 type Stage = 'kind' | 'session' | 'profile' | 'terminal'
 
@@ -45,6 +60,9 @@ export function NewTabMenu({
   onBrowser,
   onTerminal,
   onDismiss,
+  hosts,
+  host,
+  onHostChange,
   ...session
 }: NewTabMenuProps): JSX.Element {
   const [stage, setStage] = useState<Stage>('kind')
@@ -61,9 +79,19 @@ export function NewTabMenu({
     return first === undefined ? ranked : [first, ...ranked.filter((project) => project !== first)]
   }, [projects, recency, initialPath])
 
+  const choosing = hosts !== undefined && hosts.length > 1
+  const on = choosing ? hosts.find((each) => each.id === host) : undefined
+
   if (stage === 'session') {
     return (
-      <NewSessionPopover {...session} profiles={profiles} at={at} anchorRef={anchorRef} onDismiss={onDismiss} />
+      <NewSessionPopover
+        {...session}
+        profiles={profiles}
+        at={at}
+        anchorRef={anchorRef}
+        onDismiss={onDismiss}
+        hostName={on?.remote === true ? on.name : undefined}
+      />
     )
   }
 
@@ -142,18 +170,33 @@ export function NewTabMenu({
     },
     { kind: 'item', id: 'browser', label: 'Browser tab', icon: <GlobeIcon width={13} height={13} /> }
   ]
+  // Which host a session, a profile or a terminal opens on, chosen here first
+  // while there is more than one; the browser is this PC's whichever is ticked.
+  const entries: MenuEntry[] = choosing
+    ? [
+        { kind: 'heading', id: 'hosts', label: 'Open on' },
+        ...hosts.map(
+          (each): MenuEntry => ({ kind: 'item', id: `${HOST_ENTRY}${each.id}`, label: each.name, checked: each.id === host })
+        ),
+        { kind: 'separator', id: 'kinds' },
+        ...kinds
+      ]
+    : kinds
 
   return (
     <Menu
       label="New tab"
       at={at}
       anchorRef={anchorRef}
-      entries={kinds}
+      entries={entries}
       // Choosing a kind moves on to its step rather than closing: the menu
       // closes itself only for the one that has no step.
       stayOpen
       onSelect={(id) => {
-        if (id === 'browser') {
+        if (id.startsWith(HOST_ENTRY)) {
+          const chosen = id.slice(HOST_ENTRY.length)
+          if (chosen !== host) onHostChange?.(chosen)
+        } else if (id === 'browser') {
           onBrowser()
           onDismiss()
         } else {

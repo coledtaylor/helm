@@ -32,9 +32,10 @@ export interface NewSessionState {
   setHost: (host: string) => void
   /**
    * Reads what a launcher shows afresh without opening this one: the new-tab
-   * popover is a launcher too, and reads the same index the same way.
+   * popover is a launcher too, and reads the same index the same way. Given a
+   * host, it reads that host's and launches there from then on.
    */
-  prepare: () => void
+  prepare: (host?: string) => void
   hide: () => void
   /** When each folder was last worked in, by lower-cased path. */
   recency: ReadonlyMap<string, number>
@@ -82,7 +83,11 @@ export function useNewSession(): NewSessionState {
   const asked = useRef(new Set<string>())
   const opening = useRef(0)
 
-  const prepare = useCallback(() => {
+  const prepare = useCallback((on?: string) => {
+    if (on !== undefined) {
+      hostRef.current = on
+      setHostState(on)
+    }
     opening.current += 1
     const current = opening.current
     asked.current = new Set()

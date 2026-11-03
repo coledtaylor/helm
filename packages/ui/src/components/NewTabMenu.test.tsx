@@ -287,3 +287,39 @@ describe('NewTabMenu: session', () => {
     expect(props.onDismiss).toHaveBeenCalledOnce()
   })
 })
+
+describe('NewTabMenu: more than one host', () => {
+  const HOSTS = [
+    { id: 'local', name: 'This PC', remote: false },
+    { id: 'h-build', name: 'build-box', remote: true }
+  ]
+
+  it('names the host it opens on and switches to another, staying open', async () => {
+    const onHostChange = vi.fn()
+    const { props } = renderMenu({ hosts: HOSTS, host: 'local', onHostChange })
+    const menu = screen.getByRole('menu', { name: 'New tab' })
+    const choices = within(menu).getAllByRole('menuitemcheckbox')
+    expect(choices.map((item) => [item.textContent, item.getAttribute('aria-checked')])).toEqual([
+      ['This PC', 'true'],
+      ['build-box', 'false']
+    ])
+    await userEvent.click(within(menu).getByText('build-box'))
+    expect(onHostChange).toHaveBeenCalledWith('h-build')
+    expect(props.onDismiss).not.toHaveBeenCalled()
+    expect(screen.getByRole('menu', { name: 'New tab' })).toBeTruthy()
+  })
+
+  it('on build-box, its session popover says so and starts in the folders it is given', async () => {
+    const box = project('app', '/srv/app')
+    const { props } = renderMenu({ hosts: HOSTS, host: 'h-build', projects: [box], initialPath: null, recency: new Map() })
+    const popover = await chooseSession()
+    expect(within(popover).getByText('build-box').closest('[data-popover-host]')?.textContent).toBe('on build-box')
+    await userEvent.click(within(popover).getByRole('button', { name: 'Start session' }))
+    expect(props.onStart).toHaveBeenCalledWith(expect.objectContaining({ project: box }))
+  })
+
+  it('names no host with only this PC', () => {
+    renderMenu({ hosts: [HOSTS[0]!], host: 'local' })
+    expect(screen.queryByRole('menuitemcheckbox')).toBeNull()
+  })
+})

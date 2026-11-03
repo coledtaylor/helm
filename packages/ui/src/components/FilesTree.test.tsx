@@ -153,6 +153,14 @@ describe('FilesTree', () => {
     expect(within(row('node_modules')).getByRole('button', { name: /node_modules/ }).hasAttribute('aria-expanded')).toBe(false)
   })
 
+  it('offers no Explorer on any row of a host on another computer, and opens nothing for a folder it will not walk', () => {
+    const props = renderTree({ onReveal: undefined, onOpenInEditor: null })
+    expect(within(row('src/a.ts')).queryByRole('button', { name: 'Reveal in Explorer' })).toBeNull()
+    expect(within(row('src/a.ts')).getByRole('button', { name: 'Copy path' })).toBeTruthy()
+    fireEvent.click(within(row('node_modules')).getByRole('button', { name: /node_modules/ }))
+    expect(props.onOpen).not.toHaveBeenCalled()
+  })
+
   it('marks the file in front and offers VS Code, Explorer and the path on every row', async () => {
     const props = renderTree()
     expect(within(row('src/b.ts')).getByRole('button', { name: /b\.ts/ }).getAttribute('aria-current')).toBe('true')

@@ -109,6 +109,12 @@ describe('FileCrumb', () => {
 })
 
 describe('FileActions', () => {
+  it('offers no Explorer for a file on a host on another computer, whose folders are not on this PC', () => {
+    render(<FileActions path="/srv/app/a.ts" onOpenInEditor={null} onCopyPath={() => Promise.resolve(true)} />)
+    expect(screen.queryByRole('button', { name: 'Reveal in Explorer' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy path' })).toBeTruthy()
+  })
+
   it('hands the file to VS Code, Explorer and the clipboard', async () => {
     const onOpenInEditor = vi.fn()
     const onReveal = vi.fn()

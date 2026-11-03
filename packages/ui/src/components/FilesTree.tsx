@@ -42,7 +42,8 @@ export interface FilesTreeProps {
   onToggleDir: (relPath: string) => void
   /** A file to open: `keep` false for a single click, which opens a preview. */
   onOpen: (path: string, keep: boolean) => void
-  onReveal: (path: string) => void
+  /** Shows a path in this PC's file manager; absent for a host on another computer, whose paths are not here. */
+  onReveal?: ((path: string) => void) | undefined
   /** Resolves false when the clipboard refused it. */
   onCopyPath: (path: string) => Promise<boolean>
   /** Null where VS Code is not installed: the button is then not offered. */
@@ -299,8 +300,9 @@ function Row({
 
   const activate = (keep: boolean): void => {
     if (walkable) return onToggleDir(entry.relPath)
-    // A folder Helm will not walk has nothing to open onto but Explorer.
-    if (entry.directory) return onReveal(entry.path)
+    // A folder Helm will not walk has nothing to open onto but Explorer, which
+    // has nothing to show of a folder on another computer.
+    if (entry.directory) return onReveal?.(entry.path)
     onOpen(entry.path, keep)
   }
 
@@ -405,7 +407,7 @@ function RowActions({
 }: {
   path: string
   directory: boolean
-  onReveal: (path: string) => void
+  onReveal: ((path: string) => void) | undefined
   onCopyPath: (path: string) => Promise<boolean>
   onOpenInEditor: ((path: string) => void) | null
 }): JSX.Element {
@@ -426,9 +428,11 @@ function RowActions({
           <CodeIcon width={12} height={12} />
         </RowAction>
       )}
-      <RowAction label="Reveal in Explorer" onClick={() => onReveal(path)}>
-        <FolderIcon width={12} height={12} />
-      </RowAction>
+      {onReveal !== undefined && (
+        <RowAction label="Reveal in Explorer" onClick={() => onReveal(path)}>
+          <FolderIcon width={12} height={12} />
+        </RowAction>
+      )}
       <RowAction label={copyPathLabel(copy)} onClick={pressCopy}>
         {copy === 'copied' ? (
           <CheckIcon width={12} height={12} className="text-success" />

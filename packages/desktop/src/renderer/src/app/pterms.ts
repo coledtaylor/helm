@@ -5,7 +5,8 @@ import {
   type TerminalHost,
   type TerminalReport
 } from '../terminal'
-import { helm } from './bridge'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
+import { bridgeFor } from './bridge'
 import { onTerminalPrefs, terminalPrefs } from './termprefs'
 
 /**
@@ -18,6 +19,11 @@ import { onTerminalPrefs, terminalPrefs } from './termprefs'
  * pane mounts and killed when the project's tab closes. A terminal tab's shell
  * is keyed by the tab instead (`terminalShellKey`) and opened `separate`, so
  * two of them on one folder are two shells.
+ *
+ * Each shell runs on a host: this PC's by default, or a host on another
+ * computer for its folders there, opened, typed into and closed through that
+ * host's own bridge (`bridgeFor`). Two hosts' shells never share a registry
+ * key or a stream: a pty id is each host's own.
  */
 
 /** The registry key of a terminal tab's shell. No folder path looks like it. */
@@ -25,6 +31,8 @@ export const terminalShellKey = (id: number): string => `terminal:${String(id)}`
 
 interface ShellPane {
   id: number
+  /** The host it runs on: `LOCAL_HOST_KEY`, or a host on another computer by id. */
+  on: string
   /** The executable actually running, as the main process reported it. */
   shell: string
   /** What was asked for, when that is not what runs. Null when they agree. */
@@ -40,6 +48,16 @@ interface ShellPane {
 }
 
 const panes = new Map<string, ShellPane>()
+
+/**
+ * A shell's place in the registry. This PC's paths fold case, as Windows
+ * does; a host on another computer's sit behind its id, case kept.
+ */
+const registryKey = (key: string, host: string): string =>
+  host === LOCAL_HOST_KEY ? key.toLowerCase() : `host:${encodeURIComponent(host)}/${key}`
+
+/** One pty's stream: its id is its host's own. */
+const streamKey = (host: string, id: number): string => `${host}\u0000${String(id)}`
 
 /** Told whenever a shell is lost, or one is opened or closed in its place. */
 const shellListeners = new Set<() => void>()
@@ -60,24 +78,32 @@ export function onShellsChange(listener: () => void): () => void {
  * stays, with input off, until a new shell is opened in its place
  * (`reopenShell`) or its tab closes.
  */
-export function shellLost(key: string): boolean {
-  return panes.get(key.toLowerCase())?.lost === true
+export function shellLost(key: string, host: string = LOCAL_HOST_KEY): boolean {
+  return panes.get(registryKey(key, host))?.lost === true
 }
 
 /** Output that arrived between `pterm:open` resolving and the sink attaching. */
-const pending = new Map<number, string[]>()
-const sinks = new Map<number, (data: string) => void>()
+const pending = new Map<string, string[]>()
+const sinks = new Map<string, (data: string) => void>()
 
-helm.on('pterm:data', ({ id, data }) => {
-  const sink = sinks.get(id)
-  if (sink) {
-    sink(data)
-    return
-  }
-  const buffered = pending.get(id)
-  if (buffered) buffered.push(data)
-  else pending.set(id, [data])
-})
+/** The hosts whose shells' output is heard: this PC's from the start, any other from its first shell. */
+const heard = new Set<string>()
+function hear(host: string): void {
+  if (heard.has(host)) return
+  heard.add(host)
+  bridgeFor(host).on('pterm:data', ({ id, data }) => {
+    const at = streamKey(host, id)
+    const sink = sinks.get(at)
+    if (sink) {
+      sink(data)
+      return
+    }
+    const buffered = pending.get(at)
+    if (buffered) buffered.push(data)
+    else pending.set(at, [data])
+  })
+}
+hear(LOCAL_HOST_KEY)
 
 /** Live font and cursor changes reach an open shell exactly as they reach a
  * session pane; see the same subscription in terminals.ts. */
@@ -100,6 +126,8 @@ export interface MountShellOptions {
    * tab's (`terminalShellKey`). Absent means the path, and the project shell.
    */
   key?: string
+  /** The host the folder is on; this PC's when absent. */
+  host?: string
 }
 
 /** What a mounted shell turned out to be, for the pane header to caption. */
@@ -151,11 +179,14 @@ export async function mountShell(
   container: HTMLElement,
   opts: MountShellOptions
 ): Promise<MountedShell | null> {
-  const key = (opts.key ?? path).toLowerCase()
+  const on = opts.host ?? LOCAL_HOST_KEY
+  const bridge = bridgeFor(on)
+  const key = registryKey(opts.key ?? path, on)
   const existing = panes.get(key)
   if (existing) return park(container, existing)
 
-  const opened = await helm.invoke('pterm:open', {
+  hear(on)
+  const opened = await bridge.invoke('pterm:open', {
     path,
     cols: opts.cols,
     rows: opts.rows,
@@ -177,6 +208,7 @@ export async function mountShell(
   container.replaceChildren(element)
 
   const id = opened.id
+  const stream = streamKey(on, id)
   const host = createTerminal(
     element,
     {
@@ -186,11 +218,12 @@ export async function mountShell(
       ...(opts.windowsBuild !== null ? { windowsBuild: opts.windowsBuild } : {})
     },
     {
-      onInput: (data) => helm.send('pterm:input', { id, data }),
-      onResize: (cols, rows) => helm.send('pterm:resize', { id, cols, rows }),
-      readClipboard: () => helm.invoke('clipboard:read'),
-      writeClipboard: async (text) => (await helm.invoke('clipboard:write', text)).outcome,
-      openLink: (url) => void helm.invoke('shell:openExternal', { url })
+      onInput: (data) => bridge.send('pterm:input', { id, data }),
+      onResize: (cols, rows) => bridge.send('pterm:resize', { id, cols, rows }),
+      // The clipboard and the browser are this PC's whichever host the shell runs on.
+      readClipboard: () => bridgeFor(LOCAL_HOST_KEY).invoke('clipboard:read'),
+      writeClipboard: async (text) => (await bridgeFor(LOCAL_HOST_KEY).invoke('clipboard:write', text)).outcome,
+      openLink: (url) => void bridgeFor(LOCAL_HOST_KEY).invoke('shell:openExternal', { url })
     },
     terminalPrefs()
   )
@@ -198,14 +231,14 @@ export async function mountShell(
   const sink = (data: string): void => {
     host.term.write(data)
   }
-  sinks.set(id, sink)
-  const buffered = pending.get(id)
+  sinks.set(stream, sink)
+  const buffered = pending.get(stream)
   if (buffered) {
-    pending.delete(id)
+    pending.delete(stream)
     for (const chunk of buffered) sink(chunk)
   }
 
-  const detachExit = helm.on('pterm:exit', (payload) => {
+  const detachExit = bridge.on('pterm:exit', (payload) => {
     if (payload.id !== id) return
     host.term.options.cursorBlink = false
     host.term.options.disableStdin = true
@@ -218,14 +251,15 @@ export async function mountShell(
 
   const pane: ShellPane = {
     id,
+    on,
     shell: opened.shell,
     requested: opened.requested,
     problem: opened.problem,
     host,
     element,
     detachData: () => {
-      sinks.delete(id)
-      pending.delete(id)
+      sinks.delete(stream)
+      pending.delete(stream)
     },
     detachExit,
     lost: false
@@ -235,22 +269,23 @@ export async function mountShell(
   return described(pane)
 }
 
-/** A project shell by its path, or a terminal tab's by `terminalShellKey`. */
-export function getShell(key: string): TerminalHost | undefined {
-  return panes.get(key.toLowerCase())?.host
+/** A project shell by its path, or a terminal tab's by `terminalShellKey`, on `host` (this PC's by default). */
+export function getShell(key: string, host: string = LOCAL_HOST_KEY): TerminalHost | undefined {
+  return panes.get(registryKey(key, host))?.host
 }
 
-/** Kills the shell for good. Called when its project's tab, or its own, closes. */
-export function disposeShell(key: string): Promise<void> {
-  const pane = panes.get(key.toLowerCase())
+/** Kills the shell for good, on the host it runs on. Called when its project's tab, or its own, closes. */
+export function disposeShell(key: string, host: string = LOCAL_HOST_KEY): Promise<void> {
+  const at = registryKey(key, host)
+  const pane = panes.get(at)
   if (!pane) return Promise.resolve()
-  panes.delete(key.toLowerCase())
+  panes.delete(at)
   pane.detachData()
   pane.detachExit()
   pane.host.dispose()
   pane.element.remove()
   shellsChanged()
-  return helm.invoke('pterm:close', { id: pane.id })
+  return bridgeFor(pane.on).invoke('pterm:close', { id: pane.id })
 }
 
 /**
@@ -266,7 +301,7 @@ export async function reopenShell(
   container: HTMLElement,
   opts: MountShellOptions
 ): Promise<MountedShell | null> {
-  await disposeShell(opts.key ?? path)
+  await disposeShell(opts.key ?? path, opts.host)
   return mountShell(path, container, opts)
 }
 

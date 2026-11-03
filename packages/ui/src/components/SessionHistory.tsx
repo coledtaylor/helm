@@ -85,7 +85,8 @@ export interface SessionHistoryProps {
   resumeError?: string | null | undefined
   onDismissResumeError: () => void
 
-  onReveal: (path: string) => void
+  /** Shows a path in this PC's file manager; absent for a host on another computer, whose paths are not here. */
+  onReveal?: ((path: string) => void) | undefined
 
   /**
    * Docked beside a session split, where the list and the detail cannot both be
@@ -782,7 +783,7 @@ function Detail({
   resuming: boolean
   resumeError: string | null | undefined
   onDismissResumeError: () => void
-  onReveal: (path: string) => void
+  onReveal: ((path: string) => void) | undefined
   onProjectChange: (value: string | null) => void
   totalSessions: number
   totalResumable: number
@@ -829,7 +830,7 @@ function Detail({
           >
             {session.project}
           </button>
-          {session.projectExists && (
+          {session.projectExists && onReveal !== undefined && (
             <button
               type="button"
               onClick={() => onReveal(session.project)}

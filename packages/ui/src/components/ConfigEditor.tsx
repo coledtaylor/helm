@@ -66,7 +66,8 @@ export interface ConfigEditorProps {
   onSave: (content: string) => void
   onReload: () => void
   onRestore: (snapshot: ConfigSnapshotMeta) => void
-  onReveal: (path: string) => void
+  /** Shows a path in this PC's file manager; absent for a host on another computer, whose paths are not here. */
+  onReveal?: ((path: string) => void) | undefined
   /** Opens another file in this console - a bundled resource, a settings file. */
   onOpenPath: (path: string) => void
   /** Hands a link in a rendered document to the OS browser. */
@@ -253,14 +254,20 @@ export function ConfigEditor({
             <h2 className="truncate text-[14px] leading-tight font-medium tracking-tight text-fg">
               {file.name}
             </h2>
-            <button
-              type="button"
-              onClick={() => onReveal(file.path)}
-              title="Show in Explorer"
-              className="mt-0.5 block max-w-full truncate text-left font-mono text-[10.5px] text-fg-subtle transition-colors hover:text-accent-text"
-            >
-              {file.relPath}
-            </button>
+            {onReveal === undefined ? (
+              <span className="mt-0.5 block max-w-full truncate font-mono text-[10.5px] text-fg-subtle">
+                {file.relPath}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onReveal(file.path)}
+                title="Show in Explorer"
+                className="mt-0.5 block max-w-full truncate text-left font-mono text-[10.5px] text-fg-subtle transition-colors hover:text-accent-text"
+              >
+                {file.relPath}
+              </button>
+            )}
           </div>
 
           {/* What the resolution says, in the two densities it is said in: the
