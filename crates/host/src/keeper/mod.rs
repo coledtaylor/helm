@@ -77,7 +77,7 @@ pub fn keeper_version(data: &Path) -> String {
         }
     }
     let _ = data;
-    env!("CARGO_PKG_VERSION").to_owned()
+    crate::version::FLOTI_VERSION.to_owned()
 }
 
 /// Where the keeper of the host on `data` listens: a socket in the runtime

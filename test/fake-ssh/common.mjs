@@ -26,8 +26,10 @@ export function record(entry) {
 
 /**
  * Splits `line` into words the way a POSIX shell does for a plain command:
- * on blanks, with single and double quotes grouping and a backslash escaping
- * the next character outside single quotes. Nothing is expanded.
+ * on blanks, with single and double quotes grouping, a backslash escaping the
+ * next character outside quotes, and, inside double quotes, only `$`, a
+ * backtick, `"`, `\` or a newline, so a Windows path in double quotes keeps
+ * its backslashes. Nothing is expanded.
  */
 export function splitWords(line) {
   const words = []
@@ -40,7 +42,8 @@ export function splitWords(line) {
       else word += c
     } else if (quote === '"') {
       if (c === '"') quote = null
-      else if (c === '\\' && i + 1 < line.length) word += line[++i]
+      else if (c === '\\' && i + 1 < line.length && '$`"\\\n'.includes(line[i + 1]))
+        word += line[++i]
       else word += c
     } else if (c === ' ' || c === '\t') {
       if (word !== null) words.push(word)

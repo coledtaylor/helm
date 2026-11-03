@@ -89,11 +89,13 @@ use std::time::Duration;
 
 use floti_protocol::channel::from_payload;
 use floti_protocol::channel::{ChannelKind, RequestChannel, Routed, Router};
+use floti_protocol::channels::common::SessionRecord;
 use floti_protocol::channels::devices::{
     DeviceListing, DevicesApprove, DevicesList, DevicesPresence, DevicesRevoke, PairedDevice,
     RevokeDevice,
 };
 use floti_protocol::channels::host::{HostStop, HostStopReason};
+use floti_protocol::channels::sessions::SessionList;
 use floti_protocol::message::{
     ErrorCode, ErrorReply, Event, Hello, Pairing as PairingStatus, PairingApproved, PairingWaiting,
     Request, Snapshot, StreamClose, StreamCredit, StreamData, StreamOpen, Subscribe,
@@ -281,7 +283,8 @@ pub(crate) enum Entry {
     Device,
     /// A device the registry does not know, asking to pair.
     Pairing,
-    /// The host's own key: `floti devices` in a shell on its computer.
+    /// The host's own key: `floti devices` or `floti update-stop` in a shell
+    /// on its computer.
     Shell,
 }
 
@@ -392,7 +395,14 @@ pub(crate) async fn serve(
             let serving = (&*context.identity, &context.admission, &mut shutdown);
             match entry {
                 Entry::Pairing => serve_pairing(sealed, client, device, serving).await,
-                Entry::Shell | Entry::Device => serve_shell(sealed, client, device, serving).await,
+                Entry::Shell | Entry::Device => {
+                    let sessions = || context.hosted.list();
+                    let control = ShellControl {
+                        sessions: &sessions,
+                        stopper: &context.stopper,
+                    };
+                    serve_shell(sealed, client, device, serving, control).await;
+                }
             }
         }
         return;
@@ -781,16 +791,37 @@ async fn serve_pairing<S: AsyncRead + AsyncWrite>(
     }
 }
 
-/// The host's own shell: the devices channels, and every other request
-/// refused, until it goes. It is never asked for presence.
+/// What the host's own shell is served besides the devices channels: the
+/// sessions the host runs, which `floti update-stop` counts, and stopping
+/// the host, which it asks for an update.
+pub(crate) struct ShellControl<'a> {
+    pub sessions: &'a (dyn Fn() -> Result<Vec<SessionRecord>, String> + Send + Sync),
+    pub stopper: &'a Stopper,
+}
+
+/// The channels the host's own shell is served, besides presence, which it
+/// is never asked for.
+const SHELL_CHANNELS: [&str; 5] = [
+    DevicesList::NAME,
+    DevicesApprove::NAME,
+    DevicesRevoke::NAME,
+    SessionList::NAME,
+    HostStop::NAME,
+];
+
+/// The host's own shell: the devices channels, the session list and
+/// `host:stop`, and every other request refused, until it goes. It is never
+/// asked for presence. A stop it asks for is carried out once its answer
+/// has been written.
 async fn serve_shell<S: AsyncRead + AsyncWrite>(
     mut sealed: Sealed<S>,
     client: ClientId,
     device: PublicKey,
     (identity, admission, shutdown): Serving<'_>,
+    control: ShellControl<'_>,
 ) {
-    const SERVED: &str = "The host's own shell is served `devices:list`, `devices:approve` and \
-                          `devices:revoke` only.";
+    const SERVED: &str = "The host's own shell is served `devices:list`, `devices:approve`, \
+                          `devices:revoke`, `session:list` and `host:stop` only.";
     let Some(hello) = sealed
         .hello(client, device, admission.hello_deadline, shutdown)
         .await
@@ -805,12 +836,17 @@ async fn serve_shell<S: AsyncRead + AsyncWrite>(
         return sealed.close().await;
     };
     while let Some(message) = sealed.next(shutdown).await {
+        let mut reserved = None;
         let answer = match message {
             Message::Request(request) => {
-                if request.channel != DevicesPresence::NAME
-                    && DEVICE_CHANNELS.contains(&request.channel.as_str())
-                {
-                    shell_router(admission, capabilities, device).dispatch(&request)
+                if SHELL_CHANNELS.contains(&request.channel.as_str()) {
+                    let mut stop = None;
+                    let answer = shell_router(admission, capabilities, device, &control, &mut stop)
+                        .dispatch(&request);
+                    if matches!(answer, Message::Response(_)) {
+                        reserved = stop.and_then(|reason| control.stopper.reserve(reason));
+                    }
+                    answer
                 } else {
                     Message::Error(ErrorReply {
                         id: request.id,
@@ -832,17 +868,33 @@ async fn serve_shell<S: AsyncRead + AsyncWrite>(
             }),
             _ => continue,
         };
-        if sealed.write(&answer).await.is_err() {
+        let written = sealed.write(&answer).await;
+        // Dropping the reserved stop carries it out, once the answer is out.
+        drop(reserved);
+        if written.is_err() {
             return;
         }
     }
 }
 
 /// What answers the host's own shell, whose key is `host`: the devices
-/// channels, served.
-fn shell_router(admission: &Admission, capabilities: CapabilitySet, host: PublicKey) -> Router<'_> {
+/// channels, the session list, and `host:stop`, which records the stop asked
+/// for in `stop`.
+fn shell_router<'a>(
+    admission: &'a Admission,
+    capabilities: CapabilitySet,
+    host: PublicKey,
+    control: &'a ShellControl<'a>,
+    stop: &'a mut Option<HostStopReason>,
+) -> Router<'a> {
     let mut router = Router::new(&CATALOGUE, capabilities);
     devices_handlers(&mut router, admission, host);
+    router
+        .handle::<SessionList>(|()| (control.sessions)())
+        .handle::<HostStop>(move |request| {
+            *stop = Some(request.reason);
+            Ok(())
+        });
     router
 }
 

@@ -8,6 +8,14 @@
 //! pairs or enrols: a folder without a device key and a pinned host key is
 //! left as it is, untouched.
 //!
+//! `floti update-stop --ask | --stop`, with no client folder, is the same
+//! run on the host's own computer, as the desktop runs it through ssh or a
+//! command before it replaces floti there: it connects as the host itself,
+//! proving the key it reads from the host's key file as `floti devices`
+//! does, and never prints it. Its `--ask` prints the number of sessions the
+//! host is running, `0` included, on one line, for the desktop to say how
+//! many the update ends; its `--stop` is the same stop for an update.
+//!
 //! - `--ask` counts the sessions the host is running. With one or more it
 //!   prints the question to ask, which says how many end, and exits 0; with
 //!   none it prints nothing and exits [`NOTHING_TO_END_EXIT`].
@@ -26,9 +34,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use floti_host::bridge::BridgeExit;
-use floti_host::client::{ClientError, ClientKeys, Connection, is_closed};
-use floti_host::platform::folders::{self, UserEnv};
-use floti_host::server::{LOCK_FILE, local_endpoint};
+use floti_host::client::{self, ClientError, ClientKeys, Connection, is_closed};
+use floti_host::keys::read_key_pair;
+use floti_host::platform::folders::{self, Folders, UserEnv};
+use floti_host::server::{HOST_KEY_FILE, LOCK_FILE, local_endpoint};
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
 use floti_protocol::channels::common::SessionStatus;
 use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
@@ -44,6 +53,16 @@ pub const NOTHING_TO_END_EXIT: u8 = 7;
 /// it ends every session's process tree first.
 const HOST_EXIT_DEADLINE: Duration = Duration::from_secs(60);
 
+/// Who asks: Helm's installer with its client folder, or the host's own
+/// user on the host's computer, with the host's key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asker {
+    /// A paired client, whose keys are in this folder.
+    Client(PathBuf),
+    /// The host itself, by its own key.
+    Host,
+}
+
 /// The step the installer asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -53,16 +72,18 @@ pub enum Step {
     Stop,
 }
 
-/// What follows `update-stop`: the client folder, then `--ask` or `--stop`.
-pub fn parse(args: &[String]) -> Option<(PathBuf, Step)> {
+/// What follows `update-stop`: the client folder, or nothing for the host
+/// itself, then `--ask` or `--stop`.
+pub fn parse(args: &[String]) -> Option<(Asker, Step)> {
+    let step = |step: &str| match step {
+        "--ask" => Some(Step::Ask),
+        "--stop" => Some(Step::Stop),
+        _ => None,
+    };
     match args {
-        [folder, step] if !folder.is_empty() => {
-            let step = match step.as_str() {
-                "--ask" => Step::Ask,
-                "--stop" => Step::Stop,
-                _ => return None,
-            };
-            Some((PathBuf::from(folder), step))
+        [only] => Some((Asker::Host, step(only)?)),
+        [folder, which] if !folder.is_empty() => {
+            Some((Asker::Client(PathBuf::from(folder)), step(which)?))
         }
         _ => None,
     }
@@ -75,6 +96,8 @@ pub enum Outcome {
     Ask(String),
     /// The host runs no session, so installing ends none.
     NothingToEnd,
+    /// The host itself asked: how many sessions the host runs.
+    Count(usize),
     /// The host stopped for the update and has exited.
     Stopped,
     /// No host could be reached or talked to, with why.
@@ -85,16 +108,18 @@ impl Outcome {
     /// The process's exit status.
     pub fn code(&self) -> u8 {
         match self {
-            Self::Ask(_) | Self::Stopped => 0,
+            Self::Ask(_) | Self::Count(_) | Self::Stopped => 0,
             Self::NothingToEnd => NOTHING_TO_END_EXIT,
             Self::Failed(exit, _) => exit.code(),
         }
     }
 
-    /// What goes to standard output: the question, and nothing else ever.
-    pub fn printed(&self) -> Option<&str> {
+    /// What goes to standard output: the question, or the count on its own
+    /// line, and nothing else ever.
+    pub fn printed(&self) -> Option<String> {
         match self {
-            Self::Ask(question) => Some(question),
+            Self::Ask(question) => Some(question.clone()),
+            Self::Count(running) => Some(format!("{running}\n")),
             _ => None,
         }
     }
@@ -123,22 +148,22 @@ pub fn question(running: usize) -> String {
     )
 }
 
-/// Runs `step` for the client whose keys are in `client_folder`, prints what
-/// it says, and answers its exit status.
-pub fn run(client_folder: &Path, step: Step) -> u8 {
+/// Runs `step` for `asker`, prints what it says, and answers its exit
+/// status.
+pub fn run(asker: &Asker, step: Step) -> u8 {
     let outcome = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(runtime) => {
-            let outcome = runtime.block_on(perform(UserEnv::from_process(), client_folder, step));
+            let outcome = runtime.block_on(perform(UserEnv::from_process(), asker, step));
             // A wait for the host's exit that ran out may still be blocked.
             runtime.shutdown_background();
             outcome
         }
         Err(err) => Outcome::Failed(BridgeExit::Failed, format!("could not start: {err}")),
     };
-    if let Some(text) = outcome.printed() {
+    if let Some(text) = outcome.printed().as_deref() {
         let mut out = std::io::stdout().lock();
         let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
     }
@@ -148,31 +173,23 @@ pub fn run(client_folder: &Path, step: Step) -> u8 {
     outcome.code()
 }
 
-async fn perform(env: UserEnv, client_folder: &Path, step: Step) -> Outcome {
+async fn perform(env: UserEnv, asker: &Asker, step: Step) -> Outcome {
     let folders = match folders::resolve(&env) {
         Ok(folders) => folders,
         Err(err) => return Outcome::Failed(BridgeExit::Failed, err.to_string()),
     };
-    let keys = match ClientKeys::open_paired(client_folder) {
-        Ok(Some(keys)) => keys,
-        Ok(None) => {
-            return Outcome::Failed(
-                BridgeExit::NotPinned,
-                format!(
-                    "{} holds no paired client, so this PC's host was not asked anything.",
-                    client_folder.display()
-                ),
-            );
-        }
-        Err(err) => return Outcome::Failed(BridgeExit::Failed, err.to_string()),
+    let connected = match asker {
+        Asker::Client(client_folder) => as_client(&folders, client_folder).await,
+        Asker::Host => as_host(&folders).await,
     };
-    let mut connection = match keys.connect(&local_endpoint(&folders)).await {
+    let mut connection = match connected {
         Ok(connection) => connection,
-        Err(err) => return Outcome::Failed(BridgeExit::of_connect(&err), err.to_string()),
+        Err(failed) => return failed,
     };
-    let outcome = match step {
-        Step::Ask => count_running(&mut connection).await.map(asked),
-        Step::Stop => stop_for_update(&mut connection).await,
+    let outcome = match (step, asker) {
+        (Step::Ask, Asker::Client(_)) => count_running(&mut connection).await.map(asked),
+        (Step::Ask, Asker::Host) => count_running(&mut connection).await.map(Outcome::Count),
+        (Step::Stop, _) => stop_for_update(&mut connection).await,
     };
     connection.close().await;
     match outcome {
@@ -181,6 +198,50 @@ async fn perform(env: UserEnv, client_folder: &Path, step: Step) -> Outcome {
             Err(why) => Outcome::Failed(BridgeExit::Failed, why),
         },
         Ok(outcome) | Err(outcome) => outcome,
+    }
+}
+
+/// A connection to the host on this computer as the paired client whose
+/// keys are in `client_folder`.
+async fn as_client(folders: &Folders, client_folder: &Path) -> Result<Connection, Outcome> {
+    let keys = match ClientKeys::open_paired(client_folder) {
+        Ok(Some(keys)) => keys,
+        Ok(None) => {
+            return Err(Outcome::Failed(
+                BridgeExit::NotPinned,
+                format!(
+                    "{} holds no paired client, so this PC's host was not asked anything.",
+                    client_folder.display()
+                ),
+            ));
+        }
+        Err(err) => return Err(Outcome::Failed(BridgeExit::Failed, err.to_string())),
+    };
+    keys.connect(&local_endpoint(folders))
+        .await
+        .map_err(|err| Outcome::Failed(BridgeExit::of_connect(&err), err.to_string()))
+}
+
+/// A connection to the host on this computer as the host itself, proving the
+/// key in its key file, which only its own user can read. The key is held in
+/// this process only, and never printed.
+async fn as_host(folders: &Folders) -> Result<Connection, Outcome> {
+    let no_host = || {
+        Outcome::Failed(
+            BridgeExit::Unreachable,
+            "no host is running on this computer.".to_owned(),
+        )
+    };
+    let host = read_key_pair(&folders.data.join(HOST_KEY_FILE))
+        .map_err(|err| Outcome::Failed(BridgeExit::Failed, err.to_string()))?
+        .ok_or_else(no_host)?;
+    match client::connect(&local_endpoint(folders), &host, &host.public()).await {
+        Ok(connection) => Ok(connection),
+        Err(ClientError::Unreachable { .. }) => Err(no_host()),
+        Err(err) => Err(Outcome::Failed(
+            BridgeExit::of_connect(&err),
+            err.to_string(),
+        )),
     }
 }
 
@@ -347,6 +408,13 @@ mod tests {
     }
 
     #[test]
+    fn s7_the_host_itself_is_told_the_count_on_one_line_zero_included() {
+        assert_eq!(Outcome::Count(2).printed().as_deref(), Some("2\n"));
+        assert_eq!(Outcome::Count(0).printed().as_deref(), Some("0\n"));
+        assert_eq!(Outcome::Count(0).code(), 0);
+    }
+
+    #[test]
     fn with_no_session_running_it_asks_nothing_and_exits_with_its_own_status() {
         let outcome = asked(0);
         assert_eq!(outcome, Outcome::NothingToEnd);
@@ -359,14 +427,14 @@ mod tests {
         let outcome = asked(3);
         assert_eq!(outcome.code(), 0);
         assert_eq!(
-            outcome.printed(),
+            outcome.printed().as_deref(),
             Some(
                 "Installing this update stops the local host on this PC, ending 3 sessions. \
                  Helm offers them back when it next starts."
             )
         );
         assert_eq!(
-            asked(1).printed(),
+            asked(1).printed().as_deref(),
             Some(
                 "Installing this update stops the local host on this PC, ending 1 session. \
                  Helm offers it back when it next starts."
@@ -400,14 +468,20 @@ mod tests {
         assert_eq!(
             parse(&args(&["C:\\Users\\a user\\Helm\\host-client", "--ask"])),
             Some((
-                PathBuf::from("C:\\Users\\a user\\Helm\\host-client"),
+                Asker::Client(PathBuf::from("C:\\Users\\a user\\Helm\\host-client")),
                 Step::Ask
             ))
         );
         assert_eq!(
             parse(&args(&["/home/me/Helm/host-client", "--stop"])),
-            Some((PathBuf::from("/home/me/Helm/host-client"), Step::Stop))
+            Some((
+                Asker::Client(PathBuf::from("/home/me/Helm/host-client")),
+                Step::Stop
+            ))
         );
+        assert_eq!(parse(&args(&["--ask"])), Some((Asker::Host, Step::Ask)));
+        assert_eq!(parse(&args(&["--stop"])), Some((Asker::Host, Step::Stop)));
+        assert_eq!(parse(&args(&[])), None);
         assert_eq!(parse(&args(&["folder"])), None);
         assert_eq!(parse(&args(&["", "--ask"])), None);
         assert_eq!(parse(&args(&["folder", "--count"])), None);

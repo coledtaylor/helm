@@ -423,7 +423,10 @@ async fn s1_floti_host_is_one_executable_that_starts_and_serves_clients() {
     let pid = host.id();
     let endpoint = binary_endpoint(&dirs);
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
-    assert_eq!(client.welcome.host_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        client.welcome.host_version,
+        floti_host::version::FLOTI_VERSION
+    );
     assert!(
         client
             .welcome
@@ -2540,7 +2543,10 @@ async fn every_subscriber_to_session_exit_gets_a_sessions_finished_row_when_it_e
 /// Where the line that opens run `pid`'s part of `log` starts, checking that
 /// it names the host's version, that process and when it started, in UTC.
 fn start_line_at(log: &str, pid: u32) -> usize {
-    let prefix = format!("floti host {} started at ", env!("CARGO_PKG_VERSION"));
+    let prefix = format!(
+        "floti host {} started at ",
+        floti_host::version::FLOTI_VERSION
+    );
     let suffix = format!(", process {pid}");
     let mut at = 0;
     for line in log.split_inclusive('\n') {

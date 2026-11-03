@@ -139,7 +139,7 @@ pub fn wrote() {
 pub fn start_line(started: Timestamp) -> String {
     format!(
         "floti host {} started at {started}, process {}",
-        env!("CARGO_PKG_VERSION"),
+        crate::version::FLOTI_VERSION,
         std::process::id()
     )
 }

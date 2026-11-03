@@ -106,6 +106,10 @@ security-framework.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 secret-service.workspace = true
 
+# build.rs reads Floti's version from packages/desktop/package.json.
+[build-dependencies]
+serde_json.workspace = true
+
 [dev-dependencies]
 floti-host = { path = ".", features = ["testkit"] }
 # Paused time, for tests that step an interval rather than wait it out.

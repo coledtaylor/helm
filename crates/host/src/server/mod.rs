@@ -404,7 +404,7 @@ impl Host {
             .map(|program| Arc::new(Keeper::new(program, &folders, inherited_env.clone())));
         let identity = Arc::new(HostIdentity {
             protocol: PROTOCOL_VERSION,
-            host_version: env!("CARGO_PKG_VERSION").to_owned(),
+            host_version: crate::version::FLOTI_VERSION.to_owned(),
             backends: backends
                 .iter()
                 .map(|backend| backend.capabilities())

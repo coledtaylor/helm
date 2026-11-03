@@ -72,7 +72,7 @@ impl ServerHandler for FamilyServer {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new(
                 self.family.name(),
-                env!("CARGO_PKG_VERSION"),
+                crate::version::FLOTI_VERSION,
             ))
             .with_instructions(self.family.instructions())
             .with_protocol_version(SUPPORTED_VERSIONS[0].clone())

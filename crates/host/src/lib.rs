@@ -88,8 +88,10 @@ pub mod presence;
 pub mod resources;
 pub mod server;
 pub mod session;
+pub mod setup;
 pub mod store;
 pub mod usage;
+pub mod version;
 pub mod workspace;
 
 #[cfg(any(test, feature = "testkit"))]

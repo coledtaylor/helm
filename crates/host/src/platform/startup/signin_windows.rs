@@ -97,6 +97,79 @@ fn token_user_sid() -> io::Result<String> {
     Ok(sid)
 }
 
+/// Whether this user (`USERDOMAIN\USERNAME`) has a desktop session on this
+/// computer: a session other than session 0, where services run, whose
+/// user it is, at the console or over remote desktop, connected or not. An
+/// ssh login runs outside any such session, so it never counts.
+pub(super) fn desktop_session() -> io::Result<bool> {
+    use windows_sys::Win32::System::RemoteDesktop::{
+        WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW, WTSActive, WTSDisconnected, WTSDomainName,
+        WTSEnumerateSessionsW, WTSFreeMemory, WTSUserName,
+    };
+
+    let var = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_owned())
+    };
+    let Some(user) = var("USERNAME").filter(|user| !user.is_empty()) else {
+        return Err(io::Error::other(
+            "USERNAME is not set, so the user's sessions cannot be told apart",
+        ));
+    };
+    let domain = var("USERDOMAIN").unwrap_or_default();
+
+    let query = |session: u32, class| -> Option<String> {
+        let mut text: windows_sys::core::PWSTR = ptr::null_mut();
+        let mut bytes = 0u32;
+        // SAFETY: on success `text` is a NUL-terminated string the API
+        // allocated, freed below.
+        let ok = unsafe {
+            windows_sys::Win32::System::RemoteDesktop::WTSQuerySessionInformationW(
+                WTS_CURRENT_SERVER_HANDLE,
+                session,
+                class,
+                &mut text,
+                &mut bytes,
+            )
+        };
+        if ok == 0 || text.is_null() {
+            return None;
+        }
+        // SAFETY: `text` is NUL-terminated.
+        let len = (0..).take_while(|&i| unsafe { *text.add(i) } != 0).count();
+        // SAFETY: `len` units precede the NUL.
+        let value = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) });
+        // SAFETY: allocated by WTSQuerySessionInformationW.
+        unsafe { WTSFreeMemory(text.cast()) };
+        Some(value)
+    };
+
+    let mut sessions: *mut WTS_SESSION_INFOW = ptr::null_mut();
+    let mut count = 0u32;
+    // SAFETY: on success `sessions` points at `count` entries the API
+    // allocated, freed below.
+    if unsafe { WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &mut sessions, &mut count) }
+        == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `count` entries were written at `sessions`.
+    let listed = unsafe { std::slice::from_raw_parts(sessions, count as usize) };
+    let found = listed.iter().any(|session| {
+        session.SessionId != 0
+            && (session.State == WTSActive || session.State == WTSDisconnected)
+            && query(session.SessionId, WTSUserName)
+                .is_some_and(|name| name.eq_ignore_ascii_case(&user))
+            && (domain.is_empty()
+                || query(session.SessionId, WTSDomainName)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&domain)))
+    });
+    // SAFETY: allocated by WTSEnumerateSessionsW.
+    unsafe { WTSFreeMemory(sessions.cast()) };
+    Ok(found)
+}
+
 /// The console events that stop the host, registered while this lives.
 pub(super) struct Signals {
     ctrl_c: CtrlC,

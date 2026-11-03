@@ -185,7 +185,7 @@ async fn app_info_names_the_hosts_version_mode_data_folder_database_migrations_a
     let mut world = World::start().await;
 
     let info = world.client.request::<ReadAppInfo>(&()).await.unwrap();
-    assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(info.version, floti_host::version::FLOTI_VERSION);
     assert_eq!(info.mode, AppMode::Dev);
     assert_eq!(info.data_dir, world.dirs.data.display().to_string());
     assert_eq!(

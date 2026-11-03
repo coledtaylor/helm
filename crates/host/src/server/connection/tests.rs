@@ -22,9 +22,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
+use floti_protocol::channels::common::SessionRecord;
 use floti_protocol::channels::devices::{
     ApproveDevice, DeviceListing, DeviceRole, DevicesApprove, DevicesList, PairedDevice,
 };
+use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
+use floti_protocol::channels::sessions::SessionList;
 use floti_protocol::message::{
     ClientInfo, ClientKind, ErrorCode, Hello, Pairing as PairingStatus, PairingApproved, Request,
 };
@@ -39,8 +42,8 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 use super::{
-    Admission, Entry, Refusal, Sealed, admit_within_deadline, hello_within_deadline, serve_pairing,
-    serve_shell,
+    Admission, Entry, Refusal, Sealed, ShellControl, admit_within_deadline, hello_within_deadline,
+    serve_pairing, serve_shell,
 };
 use crate::devices::{DeviceRegistry, Role, Standing};
 use crate::server::access::{Confirmations, LiveConnections};
@@ -48,7 +51,7 @@ use crate::server::clock::HostClock;
 use crate::server::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME, read_enrolment};
 use crate::server::pairing::{MAX_WAITING, PAIRING_LIFETIME, Pairing};
 use crate::server::{
-    ENROLMENT_FILE, HANDSHAKE_DEADLINE, HELLO_DEADLINE, TEST_HANDSHAKE_DEADLINE_MARKER,
+    ENROLMENT_FILE, HANDSHAKE_DEADLINE, HELLO_DEADLINE, Stopper, TEST_HANDSHAKE_DEADLINE_MARKER,
     handshake_deadline, hello_deadline,
 };
 use crate::session::ClientId;
@@ -67,6 +70,10 @@ struct Fixture {
     /// Held so the shutdown never fires: a dropped sender would end the
     /// handshake as a stopping host does.
     shutdown: watch::Sender<bool>,
+    /// What the host's own shell stops the host through, and the stop it
+    /// asked for.
+    stopper: Stopper,
+    stop_asked: watch::Receiver<Option<HostStopReason>>,
     /// Last: fields drop in order, and the folder goes only once nothing in it is open.
     dirs: TestDirs,
 }
@@ -91,6 +98,7 @@ fn fixture_with(role: Role) -> Fixture {
     let host_key = Arc::new(KeyPair::generate().unwrap());
     let enrolment = Arc::new(Enrolment::prepare(&dirs.data, host_key.public(), &devices));
     let pairing = Arc::new(Pairing::new(&dirs.data, Arc::clone(&devices)));
+    let (stopper, stop_asked) = Stopper::new();
     Fixture {
         admission: Admission {
             host_key,
@@ -104,6 +112,8 @@ fn fixture_with(role: Role) -> Fixture {
         },
         device,
         shutdown: watch::channel(false).0,
+        stopper,
+        stop_asked,
         dirs,
     }
 }
@@ -855,12 +865,20 @@ impl Fixture {
         let sealed = Sealed::new(host, admitted.transport, &admitted.rest).unwrap();
         let admission = self.admission.clone();
         let key = device.public();
+        let stopper = self.stopper.clone();
         let serving = tokio::spawn(async move {
             let identity = identity();
             let serving = (&identity, &admission, &mut shutdown);
             match entry {
                 Entry::Pairing => serve_pairing(sealed, ClientId(1), key, serving).await,
-                Entry::Shell => serve_shell(sealed, ClientId(1), key, serving).await,
+                Entry::Shell => {
+                    let sessions = || Ok(Vec::new());
+                    let control = ShellControl {
+                        sessions: &sessions,
+                        stopper: &stopper,
+                    };
+                    serve_shell(sealed, ClientId(1), key, serving, control).await;
+                }
                 Entry::Device => unreachable!("a client is served by its connection"),
             }
         });
@@ -1088,7 +1106,7 @@ async fn s3_s6_the_shell_lists_and_approves_devices_and_is_served_nothing_else()
     ));
 
     shell
-        .send(&request(3, "session:list", to_payload(&()).unwrap()))
+        .send(&request(3, "session:start", to_payload(&()).unwrap()))
         .await;
     match shell.next().await {
         Some(Message::Error(error)) => {
@@ -1096,6 +1114,37 @@ async fn s3_s6_the_shell_lists_and_approves_devices_and_is_served_nothing_else()
         }
         other => panic!("the shell was served another channel: {other:?}"),
     }
+    drop(shell.client);
+    shell.serving.await.unwrap();
+}
+
+#[tokio::test]
+async fn s7_the_shell_lists_the_sessions_and_stops_the_host_for_an_update_once_answered() {
+    let mut fx = fixture();
+    let host_key = &*fx.admission.host_key;
+    let (initiator, first) = Initiator::start(host_key, &fx.host()).unwrap();
+    let mut shell = fx.served(host_key, initiator, &first, Entry::Shell).await;
+    assert!(matches!(shell.next().await, Some(Message::Welcome(_))));
+
+    shell
+        .send(&request(1, SessionList::NAME, to_payload(&()).unwrap()))
+        .await;
+    let Some(Message::Response(listed)) = shell.next().await else {
+        panic!("the shell's session list was not answered");
+    };
+    let sessions: Vec<SessionRecord> = from_payload(&listed.payload).unwrap();
+    assert!(sessions.is_empty());
+    assert_eq!(*fx.stop_asked.borrow(), None, "listing stops nothing");
+
+    let stop = HostStopRequest {
+        reason: HostStopReason::Update,
+    };
+    shell
+        .send(&request(2, HostStop::NAME, to_payload(&stop).unwrap()))
+        .await;
+    assert!(matches!(shell.next().await, Some(Message::Response(_))));
+    fx.stop_asked.changed().await.unwrap();
+    assert_eq!(*fx.stop_asked.borrow(), Some(HostStopReason::Update));
     drop(shell.client);
     shell.serving.await.unwrap();
 }

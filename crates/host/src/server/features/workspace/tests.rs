@@ -140,7 +140,7 @@ fn node() -> PathBuf {
 async fn app_info_names_the_hosts_version_mode_data_folder_database_migrations_and_home() {
     let world = World::new();
     let info: AppInfo = world.ask::<ReadAppInfo>(&()).unwrap();
-    assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(info.version, crate::version::FLOTI_VERSION);
     assert_eq!(info.mode, AppMode::Dev);
     assert_eq!(info.data_dir, world.dirs.data.display().to_string());
     assert_eq!(

@@ -3,10 +3,12 @@
 //! user unit `floti.service` on Linux. Never a system service, and never
 //! started by SSH.
 //!
-//! The host generates the definition; registering it with the OS is the
-//! installer's step, so generating one registers nothing. Each generator only
-//! composes text, so all three are compiled on every OS and tested everywhere;
-//! the lines below pick which one is `Native`.
+//! The host generates the definition; registering it with the OS is `floti
+//! setup`'s step ([`register`]), so generating one registers nothing. Each
+//! generator only composes text, and registering runs each OS command through
+//! a [`register::SignInSystem`] a test fakes, so all three are compiled on
+//! every OS and tested everywhere; the lines below pick which one is
+//! `Native`.
 //!
 //! The same concern covers the host's place in that sign-in: it refuses to
 //! start where no sign-in started it ([`launch_refusal`]: from SSH, or as root
@@ -17,6 +19,7 @@
 
 pub mod linux;
 pub mod macos;
+pub mod register;
 pub mod windows;
 
 #[cfg(unix)]

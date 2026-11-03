@@ -12,6 +12,7 @@
 //! test's pipe to its standard input closes, which takes its transport and
 //! the `floti connect` behind it along: each sees its standard input close.
 
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -21,7 +22,9 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
-use floti_host::bridge::{CONNECT_LINE, HOST_KEY_LINE, PAIRING_LINE_PREFIX};
+use floti_host::bridge::{
+    CONNECT_LINE, HOST_KEY_LINE, PAIRING_LINE_PREFIX, Transport, remote_floti_problem,
+};
 use floti_host::client::{ClientError, ClientKeys, DEVICE_KEY_FILE, PINNED_HOST_FILE, duplex};
 use floti_host::connect::NO_HOST_LINE;
 use floti_host::devices::{DeviceRegistry, Role};
@@ -31,12 +34,13 @@ use floti_host::platform::socket::{
     Endpoint, LocalListener, LocalSocket, LocalStream, Native as NativeSocket,
 };
 use floti_host::server::{HostConfig, host_public_key, local_endpoint, relay_endpoint};
-use floti_host::testkit::{FakeAgent, PATIENCE, RunningHost, TestDirs, run_floti};
+use floti_host::testkit::{FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs, run_floti};
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
 use floti_protocol::channels::common::SessionRecord;
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
-    SessionList, SessionStart, SessionStreamOpen, SessionTerminal, StartSessionRequest,
+    SessionList, SessionRestorable, SessionStart, SessionStreamOpen, SessionTerminal,
+    StartSessionRequest,
 };
 use floti_protocol::message::{ClientInfo, ClientKind, Hello, Request, StreamData, StreamOpen};
 use floti_protocol::noise::{KeyPair, PublicKey};
@@ -1240,4 +1244,228 @@ async fn s7_through_ssh_and_a_custom_command_nothing_under_the_users_ssh_folder_
         );
     }
     world.stop().await;
+}
+
+// ---------------------------------------------------------------------------
+// Installing a host: what the desktop asks floti on the host's computer
+// through the same login (its version, what an update ends, a stop for the
+// update), and the floti it names by full path where the login's PATH does
+// not have it
+// ---------------------------------------------------------------------------
+
+/// Runs `line` on "the host's computer" through `transport`, as the desktop
+/// does, and waits for it to end.
+async fn run_line(dirs: &TestDirs, transport: &[String], line: &str) -> std::process::Output {
+    let mut command = Command::new(&transport[0]);
+    command
+        .args(&transport[1..])
+        .arg(line)
+        .env(DATA_DIR_VAR, &dirs.data)
+        .env(LOG_DIR_VAR, &dirs.logs)
+        .env(CONFIG_DIR_VAR, &dirs.config)
+        .env(RUNTIME_DIR_VAR, &dirs.runtime)
+        .env("HOME", &dirs.home)
+        .env("USERPROFILE", &dirs.home)
+        .env("FAKE_SSH_FLOTI", env!("CARGO_BIN_EXE_floti"))
+        .env("FAKE_SSH_LOG", transport_log(dirs))
+        .env_remove("FAKE_SSH_FAIL")
+        .env_remove("FAKE_SSH_MISSING_LINE")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_floti(command).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn floti_answers_its_version_protocol_os_and_cpu_on_one_line_through_ssh_and_through_a_command()
+ {
+    let dirs = TestDirs::new();
+    let expected = format!("{}\n", floti_host::version::version_line());
+    for transport in [ssh_transport(), custom_transport()] {
+        let answered = run_line(&dirs, &transport, "floti version").await;
+        assert_eq!(answered.status.code(), Some(0), "{answered:?}");
+        let printed = String::from_utf8_lossy(&answered.stdout).replace("\r\n", "\n");
+        assert_eq!(printed, expected);
+        assert_eq!(printed.lines().count(), 1);
+        let words: Vec<&str> = printed.split_whitespace().collect();
+        assert_eq!(words[0], "floti");
+        assert_eq!(words[1], floti_host::version::FLOTI_VERSION);
+        assert_eq!(words[2..4], ["protocol", "1.0"]);
+        assert_eq!(words[4], floti_host::version::os_name());
+        assert_eq!(words[5], floti_host::version::cpu_name());
+        assert!(answered.stderr.is_empty(), "{answered:?}");
+    }
+    // `--version` keeps answering as it did: floti and its version.
+    let mut command = Command::new(env!("CARGO_BIN_EXE_floti"));
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let answered = run_floti(command).await;
+    assert_eq!(
+        String::from_utf8_lossy(&answered.stdout).trim_end(),
+        format!("floti {}", floti_host::version::FLOTI_VERSION)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn through_ssh_the_desktop_is_told_how_many_sessions_an_update_ends_and_its_stop_keeps_their_rows_for_the_next_host_to_offer()
+ {
+    let World { host, agent, dirs } = World::start();
+    let endpoint = local_endpoint(&dirs.folders());
+    let mut client = TestClient::connect(&endpoint, &["terminal"]).await;
+    let mut started = Vec::new();
+    for name in ["project one", "project two"] {
+        let session: SessionRecord = client
+            .request::<SessionStart>(&start_request(&dirs.folder(name)))
+            .await
+            .expect("start a session");
+        started.push(session.id);
+    }
+
+    // Asked as the host itself, through the login: the count, on one line.
+    let asked = run_line(&dirs, &ssh_transport(), "floti update-stop --ask").await;
+    assert_eq!(asked.status.code(), Some(0), "{asked:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&asked.stdout).replace("\r\n", "\n"),
+        "2\n"
+    );
+    // Asking ends nothing.
+    assert_eq!(
+        client
+            .request::<SessionList>(&())
+            .await
+            .expect("list the sessions")
+            .len(),
+        2
+    );
+
+    let stopped = run_line(&dirs, &ssh_transport(), "floti update-stop --stop").await;
+    assert_eq!(stopped.status.code(), Some(0), "{stopped:?}");
+    assert!(stopped.stdout.is_empty(), "{stopped:?}");
+    assert_eq!(host.stopped().await, HostStopReason::Update);
+    drop(client);
+
+    // The next host offers both back, to be resumed as after a crash.
+    let next = RunningHost::start(config(&dirs, &agent));
+    let mut client = TestClient::connect(&endpoint, &["terminal"]).await;
+    let offer = client
+        .request::<SessionRestorable>(&())
+        .await
+        .expect("ask what is restorable")
+        .expect("the sessions the update ended are offered");
+    assert_eq!(
+        offer
+            .sessions
+            .iter()
+            .map(|lost| lost.id)
+            .collect::<Vec<_>>(),
+        started
+    );
+    // ssh ran only those two lines.
+    let lines: Vec<Value> = transport_runs(&dirs)
+        .iter()
+        .map(|run| run["line"].clone())
+        .collect();
+    assert_eq!(
+        lines,
+        ["floti update-stop --ask", "floti update-stop --stop"]
+    );
+    drop(client);
+    next.stop(HostStopReason::Stop).await;
+    drop(agent);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn update_stop_on_a_computer_with_no_host_running_says_so_and_asks_nothing() {
+    let dirs = TestDirs::new();
+    let asked = run_line(&dirs, &ssh_transport(), "floti update-stop --ask").await;
+    assert_eq!(asked.status.code(), Some(3), "{asked:?}");
+    assert!(asked.stdout.is_empty(), "{asked:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&asked.stderr).trim_end(),
+        "floti update-stop: no host is running on this computer."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn where_the_login_path_has_no_floti_the_bridge_reaches_the_floti_it_names_by_full_path() {
+    let world = World::start();
+    let dirs = &world.dirs;
+    let folder = world.paired_folder("a laptop");
+    let floti = env!("CARGO_BIN_EXE_floti");
+    let bridge_with = |named: Option<&str>| {
+        let mut command = floti_command(dirs, &dirs.runtime);
+        command.arg("bridge").arg(&folder);
+        if let Some(path) = named {
+            command.args(["--floti", path]);
+        }
+        // A login whose PATH has no floti: `floti ...` is not found there.
+        command
+            .arg("--")
+            .args(ssh_transport())
+            .env("FAKE_SSH_MISSING_LINE", "floti ");
+        command
+    };
+
+    // Without its path, the login cannot find floti, and says so.
+    let mut bridge = Bridge::spawn(bridge_with(None));
+    bridge.close_stdin();
+    let ended = bridge.ended().await;
+    assert_eq!(ended.code, Some(8), "{ended:?}");
+    assert_eq!(ended.stderr.trim_end(), "sh: 1: floti: not found");
+
+    // With it, the line run there names that floti, and the protocol crosses.
+    let mut bridge = Bridge::spawn(bridge_with(Some(floti)));
+    bridge.welcomed().await;
+    assert_eq!(bridge.request::<SessionList>(1, &()).await, vec![]);
+    bridge.close_stdin();
+    let ended = bridge.ended().await;
+    assert_eq!(ended.code, Some(0), "{ended:?}");
+    let runs = transport_runs(dirs);
+    let line = runs.last().expect("the bridge ran ssh")["line"].clone();
+    let expected = Transport {
+        program: OsString::from("ssh"),
+        args: Vec::new(),
+        floti: Some(floti.to_owned()),
+    }
+    .line("connect");
+    assert_eq!(line, expected);
+    world.stop().await;
+}
+
+#[test]
+fn the_floti_named_on_the_other_computer_is_quoted_when_it_has_a_blank_and_refused_when_a_shell_would_split_it()
+ {
+    let through = |floti: Option<&str>| Transport {
+        program: OsString::from("ssh"),
+        args: Vec::new(),
+        floti: floti.map(str::to_owned),
+    };
+    assert_eq!(through(None).line("connect"), CONNECT_LINE);
+    assert_eq!(through(None).line("connect --host-key"), HOST_KEY_LINE);
+    assert_eq!(
+        through(Some("/home/me/.local/bin/floti")).line("connect"),
+        "/home/me/.local/bin/floti connect"
+    );
+    let windows = r"C:\Users\A User\AppData\Local\Programs\Floti\bin\floti.exe";
+    assert_eq!(
+        through(Some(windows)).line("connect --host-key"),
+        format!("\"{windows}\" connect --host-key")
+    );
+    assert_eq!(remote_floti_problem("/home/me/.local/bin/floti"), None);
+    assert_eq!(remote_floti_problem(windows), None);
+    assert_eq!(remote_floti_problem("C:/Floti/floti.exe"), None);
+    for refused in [
+        "floti",
+        "bin/floti",
+        "/home/me/$HOME/floti",
+        "/home/me/`id`/floti",
+        "/home/me/\"x\"/floti",
+        r"C:\%TEMP%\floti.exe",
+        "/home/me/floti\nrm",
+    ] {
+        assert!(remote_floti_problem(refused).is_some(), "{refused:?}");
+    }
 }

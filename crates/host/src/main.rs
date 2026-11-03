@@ -11,9 +11,16 @@
 //! `floti connect` is what that runs on the host's computer: it copies bytes
 //! between its standard input and output and the host's local socket,
 //! unchanged, and `floti connect --host-key` prints the host's public key
-//! for a device about to pair. `floti update-stop <client
-//! folder> --ask | --stop` is what an installer runs before it replaces the
-//! binary: it says what stopping the host would end, then stops it.
+//! for a device about to pair. `--floti <path>` names floti's full path on
+//! the other computer, for a login whose `PATH` does not have it; the lines
+//! run there are then `<path> connect` and the rest. `floti update-stop
+//! <client folder> --ask | --stop` is what an installer runs before it
+//! replaces the binary: it says what stopping the host would end, then
+//! stops it; without a client folder it is run on the host's own computer,
+//! as the host itself, and `--ask` prints how many sessions it runs.
+//! `floti version` prints one line: Floti's version, the protocol version,
+//! and this OS and CPU. `floti setup` registers the host to start at this
+//! user's sign-in and starts it in the signed-in session.
 //! `floti devices` lists the devices paired with the host on this computer
 //! and those waiting to pair, `floti devices approve <code>|- [--role
 //! viewer|operator|admin]` pairs the one waiting under the code it shows
@@ -36,13 +43,15 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 
-use floti_host::bridge::{BridgeExit, Pair, Transport, run_bridge, run_bridge_through};
+use floti_host::bridge::{
+    BridgeExit, Pair, Transport, remote_floti_problem, run_bridge, run_bridge_through,
+};
 use floti_host::connect::{ConnectStep, run_connect};
-use floti_host::presence;
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
+use floti_host::{presence, version};
 use floti_protocol::channels::devices::DeviceRole;
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--pair <device name> [--approve viewer|operator|admin]] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code>|- [--role viewer|operator|admin]\n       floti devices revoke <fingerprint>\n       floti presence [--window <handle>] <reason>";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--pair <device name> [--approve viewer|operator|admin]] [--floti <path>] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti version\n       floti setup\n       floti update-stop [<client folder>] --ask | --stop\n       floti devices\n       floti devices approve <code>|- [--role viewer|operator|admin]\n       floti devices revoke <fingerprint>\n       floti presence [--window <handle>] <reason>";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -84,9 +93,14 @@ fn main() -> ExitCode {
         ["connect"] => ExitCode::from(run_connect(ConnectStep::Relay).code()),
         ["connect", "--host-key"] => ExitCode::from(run_connect(ConnectStep::HostKey).code()),
         ["update-stop", ..] => match update_stop::parse(&args[1..]) {
-            Some((folder, step)) => ExitCode::from(update_stop::run(&folder, step)),
+            Some((asker, step)) => ExitCode::from(update_stop::run(&asker, step)),
             None => usage(),
         },
+        ["version"] => {
+            println!("{}", version::version_line());
+            ExitCode::SUCCESS
+        }
+        ["setup"] => ExitCode::from(floti_host::setup::run_setup()),
         ["presence", ..] => match presence::parse(&args[1..]) {
             Some(ask) => ExitCode::from(presence::run(&ask).code()),
             None => usage(),
@@ -96,7 +110,7 @@ fn main() -> ExitCode {
             None => usage(),
         },
         ["--version"] | ["-V"] => {
-            println!("floti {}", env!("CARGO_PKG_VERSION"));
+            println!("floti {}", version::FLOTI_VERSION);
             ExitCode::SUCCESS
         }
         ["--help"] | ["-h"] => {
@@ -113,36 +127,48 @@ fn usage() -> ExitCode {
 }
 
 /// What follows `bridge` when it reaches a host through a transport: the
-/// client folder, then `--pair <device name>` (and, to pair in one step,
-/// `--approve <role>`) or nothing, then `--` and the program with its
+/// client folder, then, in any order, `--pair <device name>` (with
+/// `--approve <role>` to pair in one step) and `--floti <path>`, the full
+/// path of floti on the host's computer, then `--` and the program with its
 /// arguments, each kept as the OS gave it.
 fn bridge_through(args: &[OsString]) -> Option<(OsString, Option<Pair>, Transport)> {
-    let (folder, rest) = args.split_first()?;
-    let (pair, rest) = match rest {
-        [flag, name, rest @ ..] if flag == "--pair" => {
-            let name = name.to_str().filter(|name| !name.trim().is_empty())?;
-            let (approve, rest) = match rest {
-                [flag, role, rest @ ..] if flag == "--approve" => {
-                    let role = match role.to_str()? {
-                        "viewer" => DeviceRole::Viewer,
-                        "operator" => DeviceRole::Operator,
-                        "admin" => DeviceRole::Admin,
-                        _ => return None,
-                    };
-                    (Some(role), rest)
+    let (folder, mut rest) = args.split_first()?;
+    let mut name: Option<String> = None;
+    let mut approve: Option<DeviceRole> = None;
+    let mut floti: Option<String> = None;
+    loop {
+        match rest {
+            [flag, value, more @ ..] if flag == "--pair" && name.is_none() => {
+                let value = value.to_str().filter(|name| !name.trim().is_empty())?;
+                name = Some(value.to_owned());
+                rest = more;
+            }
+            [flag, role, more @ ..] if flag == "--approve" && approve.is_none() => {
+                approve = Some(match role.to_str()? {
+                    "viewer" => DeviceRole::Viewer,
+                    "operator" => DeviceRole::Operator,
+                    "admin" => DeviceRole::Admin,
+                    _ => return None,
+                });
+                rest = more;
+            }
+            [flag, path, more @ ..] if flag == "--floti" && floti.is_none() => {
+                let path = path.to_str()?;
+                if let Some(problem) = remote_floti_problem(path) {
+                    eprintln!("floti bridge: {problem}");
+                    return None;
                 }
-                _ => (None, rest),
-            };
-            (
-                Some(Pair {
-                    name: name.to_owned(),
-                    approve,
-                }),
-                rest,
-            )
+                floti = Some(path.to_owned());
+                rest = more;
+            }
+            _ => break,
         }
-        _ => (None, rest),
-    };
+    }
+    // `--approve` approves a request to pair, so it comes with `--pair`.
+    if approve.is_some() && name.is_none() {
+        return None;
+    }
+    let pair = name.map(|name| Pair { name, approve });
     let [separator, program, args @ ..] = rest else {
         return None;
     };
@@ -153,6 +179,7 @@ fn bridge_through(args: &[OsString]) -> Option<(OsString, Option<Pair>, Transpor
             Transport {
                 program: program.clone(),
                 args: args.to_vec(),
+                floti,
             },
         )
     })

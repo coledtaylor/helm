@@ -19,7 +19,7 @@ pub const RELEASES_URL: &str = "https://github.com/coledtaylor/helm/releases/lat
 pub fn app_info(run: &HostRun, folders: &Folders, store: &Store) -> AppInfo {
     let outcome = store.migrations();
     AppInfo {
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        version: crate::version::FLOTI_VERSION.to_owned(),
         mode: run.mode,
         data_dir: folders.data.display().to_string(),
         db_file: store.file().display().to_string(),

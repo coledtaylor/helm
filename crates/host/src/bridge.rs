@@ -191,13 +191,68 @@ async fn bridge(env: UserEnv, client_folder: &Path) -> BridgeExit {
 pub struct Transport {
     pub program: OsString,
     pub args: Vec<OsString>,
+    /// The floti the lines run on the host's computer: its full path there,
+    /// for a login whose non-interactive shell does not have the folder it
+    /// was installed in on its `PATH`, or `None` for `floti` on that `PATH`.
+    /// A path [`remote_floti_problem`] refuses is never given here.
+    pub floti: Option<String>,
 }
 
-/// The line a transport runs on the host's computer to reach the host.
+impl Transport {
+    /// The line that runs floti with `rest` on the host's computer: `floti
+    /// <rest>`, or `<path> <rest>` with the path in double quotes when it
+    /// holds a blank or a backslash, which both a POSIX shell and Windows'
+    /// `cmd`, the shell Windows' OpenSSH runs a line in, read as one word,
+    /// backslashes kept.
+    pub fn line(&self, rest: &str) -> String {
+        match &self.floti {
+            None => format!("floti {rest}"),
+            Some(path) if path.contains([' ', '\t', '\\']) => format!("\"{path}\" {rest}"),
+            Some(path) => format!("{path} {rest}"),
+        }
+    }
+}
+
+/// Why `path` cannot name floti in a line run on the host's computer, or
+/// `None` when it can: it must be absolute there (`/...`, `C:\...` or
+/// `C:/...`), and hold nothing a shell would read as more than a word in
+/// double quotes: no quote, `$`, backtick, `%` or control character.
+pub fn remote_floti_problem(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    let absolute = path.starts_with('/')
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'));
+    if !absolute {
+        return Some(format!(
+            "the floti to run there, {path:?}, is not a full path"
+        ));
+    }
+    if path
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '"' | '$' | '`' | '%'))
+    {
+        return Some(format!(
+            "the floti to run there, {path:?}, holds a character a shell would not read as part of a path"
+        ));
+    }
+    None
+}
+
+/// The line a transport runs on the host's computer to reach the host, with
+/// `floti` on that login's `PATH`.
 pub const CONNECT_LINE: &str = "floti connect";
 
-/// The line a transport runs on the host's computer to learn its public key.
+/// The line a transport runs on the host's computer to learn its public key,
+/// with `floti` on that login's `PATH`.
 pub const HOST_KEY_LINE: &str = "floti connect --host-key";
+
+/// What follows floti in [`CONNECT_LINE`].
+const CONNECT: &str = "connect";
+
+/// What follows floti in [`HOST_KEY_LINE`].
+const HOST_KEY: &str = "connect --host-key";
 
 /// How the one line on standard error that shows a pairing code starts. The
 /// whole line is `floti bridge: pairing code <code>, expires in <seconds>
@@ -206,14 +261,20 @@ pub const HOST_KEY_LINE: &str = "floti connect --host-key";
 pub const PAIRING_LINE_PREFIX: &str = "floti bridge: pairing code ";
 
 /// The line a transport runs on the host's computer to approve, with `role`,
-/// the request whose code it is given on standard input.
+/// the request whose code it is given on standard input, with `floti` on
+/// that login's `PATH`.
 pub fn approve_line(role: DeviceRole) -> String {
+    format!("floti {}", approve(role))
+}
+
+/// What follows floti in [`approve_line`].
+fn approve(role: DeviceRole) -> String {
     let role = match role {
         DeviceRole::Viewer => "viewer",
         DeviceRole::Operator => "operator",
         DeviceRole::Admin => "admin",
     };
-    format!("floti devices approve - --role {role}")
+    format!("devices approve - --role {role}")
 }
 
 /// How a client that has pinned no host pairs through a transport.
@@ -264,7 +325,7 @@ async fn bridge_through(
             return exit;
         }
     }
-    let mut running = match Running::start(transport, CONNECT_LINE) {
+    let mut running = match Running::start(transport, &transport.line(CONNECT)) {
         Ok(running) => running,
         Err(exit) => return exit,
     };
@@ -289,7 +350,7 @@ async fn pair_through(
 ) -> Result<(), BridgeExit> {
     let name = pair.name.as_str();
     let host = read_host_key(transport).await?;
-    let mut running = Running::start(transport, CONNECT_LINE)?;
+    let mut running = Running::start(transport, &transport.line(CONNECT))?;
     let stream = running.stream();
     let request = match keys
         .ask_to_pair_over(stream, &running.described, &host, name, ClientKind::Desktop)
@@ -347,7 +408,7 @@ async fn approve_through(
     role: DeviceRole,
     code: &str,
 ) -> Result<(), String> {
-    let mut running = Running::start(transport, &approve_line(role)).map_err(|_| {
+    let mut running = Running::start(transport, &transport.line(&approve(role))).map_err(|_| {
         format!(
             "could not run {} to approve the request",
             transport.program.to_string_lossy()
@@ -392,7 +453,7 @@ async fn approve_through(
 /// The host's public key, as `floti connect --host-key` prints it through
 /// `transport`.
 async fn read_host_key(transport: &Transport) -> Result<PublicKey, BridgeExit> {
-    let mut running = Running::start(transport, HOST_KEY_LINE)?;
+    let mut running = Running::start(transport, &transport.line(HOST_KEY))?;
     let mut stdout = running
         .child
         .stdout
