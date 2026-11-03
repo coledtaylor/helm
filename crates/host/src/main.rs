@@ -18,7 +18,13 @@
 //! --stop` is what an installer runs before it replaces the binary: it says
 //! what stopping the host would end, then stops it; without a client folder
 //! it is run on the host's own computer, as the host itself, and `--ask`
-//! prints how many sessions it runs. `floti version` prints one line:
+//! prints how many sessions it runs. `floti doctor` checks that each host
+//! this device uses answers, this computer's through its socket and each on
+//! another computer through its own ssh or command, and prints one line per
+//! host: its floti version and round trip, or the last line ssh or the
+//! command wrote and the line to try by hand; it starts, pins and changes
+//! nothing. `floti doctor --record` is how the desktop tells it those hosts,
+//! as JSON on standard input. `floti version` prints one line:
 //! Floti's version, the protocol version, and this OS and CPU. `floti setup`
 //! registers the host to start at this user's sign-in and starts it in the
 //! signed-in session. `floti keeper <data folder> <runtime folder>` is the
@@ -35,10 +41,11 @@ use floti_host::bridge::{
     BridgeExit, Transport, remote_floti_problem, run_bridge, run_bridge_through,
 };
 use floti_host::connect::{ConnectStep, run_connect};
+use floti_host::doctor::{DoctorStep, run_doctor};
 use floti_host::version;
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--floti <path>] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti version\n       floti setup\n       floti update-stop [<client folder>] --ask | --stop";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--floti <path>] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti doctor [--record]\n       floti version\n       floti setup\n       floti update-stop [<client folder>] --ask | --stop";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -79,6 +86,8 @@ fn main() -> ExitCode {
         }
         ["connect"] => ExitCode::from(run_connect(ConnectStep::Relay).code()),
         ["connect", "--host-key"] => ExitCode::from(run_connect(ConnectStep::HostKey).code()),
+        ["doctor"] => ExitCode::from(run_doctor(DoctorStep::Check).code()),
+        ["doctor", "--record"] => ExitCode::from(run_doctor(DoctorStep::Record).code()),
         ["update-stop", ..] => match update_stop::parse(&args[1..]) {
             Some((asker, step)) => ExitCode::from(update_stop::run(&asker, step)),
             None => usage(),

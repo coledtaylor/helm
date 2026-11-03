@@ -2717,6 +2717,19 @@ process: string,
 addresses: Array<string>, };
 
 /**
+ * Which session's port a `sessions:port` stream connects to.
+ */
+export type SessionPortOpen = { 
+/**
+ * The session's row id.
+ */
+id: number, 
+/**
+ * The port its process tree listens on.
+ */
+port: number, };
+
+/**
  * One process in a hosted session's tree.
  */
 export type SessionProcess = { pid: number, parentPid: number, 
@@ -3415,6 +3428,7 @@ export interface RequestChannels {
   "history:sessions": { request: HistoryQuery; response: HistoryPage; capability: null };
   "history:summary": { request: null; response: HistorySummary; capability: null };
   "host:deviceSessions": { request: null; response: Array<DeviceSession>; capability: null };
+  "host:ping": { request: null; response: null; capability: null };
   "host:quit": { request: HostQuitRequest; response: null; capability: null };
   "host:stop": { request: HostStopRequest; response: null; capability: null };
   "plugins:add": { request: PluginAddRequest; response: PluginAddResult; capability: null };
@@ -3514,6 +3528,7 @@ export interface EventChannels {
 export interface StreamChannels {
   "pterm:data": { open: PtermStreamOpen; capability: "terminal" };
   "session:data": { open: SessionStreamOpen; capability: "terminal" };
+  "sessions:port": { open: SessionPortOpen; capability: null };
 }
 
 /** Every channel, by name. */
@@ -3589,6 +3604,7 @@ export const CHANNELS = [
   { name: "history:sessions", kind: "request", capability: null },
   { name: "history:summary", kind: "request", capability: null },
   { name: "host:deviceSessions", kind: "request", capability: null },
+  { name: "host:ping", kind: "request", capability: null },
   { name: "host:quit", kind: "request", capability: null },
   { name: "host:stop", kind: "request", capability: null },
   { name: "plugins:add", kind: "request", capability: null },
@@ -3649,6 +3665,7 @@ export const CHANNELS = [
   { name: "session:restore", kind: "request", capability: null },
   { name: "session:start", kind: "request", capability: null },
   { name: "sessions:overview", kind: "event", capability: null },
+  { name: "sessions:port", kind: "stream", capability: null },
   { name: "sessions:resources", kind: "event", capability: null },
   { name: "sessions:watch", kind: "request", capability: null },
   { name: "settings:changed", kind: "event", capability: null },

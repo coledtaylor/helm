@@ -1505,3 +1505,106 @@ async fn a_session_whose_agent_keeps_no_records_is_listed_with_its_activity_unkn
     assert_eq!(state.waiting_for, None);
     host.stop(HostStopReason::Stop).await;
 }
+
+/// Where `needle` first occurs in `bytes`, after `from`.
+fn find(bytes: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    bytes
+        .get(from..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|at| at + from)
+}
+
+/// `bytes` from the first `start` to the end of the first `end` after it.
+fn between<'a>(bytes: &'a [u8], start: &[u8], end: &[u8]) -> &'a [u8] {
+    let from = find(bytes, start, 0).expect("the start");
+    let to = find(bytes, end, from).expect("the end") + end.len();
+    &bytes[from..to]
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s10_a_client_that_falls_behind_skips_to_the_current_screen_while_the_session_and_others_go_on()
+ {
+    const SCREEN: u64 = 1;
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let mut typist = TestClient::connect(&endpoint, TERMINAL).await;
+    let session: SessionRecord = typist
+        .request::<SessionStart>(&start_request(&dirs.folder("a project")))
+        .await
+        .unwrap();
+    let mut watcher = TestClient::connect(&endpoint, TERMINAL).await;
+    let mut slow = TestClient::connect(&endpoint, TERMINAL).await;
+    slow.withhold_credit();
+    for client in [&mut typist, &mut watcher, &mut slow] {
+        client.attach(SCREEN, session.id).await;
+    }
+    typist.type_into(SCREEN, b"before\r").await;
+    for client in [&mut typist, &mut watcher, &mut slow] {
+        client
+            .read_stream_until(SCREEN, |bytes| find(bytes, b"echo: before", 0).is_some())
+            .await;
+    }
+
+    // Far more than the slow client has credit for, and than the host keeps
+    // for it.
+    typist.type_into(SCREEN, b"/flood 40000\r").await;
+    // The session never waits on the slow client: it writes all of it.
+    typist
+        .read_stream_until(SCREEN, |bytes| find(bytes, b"flood done", 0).is_some())
+        .await;
+    watcher
+        .read_stream_until(SCREEN, |bytes| find(bytes, b"flood done", 0).is_some())
+        .await;
+    let before_grant = slow
+        .read_stream_until(SCREEN, |bytes| bytes.len() >= 200 * 1024)
+        .await
+        .len();
+    assert!(
+        find(slow.stream_bytes(SCREEN), b"flood done", 0).is_none(),
+        "the slow client had no credit for the end"
+    );
+
+    // Once it grants again, it is sent a reset and the screen as it is now,
+    // which ends with the flood's last line, and then what comes next.
+    slow.grant_withheld().await;
+    let caught_up = slow
+        .read_stream_until(SCREEN, |bytes| {
+            find(bytes, b"\x1bc", before_grant)
+                .is_some_and(|reset| find(bytes, b"flood done", reset).is_some())
+        })
+        .await;
+    typist.type_into(SCREEN, b"after\r").await;
+    for client in [&mut typist, &mut watcher, &mut slow] {
+        client
+            .read_stream_until(SCREEN, |bytes| find(bytes, b"echo: after", 0).is_some())
+            .await;
+    }
+
+    // It skipped what it fell behind on; the other clients got every byte,
+    // the same bytes.
+    let typed = typist.stream_bytes(SCREEN);
+    let watched = watcher.stream_bytes(SCREEN);
+    assert!(
+        caught_up.len() + 1024 * 1024 < between(typed, b"echo: before", b"flood done").len(),
+        "the slow client was sent {} bytes of {}",
+        caught_up.len(),
+        typed.len()
+    );
+    assert_eq!(
+        between(typed, b"echo: before", b"echo: after"),
+        between(watched, b"echo: before", b"echo: after"),
+        "the watching client got every byte the typing one did"
+    );
+
+    typist
+        .request::<SessionClose>(&CloseSessionRequest {
+            id: session.id,
+            force: true,
+        })
+        .await
+        .unwrap();
+    host.stop(HostStopReason::Stop).await;
+}

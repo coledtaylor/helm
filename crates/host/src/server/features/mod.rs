@@ -10,6 +10,8 @@
 //! - [`history`]: history, the transcript archive and usage.
 //! - [`config`]: the config console.
 //! - [`resources`]: processes and ports, what each hosted session holds.
+//! - [`forwards`]: connections to the loopback ports a session's own process
+//!   tree listens on (`sessions:port`).
 //! - [`workspace`]: the host's identity, settings and setup, and what the
 //!   workspace features below share.
 //! - [`discovery`]: project discovery, scan roots and harnesses.
@@ -32,6 +34,7 @@ mod config;
 mod content;
 mod discovery;
 mod files;
+mod forwards;
 mod history;
 mod plugins;
 mod profiles;
@@ -41,10 +44,13 @@ mod templates;
 mod workspace;
 
 use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use floti_protocol::channel::{Router, StreamChannel, from_payload};
 use floti_protocol::{ClientChannels, Payload};
+use tokio::net::TcpStream;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::HostRun;
@@ -113,7 +119,33 @@ pub(crate) struct TerminalAttachment {
     pub output: UnboundedReceiver<SessionOutput>,
 }
 
-type StreamHandler<'a> = Box<dyn Fn(ClientId, &Payload) -> Result<TerminalAttachment, String> + 'a>;
+/// A connection on the host's own loopback a client opened a stream on: what
+/// the client sends is written to it, and what it answers is sent back.
+pub(crate) struct SocketAttachment {
+    pub socket: TcpStream,
+    /// Settles, with the sentence the stream is closed with, when what the
+    /// connection was opened for has ended (its session).
+    pub ended: Pin<Box<dyn Future<Output = String> + Send>>,
+}
+
+/// What a stream carries once it is open.
+pub(crate) enum StreamAttachment {
+    Terminal(TerminalAttachment),
+    Socket(SocketAttachment),
+}
+
+/// A stream being opened by work that takes time (a process-and-ports pass,
+/// a connection), which the connection waits on while it serves on.
+pub(crate) type Opening = Pin<Box<dyn Future<Output = Result<StreamAttachment, String>> + Send>>;
+
+/// How a stream opens: now, or once its work is done. Either way an `Err` is
+/// the sentence the stream is closed with.
+pub(crate) enum StreamOpening {
+    Now(Result<StreamAttachment, String>),
+    Later(Opening),
+}
+
+type StreamHandler<'a> = Box<dyn Fn(ClientId, &Payload) -> StreamOpening + 'a>;
 
 /// The stream channels the features serve, each with how a stream on it is
 /// opened.
@@ -128,28 +160,51 @@ impl<'a> Streams<'a> {
         }
     }
 
-    /// Serves `C`. The handler's `Err` is the sentence the stream is closed
-    /// with.
+    fn insert(&mut self, name: &'static str, handler: StreamHandler<'a>) {
+        let previous = self.handlers.insert(name, handler);
+        assert!(previous.is_none(), "stream `{name}` is served twice");
+    }
+
+    /// Serves `C`, a terminal attached at once. The handler's `Err` is the
+    /// sentence the stream is closed with.
     pub fn handle<C: StreamChannel>(
         &mut self,
         handler: impl Fn(ClientId, C::Open) -> Result<TerminalAttachment, String> + 'a,
     ) -> &mut Self {
-        let previous = self.handlers.insert(
+        self.insert(
             C::NAME,
-            Box::new(move |client, params| handler(client, from_payload::<C::Open>(params)?)),
+            Box::new(move |client, params| {
+                StreamOpening::Now(
+                    from_payload::<C::Open>(params)
+                        .and_then(|open| handler(client, open))
+                        .map(StreamAttachment::Terminal),
+                )
+            }),
         );
-        assert!(previous.is_none(), "stream `{}` is served twice", C::NAME);
+        self
+    }
+
+    /// Serves `C`, opened by work the handler returns, which the connection
+    /// waits on while it serves on.
+    pub fn handle_later<C: StreamChannel>(
+        &mut self,
+        handler: impl Fn(ClientId, C::Open) -> Opening + 'a,
+    ) -> &mut Self {
+        self.insert(
+            C::NAME,
+            Box::new(
+                move |client, params| match from_payload::<C::Open>(params) {
+                    Ok(open) => StreamOpening::Later(handler(client, open)),
+                    Err(why) => StreamOpening::Now(Err(why)),
+                },
+            ),
+        );
         self
     }
 
     /// Opens a stream on `channel` for `client`, or `None` when no feature
     /// serves it.
-    pub fn open(
-        &self,
-        channel: &str,
-        client: ClientId,
-        params: &Payload,
-    ) -> Option<Result<TerminalAttachment, String>> {
+    pub fn open(&self, channel: &str, client: ClientId, params: &Payload) -> Option<StreamOpening> {
         self.handlers
             .get(channel)
             .map(|handler| handler(client, params))
@@ -199,8 +254,10 @@ impl Features {
         let attached = Arc::new(Attached::serve(Arc::clone(&context.events))?);
         let history = history::History::new(&context)?;
         let carry = carry::Carry::new(&context, history.handle());
+        let forwards = forwards::Forwards::new(&context, handle.clone());
         let features: Vec<Box<dyn Feature>> = vec![
             Box::new(sessions),
+            Box::new(forwards),
             Box::new(history),
             Box::new(carry),
             Box::new(config::Config::new(&context)?),

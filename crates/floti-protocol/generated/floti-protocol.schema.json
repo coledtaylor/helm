@@ -8359,6 +8359,29 @@
       ],
       "type": "object"
     },
+    "SessionPortOpen": {
+      "description": "Which session's port a `sessions:port` stream connects to.",
+      "properties": {
+        "id": {
+          "description": "The session's row id.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "port": {
+          "description": "The port its process tree listens on.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "port"
+      ],
+      "type": "object"
+    },
     "SessionProcess": {
       "description": "One process in a hosted session's tree.",
       "properties": {
@@ -10841,6 +10864,17 @@
     {
       "capability": null,
       "kind": "request",
+      "name": "host:ping",
+      "request": {
+        "type": "null"
+      },
+      "response": {
+        "type": "null"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
       "name": "host:quit",
       "request": {
         "$ref": "#/$defs/HostQuitRequest"
@@ -11556,6 +11590,14 @@
       "name": "sessions:overview",
       "snapshot": {
         "$ref": "#/$defs/SessionsOverview"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "stream",
+      "name": "sessions:port",
+      "open": {
+        "$ref": "#/$defs/SessionPortOpen"
       }
     },
     {

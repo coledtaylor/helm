@@ -105,7 +105,12 @@ starts one that listens on a TCP port on 127.0.0.1 the OS picks and records
 the port as `listening` in its own record (it runs `--fake-serve=<ms>`), for
 the processes-and-ports tests, `--fake-exit=<code>` exits; otherwise it
 answers each line with `echo: <line>`, and `/exit <code>`, `/print <hex>`,
-`/child` and `/gui-child` do the same at its prompt.
+`/child` and `/gui-child` do the same at its prompt. `/serve <port>` starts a
+child serving HTTP on 127.0.0.1 at that port (the OS picks one for 0) and
+writes `serving <port>`: a GET is answered with `fake dev server: <method>
+<path>`, a POST with its body, byte for byte, for the forwarded-port tests
+(`tests/forwards.rs`). `/flood <n>` writes `n` numbered lines at once, then
+`flood done`, for a client that falls behind.
 `floti-fake-gui` is built for the Windows `windows` subsystem, so there it has
 no console and the pseudoconsole closing does not reach it, as with a GUI app
 or a tool a CLI starts with its window hidden; elsewhere it is an ordinary
@@ -135,7 +140,8 @@ The host process itself is tested in `crates/host/tests/host.rs`, through
 `TestClient` (`testkit/client.rs`): a protocol client that connects on the
 local socket, runs the Noise handshake as the testkit's device, pinned to
 that host's key, says `hello`, makes typed requests and reads a session's
-terminal, granting credit as it reads. The host serves any key that
+terminal, granting credit as it reads; after `withhold_credit` it grants
+none until `grant_withheld`, as a client on a link too slow to keep up. The host serves any key that
 completes the handshake, so the device simply connects: `RunningHost`
 records where its host keeps its key, and `record_test_host` does the same
 for the executable, so a test connects with an endpoint and its
@@ -537,7 +543,10 @@ config dir is `CLAUDE_CONFIG_DIR`, or `~/.claude`.
 
 At its prompt: `/exit` and `/crash` end it with 0 and 3, `/wait` reports
 "waiting" until `y` or `n`, `/busy <ms>` reports "busy", `/child` starts a
-long-running child process, `/links` asks for the mouse as the fullscreen CLI
+long-running child process, `/serve <port>` starts a child serving HTTP on
+127.0.0.1 at that port and answers `serving <port>` (a GET is answered with a
+line naming it, a POST with its body), `/flood <n>` writes `n` numbered lines
+then `flood done`, `/links` asks for the mouse as the fullscreen CLI
 does and prints a hyperlink and a bare address (logging the mouse reports it
 is sent), and anything else is a prompt it records and answers.
 

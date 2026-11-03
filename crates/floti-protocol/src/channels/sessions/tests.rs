@@ -46,6 +46,7 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("session:activate", EVENT, None),
     ("session:confirm", EVENT, None),
     ("session:data", STREAM, Some(Capability::Terminal)),
+    ("sessions:port", STREAM, None),
     ("pterm:open", REQUEST, Some(Capability::Terminal)),
     ("pterm:close", REQUEST, Some(Capability::Terminal)),
     ("pterm:shells", REQUEST, None),
@@ -354,6 +355,7 @@ fn every_session_terminal_profile_history_archive_and_usage_channel_from_ipc_ts_
 fn a_sessions_and_a_plain_terminals_input_and_output_travel_as_byte_streams() {
     stream::<SessionTerminal>(SessionStreamOpen { id: 12 });
     stream::<PtermTerminal>(PtermStreamOpen { id: 3 });
+    stream::<SessionPortForward>(SessionPortOpen { id: 12, port: 5173 });
 
     // Output with invalid UTF-8 and a split escape sequence, then a keystroke
     // back, both on stream 3.

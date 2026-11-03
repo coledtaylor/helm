@@ -28,6 +28,38 @@ fn a_sender_with_n_bytes_of_credit_sends_at_most_n_and_holds_the_rest_until_more
 }
 
 #[test]
+fn bytes_held_for_a_receiver_that_fell_behind_are_dropped_and_what_is_written_after_goes_first() {
+    let mut outbox = Outbox::new();
+    outbox.open_stream(1, 4);
+    outbox.write(1, b"abcdefgh").unwrap();
+    let Some(Message::StreamData(sent)) = outbox.next_message() else {
+        panic!("the credit's worth goes");
+    };
+    assert_eq!(sent.data.0, b"abcd");
+    assert_eq!(outbox.stream(1).unwrap().held(), 4);
+
+    outbox.discard(1).unwrap();
+    assert_eq!(outbox.stream(1).unwrap().held(), 0);
+    assert_eq!(outbox.stream(1).unwrap().credit(), 0, "the credit is kept");
+
+    outbox.write(1, b"XY").unwrap();
+    outbox
+        .grant(&StreamCredit {
+            stream: 1,
+            bytes: 10,
+        })
+        .unwrap();
+    let Some(Message::StreamData(after)) = outbox.next_message() else {
+        panic!("what was written after the drop goes once credit comes");
+    };
+    assert_eq!(after.data.0, b"XY");
+    assert!(matches!(
+        outbox.discard(9),
+        Err(ProtocolError::UnknownStream(9))
+    ));
+}
+
+#[test]
 fn data_beyond_the_granted_credit_is_refused_as_a_protocol_error() {
     let mut receiver = CreditReceiver::new(1, 10);
     receiver

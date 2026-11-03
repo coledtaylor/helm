@@ -56,6 +56,8 @@
 //! - [`connect`]: `floti connect`, what a transport runs on the host's
 //!   computer: it copies bytes between its standard input and output and the
 //!   host's local socket, unchanged.
+//! - [`doctor`]: `floti doctor`, which asks each host this device uses
+//!   whether it answers, and says how long it took or what stopped it.
 
 /// Writes a line to standard error, as `eprintln!` does, then rotates the
 /// host's log when that line took it past its limit ([`host_log`]). In
@@ -76,6 +78,7 @@ pub mod carry;
 pub mod client;
 pub mod config_console;
 pub mod connect;
+pub mod doctor;
 pub mod error;
 pub mod history;
 pub mod host_log;

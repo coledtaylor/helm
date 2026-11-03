@@ -56,6 +56,13 @@ impl CreditSender {
         self.held.extend(bytes);
     }
 
+    /// Drops every byte waiting for credit, for a receiver that fell so far
+    /// behind that what it has not taken is no longer worth sending. The
+    /// credit left is kept.
+    pub fn discard(&mut self) {
+        self.held = VecDeque::new();
+    }
+
     /// Adds credit the receiver granted.
     pub fn grant(&mut self, bytes: u64) {
         self.credit = self.credit.saturating_add(bytes);
@@ -166,6 +173,16 @@ impl Outbox {
             .get_mut(&stream)
             .ok_or(ProtocolError::UnknownStream(stream))?
             .write(bytes);
+        Ok(())
+    }
+
+    /// Drops the bytes `stream` holds waiting for credit; see
+    /// [`CreditSender::discard`].
+    pub fn discard(&mut self, stream: u64) -> Result<(), ProtocolError> {
+        self.streams
+            .get_mut(&stream)
+            .ok_or(ProtocolError::UnknownStream(stream))?
+            .discard();
         Ok(())
     }
 

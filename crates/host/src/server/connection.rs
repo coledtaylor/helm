@@ -61,7 +61,7 @@ use std::time::Duration;
 use floti_protocol::channel::{RequestChannel, Routed, Router};
 use floti_protocol::channels::common::SessionRecord;
 use floti_protocol::channels::devices::DevicesDisconnect;
-use floti_protocol::channels::host::{HostStop, HostStopReason};
+use floti_protocol::channels::host::{HostPing, HostStop, HostStopReason};
 use floti_protocol::channels::sessions::SessionList;
 use floti_protocol::message::{
     ErrorCode, ErrorReply, Event, Hello, Request, Snapshot, StreamClose, StreamCredit, StreamData,
@@ -75,20 +75,23 @@ use floti_protocol::{
     HostIdentity, Message, Outbox, ProtocolError, encode_frame,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::sync::{broadcast, mpsc, watch};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::sync::{Semaphore, broadcast, mpsc, watch};
+use tokio::task::JoinSet;
 
 use super::attached::{Attached, Attachment};
 use super::events::{Publication, Start};
-use super::features::{Caller, Features};
+use super::features::{Caller, Features, StreamAttachment, StreamOpening};
 use super::hosted::Hosted;
 use super::stopper::ReservedStop;
 use super::{CATALOGUE, Stopper, unserved};
 use crate::platform::socket::LocalStream;
-use crate::session::{ClientId, Session, SessionOutput};
+use crate::session::{ClientId, SessionOutput};
 
+mod streams;
 #[cfg(test)]
 mod tests;
+
+use streams::{BEHIND_LIMIT, Carried, Fed, Feed, RESET};
 
 const READ_CHUNK: usize = 64 * 1024;
 
@@ -109,7 +112,8 @@ fn router<'a>(
         .handle::<HostStop>(move |request| {
             *stop = Some(request.reason);
             Ok(())
-        });
+        })
+        .handle::<HostPing>(|()| Ok(()));
     router
 }
 
@@ -221,12 +225,14 @@ pub(crate) struct ConnectionContext {
     pub shutdown: watch::Receiver<bool>,
 }
 
-/// One session terminal open on this connection.
+/// One stream open on this connection.
 struct OpenStream {
-    session: Arc<Session>,
+    /// Names this opening of the stream: what a task started for an earlier
+    /// one, or for the attachment before a catch-up, sends is dropped.
+    token: u64,
     /// The client's credit for input on it.
     input: CreditReceiver,
-    forward: JoinHandle<()>,
+    carried: Carried,
 }
 
 /// Serves one client until it goes, its device is disconnected or the host
@@ -283,6 +289,7 @@ pub(crate) async fn serve(
         outbox: Outbox::new(),
         snapshot_seq: HashMap::new(),
         streams: HashMap::new(),
+        tokens: 0,
         closing: BTreeSet::new(),
         stop_after_flush: None,
         later: Vec::new(),
@@ -664,7 +671,10 @@ struct Connection {
     /// last event it included: publications up to it are already covered.
     snapshot_seq: HashMap<u64, u64>,
     streams: HashMap<u64, OpenStream>,
-    /// Streams whose session has ended, closed once their output is sent.
+    /// The last token given a stream's opening.
+    tokens: u64,
+    /// Streams whose session or socket has ended, closed once their output
+    /// is sent.
     closing: BTreeSet<u64>,
     /// A stop a client asked for, reserved when it was answered and carried
     /// out once the answer has been sent.
@@ -739,7 +749,7 @@ impl Connection {
         mut shutdown: watch::Receiver<bool>,
         attachment: &mut Attachment,
     ) {
-        let (output_tx, mut output_rx) = mpsc::unbounded_channel::<(u64, SessionOutput)>();
+        let (feed_tx, mut feed_rx) = mpsc::unbounded_channel::<Feed>();
         let mut events = self.features.events().listen(self.client);
         let mut buf = vec![0; READ_CHUNK];
         // Answers still being worked out. Dropped with the connection, which
@@ -759,10 +769,10 @@ impl Connection {
                     Ok(0) | Err(_) => Err(End::Gone),
                     Ok(n) => self
                         .received(&buf[..n])
-                        .and_then(|()| self.take_messages(&mut channels, &output_tx)),
+                        .and_then(|()| self.take_messages(&mut channels, &feed_tx)),
                 },
-                Some((stream, output)) = output_rx.recv() => {
-                    self.session_output(stream, output);
+                Some(feed) = feed_rx.recv() => {
+                    self.fed(feed, &feed_tx);
                     Ok(())
                 }
                 Some(answered) = later.join_next(), if !later.is_empty() => {
@@ -806,11 +816,11 @@ impl Connection {
     fn take_messages(
         &mut self,
         channels: &mut ClientChannels<'static>,
-        output_tx: &mpsc::UnboundedSender<(u64, SessionOutput)>,
+        feed: &mpsc::UnboundedSender<Feed>,
     ) -> Result<(), End> {
         loop {
             match self.decoder.next_message() {
-                Ok(Some(message)) => self.message(channels, message, output_tx),
+                Ok(Some(message)) => self.message(channels, message, feed),
                 Ok(None) => return Ok(()),
                 // The framing is lost for good: nothing more can be read.
                 Err(ProtocolError::FrameTooLarge { .. }) => return Err(End::Gone),
@@ -825,7 +835,7 @@ impl Connection {
         &mut self,
         channels: &mut ClientChannels<'static>,
         message: Message,
-        output_tx: &mpsc::UnboundedSender<(u64, SessionOutput)>,
+        feed: &mpsc::UnboundedSender<Feed>,
     ) {
         match message {
             Message::Request(request) => match self.answer(channels, &request) {
@@ -841,12 +851,9 @@ impl Connection {
                 self.snapshot_seq.remove(&unsubscribe.subscription);
                 self.features.subscriptions_changed(self.client, channels);
             }
-            Message::StreamOpen(open) => self.open_stream(channels, &open, output_tx),
+            Message::StreamOpen(open) => self.open_stream(channels, &open, feed),
             Message::StreamData(data) => self.input(&data),
-            Message::StreamCredit(credit) => {
-                // Credit for a stream already closed is nothing to act on.
-                let _ = self.outbox.grant(&credit);
-            }
+            Message::StreamCredit(credit) => self.credit(&credit, feed),
             Message::StreamClose(close) => self.close_stream(close.stream, None, false),
             // A second hello, or a message only a host sends, means nothing
             // from a client.
@@ -948,14 +955,16 @@ impl Connection {
         }
     }
 
-    /// Opens a terminal stream: the feature serving its channel attaches the
-    /// client, and the stream carries the screen, then the live output; what
-    /// the client sends on it is typed.
+    /// Opens a stream: the feature serving its channel attaches the client
+    /// to a terminal, whose screen and then live output the stream carries
+    /// and into which what the client sends is typed, or opens a connection
+    /// on the host's loopback, which the stream carries both ways. Work that
+    /// takes time is waited on while the connection serves on.
     fn open_stream(
         &mut self,
         channels: &ClientChannels<'static>,
         open: &StreamOpen,
-        output_tx: &mpsc::UnboundedSender<(u64, SessionOutput)>,
+        feed: &mpsc::UnboundedSender<Feed>,
     ) {
         let refuse = |reason: String| {
             Message::StreamClose(StreamClose {
@@ -974,66 +983,278 @@ impl Connection {
         };
         // A stream number reused while open replaces the earlier stream.
         self.close_stream(open.stream, None, false);
+        let stream = open.stream;
         let features = Arc::clone(&self.features);
-        let attachment = match features
+        let Some(opening) = features
             .streams()
             .open(decl.name(), self.client, &open.params)
-        {
-            Some(Ok(attachment)) => attachment,
-            Some(Err(why)) => return self.outbox.push(refuse(why)),
-            None => {
-                return self.outbox.push(refuse(format!(
-                    "This host does not serve `{}`.",
-                    decl.name()
-                )));
-            }
+        else {
+            return self.outbox.push(refuse(format!(
+                "This host does not serve `{}`.",
+                decl.name()
+            )));
         };
-        self.outbox.open_stream(open.stream, DEFAULT_INITIAL_CREDIT);
-        let _ = self.outbox.write(open.stream, &attachment.redraw);
+        let token = self.next_token();
+        let input = CreditReceiver::new(stream, DEFAULT_INITIAL_CREDIT);
+        match opening {
+            StreamOpening::Now(Ok(attachment)) => {
+                self.carry(stream, token, input, attachment, Vec::new(), feed);
+            }
+            StreamOpening::Now(Err(why)) => self.outbox.push(refuse(why)),
+            StreamOpening::Later(work) => {
+                let feed = feed.clone();
+                let work = tokio::spawn(async move {
+                    let opened = work.await;
+                    let _ = feed.send(Feed {
+                        stream,
+                        token,
+                        fed: Fed::Opened(opened),
+                    });
+                });
+                self.streams.insert(
+                    stream,
+                    OpenStream {
+                        token,
+                        input,
+                        carried: Carried::Opening {
+                            work,
+                            sent: Vec::new(),
+                        },
+                    },
+                );
+            }
+        }
+    }
 
-        let stream = open.stream;
-        let forwarding = output_tx.clone();
-        let mut output = attachment.output;
-        let forward = tokio::spawn(async move {
-            while let Some(item) = output.recv().await {
-                if forwarding.send((stream, item)).is_err() {
-                    return;
+    fn next_token(&mut self) -> u64 {
+        self.tokens += 1;
+        self.tokens
+    }
+
+    /// Starts carrying `attachment` on `stream`, with `sent`, what the client
+    /// sent while it was being opened.
+    fn carry(
+        &mut self,
+        stream: u64,
+        token: u64,
+        mut input: CreditReceiver,
+        attachment: StreamAttachment,
+        sent: Vec<u8>,
+        feed: &mpsc::UnboundedSender<Feed>,
+    ) {
+        self.outbox.open_stream(stream, DEFAULT_INITIAL_CREDIT);
+        let carried = match attachment {
+            StreamAttachment::Terminal(terminal) => {
+                let _ = self.outbox.write(stream, &terminal.redraw);
+                if !sent.is_empty() {
+                    let _ = terminal.session.input(self.client, &sent);
+                    let credit = input.grant(sent.len() as u64);
+                    self.outbox.push(Message::StreamCredit(credit));
+                }
+                Carried::Terminal {
+                    session: terminal.session,
+                    forward: streams::forward_output(stream, token, terminal.output, feed.clone()),
+                    behind: false,
                 }
             }
-        });
+            StreamAttachment::Socket(socket) => {
+                let (to_socket, from_client) = mpsc::unbounded_channel();
+                let room = Arc::new(Semaphore::new(
+                    usize::try_from(DEFAULT_INITIAL_CREDIT).unwrap_or(usize::MAX),
+                ));
+                let (read, write) = socket.socket.into_split();
+                if !sent.is_empty() {
+                    let _ = to_socket.send(sent);
+                }
+                Carried::Socket {
+                    to_socket,
+                    reader: streams::read_socket(
+                        read,
+                        Arc::clone(&room),
+                        socket.ended,
+                        stream,
+                        token,
+                        feed.clone(),
+                    ),
+                    room,
+                    writer: streams::write_socket(write, from_client, stream, token, feed.clone()),
+                }
+            }
+        };
         self.streams.insert(
             stream,
             OpenStream {
-                session: attachment.session,
-                input: CreditReceiver::new(stream, DEFAULT_INITIAL_CREDIT),
-                forward,
+                token,
+                input,
+                carried,
             },
         );
     }
 
-    /// Keys the client typed on a session's stream.
+    /// Bytes the client sent on a stream: keys typed into a terminal, or
+    /// bytes for a socket, which are granted back once written.
     fn input(&mut self, data: &StreamData) {
+        let client = self.client;
         let Some(open) = self.streams.get_mut(&data.stream) else {
             return;
         };
         if let Err(err) = open.input.accept(data) {
             return self.close_stream(data.stream, Some(err.to_string()), false);
         }
-        let typed = open.session.input(self.client, &data.data.0);
-        let credit: StreamCredit = open.input.grant(data.data.0.len() as u64);
-        self.outbox.push(Message::StreamCredit(credit));
+        let typed = match &mut open.carried {
+            Carried::Terminal { session, .. } => {
+                let typed = session.input(client, &data.data.0);
+                let credit: StreamCredit = open.input.grant(data.data.0.len() as u64);
+                self.outbox.push(Message::StreamCredit(credit));
+                typed.map_err(|err| err.to_string())
+            }
+            Carried::Opening { sent, .. } => {
+                sent.extend_from_slice(&data.data.0);
+                Ok(())
+            }
+            Carried::Socket { to_socket, .. } => {
+                let _ = to_socket.send(data.data.0.clone());
+                Ok(())
+            }
+        };
         if let Err(err) = typed {
-            self.close_stream(data.stream, Some(err.to_string()), true);
+            self.close_stream(data.stream, Some(err), true);
+        }
+    }
+
+    /// Credit the client granted on a stream: more a socket may read, and
+    /// for a terminal that fell behind, the moment to catch it up.
+    fn credit(&mut self, credit: &StreamCredit, feed: &mpsc::UnboundedSender<Feed>) {
+        // Credit for a stream already closed is nothing to act on.
+        let _ = self.outbox.grant(credit);
+        let Some(open) = self.streams.get(&credit.stream) else {
+            return;
+        };
+        match &open.carried {
+            Carried::Socket { room, .. } => {
+                let most = Semaphore::MAX_PERMITS.saturating_sub(room.available_permits());
+                room.add_permits(
+                    usize::try_from(credit.bytes)
+                        .unwrap_or(usize::MAX)
+                        .min(most),
+                );
+            }
+            Carried::Terminal { behind: true, .. } => self.catch_up(credit.stream, feed),
+            _ => {}
+        }
+    }
+
+    /// Catches a terminal stream that fell behind up: it is attached afresh
+    /// and sent a reset and the session's current screen, then streams on.
+    fn catch_up(&mut self, stream: u64, feed: &mpsc::UnboundedSender<Feed>) {
+        let token = self.next_token();
+        let client = self.client;
+        let Some(open) = self.streams.get_mut(&stream) else {
+            return;
+        };
+        let Carried::Terminal {
+            session,
+            forward,
+            behind,
+        } = &mut open.carried
+        else {
+            return;
+        };
+        // Attaching again replaces the attachment it fell behind on, whose
+        // output stops with it.
+        match session.attach(client, session.size()) {
+            Ok(attachment) => {
+                forward.abort();
+                *forward = streams::forward_output(stream, token, attachment.output, feed.clone());
+                *behind = false;
+                open.token = token;
+                let _ = self.outbox.discard(stream);
+                let _ = self.outbox.write(stream, RESET);
+                let _ = self.outbox.write(stream, &attachment.redraw);
+            }
+            // The session has ended since: the stream closes as an ended
+            // session's does.
+            Err(_) => {
+                let _ = self.outbox.discard(stream);
+                self.closing.insert(stream);
+            }
+        }
+    }
+
+    /// What one of the streams' tasks has for the connection.
+    fn fed(&mut self, feed: Feed, sender: &mpsc::UnboundedSender<Feed>) {
+        let Feed { stream, token, fed } = feed;
+        if self
+            .streams
+            .get(&stream)
+            .is_none_or(|open| open.token != token)
+        {
+            return;
+        }
+        match fed {
+            Fed::Output(output) => self.session_output(stream, output),
+            Fed::Opened(Ok(attachment)) => {
+                let Some(open) = self.streams.remove(&stream) else {
+                    return;
+                };
+                let sent = match open.carried {
+                    Carried::Opening { sent, .. } => sent,
+                    other => {
+                        // Opened once only; anything else is left as it is.
+                        self.streams.insert(
+                            stream,
+                            OpenStream {
+                                carried: other,
+                                ..open
+                            },
+                        );
+                        return;
+                    }
+                };
+                self.carry(stream, token, open.input, attachment, sent, sender);
+            }
+            Fed::Opened(Err(why)) | Fed::Ended(Some(why)) => {
+                self.close_stream(stream, Some(why), true);
+            }
+            Fed::Received(bytes) => {
+                let _ = self.outbox.write(stream, &bytes);
+            }
+            Fed::Written(bytes) => {
+                if let Some(open) = self.streams.get_mut(&stream) {
+                    let credit = open.input.grant(bytes);
+                    self.outbox.push(Message::StreamCredit(credit));
+                }
+            }
+            // The server closed the connection: the stream closes once what
+            // it sent has gone.
+            Fed::Ended(None) => {
+                self.closing.insert(stream);
+            }
         }
     }
 
     fn session_output(&mut self, stream: u64, output: SessionOutput) {
-        if !self.streams.contains_key(&stream) {
+        let Some(OpenStream {
+            carried: Carried::Terminal { behind, .. },
+            ..
+        }) = self.streams.get_mut(&stream)
+        else {
             return;
-        }
+        };
         match output {
+            // A client that fell behind is sent nothing until it has caught
+            // up: the screen it is then sent already holds this.
+            SessionOutput::Data(_) if *behind => {}
             SessionOutput::Data(bytes) => {
                 let _ = self.outbox.write(stream, &bytes);
+                if self
+                    .outbox
+                    .stream(stream)
+                    .is_some_and(|sender| sender.held() > BEHIND_LIMIT)
+                {
+                    let _ = self.outbox.discard(stream);
+                    *behind = true;
+                }
             }
             // The protocol has no message for a size change yet; the client
             // that typed set it and already knows.
@@ -1052,13 +1273,16 @@ impl Connection {
         let Some(open) = self.streams.remove(&stream) else {
             return;
         };
-        open.forward.abort();
-        if !self
-            .streams
-            .values()
-            .any(|other| Arc::ptr_eq(&other.session, &open.session))
+        open.carried.stop();
+        if let Some(session) = open.carried.session()
+            && !self.streams.values().any(|other| {
+                other
+                    .carried
+                    .session()
+                    .is_some_and(|other| Arc::ptr_eq(other, session))
+            })
         {
-            open.session.detach(self.client);
+            session.detach(self.client);
         }
         self.closing.remove(&stream);
         self.outbox.close_stream(stream);
@@ -1103,8 +1327,10 @@ impl Connection {
     /// The client has gone: its sessions run on without it.
     fn detach_all(&mut self) {
         for (_, open) in self.streams.drain() {
-            open.forward.abort();
-            open.session.detach(self.client);
+            open.carried.stop();
+            if let Some(session) = open.carried.session() {
+                session.detach(self.client);
+            }
         }
     }
 }

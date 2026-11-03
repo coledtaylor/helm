@@ -329,9 +329,26 @@ async fn read_host_key(transport: &Transport) -> Result<PublicKey, BridgeExit> {
         })
 }
 
+/// Connects to the host `transport` reaches as the client whose keys are
+/// `keys`, holding it to the key the client pinned and pinning nothing, for
+/// `floti doctor`. The error is one line: the last one the transport wrote
+/// on standard error, unedited, when it ended with a failure first, and a
+/// sentence otherwise.
+pub(crate) async fn reach_through(
+    keys: &ClientKeys,
+    transport: &Transport,
+) -> Result<(Connection, Running), String> {
+    let mut running = Running::spawn(transport, &transport.line(CONNECT))?;
+    let stream = running.stream();
+    match keys.connect_over(stream, &running.described).await {
+        Ok(connection) => Ok((connection, running)),
+        Err(err) => Err(running.failure_line(err).await),
+    }
+}
+
 /// A transport's program, running with `floti connect` (or the line to run)
 /// as its last argument.
-struct Running {
+pub(crate) struct Running {
     child: Child,
     /// The command line, for errors.
     described: String,
@@ -343,6 +360,11 @@ impl Running {
     /// Starts `transport` with `line` as its last argument, its standard
     /// input and output piped to the bridge, opening no window of its own.
     fn start(transport: &Transport, line: &str) -> Result<Self, BridgeExit> {
+        Self::spawn(transport, line).map_err(|why| fail(BridgeExit::TransportNotStarted, &why))
+    }
+
+    /// [`Self::start`], saying why it could not start rather than ending.
+    fn spawn(transport: &Transport, line: &str) -> Result<Self, String> {
         let described = transport.args.iter().map(|arg| arg.to_string_lossy()).fold(
             transport.program.to_string_lossy().into_owned(),
             |mut all, arg| {
@@ -362,12 +384,9 @@ impl Running {
             .kill_on_drop(true);
         launcher::Native.windowless(command.as_std_mut());
         let mut child = command.spawn().map_err(|err| {
-            fail(
-                BridgeExit::TransportNotStarted,
-                &format!(
-                    "could not run {}: {err}",
-                    transport.program.to_string_lossy()
-                ),
+            format!(
+                "could not run {}: {err}",
+                transport.program.to_string_lossy()
             )
         })?;
         let stderr = child
@@ -405,9 +424,34 @@ impl Running {
             .and_then(Result::ok)
     }
 
+    /// Why a handshake that did not finish with `err` failed, as one line:
+    /// the last one the transport wrote, unedited, when it ended with a
+    /// failure first, `err` otherwise.
+    async fn failure_line(mut self, err: ClientError) -> String {
+        let ended_early = matches!(
+            err,
+            ClientError::HostClosed { .. }
+                | ClientError::LearnedKeyNotProven { .. }
+                | ClientError::Io(_)
+        );
+        if ended_early
+            && let Some(status) = self.exited().await
+            && !status.success()
+        {
+            return self.last_written().await.unwrap_or_else(|| {
+                format!(
+                    "{} ended before the handshake finished ({status}) and wrote nothing on standard error",
+                    self.described
+                )
+            });
+        }
+        let _ = self.child.kill().await;
+        err.to_string()
+    }
+
     /// Lets the program end once its standard input has closed, as `floti
     /// connect` does, and ends it if it has not by then.
-    async fn finish(mut self) {
+    pub(crate) async fn finish(mut self) {
         if self.exited().await.is_none() {
             let _ = self.child.kill().await;
         }

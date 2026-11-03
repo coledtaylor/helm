@@ -45,6 +45,12 @@
 //   /wait        report status "waiting" until y or n is pressed
 //   /busy <ms>   report status "busy" for that long
 //   /child       start a long-running child process, for process-tree tests
+//   /serve <port>  start a child serving HTTP on 127.0.0.1 at that port (any
+//                free one for 0) and answer `serving <port>`: a GET is
+//                answered with a line naming it, a POST with its body, byte
+//                for byte. It exits with the test that owns it.
+//   /flood <n>   write n numbered lines (`flood 000000 ...`) at once, then
+//                answer `flood done`
 //   /clear       move to a new conversation id under the same process, and
 //                register under it, as the real CLI does
 //   /links       ask for mouse and focus reports, as the real CLI's fullscreen
@@ -514,6 +520,27 @@ function recordPrompt(text) {
   )
 }
 
+/**
+ * The script for `node -e` that `/serve` runs: an HTTP server on 127.0.0.1
+ * at `port` (any free one for 0) that answers a GET with a line naming the
+ * request and a POST with its body, byte for byte. It prints
+ * `listening <port>` once it listens, and exits with the test that owns it.
+ */
+function serveScript(port) {
+  return (
+    `${childScript(configDir)};` +
+    `const server = require('node:http').createServer((req, res) => {` +
+    `  const body = [];` +
+    `  req.on('data', (chunk) => body.push(chunk));` +
+    `  req.on('end', () => {` +
+    `    res.setHeader('content-type', 'application/octet-stream');` +
+    `    res.end(req.method === 'POST' ? Buffer.concat(body) : 'fake dev server: ' + req.method + ' ' + req.url);` +
+    `  });` +
+    `});` +
+    `server.listen(${String(port)}, '127.0.0.1', () => process.stdout.write('listening ' + server.address().port + '\\n'));`
+  )
+}
+
 let exiting = false
 function exit(code) {
   if (exiting) return
@@ -585,6 +612,30 @@ function submit(line) {
     const child = spawn(process.execPath, ['-e', childScript(configDir)], { stdio: 'ignore' })
     children.push(child)
     return answer(`child ${String(child.pid)}`)
+  }
+  if (command === '/serve') {
+    const child = spawn(process.execPath, ['-e', serveScript(Number(arg) || 0)], {
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+    children.push(child)
+    let said = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      said += chunk
+      const port = /^listening (\d+)\n/.exec(said)
+      if (port !== null) {
+        child.stdout.removeAllListeners('data')
+        answer(`serving ${port[1]}`)
+      }
+    })
+    return
+  }
+  if (command === '/flood') {
+    const lines = Number(arg) || 1000
+    const all = []
+    for (let n = 0; n < lines; n += 1) all.push(`flood ${String(n).padStart(6, '0')} ${'.'.repeat(50)}\r\n`)
+    out(all.join(''))
+    return answer('flood done')
   }
   if (line.trim() === '') return drawPrompt()
 

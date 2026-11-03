@@ -36,6 +36,10 @@ pub struct TestClient {
     closed_streams: HashMap<u64, Option<String>>,
     /// Whether the host has closed the connection.
     ended: bool,
+    /// Whether it grants no credit for what it reads.
+    withholding: bool,
+    /// Credit withheld, per stream.
+    owed: HashMap<u64, u64>,
     pub welcome: Welcome,
 }
 
@@ -155,6 +159,8 @@ impl TestClient {
             stream_bytes: HashMap::new(),
             closed_streams: HashMap::new(),
             ended: false,
+            withholding: false,
+            owed: HashMap::new(),
             welcome: Welcome {
                 protocol: PROTOCOL_VERSION,
                 host_version: String::new(),
@@ -382,6 +388,29 @@ impl TestClient {
         }
     }
 
+    /// From now on, grants no credit for what it reads, as a client on a
+    /// link too slow to keep up: the host may send it only the credit it
+    /// already has.
+    pub fn withhold_credit(&mut self) {
+        self.withholding = true;
+    }
+
+    /// Grants every byte it read while withholding credit, and grants as it
+    /// reads from then on.
+    pub async fn grant_withheld(&mut self) {
+        self.withholding = false;
+        let owed: Vec<(u64, u64)> = self.owed.drain().collect();
+        for (stream, bytes) in owed {
+            self.send(&Message::StreamCredit(StreamCredit { stream, bytes }))
+                .await;
+        }
+    }
+
+    /// Every byte received on `stream` so far.
+    pub fn stream_bytes(&self, stream: u64) -> &[u8] {
+        self.stream_bytes.get(&stream).map_or(&[], Vec::as_slice)
+    }
+
     /// Whether the host closed `stream`, and why.
     pub fn stream_closed(&self, stream: u64) -> Option<&Option<String>> {
         self.closed_streams.get(&stream)
@@ -442,11 +471,15 @@ impl TestClient {
                     .entry(data.stream)
                     .or_default()
                     .extend_from_slice(&data.data.0);
-                self.send(&Message::StreamCredit(StreamCredit {
-                    stream: data.stream,
-                    bytes: len,
-                }))
-                .await;
+                if self.withholding {
+                    *self.owed.entry(data.stream).or_default() += len;
+                } else {
+                    self.send(&Message::StreamCredit(StreamCredit {
+                        stream: data.stream,
+                        bytes: len,
+                    }))
+                    .await;
+                }
             }
             Message::StreamClose(close) => {
                 self.closed_streams.insert(close.stream, close.reason);

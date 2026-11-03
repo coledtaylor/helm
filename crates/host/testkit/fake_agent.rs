@@ -41,7 +41,13 @@
 //! `echo: <line>`. At its prompt, `/exit <code>` exits with `code`,
 //! `/print <hex>` writes those bytes, `/size` writes `size: <cols>x<rows>`,
 //! the size of the terminal it writes to, and `/child` and `/gui-child` start
-//! a child. It exits 0 when stdin ends.
+//! a child. `/serve <port>` starts a child serving HTTP on 127.0.0.1 at that
+//! port (one the OS picks for 0), recorded as `listening` in the child's
+//! record, and writes `serving <port>` once it listens: a GET is answered
+//! with `fake dev server: <method> <path>`, a POST with its body, byte for
+//! byte. The child runs this program with `--fake-http=<port>`. `/flood <n>`
+//! writes `n` numbered lines (`flood 000000 ...`) at once, then `flood done`.
+//! It exits 0 when stdin ends.
 //!
 //! It, and every child it starts, exits 0 once the test process that owns it
 //! is gone: the one the `test-owner` file nearest above its record folder
@@ -182,6 +188,10 @@ fn main() {
         serve(&mut record, parse_ms(ms));
         return;
     }
+    if let Some(port) = flag_value(&argv, "--fake-http") {
+        serve_http(&mut record, port.parse().unwrap_or(0));
+        return;
+    }
     if let Some(ms) = flag_value(&argv, "--fake-sleep") {
         thread::sleep(Duration::from_millis(parse_ms(ms)));
         return;
@@ -243,6 +253,10 @@ fn main() {
             start_child(&mut record, Child::Console, DEFAULT_CHILD_MS);
         } else if line == "/gui-child" {
             start_child(&mut record, Child::Gui, DEFAULT_CHILD_MS);
+        } else if let Some(port) = line.strip_prefix("/serve") {
+            start_server(&mut record, port.trim().parse().unwrap_or(0));
+        } else if let Some(lines) = line.strip_prefix("/flood") {
+            flood(lines.trim().parse().unwrap_or(1000));
         } else if line == "/size" {
             match terminal_size::Native.of_standard_output() {
                 Ok((cols, rows)) => write_out(format!("size: {cols}x{rows}\r\n").as_bytes()),
@@ -310,6 +324,120 @@ fn serve(record: &mut Record, ms: u64) {
     record.save();
     thread::sleep(Duration::from_millis(ms));
     drop(listener);
+}
+
+/// Serves HTTP on 127.0.0.1 at `port` (one the OS picks for 0), records it
+/// and says `listening <port>` on stdout, until the test that owns it is
+/// gone: a GET is answered with a line naming it, a POST with its body,
+/// byte for byte, each on a connection of its own that closes after.
+fn serve_http(record: &mut Record, port: u16) {
+    let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => listener,
+        Err(err) => {
+            eprintln!("floti-fake-agent: could not listen: {err}");
+            return;
+        }
+    };
+    let port = listener.local_addr().map_or(port, |addr| addr.port());
+    record.listening = Some(port);
+    record.save();
+    write_out(format!("listening {port}\n").as_bytes());
+    for stream in listener.incoming().flatten() {
+        thread::spawn(move || answer_http(stream));
+    }
+}
+
+/// Answers one request on `stream`, then closes it.
+fn answer_http(mut stream: std::net::TcpStream) {
+    use std::io::Read;
+    let mut got = Vec::new();
+    let mut chunk = [0; 16 * 1024];
+    let head_end = loop {
+        if let Some(at) = got.windows(4).position(|four| four == b"\r\n\r\n") {
+            break at + 4;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => got.extend_from_slice(&chunk[..n]),
+        }
+    };
+    let head = String::from_utf8_lossy(&got[..head_end]).into_owned();
+    let mut words = head.lines().next().unwrap_or_default().split(' ');
+    let method = words.next().unwrap_or_default().to_owned();
+    let path = words.next().unwrap_or_default().to_owned();
+    let length: usize = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse().ok())?
+        })
+        .unwrap_or(0);
+    while got.len() < head_end + length {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => got.extend_from_slice(&chunk[..n]),
+        }
+    }
+    let body = if method == "POST" {
+        got[head_end..head_end + length].to_vec()
+    } else {
+        format!("fake dev server: {method} {path}").into_bytes()
+    };
+    let mut answer = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    answer.extend_from_slice(&body);
+    let _ = stream.write_all(&answer).and_then(|()| stream.flush());
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+}
+
+/// Starts a child serving HTTP at `port`, and says `serving <port>` once it
+/// listens.
+fn start_server(record: &mut Record, port: u16) {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            eprintln!("floti-fake-agent: could not find itself to start a server: {err}");
+            return;
+        }
+    };
+    let child = Command::new(exe)
+        .arg(format!("--fake-http={port}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(err) => {
+            eprintln!("floti-fake-agent: could not start a server: {err}");
+            return;
+        }
+    };
+    record.children.push(child.id());
+    record.save();
+    let mut said = String::new();
+    if let Some(stdout) = child.stdout.take() {
+        let _ = io::BufReader::new(stdout).read_line(&mut said);
+    }
+    match said.trim().strip_prefix("listening ") {
+        Some(port) => write_out(format!("serving {port}\r\n").as_bytes()),
+        None => write_out(b"serving failed\r\n"),
+    }
+}
+
+/// Writes `lines` numbered lines at once, then `flood done`.
+fn flood(lines: u32) {
+    let mut all = String::new();
+    for n in 0..lines {
+        all.push_str(&format!("flood {n:06} {}\r\n", ".".repeat(50)));
+    }
+    all.push_str("flood done\r\n");
+    write_out(all.as_bytes());
 }
 
 fn start_child(record: &mut Record, kind: Child, ms: u64) {

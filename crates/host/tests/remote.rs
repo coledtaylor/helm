@@ -1310,3 +1310,170 @@ fn the_floti_named_on_the_other_computer_is_quoted_when_it_has_a_blank_and_refus
         assert!(remote_floti_problem(refused).is_some(), "{refused:?}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// floti doctor
+// ---------------------------------------------------------------------------
+
+/// How a run of `floti doctor` ended.
+#[derive(Debug)]
+struct Doctored {
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+/// Runs `floti doctor` with `args` over `dirs`, giving it `stdin`, with
+/// `fail` as the fake ssh's failure, and waits for it to end.
+async fn doctor(dirs: &TestDirs, args: &[&str], stdin: &[u8], fail: Option<&str>) -> Doctored {
+    let mut command = floti_command(dirs, &dirs.runtime);
+    command.arg("doctor").args(args);
+    if let Some(fail) = fail {
+        command.env("FAKE_SSH_FAIL", fail);
+    }
+    let stdin = stdin.to_vec();
+    let run = tokio::task::spawn_blocking(move || {
+        let mut child = command.spawn().expect("run floti doctor");
+        child
+            .stdin
+            .take()
+            .expect("its stdin")
+            .write_all(&stdin)
+            .expect("write its stdin");
+        child.wait_with_output().expect("wait for floti doctor")
+    });
+    let output = tokio::time::timeout(PATIENCE, run)
+        .await
+        .unwrap_or_else(|_| panic!("floti doctor did not end within {PATIENCE:?}"))
+        .expect("floti doctor's run");
+    Doctored {
+        code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// A host as the desktop records it: `transport` as its words.
+fn recorded(id: &str, name: &str, words: &[String], folder: &Path) -> Value {
+    serde_json::json!({
+        "id": id,
+        "name": name,
+        "transport": { "kind": "command", "program": words[0], "args": &words[1..] },
+        "folder": folder,
+    })
+}
+
+/// `words` as a terminal reads them back, then `floti connect`.
+fn tried_by_hand(words: &[String]) -> String {
+    let typed: Vec<String> = words
+        .iter()
+        .map(|word| {
+            if word.contains(' ') {
+                format!("\"{word}\"")
+            } else {
+                word.clone()
+            }
+        })
+        .collect();
+    format!("{} {CONNECT_LINE}", typed.join(" "))
+}
+
+/// Whether `line` says `name` answers, with this floti and a round trip.
+fn answers(line: &str, name: &str) -> bool {
+    let Some(rest) = line.strip_prefix(&format!(
+        "{name}: answers, floti {}, ",
+        floti_host::version::FLOTI_VERSION
+    )) else {
+        return false;
+    };
+    rest.strip_suffix(" ms round trip")
+        .is_some_and(|ms| ms.parse::<u128>().is_ok())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s6_floti_doctor_prints_one_line_per_host_and_fails_when_any_does_not_answer() {
+    let world = World::start();
+    let dirs = &world.dirs;
+    let reached = world.pinned_folder("reached by a command");
+    let refused = world.pinned_folder("refused by ssh");
+    let new = dirs.root().join("never connected");
+    let hosts = serde_json::json!([
+        recorded("a1", "box", &custom_transport(), &reached),
+        recorded("b2", "build-box", &ssh_transport(), &refused),
+        recorded("c3", "new-box", &custom_transport(), &new),
+    ]);
+
+    let recording = doctor(dirs, &["--record"], hosts.to_string().as_bytes(), None).await;
+    assert_eq!(recording.code, Some(0), "{recording:?}");
+    assert!(dirs.data.join(floti_host::doctor::HOSTS_FILE).is_file());
+
+    let checked = doctor(dirs, &[], b"", Some("denied")).await;
+    assert_eq!(checked.code, Some(1), "{checked:?}");
+    let lines: Vec<&str> = checked.stdout.lines().collect();
+    assert_eq!(lines.len(), 4, "{checked:?}");
+    assert!(answers(lines[0], "This PC"), "{checked:?}");
+    assert!(answers(lines[1], "box"), "{checked:?}");
+    assert_eq!(
+        lines[2],
+        format!(
+            "build-box: does not answer: {TARGET}: Permission denied (publickey,password). | try by hand: {}",
+            tried_by_hand(&ssh_transport())
+        )
+    );
+    assert!(
+        lines[3].starts_with("new-box: not added yet:"),
+        "{checked:?}"
+    );
+    assert!(checked.stderr.is_empty(), "{checked:?}");
+
+    // Nothing was learned or pinned for the host it had no key for, and no
+    // transport was asked for a host key.
+    assert!(!new.join(PINNED_HOST_FILE).exists());
+    assert!(
+        transport_runs(dirs)
+            .iter()
+            .all(|run| run["line"].as_str() != Some(HOST_KEY_LINE)),
+        "{:?}",
+        transport_runs(dirs)
+    );
+
+    // With every host answering, it succeeds.
+    let only_reached = serde_json::json!([recorded("a1", "box", &custom_transport(), &reached)]);
+    assert_eq!(
+        doctor(
+            dirs,
+            &["--record"],
+            only_reached.to_string().as_bytes(),
+            None
+        )
+        .await
+        .code,
+        Some(0)
+    );
+    let checked = doctor(dirs, &[], b"", None).await;
+    assert_eq!(checked.code, Some(0), "{checked:?}");
+    assert_eq!(checked.stdout.lines().count(), 2, "{checked:?}");
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s6_floti_doctor_starts_no_host_and_says_none_is_running_on_this_computer() {
+    let dirs = TestDirs::new();
+    let checked = doctor(&dirs, &[], b"", None).await;
+    assert_eq!(checked.code, Some(1), "{checked:?}");
+    assert_eq!(
+        checked.stdout.lines().collect::<Vec<_>>(),
+        ["This PC: does not answer: no Floti host has started on this computer yet."]
+    );
+    // It started none: there is still no host key in the data folder.
+    assert!(host_public_key(&dirs.data).unwrap().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn floti_doctor_record_refuses_what_is_not_a_list_of_hosts_and_records_nothing() {
+    let dirs = TestDirs::new();
+    let refused = doctor(&dirs, &["--record"], b"{\"not\": \"hosts\"}", None).await;
+    assert_eq!(refused.code, Some(3), "{refused:?}");
+    assert!(refused.stderr.starts_with("floti doctor: "), "{refused:?}");
+    assert!(!dirs.data.join(floti_host::doctor::HOSTS_FILE).exists());
+}

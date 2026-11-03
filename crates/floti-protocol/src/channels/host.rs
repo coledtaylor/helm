@@ -1,5 +1,6 @@
-//! The host process itself: `host:stop`, and what a client's deliberate quit
-//! asks of it (`host:deviceSessions`, `host:quit`).
+//! The host process itself: `host:stop`, what a client's deliberate quit
+//! asks of it (`host:deviceSessions`, `host:quit`), and `host:ping`, which a
+//! client times to know its connection's round trip.
 //!
 //! The host is a process of its own that outlives every client, so stopping
 //! it is a request a client makes on purpose. A client quitting is not a
@@ -16,7 +17,15 @@ pub fn declare(catalogue: &mut Catalogue) {
     catalogue
         .request::<HostStop>()
         .request::<HostDeviceSessions>()
-        .request::<HostQuit>();
+        .request::<HostQuit>()
+        .request::<HostPing>();
+}
+
+request_channel! {
+    /// Answered at once with nothing, for any client: how long the answer
+    /// takes to come back is the round trip of the client's connection, what
+    /// a keystroke in a terminal there costs.
+    HostPing = "host:ping", () => ()
 }
 
 request_channel! {

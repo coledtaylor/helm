@@ -81,7 +81,8 @@ pub fn declare(catalogue: &mut Catalogue) {
         .event::<SessionNotify>()
         .event::<SessionActivate>()
         .event::<SessionConfirm>()
-        .stream::<SessionTerminal>();
+        .stream::<SessionTerminal>()
+        .stream::<SessionPortForward>();
     terminal::declare(catalogue);
     profiles::declare(catalogue);
     history::declare(catalogue);
@@ -199,6 +200,20 @@ stream_channel! {
     /// A session's terminal: its output host to client, its input client to
     /// host, as raw bytes.
     SessionTerminal = "session:data", opens SessionStreamOpen, needs Terminal
+}
+
+stream_channel! {
+    /// One connection to a port a running session's own process tree listens
+    /// on, at an address the host's loopback reaches: what the client sends
+    /// goes to it and what it answers comes back, as raw bytes, each way
+    /// under the stream's credit. The host connects only to its own loopback
+    /// address (`127.0.0.1`, or `::1` for a port bound there alone), never to
+    /// another interface or computer. Any other port, or a session that is
+    /// not running, closes the stream at once with a sentence saying why, and
+    /// no connection is opened. The stream closes with a sentence when its
+    /// session ends, and without one once the server has closed the
+    /// connection and everything it sent has gone.
+    SessionPortForward = "sessions:port", opens SessionPortOpen
 }
 
 // ---------------------------------------------------------------------------
@@ -478,6 +493,17 @@ pub struct SessionActivation {
 pub struct SessionStreamOpen {
     #[ts(type = "number")]
     pub id: u64,
+}
+
+/// Which session's port a `sessions:port` stream connects to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPortOpen {
+    /// The session's row id.
+    #[ts(type = "number")]
+    pub id: u64,
+    /// The port its process tree listens on.
+    pub port: u16,
 }
 
 /// What a live session says it is doing, in its backend's own records.
