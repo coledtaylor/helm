@@ -35,9 +35,34 @@ interface ShellPane {
   element: HTMLDivElement
   detachData: () => void
   detachExit: () => void
+  /** Whether the shell went with the host it ran in, rather than exiting. */
+  lost: boolean
 }
 
 const panes = new Map<string, ShellPane>()
+
+/** Told whenever a shell is lost, or one is opened or closed in its place. */
+const shellListeners = new Set<() => void>()
+const shellsChanged = (): void => {
+  for (const listener of shellListeners) listener()
+}
+
+/** Calls `listener` whenever a shell is lost, opened or closed; returns the unsubscribe. */
+export function onShellsChange(listener: () => void): () => void {
+  shellListeners.add(listener)
+  return () => {
+    shellListeners.delete(listener)
+  }
+}
+
+/**
+ * Whether the shell under `key` went with the host it ran in. Its screen
+ * stays, with input off, until a new shell is opened in its place
+ * (`reopenShell`) or its tab closes.
+ */
+export function shellLost(key: string): boolean {
+  return panes.get(key.toLowerCase())?.lost === true
+}
 
 /** Output that arrived between `pterm:open` resolving and the sink attaching. */
 const pending = new Map<number, string[]>()
@@ -185,6 +210,10 @@ export async function mountShell(
     host.term.options.cursorBlink = false
     host.term.options.disableStdin = true
     host.term.blur()
+    if (payload.lost === true) {
+      pane.lost = true
+      shellsChanged()
+    }
   })
 
   const pane: ShellPane = {
@@ -198,9 +227,11 @@ export async function mountShell(
       sinks.delete(id)
       pending.delete(id)
     },
-    detachExit
+    detachExit,
+    lost: false
   }
   panes.set(key, pane)
+  shellsChanged()
   return described(pane)
 }
 
@@ -218,6 +249,7 @@ export function disposeShell(key: string): Promise<void> {
   pane.detachExit()
   pane.host.dispose()
   pane.element.remove()
+  shellsChanged()
   return helm.invoke('pterm:close', { id: pane.id })
 }
 

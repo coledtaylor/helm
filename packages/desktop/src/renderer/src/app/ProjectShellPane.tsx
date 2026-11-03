@@ -1,9 +1,10 @@
 import type { JSX, Ref } from 'react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { DetectedShell } from '@helm/core'
-import { CaretIcon, cn, WarnIcon } from '@helm/ui'
+import { CaretIcon, cn, ShellLostBar, WarnIcon } from '@helm/ui'
 import { estimateGrid } from './terminals'
-import { getShell, mountShell, reopenShell, type MountedShell } from './pterms'
+import { getShell, mountShell, onShellsChange, reopenShell, shellLost, type MountedShell } from './pterms'
+import { LOCAL_HOST_NAME } from './host/sessions'
 
 /**
  * The shortest this pane is ever drawn, whatever percentage it is asked for.
@@ -68,6 +69,8 @@ export function ProjectShellPane({
   /** What this pane was told to run, as opposed to what it is running. */
   const [override, setOverride] = useState('')
   const [swapping, setSwapping] = useState(false)
+  /** Whether the shell went with the host it ran in: its screen stays, dimmed, until a new one opens. */
+  const lost = useSyncExternalStore(onShellsChange, () => shellLost(path))
 
   useEffect(() => {
     const box = boxRef.current
@@ -230,7 +233,12 @@ export function ProjectShellPane({
           />
         </span>
       </div>
-      <div className="min-h-0 flex-1 p-2.5">
+      {/* A new shell is the same shell this pane was told to run. */}
+      {lost && <ShellLostBar hostName={LOCAL_HOST_NAME} onNewShell={() => swap(override)} />}
+      <div
+        data-terminal-lost={lost ? true : undefined}
+        className={lost ? 'min-h-0 flex-1 p-2.5 opacity-60' : 'min-h-0 flex-1 p-2.5'}
+      >
         <div ref={boxRef} className="h-full w-full" />
       </div>
     </div>

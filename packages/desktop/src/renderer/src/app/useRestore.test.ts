@@ -128,4 +128,10 @@ describe('restoreReport', () => {
     ).toEqual({ text: 'Reopened 2 sessions Helm was running when it closed.', failed: false })
     expect(restoreReport({ restored: [], failed: [] }, true)).toBeNull()
   })
+
+  it('names the host that stopped when the sessions went with it', () => {
+    expect(
+      restoreReport({ restored: [{ from: 1, launched: launched(5) }], failed: [] }, true, 'this PC’s host')
+    ).toEqual({ text: 'Reopened 1 session this PC’s host was running when it stopped.', failed: false })
+  })
 })

@@ -1,4 +1,5 @@
-import { render, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bridge } from './bridge.testkit'
 import { FakeResizeObserver, layout, Terminal } from './terminal.testkit'
@@ -59,5 +60,27 @@ describe('TerminalTabPane', () => {
 
     expect(refit).toHaveBeenCalled()
     expect(focus).toHaveBeenCalled()
+  })
+
+  it('says its shell was lost with the host, keeps its screen dimmed with input off, and starts a new shell in its folder on request', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<TerminalTabPane id={1} path={ALPHA} active windowsBuild={null} />)
+    await waitFor(() => expect(getShell(terminalShellKey(1))).toBeDefined())
+    const lostId = nextId - 1
+    const term = getShell(terminalShellKey(1))!.term as unknown as Terminal
+
+    act(() => bridge.emit('pterm:exit', { id: lostId, exitCode: null, lost: true }))
+
+    const bar = await screen.findByRole('status')
+    expect(bar.textContent).toContain('Shell lost: this PC’s host stopped')
+    expect(term.options.disableStdin).toBe(true)
+    expect(container.querySelector('[data-terminal-lost]')).not.toBeNull()
+
+    await user.click(within(bar).getByRole('button', { name: 'New shell' }))
+
+    await waitFor(() => expect(bridge.invoked('pterm:open')).toHaveLength(2))
+    expect(bridge.invoked('pterm:open')[1]).toEqual(expect.objectContaining({ path: ALPHA, separate: true }))
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull())
+    expect(container.querySelector('[data-terminal-lost]')).toBeNull()
   })
 })

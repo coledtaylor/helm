@@ -122,6 +122,7 @@ export {
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { OwnDataBanner, type OwnDataBannerProps } from './components/OwnDataBanner'
 export { HostStoppedBanner, type HostStoppedBannerProps } from './components/HostStoppedBanner'
+export { ShellLostBar, type ShellLostBarProps } from './components/ShellLostBar'
 export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'
 export {

@@ -119,4 +119,11 @@ describe('RestorePane', () => {
     screen.getByRole('heading', { name: '1 session was running when Helm closed' })
     expect(document.body.textContent).toContain('2 more are still running somewhere else, and left alone.')
   })
+
+  it('names the host that stopped when the sessions went with it, not Helm', () => {
+    renderPane({ offer: { ...OFFER, sessions: [OFFER.sessions[0]!] }, lostWith: 'this PC’s host' })
+    screen.getByRole('region', { name: '1 session was running when this PC’s host stopped' })
+    expect(document.body.textContent).toContain('This PC’s host didn’t shut down cleanly. Pick up where they left off.')
+    expect(document.body.textContent).not.toContain('Helm')
+  })
 })

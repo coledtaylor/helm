@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type DetectedShell } from '@helm/core/types'
@@ -118,5 +118,28 @@ describe('ProjectShellPane', () => {
     await within(alpha).findByTitle(PWSH)
     expect(bridge.invoked('pterm:open').at(-1)).not.toHaveProperty('shell')
     expect(screen.getAllByTitle(PWSH)).toHaveLength(2)
+  })
+
+  it('says its shell was lost with the host and starts a new one in the project on request', async () => {
+    const user = userEvent.setup()
+    const alpha = box('alpha')
+    render(<ProjectShellPane path={ALPHA} windowsBuild={null} visible shells={SHELLS} heightPct={30} />, {
+      container: alpha
+    })
+    await within(alpha).findByTitle(PWSH)
+    const lostId = nextId - 1
+
+    act(() => bridge.emit('pterm:exit', { id: lostId, exitCode: null, lost: true }))
+
+    const bar = await within(alpha).findByRole('status')
+    expect(bar.textContent).toContain('Shell lost: this PC’s host stopped')
+    expect(alpha.querySelector('[data-terminal-lost]')).not.toBeNull()
+
+    await user.click(within(bar).getByRole('button', { name: 'New shell' }))
+
+    await waitFor(() => expect(bridge.invoked('pterm:open')).toHaveLength(2))
+    expect(bridge.invoked('pterm:open')[1]).toEqual(expect.objectContaining({ path: ALPHA }))
+    await waitFor(() => expect(within(alpha).queryByRole('status')).toBeNull())
+    expect(alpha.querySelector('[data-terminal-lost]')).toBeNull()
   })
 })

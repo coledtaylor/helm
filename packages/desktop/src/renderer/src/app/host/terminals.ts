@@ -2,6 +2,7 @@ import type { HostConnection, HostSubscription } from '../../../../shared/host/c
 import type { TerminalStreams } from '../../../../shared/host/streams'
 import type { LocalEvents } from './events'
 import type { HostReach } from './history'
+import type { PageLink } from './link'
 import type { HostAdapter } from './router'
 
 /**
@@ -24,7 +25,7 @@ export interface ShellShelf {
 }
 
 export interface TerminalsAdapterDeps {
-  link: HostReach
+  link: HostReach & Pick<PageLink, 'onEnded'>
   /** The connection now, or null between connections. */
   current: () => HostConnection | null
   streams: TerminalStreams
@@ -103,6 +104,18 @@ export function createTerminalsAdapter(deps: TerminalsAdapterDeps): HostAdapter 
       },
       error: (error) => deps.log(`host: pterm:exit ended (${error.message})`)
     })
+  })
+
+  link.onEnded((end) => {
+    // A stop or a quit ended each shell on purpose, and the host said so.
+    if (end.planned) return
+    // Every shell went with the host that ran it, the ones kept for a reload
+    // included: a reload asks the next host for new ones.
+    const lost = [...open.keys()]
+    waiting = []
+    for (const id of lost) drop(id)
+    keep()
+    for (const id of lost) deps.events.tell('pterm:exit', { id, exitCode: null, lost: true })
   })
 
   const failed = (channel: string) => (error: unknown) =>

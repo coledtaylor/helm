@@ -1900,7 +1900,11 @@ export interface IpcEvents {
   'session:data': { id: number; data: string }
   /** Project-shell output and death, addressed to the pane hosting it. */
   'pterm:data': { id: number; data: string }
-  'pterm:exit': { id: number; exitCode: number }
+  /**
+   * A shell that went with the host it ran in (the host stopped without a stop
+   * or a quit) is `lost`, with no exit code: nobody saw it exit.
+   */
+  'pterm:exit': { id: number; exitCode: number | null; lost?: boolean }
   /** The finished row, exit code and measured duration included. */
   'session:exit': SessionRecord
   /**

@@ -23,6 +23,11 @@ export interface RestorePaneProps {
    * Restore asked for; every one that can come back when not given.
    */
   preselected?: readonly number[]
+  /**
+   * The host the sessions went with, as the window names it ("this PC’s
+   * host"), when they ran in one; absent when they went with Helm.
+   */
+  lostWith?: string
 }
 
 const plural = (count: number, one: string, many: string): string =>
@@ -40,9 +45,9 @@ function lastSaid(at: number, now: number): string {
 }
 
 /**
- * What a crash took, offered back: every session the last run was hosting
- * when it stopped, ticked, and the one button that reopens them where they
- * were.
+ * What a crash took, offered back: every session Helm, or the host they ran
+ * in, was running when it stopped, ticked, and the one button that reopens
+ * them where they were.
  *
  * A page in a pane rather than a dialog, because it is the first thing a
  * start after a crash has to say and somebody may want to look at the rest of
@@ -61,7 +66,8 @@ export function RestorePane({
   onResume,
   onNotNow,
   now,
-  preselected
+  preselected,
+  lostWith
 }: RestorePaneProps): JSX.Element {
   const headingId = useId()
   const [ticked, setTicked] = useState<ReadonlySet<number>>(
@@ -85,6 +91,9 @@ export function RestorePane({
     })
 
   const count = offer.sessions.length
+  // What stopped: Helm, which closes, or the host the sessions ran in, which stops.
+  const stopped = lostWith === undefined ? 'Helm closed' : `${lostWith} stopped`
+  const who = lostWith === undefined ? 'Helm' : lostWith.charAt(0).toUpperCase() + lostWith.slice(1)
   const elsewhere =
     offer.elsewhere === 0
       ? null
@@ -102,12 +111,12 @@ export function RestorePane({
           <HistoryIcon width={20} height={20} className="shrink-0 text-accent-text" />
           <h1 id={headingId} className="m-0 text-[18px] font-medium tracking-[-0.01em] text-fg">
             {count === 1
-              ? '1 session was running when Helm closed'
-              : `${String(count)} sessions were running when Helm closed`}
+              ? `1 session was running when ${stopped}`
+              : `${String(count)} sessions were running when ${stopped}`}
           </h1>
         </div>
         <p className="mt-0 mb-[18px] ml-[30px] leading-normal text-fg-muted">
-          Helm didn’t shut down cleanly. Pick up where they left off.
+          {who} didn’t shut down cleanly. Pick up where they left off.
         </p>
 
         <ul

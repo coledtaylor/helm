@@ -456,4 +456,60 @@ describe('plain terminals over the window’s own connection', () => {
     expect(exits).toEqual([{ id: 3, exitCode: 0 }])
     expect(connection.streamsFor('pterm:data', 3)[0]?.closed).toBe(true)
   })
+
+  describe('when the host connection ends', () => {
+    /** A folder's shell and a terminal tab's shell, open over a link the test ends. */
+    async function shellWorld() {
+      let next = 3
+      const first = new FakeConnection()
+        .answer('session:list', () => [])
+        .answer('pterm:open', () => ({ id: next++, shell: 'pwsh', requested: null, problem: null }))
+      const link = reconnectingReach(first)
+      const { own } = ownBridge()
+      const shelf: Shelf = { text: null }
+      const adapters = createSessionsAdapters({
+        link,
+        own,
+        front: { focused: () => true, onChange: () => undefined },
+        shelf: {
+          read: () => shelf.text,
+          write: (text) => {
+            shelf.text = text
+          }
+        }
+      })
+      const exits = hear(adapters, 'pterm:exit')
+      await ask(adapters, 'pterm:open', { path: '/work dir/app', cols: 80, rows: 24 })
+      await ask(adapters, 'pterm:open', { path: '/work dir/app', cols: 80, rows: 24, separate: true })
+      const streams = [first.streamsFor('pterm:data', 3)[0]!, first.streamsFor('pterm:data', 4)[0]!]
+      return { first, link, adapters, exits, streams, shelf }
+    }
+
+    it('ends every shell the window shows as lost, closes its terminal and keeps none for a reload, when the host went without a stop', async () => {
+      const w = await shellWorld()
+
+      w.link.lose({ planned: false, restarts: true })
+      await settle()
+
+      expect(w.exits).toEqual([
+        { id: 3, exitCode: null, lost: true },
+        { id: 4, exitCode: null, lost: true }
+      ])
+      expect(w.streams.every((stream) => stream.closed)).toBe(true)
+      // The shells went with the host: a reload asks the new host for new ones.
+      expect(JSON.parse(w.shelf.text ?? '{}')).toEqual({ version: 1, shells: [] })
+      // Keys pressed meanwhile reach no shell.
+      send(w.adapters, 'pterm:input', { id: 3, data: 'ls\r' })
+      expect(w.streams[0]!.text()).toBe('')
+    })
+
+    it('ends no shell when the host was stopped on purpose', async () => {
+      const w = await shellWorld()
+
+      w.link.lose({ planned: true, restarts: false })
+      await settle()
+
+      expect(w.exits).toEqual([])
+    })
+  })
 })

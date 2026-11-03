@@ -23,13 +23,20 @@ export interface RestoreState {
    */
   restore: (
     picks: RestoreSessionsRequest['sessions'],
-    options?: { unasked?: boolean }
+    options?: RestoreOptions
   ) => Promise<RestoreSessionsResult | null>
   /** "Not now": answers the offer with nothing. */
   dismiss: () => void
   /** One line about how it went, for the toast. */
   report: { text: string; failed: boolean } | null
   dismissReport: () => void
+}
+
+export interface RestoreOptions {
+  /** Nobody was asked (`restoreWithoutAsking`), so the report says it happened. */
+  unasked?: boolean
+  /** The host the sessions went with, as the window names it; absent when they went with Helm. */
+  lostWith?: string
 }
 
 const plural = (count: number, one: string, many: string): string =>
@@ -42,7 +49,8 @@ const plural = (count: number, one: string, many: string): string =>
  */
 export function restoreReport(
   result: RestoreSessionsResult,
-  unasked: boolean
+  unasked: boolean,
+  lostWith?: string
 ): { text: string; failed: boolean } | null {
   if (result.failed.length > 0) {
     const reasons = result.failed.map(({ name, reason }) => `“${name}” could not be reopened: ${reason}`)
@@ -55,8 +63,12 @@ export function restoreReport(
   const warnings = result.restored.flatMap((restored) => restored.launched.warnings)
   if (warnings.length > 0) return { text: warnings.join(' '), failed: false }
   if (unasked && result.restored.length > 0) {
+    const reopened = `Reopened ${plural(result.restored.length, 'session', 'sessions')}`
     return {
-      text: `Reopened ${plural(result.restored.length, 'session', 'sessions')} Helm was running when it closed.`,
+      text:
+        lostWith === undefined
+          ? `${reopened} Helm was running when it closed.`
+          : `${reopened} ${lostWith} was running when it stopped.`,
       failed: false
     }
   }
@@ -86,13 +98,13 @@ export function useRestore(reconnects = 0): RestoreState {
   const restore = useCallback(
     async (
       picks: RestoreSessionsRequest['sessions'],
-      options: { unasked?: boolean } = {}
+      options: RestoreOptions = {}
     ): Promise<RestoreSessionsResult | null> => {
       setBusy(true)
       setReport(null)
       try {
         const result = await helm.invoke('session:restore', { sessions: picks })
-        setReport(restoreReport(result, options.unasked === true))
+        setReport(restoreReport(result, options.unasked === true, options.lostWith))
         return result
       } catch (err: unknown) {
         setReport({ text: readable(err), failed: true })

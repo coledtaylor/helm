@@ -831,6 +831,8 @@ test('when the host Helm started dies, its tab is lost, Helm starts a new host a
   // The new host offers the session back, and the Restore sessions tab opens
   // in front; the lost tab's own Restore goes through that same offer.
   await expect(pane.getByRole('tab', { name: 'Restore sessions' })).toBeVisible()
+  // It names what stopped: the host, not Helm.
+  await expect(window.getByRole('region', { name: '1 session was running when this PC’s host stopped' })).toBeVisible()
   await pane.getByRole('tab', { name: 'alpha, ended' }).click()
   const restore = pane.locator('[data-session-ended="lost"]').getByRole('button', { name: 'Restore' })
   await expect(restore).toBeEnabled()
@@ -855,6 +857,53 @@ test('when the host Helm started dies, its tab is lost, Helm starts a new host a
   const resumedId = Number(((await tabs.getAttribute('data-tab')) ?? '').replace('session:', ''))
   await expect.poll(() => terminalText(window, resumedId)).toContain(`Resumed ${first.sessionId}`)
 })
+
+/** With "Always resume without asking" ticked before the app starts. */
+const withoutAsking = test.extend({
+  world: async ({ world }, use) => {
+    seedSettings(world, { sessionsInHost: true, restoreWithoutAsking: true })
+    await use(world)
+  }
+})
+
+withoutAsking(
+  'with restore without asking on, a session lost with the host Helm started comes back in its tab with no click',
+  async ({ helm, world }) => {
+    const { window } = helm
+    const id = await startSession(window, 'alpha')
+    const pane = window.getByRole('region', { name: 'First pane' })
+    await typeLine(pane, 'sketch the migration')
+    await expect.poll(() => terminalText(window, id)).toContain('You said: sketch the migration')
+    const first = await claudeRunIn(world, world.projects.alpha)
+    await expect.poll(async () => flotiHostsAmong(flotiChildren(await mainPid(helm))).length).toBe(1)
+    const [host] = flotiHostsAmong(flotiChildren(await mainPid(helm)))
+
+    // Outright, as a crash would: this test's own host, never another.
+    process.kill(host!, 'SIGKILL')
+
+    // Nothing is clicked: the new host offers the session and it is resumed.
+    let resumed: FakeClaudeLog | undefined
+    await expect
+      .poll(() => {
+        resumed = fakeClaudeLogs(world).find((log) => log.resumed)
+        return resumed !== undefined
+      })
+      .toBe(true)
+    const run = resumed as FakeClaudeLog
+    expect(run.argv[run.argv.indexOf('--resume') + 1]).toBe(first.sessionId)
+    expect(run.cwd.toLowerCase()).toBe(world.projects.alpha.toLowerCase())
+
+    // In the tab the lost session had, with no Restore sessions tab drawn.
+    const tabs = pane.locator('[role="tab"][data-tab^="session:"]')
+    await expect(tabs).toHaveCount(1)
+    await expect(tabs).not.toHaveAttribute('data-tab', `session:${String(id)}`)
+    const resumedId = Number(((await tabs.getAttribute('data-tab')) ?? '').replace('session:', ''))
+    await expect.poll(() => terminalText(window, resumedId)).toContain(`Resumed ${first.sessionId}`)
+    await expect(window.getByRole('tab', { name: 'Restore sessions' })).toHaveCount(0)
+    await expect(window.getByText('Reopened 1 session this PC’s host was running when it stopped.')).toBeVisible()
+    await expect(window.locator('[data-host-stopped-banner]')).toHaveCount(0)
+  }
+)
 
 test('a session ended in the host is in the history without a refresh, its archive opens, and it resumes in its folder through the host', async ({
   helm,

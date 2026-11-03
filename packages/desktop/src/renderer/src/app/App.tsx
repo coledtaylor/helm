@@ -1294,7 +1294,7 @@ export function App(): JSX.Element {
         const body = (there === undefined ? undefined : bodyRefs.current.get(there.id)) ?? bodyRefs.current.get(open.focused)
         return { id, ...estimateGrid(body ?? null) }
       })
-      const result = await restoreLost(picks, { unasked })
+      const result = await restoreLost(picks, { unasked, ...(hostRunning === true ? { lostWith: LOCAL_HOST_NAME } : {}) })
       if (result === null) return
       for (const { launched } of result.restored) sessionState.adopt(launched.session)
       const pairs = new Map(result.restored.map(({ from, launched }) => [from, launched.session.id]))
@@ -1312,7 +1312,7 @@ export function App(): JSX.Element {
         return placed
       })
     },
-    [restoreOffer, restoreLost, sessionState, commit, open]
+    [restoreOffer, restoreLost, sessionState, commit, open, hostRunning]
   )
 
   /*
@@ -2227,7 +2227,10 @@ export function App(): JSX.Element {
               {
                 id: paneId(ref),
                 title: 'Restore sessions',
-                hint: 'What Helm was running when it closed',
+                hint:
+                  hostRunning === true
+                    ? `What ${LOCAL_HOST_NAME} was running when it stopped`
+                    : 'What Helm was running when it closed',
                 icon: <HistoryIcon width={13} height={13} />
               }
             ]
@@ -3047,6 +3050,7 @@ export function App(): JSX.Element {
             // Opened again with what a lost tab asked for ticked.
             key={restoreChosen === null ? 'every' : restoreChosen.join(',')}
             {...(restoreChosen === null ? {} : { preselected: restoreChosen })}
+            {...(hostRunning === true ? { lostWith: LOCAL_HOST_NAME } : {})}
             offer={restoreOffer}
             withoutAsking={settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking}
             onWithoutAskingChange={(restoreWithoutAsking) => writeSettings({ restoreWithoutAsking })}

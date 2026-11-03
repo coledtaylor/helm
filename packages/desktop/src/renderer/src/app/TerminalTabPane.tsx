@@ -1,7 +1,9 @@
 import type { JSX } from 'react'
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import { ShellLostBar } from '@helm/ui'
 import { estimateGrid } from './terminals'
-import { getShell, mountShell, terminalShellKey } from './pterms'
+import { getShell, mountShell, onShellsChange, reopenShell, shellLost, terminalShellKey } from './pterms'
+import { LOCAL_HOST_NAME } from './host/sessions'
 
 export interface TerminalTabPaneProps {
   /** The tab's own id - `PaneRef`'s, and the shell's registry key. */
@@ -23,10 +25,14 @@ export interface TerminalTabPaneProps {
  *
  * Drawn the way a session's terminal is (`TerminalPane`): edge to edge in its
  * pane's body, on the terminal's own fixed ground, with no chrome of its own.
- * Which executable runs is the `terminalShell` setting.
+ * Which executable runs is the `terminalShell` setting. A shell that went with
+ * the host it ran in keeps its screen, dimmed, under a bar offering a new one.
  */
 export function TerminalTabPane({ id, path, active, windowsBuild }: TerminalTabPaneProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
+  const key = terminalShellKey(id)
+  const lost = useSyncExternalStore(onShellsChange, () => shellLost(key))
+
   useEffect(() => {
     const box = boxRef.current
     if (!box) return
@@ -48,11 +54,24 @@ export function TerminalTabPane({ id, path, active, windowsBuild }: TerminalTabP
     host.term.focus()
   }, [active, id])
 
+  const newShell = useCallback(() => {
+    const box = boxRef.current
+    if (!box) return
+    const grid = estimateGrid(box)
+    void reopenShell(path, box, { windowsBuild, cols: grid.cols, rows: grid.rows, key }).then((opened) => {
+      if (opened !== null && active) opened.host.term.focus()
+    })
+  }, [path, windowsBuild, key, active])
+
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-terminal" data-terminal-tab={id}>
+      {lost && <ShellLostBar hostName={LOCAL_HOST_NAME} onNewShell={newShell} />}
       {/* A wrapper rather than padding on the terminal's container, for the
           reason `TerminalPane` gives: xterm measures that container's box. */}
-      <div className="min-h-0 flex-1 p-2.5">
+      <div
+        data-terminal-lost={lost ? true : undefined}
+        className={lost ? 'min-h-0 flex-1 p-2.5 opacity-60' : 'min-h-0 flex-1 p-2.5'}
+      >
         <div ref={boxRef} className="h-full w-full" />
       </div>
     </div>
