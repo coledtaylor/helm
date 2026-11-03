@@ -190,9 +190,15 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   client on this computer enrol as the first admin inside the Noise
   handshake, then is removed. Each is an owner-only file
   (`platform/private_files`): `0600` on macOS and Linux, an access list naming
-  only the user on Windows. A private key or the code is never logged,
-  printed, sent to another client or put in a session's environment; logs
-  name a key by its fingerprint. Keys and the Noise sessions they prove come
+  only the user on Windows. Any other device pairs by asking in its
+  handshake: the host tells it a short code to show, keeps the request in
+  memory only, for ten minutes, and pairs it once `floti devices approve
+  <code>` is run on the host's computer. That command proves the host's own
+  key, read from `host.key`, and only it is served `devices:list` and
+  `devices:approve`; no paired device is, an admin's included. A private
+  key or either code is never logged, printed, sent to another client or
+  put in a session's environment (a pairing code goes only to the device it
+  was made for); logs name a key by its fingerprint. Keys and the Noise sessions they prove come
   from snow, through `floti_protocol::noise`; never hand-rolled crypto.
 - The network posture is stated identically in README, docs/PACKAGING.md, the
   `update:check` comment in `shared/ipc.ts` and SPEC 5; change all four

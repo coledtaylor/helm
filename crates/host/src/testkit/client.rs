@@ -15,7 +15,7 @@ use floti_protocol::message::{
 use floti_protocol::{Bytes, Message, PROTOCOL_VERSION, Payload, StreamChannel};
 use tokio::time::Instant;
 
-use crate::client::{self, ClientError, Connection};
+use crate::client::{self, ClientError, ClientKeys, Connection, PairingRequest};
 use crate::platform::socket::Endpoint;
 use crate::server::host_public_key;
 
@@ -101,6 +101,34 @@ impl TestClient {
             .await
             .unwrap_or_else(|err| panic!("the host at {endpoint} did not let {name} in: {err}"));
         Self::over(connection, capabilities).await
+    }
+
+    /// Asks the host at `endpoint` to pair the device whose keys are `keys`,
+    /// named `name`, holding the host to the key in its data folder, and
+    /// hands back the waiting request with the code to show; retries while
+    /// the host is still starting.
+    pub async fn ask_to_pair(
+        keys: &ClientKeys,
+        endpoint: &Endpoint,
+        name: &str,
+        kind: ClientKind,
+    ) -> PairingRequest {
+        let data = super::data_folder_of(endpoint);
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let waited = match keys.ask_local_to_pair(endpoint, &data, name, kind).await {
+                Ok(request) => return request,
+                Err(err @ ClientError::Unreachable { .. }) => err.to_string(),
+                Err(err) => {
+                    panic!("the host at {endpoint} did not take the request to pair: {err}")
+                }
+            };
+            assert!(
+                Instant::now() < deadline,
+                "no host took the request to pair at {endpoint} within {PATIENCE:?}: {waited}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Says `hello` on `connection`, a handshake already done, and is

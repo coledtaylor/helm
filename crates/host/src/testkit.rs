@@ -20,6 +20,9 @@
 //!   does the same for a host started another way, such as the `floti host`
 //!   executable. A test of enrolment starts its host unpaired
 //!   ([`RunningHost::start_unpaired`]).
+//! - [`HostProcess`] and [`run_floti`]: the `floti` executable, pointed at a
+//!   [`TestDirs`] ([`TestDirs::floti_command`]), as a host the test stops and
+//!   as a command run to its end, such as `floti devices`.
 //!
 //! A test leaves nothing behind: [`TestDirs`] fails the test that leaves a
 //! file in its tree open, and a dropped [`RunningHost`] stops its host before
@@ -31,8 +34,10 @@
 mod client;
 #[path = "../testkit/owner.rs"]
 pub mod owner;
+mod process;
 
 pub use client::{PATIENCE, TestClient, names_unserved_channel};
+pub use process::{HostProcess, host_key_when_made, raw_connection, read_until_closed, run_floti};
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
@@ -186,6 +191,17 @@ impl TestDirs {
             self.data
                 .join(crate::server::TEST_HANDSHAKE_DEADLINE_MARKER),
             deadline.as_millis().to_string(),
+        )
+        .expect("mark the test's data folder");
+    }
+
+    /// Moves the pairing clock of a host over this tree's data folder
+    /// `ahead` of the real one, read at every check, so a test steps a
+    /// request to pair to its expiry rather than waiting it out.
+    pub fn step_pairing_clock(&self, ahead: Duration) {
+        std::fs::write(
+            self.data.join(crate::server::TEST_PAIRING_CLOCK_MARKER),
+            ahead.as_millis().to_string(),
         )
         .expect("mark the test's data folder");
     }

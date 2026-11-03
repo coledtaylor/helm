@@ -19,22 +19,37 @@
 //! one-time code. The client carries the code in its first handshake
 //! message, holds the host to the file's key, and pins that key only once
 //! the host has proven it. The code is never printed or stored by the client.
+//!
+//! Any other client pairs by asking: [`ClientKeys::ask_to_pair`] holds the
+//! host to a key the client learned another way (a client on the host's
+//! computer reads it from the host's data folder,
+//! [`ClientKeys::ask_local_to_pair`]), asks in its first handshake message,
+//! says `hello`, and is told a short code to show. Someone on the host's
+//! computer approves that code with `floti devices approve`;
+//! [`ClientKeys::finish_pairing`] waits for that, and pins the host key only
+//! once the host says the device is paired. From then on the client connects
+//! as itself ([`ClientKeys::connect`]).
 
 use std::fmt;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
+use floti_protocol::channels::devices::DeviceRole;
+use floti_protocol::message::{
+    ClientInfo, ClientKind, ErrorReply, Hello, Pairing, Request, Welcome,
+};
 use floti_protocol::noise::{
     EnrolmentCode, Initiator, InitiatorStep, KeyPair, NoiseError, Opener, PublicKey, Sealer,
 };
-use floti_protocol::{FrameDecoder, Message, ProtocolError, encode_frame};
+use floti_protocol::{FrameDecoder, Message, PROTOCOL_VERSION, ProtocolError, encode_frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::keys::{load_or_create_key_pair, read_key_pair};
 use crate::platform::private_files::{Native as NativeFiles, PrivateFiles, sweep_stale_temps};
 use crate::platform::process_tree;
 use crate::platform::socket::{Endpoint, LocalSocket, LocalStream, Native as NativeSocket};
-use crate::server::{HANDSHAKE_DEADLINE, read_enrolment};
+use crate::server::{HANDSHAKE_DEADLINE, host_public_key, read_enrolment};
 use crate::{Error, Result};
 
 /// The client's device key in its folder.
@@ -136,28 +151,178 @@ impl ClientKeys {
         match (self.pinned, enrolment) {
             (None, Some(enrolment)) => {
                 let host = enrolment.host_key;
-                let connection = connect_with(endpoint, &self.device, &host, Some(&enrolment.code))
-                    .await
-                    .map_err(|err| match err {
-                        ClientError::HostNotProven { endpoint, .. }
-                        | ClientError::HostClosed { endpoint, .. } => {
-                            ClientError::EnrolmentNotProven {
-                                endpoint,
-                                host: host.fingerprint(),
+                let connection =
+                    connect_with(endpoint, &self.device, &host, Ask::Enrol(&enrolment.code))
+                        .await
+                        .map_err(|err| match err {
+                            ClientError::HostNotProven { endpoint, .. }
+                            | ClientError::HostClosed { endpoint, .. } => {
+                                ClientError::EnrolmentNotProven {
+                                    endpoint,
+                                    host: host.fingerprint(),
+                                }
                             }
-                        }
-                        other => other,
-                    })?;
+                            other => other,
+                        })?;
                 drop(enrolment);
                 self.pin_host(connection.host_key())
                     .map_err(ClientError::Local)?;
                 Ok(connection)
             }
             (Some(pinned), Some(enrolment)) if enrolment.host_key == pinned => {
-                connect_with(endpoint, &self.device, &pinned, Some(&enrolment.code)).await
+                connect_with(endpoint, &self.device, &pinned, Ask::Enrol(&enrolment.code)).await
             }
             _ => self.connect(endpoint).await,
         }
+    }
+
+    /// Asks the host at `endpoint`, holding it to `host`, to pair this
+    /// device, which it does not know yet, named `name`: the handshake asking,
+    /// then `hello`, then the code the host answers with, to show. Pins
+    /// nothing; [`Self::finish_pairing`] waits for the outcome.
+    pub async fn ask_to_pair(
+        &self,
+        endpoint: &Endpoint,
+        host: &PublicKey,
+        name: &str,
+        kind: ClientKind,
+    ) -> Result<PairingRequest, ClientError> {
+        let mut connection = connect_with(endpoint, &self.device, host, Ask::Pair)
+            .await
+            .map_err(|err| match err {
+                ClientError::HostNotProven { endpoint, .. }
+                | ClientError::HostClosed { endpoint, .. } => ClientError::PairingNotAnswered {
+                    endpoint,
+                    host: host.fingerprint(),
+                },
+                other => other,
+            })?;
+        connection.send(&hello(name, kind)).await?;
+        match connection.next().await? {
+            Some(Message::Pairing(Pairing::Waiting(waiting))) => Ok(PairingRequest {
+                connection,
+                code: waiting.code,
+                expires_in_seconds: waiting.expires_in_seconds,
+            }),
+            Some(Message::Refused(refused)) => Err(ClientError::Refused(refused.message)),
+            Some(other) => Err(ClientError::Unexpected(kind_of(&other))),
+            None => Err(ClientError::PairingEnded),
+        }
+    }
+
+    /// [`Self::ask_to_pair`], to the host on this computer at `endpoint`,
+    /// whose data folder is `host_data`: the host is held to the key kept
+    /// there.
+    pub async fn ask_local_to_pair(
+        &self,
+        endpoint: &Endpoint,
+        host_data: &Path,
+        name: &str,
+        kind: ClientKind,
+    ) -> Result<PairingRequest, ClientError> {
+        let host = host_public_key(host_data)
+            .map_err(ClientError::Local)?
+            .ok_or_else(|| ClientError::Unreachable {
+                endpoint: endpoint.clone(),
+                source: Error::Refused(format!(
+                    "no host has started on {} yet",
+                    host_data.display()
+                )),
+            })?;
+        self.ask_to_pair(endpoint, &host, name, kind).await
+    }
+
+    /// Waits for `request` to be approved or to expire. Once approved, the
+    /// host key it proved is pinned, and the client connects as itself from
+    /// then on.
+    pub async fn finish_pairing(
+        &mut self,
+        mut request: PairingRequest,
+    ) -> Result<PairingOutcome, ClientError> {
+        loop {
+            match request.connection.next().await? {
+                Some(Message::Pairing(Pairing::Approved(approved))) => {
+                    self.pin_host(request.connection.host_key())
+                        .map_err(ClientError::Local)?;
+                    return Ok(PairingOutcome::Approved(approved.role));
+                }
+                Some(Message::Pairing(Pairing::Expired)) => return Ok(PairingOutcome::Expired),
+                Some(_) => {}
+                None => return Err(ClientError::PairingEnded),
+            }
+        }
+    }
+}
+
+/// A request to pair that waits on the host: its connection, held open until
+/// the host says how it ended, and the code to show. Dropping it withdraws
+/// the request.
+pub struct PairingRequest {
+    connection: Connection,
+    code: String,
+    expires_in_seconds: u64,
+}
+
+impl PairingRequest {
+    /// The code to show, for `floti devices approve <code>` on the host's
+    /// computer.
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// How long, from when the host answered, the request waits.
+    pub fn expires_in_seconds(&self) -> u64 {
+        self.expires_in_seconds
+    }
+
+    /// The key the host proved, which the client pins once approved.
+    pub fn host_key(&self) -> PublicKey {
+        self.connection.host_key()
+    }
+
+    /// Sends the host `message` on the waiting connection, which the host
+    /// answers by withdrawing the request: for a test of just that.
+    pub async fn send(&mut self, message: &Message) -> Result<(), ClientError> {
+        self.connection.send(message).await
+    }
+}
+
+impl fmt::Debug for PairingRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PairingRequest")
+            .field("host", &self.connection.host_key())
+            .finish_non_exhaustive()
+    }
+}
+
+/// How a request to pair ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingOutcome {
+    /// Approved with this role; the host key is pinned.
+    Approved(DeviceRole),
+    /// Nobody approved it in time; nothing was pinned.
+    Expired,
+}
+
+/// A client's `hello` naming it `name`, of `kind`, declaring no capability.
+fn hello(name: &str, kind: ClientKind) -> Message {
+    Message::Hello(Hello {
+        protocol: PROTOCOL_VERSION,
+        client: ClientInfo {
+            name: name.to_owned(),
+            kind,
+        },
+        capabilities: Vec::new(),
+    })
+}
+
+fn kind_of(message: &Message) -> &'static str {
+    match message {
+        Message::Welcome(_) => "a welcome",
+        Message::Response(_) => "a response",
+        Message::Error(_) => "an error",
+        Message::Pairing(_) => "a pairing message",
+        _ => "another message",
     }
 }
 
@@ -233,6 +398,27 @@ pub enum ClientError {
     #[error("{0}")]
     Local(Error),
 
+    /// The host closed a connection asking to pair during the handshake, or
+    /// its answer was not the one the key the client held it to makes.
+    /// Nothing more was sent to it and no key was pinned.
+    #[error(
+        "the host at {endpoint} did not answer this device's request to pair: it holds another key than {host}, has paired or revoked this device already, or has as many requests waiting as it takes"
+    )]
+    PairingNotAnswered { endpoint: Endpoint, host: String },
+
+    /// The host closed a connection asking to pair without saying how the
+    /// request ended: the device asked again elsewhere, or the host stopped.
+    #[error("the host closed the connection without saying how the request to pair ended")]
+    PairingEnded,
+
+    /// The host refused the client's `hello`, saying why.
+    #[error("{0}")]
+    Refused(String),
+
+    /// The host answered with a message the client did not expect there.
+    #[error("the host answered with {0}")]
+    Unexpected(&'static str),
+
     #[error("the host at {endpoint} did not finish the handshake within {HANDSHAKE_DEADLINE:?}")]
     TimedOut { endpoint: Endpoint },
 
@@ -254,16 +440,26 @@ pub async fn connect(
     device: &KeyPair,
     host: &PublicKey,
 ) -> Result<Connection, ClientError> {
-    connect_with(endpoint, device, host, None).await
+    connect_with(endpoint, device, host, Ask::Plain).await
 }
 
-/// [`connect`], carrying `code` in the first handshake message when there is
-/// one.
+/// What a first handshake message carries besides the device's key.
+#[derive(Clone, Copy)]
+enum Ask<'a> {
+    /// Nothing: a paired device.
+    Plain,
+    /// The code a first admin enrols with.
+    Enrol(&'a EnrolmentCode),
+    /// The ask to pair.
+    Pair,
+}
+
+/// [`connect`], with the first handshake message carrying `ask`.
 async fn connect_with(
     endpoint: &Endpoint,
     device: &KeyPair,
     host: &PublicKey,
-    code: Option<&EnrolmentCode>,
+    ask: Ask<'_>,
 ) -> Result<Connection, ClientError> {
     let mut stream =
         NativeSocket
@@ -275,7 +471,7 @@ async fn connect_with(
             })?;
     let handshake = tokio::time::timeout(
         HANDSHAKE_DEADLINE,
-        handshake(&mut stream, device, host, code),
+        handshake(&mut stream, device, host, ask),
     );
     let (transport, rest) = match handshake.await {
         Ok(Ok(done)) => done,
@@ -325,11 +521,12 @@ async fn handshake(
     stream: &mut LocalStream,
     device: &KeyPair,
     host: &PublicKey,
-    code: Option<&EnrolmentCode>,
+    ask: Ask<'_>,
 ) -> std::result::Result<(floti_protocol::noise::Transport, Vec<u8>), Handshake> {
-    let started = match code {
-        Some(code) => Initiator::start_enrolling(device, host, code),
-        None => Initiator::start(device, host),
+    let started = match ask {
+        Ask::Plain => Initiator::start(device, host),
+        Ask::Enrol(code) => Initiator::start_enrolling(device, host, code),
+        Ask::Pair => Initiator::start_pairing(device, host),
     };
     let (mut initiator, first) = started.map_err(|err| Handshake::Failed(err.into()))?;
     stream
@@ -404,6 +601,59 @@ impl Connection {
             }
             let opened = self.opener.open(&self.buf[..n])?;
             self.decoder.push(&opened);
+        }
+    }
+
+    /// Says `hello` as `name`, of `kind`, declaring no capability, and is
+    /// welcomed; the host's refusal is [`ClientError::Refused`].
+    pub async fn say_hello(
+        &mut self,
+        name: &str,
+        kind: ClientKind,
+    ) -> Result<Welcome, ClientError> {
+        self.send(&hello(name, kind)).await?;
+        match self.next().await? {
+            Some(Message::Welcome(welcome)) => Ok(welcome),
+            Some(Message::Refused(refused)) => Err(ClientError::Refused(refused.message)),
+            Some(other) => Err(ClientError::Unexpected(kind_of(&other))),
+            None => Err(ClientError::Io(ErrorKind::UnexpectedEof.into())),
+        }
+    }
+
+    /// Makes request `id` on `C` and waits for its answer, setting aside
+    /// nothing else: for a client that makes one request at a time. The
+    /// host's error reply is the inner `Err`.
+    pub async fn request<C: RequestChannel>(
+        &mut self,
+        id: u64,
+        request: &C::Request,
+    ) -> Result<Result<C::Response, ErrorReply>, ClientError> {
+        let payload = to_payload(request).map_err(|err| {
+            ClientError::Local(Error::Refused(format!(
+                "`{}` does not encode: {err}",
+                C::NAME
+            )))
+        })?;
+        self.send(&Message::Request(Request {
+            id,
+            channel: C::NAME.to_owned(),
+            payload,
+        }))
+        .await?;
+        loop {
+            match self.next().await? {
+                Some(Message::Response(response)) if response.id == id => {
+                    return from_payload(&response.payload).map(Ok).map_err(|err| {
+                        ClientError::Local(Error::Refused(format!(
+                            "the host's answer to `{}` does not decode: {err}",
+                            C::NAME
+                        )))
+                    });
+                }
+                Some(Message::Error(error)) if error.id == id => return Ok(Err(error)),
+                Some(_) => {}
+                None => return Err(ClientError::Io(ErrorKind::UnexpectedEof.into())),
+            }
         }
     }
 

@@ -6,7 +6,11 @@
 //! the protocol over standard input and output. `floti update-stop <client
 //! folder> --ask | --stop` is what an installer runs before it replaces the
 //! binary: it says what stopping the host would end, then stops it.
+//! `floti devices` lists the devices paired with the host on this computer
+//! and those waiting to pair, and `floti devices approve <code> [--role
+//! viewer|operator|admin]` pairs the one waiting under the code it shows.
 
+mod devices_shell;
 mod update_stop;
 
 use std::ffi::OsString;
@@ -16,7 +20,7 @@ use std::process::ExitCode;
 use floti_host::bridge::{BridgeExit, run_bridge};
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions};
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti update-stop <client folder> --ask | --stop";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code> [--role viewer|operator|admin]";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -41,6 +45,10 @@ fn main() -> ExitCode {
         }
         ["update-stop", ..] => match update_stop::parse(&args[1..]) {
             Some((folder, step)) => ExitCode::from(update_stop::run(&folder, step)),
+            None => usage(),
+        },
+        ["devices", ..] => match devices_shell::parse(&args[1..]) {
+            Some(step) => ExitCode::from(devices_shell::run(&step)),
             None => usage(),
         },
         ["--version"] | ["-V"] => {

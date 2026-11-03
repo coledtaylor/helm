@@ -21,7 +21,19 @@
 //! the session clients speak `floti-protocol`, starting at `hello`, every
 //! frame sealed; one that has not said `hello` within [`HELLO_DEADLINE`] of
 //! the host's answer is closed the same way, logged by its device's
-//! fingerprint. Sessions outlive them: a client leaving ends nothing. Stopping the host ends every
+//! fingerprint.
+//!
+//! A key the registry does not know may instead ask to pair in its first
+//! handshake message; after `hello` it is told a short code to show and
+//! waits, in memory only (`pairing`), until someone on this computer runs
+//! `floti devices approve <code>`, the request expires after
+//! [`PAIRING_LIFETIME`], or it goes away. That command, and `floti
+//! devices`, connect as the host's own key, which only the host's OS user
+//! can read; such a connection is served `devices:list` and
+//! `devices:approve` and nothing else, and no paired device is served
+//! either. The code is never logged; requests are named by fingerprint.
+//!
+//! Sessions outlive clients: a client leaving ends nothing. Stopping the host ends every
 //! session's process tree; a plain stop records each row as exited first, a
 //! stop for an update leaves them for the next start to find lost. Sessions
 //! never outlive the host: one that is killed or crashes takes every process

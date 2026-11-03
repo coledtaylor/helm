@@ -130,7 +130,13 @@ a deadline of their own (`TestDirs::with_handshake_deadline`, a marker in the
 data folder that only a test build reads, which sets the handshake's deadline
 and the hello's); the real deadlines' lengths are stepped on tokio's paused
 clock in `server/connection/tests.rs`, where the wait for `hello` runs over
-in-memory pipes after a real handshake. Most tests run a `Host` in the test
+in-memory pipes after a real handshake. `pairing.rs` pairs devices by code
+against the executable, running `floti devices` beside it as its own process
+with the same folders (`TestDirs::floti_command`, `run_floti`); a request's
+ten minutes are stepped, never waited out, with `TestDirs::step_pairing_clock`
+(another marker only a test build reads, moving the host's pairing clock
+ahead), and the expiry's exact edge is stepped on the paused clock in
+`server/pairing/tests.rs`. Most tests run a `Host` in the test
 process on a `TestDirs`; the ones about the executable (one instance per data
 folder and socket, the SSH refusal, Ctrl+C and SIGTERM, a killed host) run the
 built `floti host` with `FLOTI_DATA_DIR`, `FLOTI_RUNTIME_DIR` and the other
