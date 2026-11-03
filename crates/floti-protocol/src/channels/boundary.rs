@@ -91,7 +91,7 @@ pub const CLIENT_ONLY: &[Outside] = &[
     ),
     outside(
         "remoteHosts:*",
-        "where each host on another computer stands with this device: connected, retrying, its key changed since the client pinned it, or its transport's last line, which the client's main process learns from its own links to those hosts and tells only its own window",
+        "where each host on another computer stands with this device: connected, retrying, its key changed since the client pinned it, or its transport's last line, which the client's main process learns from its own links to those hosts and tells only its own window; and adding one, which the client's main process does by connecting to it through the user's own ssh or command, after reading the Host names of this computer's ssh config",
     ),
     outside(
         "forwards:*",

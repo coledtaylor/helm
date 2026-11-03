@@ -77,7 +77,15 @@ import type {
   SecretInput,
   SecretsState
 } from '@helm/core'
-import type { HostCheck, HostCheckTarget, InstallOutcome, RemoteHostConnection } from '@helm/core/types'
+import type {
+  HostAddOutcome,
+  HostAddRequest,
+  HostCheck,
+  HostCheckTarget,
+  InstallOutcome,
+  RemoteHostConnection,
+  SshConfigHosts
+} from '@helm/core/types'
 import type { BrowserCommand } from './browserKeys'
 import type { ProbeOp, TermCreateOptions } from './protocol'
 
@@ -766,6 +774,28 @@ export interface IpcRequests {
 
   /** The user cancelled an offer: main forgets it, and nothing is run there. */
   'remoteHosts:cancel': { request: { id: string }; response: void }
+
+  /**
+   * The Host names in this PC's `~/.ssh/config` and the files its Include
+   * lines name, without patterns, for the add-a-host dialog's pick list. Main
+   * opens no other file there, reads nothing but Host and Include lines, and
+   * writes nothing.
+   */
+  'remoteHosts:sshHosts': { request: void; response: SshConfigHosts }
+
+  /**
+   * Adds a host by connecting to it: main mints its id and makes its first
+   * connection through the user's own ssh or command, in its own client
+   * folder, which pins the host's key once the handshake completes. Only then
+   * is the host written into this device's hosts, and that connection is
+   * kept for its link. A failure, or `remoteHosts:cancelAdd` before then,
+   * stops it, removes the folder and writes nothing. No pairing code,
+   * approval or role is asked or kept.
+   */
+  'remoteHosts:add': { request: HostAddRequest; response: HostAddOutcome }
+
+  /** Stops the check or the first connection of the add-a-host attempt `attempt`, wherever it is. */
+  'remoteHosts:cancelAdd': { request: { attempt: string }; response: void }
 
   /**
    * The user's Reconnect now: main's link to host `id` drops the wait it is
@@ -2148,6 +2178,9 @@ export const REQUEST_CHANNELS = Object.keys({
   'remoteHosts:check': true,
   'remoteHosts:install': true,
   'remoteHosts:cancel': true,
+  'remoteHosts:sshHosts': true,
+  'remoteHosts:add': true,
+  'remoteHosts:cancelAdd': true,
   'remoteHosts:reconnect': true,
   'forwards:open': true,
   'forwards:read': true,

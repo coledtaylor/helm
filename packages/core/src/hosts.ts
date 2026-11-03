@@ -41,6 +41,39 @@ export interface RemoteHost {
    * a floti found on that login's `PATH`.
    */
   floti?: string
+  /**
+   * That computer's OS and CPU, as its floti's version line or the check said
+   * them when the host was added, and again after Helm installed or updated
+   * floti there. Absent for a host added before Helm kept it, whose row then
+   * names no OS.
+   */
+  system?: HostSystem
+}
+
+/** A host's OS and CPU in that computer's own words: `Linux` and `x86_64`. */
+export interface HostSystem {
+  os: string
+  cpu: string
+}
+
+/** `Linux x86_64`: how a host's row names its OS and CPU. */
+export function describeHostSystem(system: HostSystem): string {
+  return `${system.os} ${system.cpu}`
+}
+
+const SYSTEM_WORD_MAX = 64
+
+function systemProblem(system: unknown): string | null {
+  if (typeof system !== 'object' || system === null || Array.isArray(system)) {
+    return `expected an OS and CPU, got ${describe(system)}`
+  }
+  for (const key of ['os', 'cpu'] as const) {
+    const word = (system as Record<string, unknown>)[key]
+    if (typeof word !== 'string' || word.trim() === '' || word.length > SYSTEM_WORD_MAX || /\p{Cc}/u.test(word)) {
+      return `expected the ${key === 'os' ? 'OS' : 'CPU'} as a word, got ${describe(word)}`
+    }
+  }
+  return null
 }
 
 /**
@@ -76,6 +109,7 @@ export function flotiLine(floti: string | undefined, rest: string): string {
  * - `connected`: the handshake held the host to the key this device pinned
  *   for it, or, at the first connection, pinned the key the host proved. A
  *   host reached through the user's own login serves this device in full.
+ *   `version` is the floti version the host's welcome named.
  * - `retrying`: the link ended (the ssh or command process exited) and it is
  *   trying again by itself. Nothing on the host ended.
  * - `keyChanged`: the host reached at that target proved another key than
@@ -93,7 +127,8 @@ export function flotiLine(floti: string | undefined, rest: string): string {
  *   the host starts at the next sign-in. Not a failure.
  */
 export type RemoteHostConnection =
-  | { state: 'connected' }
+  /** `version` is the host's floti version, as its welcome said it. */
+  | { state: 'connected'; version?: string }
   | { state: 'retrying' }
   | { state: 'keyChanged' }
   | { state: 'failed'; lastLine: string }
@@ -300,6 +335,11 @@ export function remoteHostsProblem(value: unknown): string | null {
       const problem = flotiPathProblem(floti)
       if (problem !== null) return `expected the floti path for ${JSON.stringify(name)}: ${problem}`
     }
+    const { system } = host as { system?: unknown }
+    if (system !== undefined) {
+      const problem = systemProblem(system)
+      if (problem !== null) return `${problem} for ${JSON.stringify(name)}`
+    }
   }
   return null
 }
@@ -308,7 +348,7 @@ export function remoteHostsProblem(value: unknown): string | null {
 // Adding and removing one
 // ---------------------------------------------------------------------------
 
-/** What Settings > Hosts' add form holds: the name, and an ssh target or a command line. */
+/** What the add-a-host dialog's pick screen holds: the name, and an ssh target or a command line. */
 export interface RemoteHostDraft {
   name: string
   via: HostTransport['kind']

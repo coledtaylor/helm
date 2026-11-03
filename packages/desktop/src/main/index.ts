@@ -81,9 +81,11 @@ import {
 } from './sessions'
 import {
   createDesktopHost,
+  createDesktopRemoteAdder,
   createDesktopRemoteHosts,
   createDesktopRemoteInstaller,
   createLocalPageLinks,
+  readDesktopSshHosts,
   type DesktopHost
 } from './host/desktop'
 import { routePageLinks } from './host/page-link'
@@ -926,7 +928,12 @@ function startApp(options: AppOptions = {}): void {
     ...(remoteHosts !== null
       ? {
           remoteHosts,
-          remoteInstall: createDesktopRemoteInstaller((line) => console.log(line))
+          remoteInstall: createDesktopRemoteInstaller((line) => console.log(line)),
+          remoteAdd: createDesktopRemoteAdder({
+            hosts: () => services.settings.hosts,
+            log: (line) => console.log(line)
+          }),
+          sshHosts: readDesktopSshHosts
         }
       : {}),
     ...(forwards !== null ? { forwards } : {}),

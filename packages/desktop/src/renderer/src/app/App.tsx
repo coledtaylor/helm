@@ -202,6 +202,8 @@ import {
   type LauncherHost,
   type HostChoice,
   type HostInstallActions,
+  AddHostDialog,
+  type AddHostActions,
 } from "@helm/ui";
 import { sidebarFor, type SidebarView } from "./sidebarFor";
 import type { PanelActionIcon } from "@coledtaylor/helm-plugin-sdk";
@@ -306,6 +308,21 @@ const hostInstall: HostInstallActions = {
   check: (target) => helm.invoke("remoteHosts:check", target),
   install: (id, host) => helm.invoke("remoteHosts:install", { id, host }),
   cancel: (id) => void helm.invoke("remoteHosts:cancel", { id }),
+};
+
+/**
+ * The add-a-host dialog's reads, checks and adds: main reads this computer's
+ * ssh config Host names, checks and installs through the user's own ssh or
+ * command, and adds a host only once it connected.
+ */
+const addHostActions: AddHostActions = {
+  sshHosts: () => helm.invoke("remoteHosts:sshHosts"),
+  check: hostInstall.check,
+  install: hostInstall.install,
+  cancelInstall: hostInstall.cancel,
+  add: (request) => helm.invoke("remoteHosts:add", request),
+  cancelAdd: (attempt) =>
+    void helm.invoke("remoteHosts:cancelAdd", { attempt }),
 };
 
 /** A stable empty list, so a view with no console entries does not hand
@@ -596,6 +613,8 @@ export function App(): JSX.Element {
     id: string;
     nonce: number;
   } | null>(null);
+  /** Whether the add-a-host dialog is open, from Settings > Hosts or the sidebar. */
+  const [addingHost, setAddingHost] = useState(false);
   /** Where each file tab's caret is, so VS Code opens at the same line. */
   const fileCarets = useRef(new Map<string, number>());
   const [sidebarView, setSidebarView] = useState<SidebarView>("sessions");
@@ -3178,7 +3197,7 @@ export function App(): JSX.Element {
       showLauncher(host === LOCAL_HOST_KEY ? frontFolder : null, host),
     onNewHarness: (host: string) => setup.openDialog("new", host),
     onRescan: rescanOn,
-    onAddHost: () => openSettings("hosts"),
+    onAddHost: () => setAddingHost(true),
   };
 
   /** Helm's live sessions by what they are doing, for the status bar. */
@@ -4122,9 +4141,7 @@ export function App(): JSX.Element {
         quit: quitChoice(currentSettings, host.id),
         connection: remoteView[host.id]?.connection ?? null,
       }))}
-      onAddHost={(host) =>
-        writeSettings({ hosts: [...currentSettings.hosts, host] })
-      }
+      onAddHost={() => setAddingHost(true)}
       // Forgets it on this device with its quit choice; nothing on it ends.
       onRemoveHost={(id) =>
         writeSettings(withoutRemoteHost(currentSettings, id))
@@ -4139,10 +4156,10 @@ export function App(): JSX.Element {
       hostInstall={hostInstall}
       // The path Helm installed floti at there, which every line run there
       // starts with from now on.
-      onHostInstalled={(id, floti) =>
+      onHostInstalled={(id, floti, system) =>
         writeSettings({
           hosts: currentSettings.hosts.map((host) =>
-            host.id === id ? { ...host, floti } : host,
+            host.id === id ? { ...host, floti, system } : host,
           ),
         })
       }
@@ -5182,7 +5199,11 @@ export function App(): JSX.Element {
             onAddRoot={launcher.addRoot}
             reveal={treeReveal}
             {...(listedHosts.length === 0
-              ? {}
+              ? // This PC is the only host: the list's right-click menu adds
+                // one, while sessions run in the local host.
+                settings?.sessionsInHost === true
+                ? { onAddHostMenu: () => setAddingHost(true) }
+                : {}
               : {
                   hosts: treeHosts,
                   hostActions: treeHostActions,
@@ -5585,6 +5606,22 @@ export function App(): JSX.Element {
         {templateDialogs}
         {confirmDialog}
         {configEntryDialog}
+        {addingHost && settings?.sessionsInHost === true && (
+          <AddHostDialog
+            actions={addHostActions}
+            hosts={currentSettings.hosts}
+            // Written at once for the new host: the status bar says it.
+            onQuitChange={(id, choice) =>
+              writeSettings({
+                quitSessions: {
+                  ...currentSettings.quitSessions,
+                  [id]: choice,
+                },
+              })
+            }
+            onClose={() => setAddingHost(false)}
+          />
+        )}
         {quickOpenRoot !== null && (
           <QuickOpenDialog
             rootLabel={

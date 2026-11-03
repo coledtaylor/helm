@@ -99,6 +99,12 @@ export function runLine(line) {
     process.stdout.write(`${process.env.FAKE_SSH_SYSTEM || ownSystem()}\n`)
     process.exit(0)
   }
+  // FAKE_SSH_FLOTI_VERSION plays the floti there by its version line alone:
+  // a line `floti version` is answered with it, and nothing is run.
+  if (process.env.FAKE_SSH_FLOTI_VERSION && args.length === 1 && args[0] === 'version') {
+    process.stdout.write(`${process.env.FAKE_SSH_FLOTI_VERSION}\n`)
+    process.exit(0)
+  }
   // `<floti> setup` is played, never run: a real one registers the host to
   // start at sign-in with this computer's own scheduler. FAKE_SSH_SETUP picks
   // what it says: `running` (the default), `next-sign-in`, or `fail:<line>`.

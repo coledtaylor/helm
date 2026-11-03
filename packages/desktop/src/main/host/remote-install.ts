@@ -59,10 +59,19 @@ export interface TransportRun {
   stderr: string
   /** Why the transport's program could not be run on this PC at all. */
   error?: string
+  /** The transport's program is not on this PC (`ENOENT`): no ssh, or no such command. */
+  notFound?: boolean
 }
 
-/** Runs `argv` without a shell, with the file at `stdinFile` as its standard input, or none. */
-export type RunTransport = (argv: readonly string[], stdinFile: string | null) => Promise<TransportRun>
+/**
+ * Runs `argv` without a shell, with the file at `stdinFile` as its standard
+ * input, or none. When `signal` aborts, the run is stopped: its program ends.
+ */
+export type RunTransport = (
+  argv: readonly string[],
+  stdinFile: string | null,
+  signal?: AbortSignal
+) => Promise<TransportRun>
 
 export interface RemoteInstallDeps {
   run: RunTransport
@@ -86,8 +95,11 @@ export interface RemoteInstallDeps {
 }
 
 export interface RemoteInstaller {
-  /** What is on that computer, and the offer when floti is missing or too old there. */
-  check(target: { transport: HostTransport; floti?: string | undefined }): Promise<HostCheck>
+  /**
+   * What is on that computer, and the offer when floti is missing or too old
+   * there. `signal` stops a check under way: the add-a-host dialog's Cancel.
+   */
+  check(target: { transport: HostTransport; floti?: string | undefined }, signal?: AbortSignal): Promise<HostCheck>
   /** Does what the check with `id` offered. Rejects for an id no check gave, or one used or cancelled. */
   install(id: string): Promise<InstallOutcome>
   /** Forgets the offer: nothing is run there. */
@@ -124,6 +136,31 @@ export function lastLineOf(run: TransportRun): string {
   return run.code === null ? 'The command was stopped before it said anything.' : `It exited with status ${String(run.code)}.`
 }
 
+/**
+ * A check that could not run there: the last line, everything written for
+ * what the last line alone cannot tell (a changed host key and an unknown one
+ * end on the same line), and whether the transport's program is missing here.
+ */
+function failedCheck(run: TransportRun): HostCheck {
+  const said = `${run.stderr}\n${run.stdout}`.trim()
+  return {
+    kind: 'failed',
+    lastLine: lastLineOf(run),
+    ...(said !== '' ? { said } : {}),
+    ...(run.notFound === true ? { cause: 'transportMissing' as const } : {})
+  }
+}
+
+/** The first line the login printed before `floti version`'s own line, or null when that line came first. */
+export function firstLineBeforeVersion(stdout: string): string | null {
+  const first = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .find((line) => line.trim() !== '')
+  if (first === undefined || parseVersionLine(first) !== null) return null
+  return first
+}
+
 /** A word for a POSIX shell: single-quoted, each quote in it closed, escaped and reopened. */
 function shellWord(word: string): string {
   return `'${word.replace(/'/g, `'\\''`)}'`
@@ -152,8 +189,15 @@ export function createRemoteInstaller(deps: RemoteInstallDeps): RemoteInstaller 
   const plans = new Map<string, Plan>()
   const newId = deps.newId ?? randomUUID
 
-  const runThere = (transport: HostTransport, line: string, stdinFile: string | null = null): Promise<TransportRun> =>
-    deps.run([...transportArgv(transport), line], stdinFile)
+  const runThere = (
+    transport: HostTransport,
+    line: string,
+    stdinFile: string | null = null,
+    signal?: AbortSignal
+  ): Promise<TransportRun> =>
+    signal === undefined
+      ? deps.run([...transportArgv(transport), line], stdinFile)
+      : deps.run([...transportArgv(transport), line], stdinFile, signal)
 
   /** How many sessions the floti there says an update ends, or null when it cannot say. */
   const sessionsThere = async (transport: HostTransport, floti: string | undefined): Promise<number | null> => {
@@ -164,10 +208,10 @@ export function createRemoteInstaller(deps: RemoteInstallDeps): RemoteInstaller 
   }
 
   /** The OS and CPU there, or what the line said instead. */
-  const systemThere = async (transport: HostTransport): Promise<RemoteSystem | { lastLine: string }> => {
-    const said = await runThere(transport, SYSTEM_LINE)
+  const systemThere = async (transport: HostTransport, signal?: AbortSignal): Promise<RemoteSystem | HostCheck> => {
+    const said = await runThere(transport, SYSTEM_LINE, null, signal)
     const system = said.code === 0 ? parseSystemLine(said.stdout) : null
-    return system ?? { lastLine: lastLineOf(said) }
+    return system ?? failedCheck(said)
   }
 
   const offer = async (
@@ -206,22 +250,29 @@ export function createRemoteInstaller(deps: RemoteInstallDeps): RemoteInstaller 
   }
 
   return {
-    async check({ transport, floti }) {
-      const asked = await runThere(transport, flotiLine(floti, 'version'))
+    async check({ transport, floti }, signal) {
+      const asked = await runThere(transport, flotiLine(floti, 'version'), null, signal)
+      if (asked.error !== undefined) return failedCheck(asked)
       const found = asked.code === 0 ? parseVersionLine(asked.stdout) : null
       if (found !== null) {
+        // floti's connection goes where its version line went: anything the
+        // login printed before it would land in the middle of the handshake.
+        const printed = firstLineBeforeVersion(asked.stdout)
+        if (printed !== null) return { kind: 'failed', lastLine: printed, cause: 'loginOutput' }
         const { protocolNumbers, os, cpu, ...named } = found
         const verdict = judgeProtocol(protocolNumbers, deps.protocol)
-        if (verdict === 'ok') return { kind: 'ready', found: named }
-        if (verdict === 'newer') return { kind: 'newer', found: named, ours: formatProtocol(deps.protocol) }
+        if (verdict === 'ok') return { kind: 'ready', found: named, system: systemOfBuild(os, cpu) }
+        if (verdict === 'newer') {
+          return { kind: 'newer', found: named, ours: formatProtocol(deps.protocol), helm: deps.version }
+        }
         return offer(transport, floti, systemOfBuild(os, cpu), named)
       }
       const said = `${asked.stderr}\n${asked.stdout}`
       // A floti from before `floti version`: too old, whatever it is.
       const old = asked.code === USAGE_EXIT && /^usage: floti /m.test(said)
-      if (!old && !saysNotFound(asked.code, said)) return { kind: 'failed', lastLine: lastLineOf(asked) }
-      const system = await systemThere(transport)
-      if ('lastLine' in system) return { kind: 'failed', lastLine: system.lastLine }
+      if (!old && !saysNotFound(asked.code, said)) return failedCheck(asked)
+      const system = await systemThere(transport, signal)
+      if ('kind' in system) return system
       if (!old) return offer(transport, floti, system, null)
       const short = await runThere(transport, flotiLine(floti, '--version'))
       const version = (short.code === 0 ? parseShortVersion(short.stdout) : null) ?? 'of unknown version'
@@ -286,7 +337,7 @@ export function spawnTransportRun(
   ) => ChildProcess,
   env: NodeJS.ProcessEnv
 ): RunTransport {
-  return (argv, stdinFile) =>
+  return (argv, stdinFile, signal) =>
     new Promise((done) => {
       const [program, ...args] = argv as [string, ...string[]]
       let stdout = ''
@@ -295,13 +346,30 @@ export function spawnTransportRun(
       const finish = (run: TransportRun): void => {
         if (settled) return
         settled = true
+        signal?.removeEventListener('abort', stop)
         done(run)
       }
-      let child: ChildProcess
+      const failedToRun = (error: unknown): TransportRun => ({
+        code: null,
+        stdout,
+        stderr,
+        error: couldNotRun(program, error),
+        ...((error as NodeJS.ErrnoException).code === 'ENOENT' ? { notFound: true } : {})
+      })
+      let child: ChildProcess | null = null
+      // The run this PC started, by its own process: nothing else is stopped.
+      const stop = (): void => {
+        child?.kill()
+      }
+      if (signal?.aborted === true) {
+        finish({ code: null, stdout, stderr })
+        return
+      }
+      signal?.addEventListener('abort', stop, { once: true })
       try {
         child = spawn(program, args, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
       } catch (error) {
-        finish({ code: null, stdout, stderr, error: couldNotRun(program, error) })
+        finish(failedToRun(error))
         return
       }
       child.stdout?.on('data', (chunk: Buffer | string) => {
@@ -310,7 +378,7 @@ export function spawnTransportRun(
       child.stderr?.on('data', (chunk: Buffer | string) => {
         stderr = (stderr + chunk.toString()).slice(-KEPT)
       })
-      child.once('error', (error) => finish({ code: null, stdout, stderr, error: couldNotRun(program, error) }))
+      child.once('error', (error) => finish(failedToRun(error)))
       child.once('close', (code: number | null) => finish({ code, stdout, stderr }))
       const stdin = child.stdin
       if (stdin === null) return

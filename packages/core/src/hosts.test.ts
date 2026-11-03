@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  describeHostSystem,
   describeTransport,
   formatCommandLine,
   lineToTryByHand,
@@ -199,5 +200,24 @@ describe('quitting, per host', () => {
       hosts: [hosts[1]],
       quitSessions: { local: 'keep', b: 'end' }
     })
+  })
+})
+
+describe('a host’s OS and CPU, kept with it', () => {
+  const host = (system: unknown): unknown => ({ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'build-box' }, system })
+
+  it('S1: keeps the OS and CPU a host was added with, and names them as its row does', () => {
+    expect(remoteHostsProblem([host({ os: 'Linux', cpu: 'x86_64' })])).toBeNull()
+    expect(describeHostSystem({ os: 'Linux', cpu: 'x86_64' })).toBe('Linux x86_64')
+  })
+
+  it('S1: a host kept before Helm kept its OS still loads', () => {
+    expect(remoteHostsProblem([{ id: 'h1', name: 'lab', transport: { kind: 'ssh', target: 'lab' } }])).toBeNull()
+  })
+
+  it('refuses an OS or CPU that is not a word', () => {
+    expect(remoteHostsProblem([host('Linux')])).toMatch(/expected an OS and CPU/)
+    expect(remoteHostsProblem([host({ os: '', cpu: 'x64' })])).toMatch(/expected the OS/)
+    expect(remoteHostsProblem([host({ os: 'Linux', cpu: 'x\u0007' })])).toMatch(/expected the CPU/)
   })
 })

@@ -3,11 +3,12 @@ import { FOREIGN_PAGE, type HelmPage, type HostPageLinks } from './host/page-lin
 import type { RemoteHostLinks } from './host/remote'
 import type { PortForwards } from './host/forwards'
 import type { RemoteInstaller } from './host/remote-install'
+import type { RemoteHostAdder } from './host/remote-add'
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename } from 'node:path'
 import { pluginThemeOf, type AppSettings } from '@helm/core'
-import { remoteHostsProblem } from '@helm/core/types'
+import { remoteHostsProblem, type SshConfigHosts } from '@helm/core/types'
 import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
@@ -165,6 +166,10 @@ interface IpcContextBase {
   remoteHosts?: RemoteHostLinks | undefined
   /** Installs and updates floti on those hosts' computers, after a yes; see `host/remote-install.ts`. */
   remoteInstall?: RemoteInstaller | undefined
+  /** Adds a host by connecting to it; see `host/remote-add.ts`. */
+  remoteAdd?: RemoteHostAdder | undefined
+  /** The Host names in this PC's `~/.ssh/config`, for the add-a-host dialog; see `host/ssh-config.ts`. */
+  sshHosts?: (() => Promise<SshConfigHosts>) | undefined
   /** The ports of those hosts' sessions forwarded to this PC's loopback; see `host/forwards.ts`. */
   forwards?: PortForwards | undefined
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
@@ -466,7 +471,35 @@ export function registerIpc(ctx: IpcContext): void {
       // A host being added is checked as the settings would keep it.
       const problem = remoteHostsProblem([{ id: 'checked', name: 'checked', transport: target.transport, ...(target.floti !== undefined ? { floti: target.floti } : {}) }])
       if (problem !== null) return Promise.reject(new Error(problem))
-      return ctx.remoteInstall.check(target)
+      const remoteInstall = ctx.remoteInstall
+      const { attempt, ...checked } = target
+      // A check for the add-a-host dialog stops with its Cancel.
+      if (attempt !== undefined && ctx.remoteAdd !== undefined) {
+        return ctx.remoteAdd.during(attempt, (signal) => remoteInstall.check(checked, signal))
+      }
+      return remoteInstall.check(checked)
+    },
+    'remoteHosts:sshHosts': () => ctx.sshHosts?.() ?? { found: false, hosts: [] },
+    'remoteHosts:add': (request) => {
+      const { remoteAdd, remoteHosts } = ctx
+      if (remoteAdd === undefined || remoteHosts === undefined) return Promise.reject(new Error(NO_REMOTE_HOSTS))
+      return remoteAdd.add(request, (host, connected) => {
+        // The link takes the connection the add made, then the write that
+        // lists the host keeps that link rather than making another.
+        remoteHosts.adopt(host, connected)
+        try {
+          const next = updateSettings(services, { hosts: [...services.settings.hosts, host] })
+          emit(ctx.window(), 'ownSettings:changed', next)
+          settingsWritten({ hosts: next.hosts }, next)
+        } catch (error) {
+          // Not written: the link it was given is let go of, with its folder.
+          remoteHosts.sync(services.settings.hosts)
+          throw error
+        }
+      })
+    },
+    'remoteHosts:cancelAdd': ({ attempt }) => {
+      ctx.remoteAdd?.cancel(attempt)
     },
     'remoteHosts:install': async ({ id, host }) => {
       if (ctx.remoteInstall === undefined) throw new Error(NO_REMOTE_HOSTS)

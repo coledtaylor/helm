@@ -186,21 +186,53 @@ function spawnBridge(
   return { binary, child }
 }
 
+/** Said for a first connection the user stopped before it connected. */
+export const STOPPED_LINE = 'Stopped before it connected.'
+
 /**
  * Main's own connection to a remote host, which pins the host's key at the
  * first connection; its `hello` names this device `deviceName`. Rejects with
  * a `RemoteHostError` whose line is the one to show.
+ *
+ * `signal` stops a connection that has not connected yet: the bridge this
+ * started ends, and it rejects. Once connected, the signal stops nothing.
  */
 export async function startRemoteHost(
   places: HostPlaces,
   deps: RemoteLauncherDeps,
-  target: RemoteTarget & { deviceName: string }
+  target: RemoteTarget & { deviceName: string; signal?: AbortSignal | undefined }
 ): Promise<LocalHost> {
+  const stopped = (): boolean => target.signal?.aborted === true
+  if (stopped()) throw new RemoteHostError(STOPPED_LINE)
   const spawned = spawnBridge(places, deps, target)
   if ('missing' in spawned) throw new RemoteHostError(`Helm could not find floti at ${spawned.binary}.`)
   const { binary, child } = spawned
   const exited = exitOf(child)
   const said = readStandardError(child)
+  // The bridge this started, by its own process: nothing else is stopped.
+  const stop = (): void => {
+    closeInput(child)
+    child.kill()
+  }
+  target.signal?.addEventListener('abort', stop, { once: true })
+  try {
+    return await connectRemote(deps, target, child, exited, said, binary)
+  } catch (error) {
+    if (stopped()) throw new RemoteHostError(STOPPED_LINE)
+    throw error
+  } finally {
+    target.signal?.removeEventListener('abort', stop)
+  }
+}
+
+async function connectRemote(
+  deps: RemoteLauncherDeps,
+  target: RemoteTarget & { deviceName: string },
+  child: HostChild,
+  exited: Promise<Exit>,
+  said: StandardError,
+  binary: string
+): Promise<LocalHost> {
   const failed = async (): Promise<never> => {
     closeInput(child)
     const exit = await exited

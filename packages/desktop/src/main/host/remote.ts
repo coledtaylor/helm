@@ -80,6 +80,13 @@ export interface RemoteHostLinks {
    */
   installed(id: string, floti: string, startsAtNextSignIn: boolean): void
   /**
+   * Host `host`, being added, connected on `connected`, which pinned its key:
+   * its link starts on that connection rather than making another. The
+   * settings write that adds the host follows at once, and its `sync` keeps
+   * this link. Helm quitting, or a host already linked, closes it instead.
+   */
+  adopt(host: RemoteHost, connected: LocalHost): void
+  /**
    * The user's Reconnect now for host `id`: its link drops the wait it is in
    * and tries at once, the next wait starting short again. Every other host
    * keeps its own wait. Nothing is asked of the host but the connection.
@@ -162,11 +169,18 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
     }
   }
 
-  const open = (host: RemoteHost): Entry => {
+  const open = (host: RemoteHost, connected: LocalHost | null = null): Entry => {
     // Filled in below: the link's callbacks reach the entry they belong to.
     const entry = { host, own: [], subscriptions: [], attached: null } as unknown as Entry
+    // The connection the add already made is the link's first; every later
+    // one is its own.
+    let first = connected
     entry.link = createHostLink({
-      start: () => deps.start(entry.host),
+      start: () => {
+        const adopted = first
+        first = null
+        return adopted !== null ? Promise.resolve(adopted) : deps.start(entry.host)
+      },
       name: host.name,
       onAttemptFailed: (error) => setState(entry, failedState(error, atSignIn.has(entry.host.id))),
       log: deps.log,
@@ -202,7 +216,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
         if (!entry.link.endedOnPurpose()) setState(entry, { state: 'retrying' })
       })
       atSignIn.delete(entry.host.id)
-      setState(entry, { state: 'connected' })
+      setState(entry, { state: 'connected', version: connection.welcome.hostVersion })
     })
     // Before the first connect, so what hangs on the link hears it.
     entry.attached = deps.linked?.(host, entry.link) ?? null
@@ -278,6 +292,14 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       forget(entry, false)
       entries.set(id, open(entry.host))
       tell()
+    },
+
+    adopt(host, connected) {
+      if (quitting || entries.has(host.id)) {
+        void connected.close()
+        return
+      }
+      entries.set(host.id, open(host, connected))
     },
 
     reconnect(id) {

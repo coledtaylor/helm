@@ -13,7 +13,7 @@
  * that names its OS and CPU. Both change nothing.
  */
 
-import type { HostTransport } from './hosts'
+import type { HostSystem, HostTransport } from './hosts'
 
 /** The OSes a floti is built for, as `floti version` and the release's file names say them. */
 export type FlotiOs = 'windows' | 'macos' | 'linux'
@@ -61,20 +61,25 @@ export interface FlotiFound {
  * What adding or updating a host found there.
  *
  * - `ready`: a floti this Helm can talk to is there: nothing to install.
+ *   `system` is that computer's OS and CPU, as its floti's build names them.
  * - `offer`: floti is missing, or too old to talk to; `id` names the plan
  *   main keeps for `remoteHosts:install`.
  * - `newer`: its floti speaks a protocol newer than this Helm's: update Helm
- *   on this PC. Nothing is offered there.
+ *   on this PC. Nothing is offered there. `ours` is this Helm's protocol and
+ *   `helm` its version.
  * - `noBuild`: there is no floti this Helm can install there.
  * - `failed`: the check could not run there; `lastLine` is what ssh, the
- *   command or that computer's shell wrote, unedited.
+ *   command or that computer's shell wrote, unedited, and `said` all of it.
+ *   `cause` is what only main can tell: the transport's program is not on
+ *   this PC, or the login printed text before floti's own line, which
+ *   `lastLine` then is (`classifyHostFailure`).
  */
 export type HostCheck =
-  | { kind: 'ready'; found: FlotiFound }
+  | { kind: 'ready'; found: FlotiFound; system: RemoteSystem }
   | { kind: 'offer'; id: string; offer: InstallOffer }
-  | { kind: 'newer'; found: FlotiFound; ours: string }
+  | { kind: 'newer'; found: FlotiFound; ours: string; helm: string }
   | { kind: 'noBuild'; system: RemoteSystem; reason: string }
-  | { kind: 'failed'; lastLine: string }
+  | { kind: 'failed'; lastLine: string; said?: string; cause?: 'transportMissing' | 'loginOutput' }
 
 /** What Helm offers to do on a host's computer, said before anything is done. */
 export interface InstallOffer {
@@ -106,8 +111,12 @@ export type InstallOutcome =
     }
   | { ok: false; step: InstallStep; lastLine: string }
 
-/** What `remoteHosts:check` is asked about: a host being added, or one added already, by id. */
-export type HostCheckTarget = { transport: HostTransport; floti?: string } | { host: string }
+/**
+ * What `remoteHosts:check` is asked about: a host being added, or one added
+ * already, by id. A host being added names the `attempt` the add-a-host
+ * dialog minted, which `remoteHosts:cancelAdd` stops.
+ */
+export type HostCheckTarget = { transport: HostTransport; floti?: string; attempt?: string } | { host: string }
 
 /** The protocol version as `floti version` and the refused hello say it. */
 export interface ProtocolVersionNumbers {
@@ -181,6 +190,12 @@ export function parseSystemLine(output: string): RemoteSystem | null {
           : null
   const label = `${os === null ? kernel : OS_LABEL[os]} · ${machine}`
   return { os, cpu: cpuOf(machine), label }
+}
+
+/** A computer's OS and CPU as a host keeps them (`RemoteHost.system`): the two words of its label. */
+export function hostSystem(system: RemoteSystem): HostSystem {
+  const [os = system.label, cpu = system.cpu] = system.label.split(' · ')
+  return { os, cpu }
 }
 
 /** What a floti's own version line says of the computer it runs on. */

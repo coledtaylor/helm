@@ -120,6 +120,7 @@ export {
   type SettingsSectionId,
   type SettingsSectionsProps
 } from './components/SettingsSections'
+export { AddHostDialog, type AddHostActions, type AddHostDialogProps } from './components/AddHostDialog'
 export {
   HostsSettings,
   type HostInstallActions,

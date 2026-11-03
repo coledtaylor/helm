@@ -138,7 +138,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onAddHost: vi.fn(),
     onRemoveHost: vi.fn(),
     onHostQuitChange: vi.fn(),
-    hostInstall: { check: vi.fn(async () => ({ kind: 'ready' as const, found: { version: '1.2.0', protocol: '1.0' } })), install: vi.fn(), cancel: vi.fn() },
+    hostInstall: { check: vi.fn(async () => ({ kind: 'ready' as const, found: { version: '1.2.0', protocol: '1.0' }, system: { os: 'linux' as const, cpu: 'x64', label: 'Linux · x86_64' } })), install: vi.fn(), cancel: vi.fn() },
     onHostInstalled: vi.fn(),
     onReconnectHost: vi.fn(),
     devices: { hosts: [], onDisconnect: vi.fn() },
@@ -644,41 +644,40 @@ describe('SettingsPane', () => {
     expect(screen.queryByRole('group', { name: 'lab' })).toBeNull()
   })
 
-  it('adds a host by its ssh target or a command, and says what to fix instead of adding one it could not use', async () => {
-    const existing: SettingsHost = {
-      host: { id: 'h-build', name: 'build-box', transport: { kind: 'ssh', target: 'build-box' } },
-      quit: 'keep',
-      connection: null
-    }
-    const { props } = renderPane({ section: 'hosts', sessionsInHost: true, hosts: [existing] })
-    await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
-    const form = screen.getByRole('form', { name: 'Add a host' })
-    await userEvent.type(within(form).getByRole('textbox', { name: 'ssh target' }), '-oProxyCommand=x')
-    await userEvent.click(within(form).getByRole('button', { name: 'Add host' }))
-    expect(within(form).getByRole('alert').textContent).toContain('dash')
-    expect(props.onAddHost).not.toHaveBeenCalled()
-
-    await userEvent.clear(within(form).getByRole('textbox', { name: 'ssh target' }))
-    await userEvent.type(within(form).getByRole('textbox', { name: 'ssh target' }), 'you@lab')
-    await userEvent.click(within(form).getByRole('button', { name: 'Add host' }))
-    expect(props.onAddHost).toHaveBeenLastCalledWith(
-      expect.objectContaining({ name: 'you@lab', transport: { kind: 'ssh', target: 'you@lab' } })
-    )
-    // The form closes once the host is added.
-    expect(screen.queryByRole('form', { name: 'Add a host' })).toBeNull()
-
-    await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
-    const again = screen.getByRole('form', { name: 'Add a host' })
-    await userEvent.click(within(again).getByRole('radio', { name: 'Command' }))
-    await userEvent.type(within(again).getByRole('textbox', { name: 'Host name' }), 'wsl')
-    await userEvent.type(within(again).getByRole('textbox', { name: 'Command' }), 'wsl.exe -d "Ubuntu Dev" --')
-    await userEvent.click(within(again).getByRole('button', { name: 'Add host' }))
-    const added = vi.mocked(props.onAddHost).mock.lastCall?.[0]
-    expect(added).toMatchObject({
-      name: 'wsl',
-      transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu Dev', '--'] }
+  it('S1: each row shows its name, how it is reached, floti’s version and the OS there, its state, quit choice and Remove; Add a host… opens the dialog', async () => {
+    const { props } = renderPane({
+      section: 'hosts',
+      sessionsInHost: true,
+      hosts: [
+        {
+          host: {
+            id: 'h-build',
+            name: 'build-box',
+            transport: { kind: 'ssh', target: 'build-box' },
+            system: { os: 'Linux', cpu: 'x86_64' }
+          },
+          quit: 'keep',
+          connection: { state: 'connected', version: '3.0.0' }
+        }
+      ]
     })
-    expect(added?.id).not.toBe('local')
+    const row = screen.getByRole('group', { name: 'build-box' })
+    expect(row.querySelector('[data-settings-host-reached]')?.textContent).toBe('ssh build-box · floti 3.0.0 · Linux x86_64')
+    expect(row.textContent).toContain('Connected')
+    expect(within(row).getByRole<HTMLSelectElement>('combobox', { name: 'When you quit, on build-box' }).value).toBe('keep')
+    expect(within(row).getByRole('button', { name: 'Remove' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
+    expect(props.onAddHost).toHaveBeenCalledTimes(1)
+    // The dialog is the only way in: the page has no form of its own.
+    expect(screen.queryByRole('form', { name: 'Add a host' })).toBeNull()
+  })
+
+  it('S1: with no host the page says so and offers Add a host…', async () => {
+    const { props } = renderPane({ section: 'hosts', sessionsInHost: true, hosts: [] })
+    const empty = document.querySelector('[data-settings-hosts-empty]') as HTMLElement
+    expect(empty.textContent).toContain('No other hosts yet.')
+    await userEvent.click(within(empty).getByRole('button', { name: 'Add a host…' }))
+    expect(props.onAddHost).toHaveBeenCalledTimes(1)
   })
 
   it('fills each host’s connection slot: connected, retrying, a changed key, and the last line ssh wrote with its fix', () => {
@@ -705,6 +704,10 @@ describe('SettingsPane', () => {
     expect(screen.getByRole('group', { name: 'moved' }).textContent).toContain('Key changed')
     const locked = screen.getByRole('group', { name: 'locked' })
     expect(within(locked).getByText('you@locked: Permission denied (publickey,password).')).toBeTruthy()
+    // Said the way the add-a-host dialog says it: the chip, the title and the fix.
+    expect(locked.textContent).toContain('Needs a key')
+    expect(locked.querySelector('[data-settings-host-failed]')?.getAttribute('data-settings-host-failed')).toBe('password')
+    expect(locked.querySelector('[data-settings-host-fix]')?.textContent).toContain('ssh you@locked gets in without asking')
     expect(locked.textContent).toContain('Try it by hand in a terminal: ssh you@locked floti connect')
   })
 
@@ -759,26 +762,6 @@ describe('SettingsPane', () => {
     expect(lab.querySelector('[data-settings-host-try]')?.textContent).toBe('wsl.exe -d Ubuntu -- floti connect')
     // A connected host has nothing to reconnect.
     expect(within(screen.getByRole('group', { name: 'up' })).queryByRole('button', { name: 'Reconnect now' })).toBeNull()
-  })
-
-  it('S4: adds a host by its ssh target alone: no role, code or approval is asked', async () => {
-    const { props } = renderPane({
-      section: 'hosts',
-      sessionsInHost: true,
-      hosts: []
-    })
-    await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
-    const form = screen.getByRole('form', { name: 'Add a host' })
-    expect(within(form).queryByRole('radiogroup', { name: /role/i })).toBeNull()
-    expect(form.textContent).not.toMatch(/role|approve|pair|code/i)
-    await userEvent.type(within(form).getByRole('textbox', { name: 'ssh target' }), 'you@lab')
-    await userEvent.click(within(form).getByRole('button', { name: 'Add host' }))
-    const added = vi.mocked(props.onAddHost).mock.lastCall?.[0]
-    expect(added).toMatchObject({
-      name: 'you@lab',
-      transport: { kind: 'ssh', target: 'you@lab' }
-    })
-    expect(added).not.toHaveProperty('role')
   })
 
   it('S5: each host shows its name, target, connection state and quit choice, with no role, role picker, pairing code or approve step', () => {

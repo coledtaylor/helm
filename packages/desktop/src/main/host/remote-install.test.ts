@@ -158,7 +158,8 @@ describe('installing floti on a host’s computer, from the desktop', () => {
     const w = world([['floti version', { stdout: 'floti 2.5.0 protocol 1.2 linux x64\n' }]])
     expect(await w.installer.check({ transport: SSH })).toEqual({
       kind: 'ready',
-      found: { version: '2.5.0', protocol: '1.2' }
+      found: { version: '2.5.0', protocol: '1.2' },
+      system: { os: 'linux', cpu: 'x64', label: 'Linux · x64' }
     })
     expect(w.lines()).toEqual(['floti version'])
   })
@@ -200,7 +201,8 @@ describe('installing floti on a host’s computer, from the desktop', () => {
     expect(await w.installer.check({ transport: SSH })).toEqual({
       kind: 'newer',
       found: { version: '3.0.0', protocol: '2.0' },
-      ours: '1.2'
+      ours: '1.2',
+      helm: '2.6.0'
     })
   })
 
@@ -308,9 +310,42 @@ describe('installing floti on a host’s computer, from the desktop', () => {
     const w = world([['floti ', { code: 255, stderr: 'me@build-box: Permission denied (publickey,password).\n' }]])
     expect(await w.installer.check({ transport: SSH })).toEqual({
       kind: 'failed',
-      lastLine: 'me@build-box: Permission denied (publickey,password).'
+      lastLine: 'me@build-box: Permission denied (publickey,password).',
+      said: 'me@build-box: Permission denied (publickey,password).'
     })
     expect(w.lines()).toEqual(['floti version'])
+  })
+
+  it('S15: a login that prints text before floti version’s line fails the check, with the first line it printed', async () => {
+    const w = world([['floti version', { stdout: 'Welcome to build-box!\nfloti 2.5.0 protocol 1.2 linux x64\n' }]])
+    expect(await w.installer.check({ transport: SSH })).toEqual({
+      kind: 'failed',
+      lastLine: 'Welcome to build-box!',
+      cause: 'loginOutput'
+    })
+  })
+
+  it('S10: a transport whose program is not on this PC fails the check as missing, and runs nothing more', async () => {
+    const w = world([['floti version', { code: null, error: 'Helm could not run ssh on this PC (ENOENT).', notFound: true }]])
+    expect(await w.installer.check({ transport: SSH })).toEqual({
+      kind: 'failed',
+      lastLine: 'Helm could not run ssh on this PC (ENOENT).',
+      cause: 'transportMissing'
+    })
+    expect(w.lines()).toEqual(['floti version'])
+  })
+
+  it('S8: the check is given the add’s signal, so Cancel stops the run under way', async () => {
+    const signals: (AbortSignal | undefined)[] = []
+    const w = world([], {
+      run: async (_argv, _stdin, signal) => {
+        signals.push(signal)
+        return { code: null, stdout: '', stderr: '' }
+      }
+    })
+    const controller = new AbortController()
+    await w.installer.check({ transport: SSH }, controller.signal)
+    expect(signals[0]).toBe(controller.signal)
   })
 })
 

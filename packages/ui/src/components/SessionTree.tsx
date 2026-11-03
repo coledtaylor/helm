@@ -102,6 +102,12 @@ export interface SessionTreeProps {
   localName?: string | undefined
   /** This PC's host key, which `hostActions` names its group by. */
   localKey?: string | undefined
+  /**
+   * The list's right-click menu offers Add a host…, which this opens. Given
+   * only while sessions run in the local host and this PC is the only host;
+   * once there are others, the Add a host line at the end of the list does it.
+   */
+  onAddHostMenu?: (() => void) | undefined
 }
 
 /** A session's row, by its id, or a project's, by its path (on `host`, this PC's when absent). */
@@ -237,9 +243,11 @@ export function SessionTree({
   hosts = [],
   hostActions,
   localName = 'This PC',
-  localKey = 'local'
+  localKey = 'local',
+  onAddHostMenu
 }: SessionTreeProps): JSX.Element {
   const [query, setQuery] = useState('')
+  const [listMenu, setListMenu] = useState<MenuAnchor | null>(null)
   const navRef = useRef<HTMLElement>(null)
   const grouped = hosts.length > 0 && hostActions !== undefined
 
@@ -297,6 +305,12 @@ export function SessionTree({
         ref={navRef}
         aria-label="Projects and sessions"
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-1.5"
+        onContextMenu={(event) => {
+          // A row's own menu came first and is the one shown.
+          if (grouped || onAddHostMenu === undefined || event.defaultPrevented) return
+          event.preventDefault()
+          setListMenu({ x: event.clientX, y: event.clientY })
+        }}
       >
         {!grouped ? (
           local
@@ -355,9 +369,25 @@ export function SessionTree({
           </>
         )}
       </nav>
+      {listMenu !== null && onAddHostMenu !== undefined && (
+        <Menu
+          label="Projects and sessions"
+          entries={ADD_HOST_MENU}
+          at={listMenu}
+          onSelect={() => {
+            setListMenu(null)
+            onAddHostMenu()
+          }}
+          onDismiss={() => setListMenu(null)}
+        />
+      )}
     </>
   )
 }
+
+const ADD_HOST_MENU: readonly MenuEntry[] = [
+  { kind: 'item', id: 'add-host', label: 'Add a host…', icon: <ServerIcon width={13} height={13} /> }
+]
 
 /**
  * A host's header row: a ring dot (the warn colour while it is not reached),

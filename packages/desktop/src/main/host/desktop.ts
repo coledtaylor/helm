@@ -3,10 +3,12 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
 import { readFile, rm, writeFile } from 'node:fs/promises'
-import { hostname, tmpdir } from 'node:os'
-import { resolve } from 'node:path'
+import { homedir, hostname, tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { listProfiles, readPluginFolders, readPluginSettings } from '@helm/core'
-import { parseSums, type FlotiOs } from '@helm/core/types'
+import { parseSums, type FlotiOs, type RemoteHost, type SshConfigHosts } from '@helm/core/types'
+import { createRemoteHostAdder, type RemoteHostAdder } from './remote-add'
+import { readSshConfigHosts } from './ssh-config'
 import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
 import { emit } from '../ipc'
 import { appMode, dataDir, templatesDir } from '../paths'
@@ -230,6 +232,41 @@ export function createDesktopRemoteHosts(options: {
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
   })
+}
+
+/**
+ * Adding a host on another computer by connecting to it (`remote-add.ts`):
+ * its first connection is main's, in the host's own client folder, the same
+ * one its link uses after, so the key it pins is the one the link holds the
+ * host to. A host not added has that folder removed.
+ */
+export function createDesktopRemoteAdder(options: {
+  hosts: () => readonly RemoteHost[]
+  log: (line: string) => void
+}): RemoteHostAdder {
+  const folderOf = (id: string): string => remoteClientFolder(places(), process.platform, id)
+  return createRemoteHostAdder({
+    hosts: options.hosts,
+    connect: (host, signal) =>
+      startRemoteHost(
+        places(),
+        { ...programs, appVersion: app.getVersion(), log: options.log },
+        {
+          folder: folderOf(host.id),
+          transport: host.transport,
+          floti: host.floti,
+          deviceName: hostname(),
+          signal
+        }
+      ),
+    forget: (host) => rm(folderOf(host.id), { recursive: true, force: true }),
+    log: options.log
+  })
+}
+
+/** The Host names of this PC's `~/.ssh/config`, read from the user's own home folder. */
+export function readDesktopSshHosts(): Promise<SshConfigHosts> {
+  return readSshConfigHosts(join(homedir(), '.ssh'), homedir())
 }
 
 /** A file's SHA-256, read as a stream. */

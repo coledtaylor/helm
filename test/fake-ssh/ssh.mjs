@@ -16,6 +16,18 @@
 //   asks nobody and fails as `denied` does; without it, it writes the prompt
 //   `<target>'s password: ` and waits for an answer on standard input, as a
 //   real ssh does on its terminal, failing once standard input closes.
+// - `refused`: `ssh: connect to host <host> port 22: Connection refused`
+// - `noroute`: `ssh: connect to host <host> port 22: No route to host`
+// - `unknownkey`: a host whose key ssh has not seen, in batch mode:
+//   `No ED25519 host key is known for <host> and you have requested strict
+//   checking.` then `Host key verification failed.`
+// - `changedkey`: a host whose key changed: ssh's warning box, `Host key for
+//   <host> has changed and you have requested strict checking.` then
+//   `Host key verification failed.`
+//
+// FAKE_SSH_LOGIN_TEXT plays a login whose shell start-up files print: that
+// text is written to standard output before the line runs, where floti's
+// connection would go.
 
 import { record, runLine } from './common.mjs'
 
@@ -62,6 +74,28 @@ switch (process.env.FAKE_SSH_FAIL) {
   case 'timeout':
     fail(`ssh: connect to host ${host} port 22: Connection timed out`)
     break
+  case 'refused':
+    fail(`ssh: connect to host ${host} port 22: Connection refused`)
+    break
+  case 'noroute':
+    fail(`ssh: connect to host ${host} port 22: No route to host`)
+    break
+  case 'unknownkey':
+    fail(
+      `No ED25519 host key is known for ${host} and you have requested strict checking.\nHost key verification failed.`
+    )
+    break
+  case 'changedkey':
+    fail(
+      [
+        '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@',
+        '@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @',
+        '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@',
+        `Host key for ${host} has changed and you have requested strict checking.`,
+        'Host key verification failed.'
+      ].join('\n')
+    )
+    break
   case 'password':
     if (batch) fail(`${target}: Permission denied (publickey,password).`)
     process.stderr.write(`${target}'s password: `)
@@ -69,5 +103,6 @@ switch (process.env.FAKE_SSH_FAIL) {
     process.stdin.on('end', () => fail(`${target}: Permission denied (publickey,password).`))
     break
   default:
+    if (process.env.FAKE_SSH_LOGIN_TEXT) process.stdout.write(`${process.env.FAKE_SSH_LOGIN_TEXT}\n`)
     runLine(line)
 }

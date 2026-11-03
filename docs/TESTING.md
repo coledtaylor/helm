@@ -581,17 +581,25 @@ real ones. They share `common.mjs`:
   as ssh does. `FAKE_SSH_FAIL` plays one of ssh's failures with ssh's own
   message and exit status 255: `denied` (`<target>: Permission denied
   (publickey,password).`), `unresolved` (`ssh: Could not resolve hostname
-  <host>: Name or service not known`), `timeout` (`ssh: connect to host <host>
-  port 22: Connection timed out`) and `password`, a host that wants a
+  <host>: Name or service not known`), `timeout`, `refused` and `noroute`
+  (`ssh: connect to host <host> port 22: Connection timed out`, `Connection
+  refused`, `No route to host`), `unknownkey` (a host key ssh has not seen:
+  `No ED25519 host key is known for <host> ...`, then `Host key verification
+  failed.`), `changedkey` (ssh's warning box, `Host key for <host> has
+  changed ...`, then the same last line) and `password`, a host that wants a
   password: with `-o BatchMode=yes` it fails as `denied`; without, it writes
   ssh's prompt and waits on standard input, as a real ssh would, so a test can
-  show a client never leaves it there.
+  show a client never leaves it there. `FAKE_SSH_LOGIN_TEXT` plays a login
+  whose shell start-up files print: that text goes to standard output before
+  the line runs, where floti's connection would go.
 - **`carry.mjs`** is any custom command that carries bytes: `[<argument>...]
   <line>`, the line to run as its last argument and every other argument only
   recorded.
 - **They play a computer floti is installed on.** `FAKE_SSH_MISSING_LINE`
   plays one with no floti: a line starting with it fails as `sh` says a
-  program it cannot find, with 127. The desktop's line for the OS and CPU
+  program it cannot find, with 127. `FAKE_SSH_FLOTI_VERSION` plays the floti
+  there by its version line alone: `floti version` answers it, and nothing is
+  run. The desktop's line for the OS and CPU
   (`SYSTEM_LINE` in `packages/core/src/hostInstall.ts`) answers
   `FAKE_SSH_SYSTEM` (`Linux aarch64`), or this computer's own as `uname -sm`
   or Windows' cmd says it. A line `<floti> setup` is always played, never run,

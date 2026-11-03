@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react'
+import type { JSX } from 'react'
 import {
   ACCENT_SWATCHES,
   offerableUsageModes,
@@ -21,7 +21,7 @@ import {
   type BrowserSearch,
   type DetectedShell,
   type QuitSessions,
-  type RemoteHost,
+  type HostSystem,
   type TerminalCursorStyle,
   type Density,
   type ThemeDefinition,
@@ -254,7 +254,8 @@ export interface SettingsPaneProps {
   hostLogFile: string | null
   /** Settings > Hosts: each host on another computer, its quit choice and where its link stands. */
   hosts: readonly SettingsHost[]
-  onAddHost: (host: RemoteHost) => void
+  /** Opens the add-a-host dialog. */
+  onAddHost: () => void
   /** Forgets a host on this device. Ends nothing on it. */
   onRemoveHost: (id: string) => void
   /** One host's own quit choice; every other host's is left as it is. */
@@ -262,7 +263,7 @@ export interface SettingsPaneProps {
   /** Checks a host's computer, and installs or updates floti there after a yes. */
   hostInstall: HostInstallActions
   /** Floti was installed or updated on host `id`, at `floti` there. */
-  onHostInstalled: (id: string, floti: string) => void
+  onHostInstalled: (id: string, floti: string, system: HostSystem) => void
   /** Starts updating a host's floti from outside Settings, such as its sidebar row. */
   hostUpdateRequest?: { id: string; nonce: number } | null | undefined
   /** A host's Reconnect now: its link tries at once rather than after the wait. */
@@ -392,7 +393,6 @@ export function SettingsPane({
   onReconnectHost,
   devices
 }: SettingsPaneProps): JSX.Element {
-  const [addingHost, setAddingHost] = useState(false)
   const found = status !== null && status.path !== null && status.version !== null
   const overridden = status?.source === 'setting'
   const offerable = offerableUsageModes(hasCostEstimate)
@@ -410,8 +410,8 @@ export function SettingsPane({
       hint={meta.hint}
       sole={sole}
       aside={
-        section === 'hosts' && !addingHost ? (
-          <Action data-settings-add-host onClick={() => setAddingHost(true)}>
+        section === 'hosts' ? (
+          <Action data-settings-add-host onClick={onAddHost}>
             <span className="flex items-center gap-1.5">
               <PlusIcon width={12} height={12} />
               Add a host…
@@ -698,8 +698,6 @@ export function SettingsPane({
               onAdd={onAddHost}
               onRemove={onRemoveHost}
               onQuitChange={onHostQuitChange}
-              adding={addingHost}
-              onAddingChange={setAddingHost}
               install={hostInstall}
               onInstalled={onHostInstalled}
               updateRequest={hostUpdateRequest}

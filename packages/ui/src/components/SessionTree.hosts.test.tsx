@@ -199,4 +199,27 @@ describe('SessionTree with hosts on other computers', () => {
     await userEvent.click(within(remote).getByRole('button', { name: 'Try again' }))
     expect(hostActions.onRescan).toHaveBeenCalledWith('h1')
   })
+
+  it('S20: the Add a host line at the end of the list opens the add-a-host dialog', async () => {
+    const hostActions = actions()
+    renderTree({ hosts: [buildBox()], hostActions })
+    await userEvent.click(screen.getByRole('button', { name: 'Add a host' }))
+    expect(hostActions.onAddHost).toHaveBeenCalledOnce()
+  })
+
+  it('S21: with this PC the only host, the list’s right-click menu has Add a host…, which opens the dialog', async () => {
+    const onAddHostMenu = vi.fn()
+    renderTree({ hosts: [], onAddHostMenu })
+    fireEvent.contextMenu(screen.getByRole('navigation', { name: 'Projects and sessions' }), { clientX: 40, clientY: 80 })
+    const item = await screen.findByRole('menuitem', { name: 'Add a host…' })
+    await userEvent.click(item)
+    expect(onAddHostMenu).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('menuitem', { name: 'Add a host…' })).toBeNull()
+  })
+
+  it('S21: with the setting off (no menu handler given), the list’s right-click menu has no Add a host… item', () => {
+    renderTree({ hosts: [] })
+    fireEvent.contextMenu(screen.getByRole('navigation', { name: 'Projects and sessions' }), { clientX: 40, clientY: 80 })
+    expect(screen.queryByRole('menuitem', { name: 'Add a host…' })).toBeNull()
+  })
 })

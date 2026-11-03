@@ -89,6 +89,12 @@ export * from './hosts'
 /** Installing floti on a host's computer: what the check found and what is offered, said in the window. */
 export * from './hostInstall'
 
+/** Adding a host by connecting to it, what went wrong said one way everywhere, its agents, and the ssh config's Host names. */
+export * from './hostAdd'
+export * from './hostFailure'
+export * from './hostAgents'
+export * from './sshConfig'
+
 export {
   frontmatterField,
   parseFrontmatter,

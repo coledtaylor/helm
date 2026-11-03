@@ -160,7 +160,7 @@ describe('the links to hosts on other computers', () => {
     await settle()
 
     expect(w.links.states()).toEqual({
-      'h-build': { state: 'connected' },
+      'h-build': { state: 'connected', version: 'test' },
       'h-lab': { state: 'failed', lastLine: 'ssh: Could not resolve hostname lab: Name or service not known' }
     })
     // Each page reaches each host over a connection of its own, numbered from one counter.
@@ -192,7 +192,7 @@ describe('the links to hosts on other computers', () => {
     const first = hostWith([{ id: 4, name: 'deploy' }])
     w.startFor(BUILD).resolve(fakeLocalHost(first, false))
     await settle()
-    expect(w.state(BUILD)).toEqual({ state: 'connected' })
+    expect(w.state(BUILD)).toEqual({ state: 'connected', version: 'test' })
     const window = page()
     await w.links.pageLinks(BUILD.id)?.open(window)
 
@@ -216,7 +216,7 @@ describe('the links to hosts on other computers', () => {
     w.startFor(BUILD).resolve(fakeLocalHost(second, false))
     await settle()
     expect(w.starts).toHaveLength(2)
-    expect(w.state(BUILD)).toEqual({ state: 'connected' })
+    expect(w.state(BUILD)).toEqual({ state: 'connected', version: 'test' })
     expect(second.payloads('host:quit')).toEqual([])
   })
 
@@ -253,7 +253,7 @@ describe('the links to hosts on other computers', () => {
     ])
     expect(Math.max(...waits)).toBe(120_000)
     // lab was connected the whole time, tried once and never again, and answers.
-    expect(w.state(LAB)).toEqual({ state: 'connected' })
+    expect(w.state(LAB)).toEqual({ state: 'connected', version: 'test' })
     expect(w.starts.filter((start) => start.host.id === LAB.id)).toHaveLength(1)
     expect(w.state(BUILD)).toEqual({ state: 'failed', lastLine: unreachable })
   })
@@ -291,7 +291,7 @@ describe('the links to hosts on other computers', () => {
     const build = hostWith()
     w.startFor(BUILD).resolve(fakeLocalHost(build, false))
     await settle()
-    expect(w.state(BUILD)).toEqual({ state: 'connected' })
+    expect(w.state(BUILD)).toEqual({ state: 'connected', version: 'test' })
 
     // A connected host has nothing to reconnect: nothing is started or sent.
     w.links.reconnect(LAB.id)
@@ -309,8 +309,8 @@ describe('the links to hosts on other computers', () => {
     expect(w.told).toEqual([])
     w.startFor(BUILD).resolve(fakeLocalHost(hostWith(), false))
     await settle()
-    expect(w.state(BUILD)).toEqual({ state: 'connected' })
-    expect(w.told.at(-1)).toEqual({ 'h-build': { state: 'connected' } })
+    expect(w.state(BUILD)).toEqual({ state: 'connected', version: 'test' })
+    expect(w.told.at(-1)).toEqual({ 'h-build': { state: 'connected', version: 'test' } })
   })
 
   it('S7: a host that proves another key than the one pinned is keyChanged, and stays so while it keeps proving it', async () => {
@@ -338,7 +338,7 @@ describe('the links to hosts on other computers', () => {
     w.links.sync([again])
     w.startFor(again).resolve(fakeLocalHost(hostWith(), false))
     await settle()
-    expect(w.state(again)).toEqual({ state: 'connected' })
+    expect(w.state(again)).toEqual({ state: 'connected', version: 'test' })
   })
 
   it('S10: Remove lets go of the host without a word to it, ends its page bridges and removes its client folder', async () => {
@@ -407,7 +407,7 @@ describe('the links to hosts on other computers', () => {
     w.fireTimers()
     w.startFor(placed).resolve(fakeLocalHost(hostWith(), false))
     await settle()
-    expect(w.state(placed)).toEqual({ state: 'connected' })
+    expect(w.state(placed)).toEqual({ state: 'connected', version: 'test' })
   })
 
   it('S13: names only what a quit would end per host, and tells each host its own choice; one not connected is told nothing', async () => {
@@ -437,5 +437,33 @@ describe('the links to hosts on other computers', () => {
     await quitting
     expect(build.payloads('host:quit')).toEqual([{ end: true }])
     expect(lab.payloads('host:quit')).toEqual([{ end: false }])
+  })
+
+  it('S5: a host added by connecting keeps the connection the add made: no second start, connected with its floti version, kept by the sync that lists it', async () => {
+    const w = world()
+    const local = fakeLocalHost(hostWith())
+    w.links.adopt(BUILD, local)
+    await settle()
+    expect(w.starts).toHaveLength(0)
+    expect(w.state(BUILD)).toEqual({ state: 'connected', version: 'test' })
+    w.links.sync([BUILD])
+    await settle()
+    expect(w.starts).toHaveLength(0)
+    expect(local.closed).toBe(false)
+    expect(w.forgotten).toEqual([])
+    expect(w.links.pageLinks(BUILD.id)).not.toBeNull()
+  })
+
+  it('S2: a host added this way and then removed is let go of and its client folder removed', async () => {
+    const w = world()
+    const local = fakeLocalHost(hostWith())
+    w.links.adopt(BUILD, local)
+    w.links.sync([BUILD])
+    await settle()
+    w.links.sync([])
+    await settle()
+    await vi.waitFor(() => expect(w.forgotten).toEqual([BUILD.id]))
+    expect(local.closed).toBe(true)
+    expect(w.state(BUILD)).toBeUndefined()
   })
 })
