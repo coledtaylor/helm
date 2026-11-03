@@ -54,7 +54,10 @@ import {
   retitlePluginSurface,
   RAIL_DESTINATIONS,
   LOCAL_HOST_KEY,
+  LOCAL_HOST_LABEL,
+  quitChoice,
   quitEndsSessions,
+  withoutRemoteHost,
   type PluginParams,
   type PluginPagesRef,
   type EditorHighlight,
@@ -2597,6 +2600,37 @@ export function App(): JSX.Element {
     )
   }
 
+  /**
+   * The hosts on other computers this device has added, kept in its own
+   * settings. They are reached only beside this PC's host, so with "Run
+   * sessions in the local host" off there are none: Settings > Hosts is not
+   * listed and nothing names them.
+   */
+  const currentSettings = settings ?? DEFAULT_SETTINGS
+  const remoteHosts = currentSettings.sessionsInHost ? currentSettings.hosts : []
+  // Hosts is listed only with that setting on; a page left open on it when
+  // the setting goes off shows Sessions, where the setting is.
+  const shownSettingsSection: SettingsSectionId =
+    settingsSection === 'hosts' && !currentSettings.sessionsInHost ? 'sessions' : settingsSection
+  /** What the status bar says about each host, this PC first: what quitting does there, and the setting that decides. */
+  const statusHosts =
+    hostRunning === true
+      ? [
+          {
+            id: LOCAL_HOST_KEY,
+            name: LOCAL_HOST_LABEL,
+            quitEnds: quitEndsSessions(currentSettings),
+            onOpen: () => openSettings('sessions')
+          },
+          ...remoteHosts.map((host) => ({
+            id: host.id,
+            name: host.name,
+            quitEnds: quitEndsSessions(currentSettings, host.id),
+            onOpen: () => openSettings('hosts')
+          }))
+        ]
+      : []
+
   /** Settings > Plugins, Secrets and each plugin's page; every other section is `SettingsPane`'s. */
   const renderSettings = (): JSX.Element => {
     if (settingsSection === 'secrets') {
@@ -2651,7 +2685,7 @@ export function App(): JSX.Element {
 
   const renderHelmSettings = (): JSX.Element => (
     <SettingsPane
-      section={settingsSection}
+      section={shownSettingsSection}
       status={setup.status}
       checking={setup.checking}
       onRecheck={setup.recheck}
@@ -2742,6 +2776,15 @@ export function App(): JSX.Element {
       hostRunning={hostRunning === true}
       onStopHost={askStopHost}
       hostLogFile={info?.hostLogFile ?? null}
+      // Each host's own quit choice, Keep them running until set. Where each
+      // link stands is the desktop's to fill.
+      hosts={remoteHosts.map((host) => ({ host, quit: quitChoice(currentSettings, host.id), connection: null }))}
+      onAddHost={(host) => writeSettings({ hosts: [...currentSettings.hosts, host] })}
+      // Forgets it on this device with its quit choice; nothing on it ends.
+      onRemoveHost={(id) => writeSettings(withoutRemoteHost(currentSettings, id))}
+      onHostQuitChange={(id, choice) =>
+        writeSettings({ quitSessions: { ...currentSettings.quitSessions, [id]: choice } })
+      }
       filesWrap={filesWrap}
       onFilesWrapChange={setFilesWrap}
       onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>
@@ -3647,7 +3690,8 @@ export function App(): JSX.Element {
       {sidebarView === 'settings' && (
         <Sidebar title="Settings">
           <SettingsSections
-            current={settingsSection}
+            current={shownSettingsSection}
+            showHosts={currentSettings.sessionsInHost}
             plugins={(pluginState.list ?? []).map((plugin) => ({
               path: plugin.path,
               name: plugin.name,
@@ -3805,17 +3849,9 @@ export function App(): JSX.Element {
           update={update}
           onOpenUpdate={(url) => void helmOpenExternal(url)}
           plugins={statusPlugins}
-          // With sessions in this PC's host: where they run and what quitting
-          // does there, which opens the setting that decides.
-          host={
-            hostRunning === true
-              ? {
-                  name: 'This PC',
-                  quitEnds: quitEndsSessions(settings ?? DEFAULT_SETTINGS),
-                  onOpen: () => openSettings('sessions')
-                }
-              : null
-          }
+          // With sessions in this PC's host: each host, where they run and what
+          // quitting does there, which opens the setting that decides.
+          hosts={statusHosts}
         />
       }
     >

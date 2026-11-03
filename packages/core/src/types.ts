@@ -20,6 +20,8 @@ import type { BrowserReach, BrowserSearch } from './browser/reach'
 import type { SavedPaneLayout } from './layout/panes'
 // A plugin's tab is a `WorkspaceTab`, and its rail id may be in `railHidden`.
 import type { PluginPage, PluginParams, PluginRailId } from './plugins/tabs'
+// `AppSettings.hosts` names it, and `quitEndsSessions` reads the key.
+import { LOCAL_HOST_KEY, type RemoteHost } from './hosts'
 
 /**
  * The browser pane's URL rules, re-exported here rather than from the package
@@ -76,6 +78,13 @@ export type * from './plugins/info'
  */
 export * from './files/fuzzy'
 export * from './files/shape'
+
+/**
+ * The hosts this device reaches on other computers, re-exported for the same
+ * reason: Settings > Hosts checks its add form in the window. `hosts.ts`
+ * imports nothing.
+ */
+export * from './hosts'
 
 export {
   frontmatterField,
@@ -1661,7 +1670,9 @@ export interface AppSettings {
   /**
    * What quitting Helm does to the sessions it started on a host, by host:
    * `end` them or `keep` them running there. This PC's host is keyed
-   * `LOCAL_HOST_KEY`, and a host with no entry ends them (`quitEndsSessions`).
+   * `LOCAL_HOST_KEY` and ends them when it has no entry; a remote host is keyed
+   * by its id in `hosts` and keeps them running when it has none
+   * (`quitEndsSessions`).
    *
    * Kept on this device, never in the host: each client decides for itself
    * what its quitting does. Read only with `sessionsInHost` on; with it off,
@@ -1670,6 +1681,16 @@ export interface AppSettings {
    * never writes here; only Settings does.
    */
   quitSessions: Readonly<Record<string, QuitSessions>>
+  /**
+   * The hosts on other computers this device reaches, in the order they were
+   * added: each one's id, name and how it is reached (an ssh target exactly as
+   * typed, or a command). Empty by default: this PC's own host is not in it.
+   *
+   * Kept on this device, never in a host, like `quitSessions`, which keys each
+   * by its id. Read only with `sessionsInHost` on. It holds nothing secret: no
+   * ssh key, password or passphrase, and no ssh option (`hosts.ts`).
+   */
+  hosts: readonly RemoteHost[]
   /**
    * When Helm's saved profiles were copied into the local host, ISO 8601, or
    * null while they never have been.
@@ -1700,12 +1721,19 @@ export type QuitSessions = 'end' | 'keep'
 
 export const QUIT_SESSIONS: readonly QuitSessions[] = ['end', 'keep']
 
-/** The key `quitSessions` holds this PC's own host under. */
-export const LOCAL_HOST_KEY = 'local'
+/**
+ * What quitting Helm does to the sessions it started on `host`: what the
+ * setting says, and otherwise End for this PC's own host and Keep them running
+ * for a host on another computer, whose sessions are usually long work meant
+ * to outlive the laptop that started them.
+ */
+export function quitChoice(settings: Pick<AppSettings, 'quitSessions'>, host: string = LOCAL_HOST_KEY): QuitSessions {
+  return settings.quitSessions[host] ?? (host === LOCAL_HOST_KEY ? 'end' : 'keep')
+}
 
-/** Whether quitting Helm ends the sessions it started on `host`: yes unless the setting keeps them. */
+/** Whether quitting Helm ends the sessions it started on `host` (`quitChoice`). */
 export function quitEndsSessions(settings: Pick<AppSettings, 'quitSessions'>, host: string = LOCAL_HOST_KEY): boolean {
-  return (settings.quitSessions[host] ?? 'end') === 'end'
+  return quitChoice(settings, host) === 'end'
 }
 
 /** How many addresses the dropdown offers. Ten, and no manager behind it. */
@@ -1778,8 +1806,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sessionMcp: true,
   sessionsInHost: false,
   // Empty: this PC's host then ends the sessions Helm started when it quits,
-  // which is what a session on your own computer usually wants.
+  // which is what a session on your own computer usually wants, and a host on
+  // another computer keeps them running (`quitChoice`).
   quitSessions: {},
+  hosts: [],
   profilesCopiedToHostAt: null,
   pluginsCopiedToHostAt: null
 }

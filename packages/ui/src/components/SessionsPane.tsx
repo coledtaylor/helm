@@ -91,7 +91,38 @@ export interface SessionsPaneProps {
   onReveal: (path: string) => void
   /** Docked beside a session split: list *or* detail, never both. */
   compact?: boolean | undefined
+  /**
+   * The hosts on other computers this device has added, in the order they
+   * were added, each with its running sessions. With any, the list is grouped
+   * by host: this PC first, everything above under it, then each of these
+   * under its name.
+   */
+  remoteHosts?: readonly SessionsPaneHost[] | undefined
 }
+
+/** A host on another computer, and its running sessions as this device last heard them. */
+export interface SessionsPaneHost {
+  id: string
+  name: string
+  /**
+   * Whether this device's link to it is up. While it is not, its rows are
+   * dimmed and say it is not connected and retrying: nothing there ended.
+   */
+  connected: boolean
+  sessions: readonly SessionsPaneRemoteSession[]
+}
+
+/** One running session on a host on another computer. */
+export interface SessionsPaneRemoteSession {
+  /** Unique across every host, so it never meets this PC's session ids. */
+  key: string
+  name: string
+  cwd: string
+  state: SessionState
+}
+
+/** What the window calls this PC's own host where hosts are listed together. */
+const THIS_PC = 'This PC'
 
 /**
  * What a live session's dot says.
@@ -120,7 +151,8 @@ export function SessionsPane({
   notOpenHere = [],
   onEndSession,
   onReveal,
-  compact = false
+  compact = false,
+  remoteHosts = []
 }: SessionsPaneProps): JSX.Element {
   const selected = sessions.find((session) => session.pid === selectedPid) ?? null
   const showList = !compact || selected === null
@@ -148,6 +180,79 @@ export function SessionsPane({
     if (seenDirs.has(key)) crowded.add(key)
     seenDirs.add(key)
   }
+
+  // This PC's list: every session on this machine, as it has always been drawn.
+  const thisPc = (
+    <>
+      {sessions.length === 0 && notOpenHere.length === 0 ? (
+        <EmptyState
+          size="list"
+          name="sessions-list"
+          icon={<TerminalIcon width={18} height={18} />}
+          title="Nothing running"
+        >
+          A session started anywhere on this machine is listed here, in Helm or not.
+        </EmptyState>
+      ) : (
+        <>
+          {notOpenHere.length > 0 && (
+            <Section label="Not open here" count={notOpenHere.length}>
+              {notOpenHere.map((record) => (
+                <NotOpenRow
+                  key={record.id}
+                  record={record}
+                  live={hosted.find((session) => session.helmSessionId === record.id) ?? null}
+                  onOpen={onOpenSession}
+                  onEnd={onEndSession}
+                />
+              ))}
+            </Section>
+          )}
+
+          <Section label="In Helm" count={hostedHere.length}>
+            {hostedHere.map((session) => (
+              <Row
+                key={session.pid}
+                session={session}
+                selected={session.pid === selectedPid}
+                crowded={session.cwd !== null && crowded.has(session.cwd.toLowerCase())}
+                resources={
+                  session.helmSessionId === null
+                    ? undefined
+                    : resources.get(session.helmSessionId)
+                }
+                onSelect={onSelect}
+              />
+            ))}
+            {hostedHere.length === 0 && (
+              <p className="px-2.5 py-2 text-[11px] text-fg-subtle">
+                {notOpenHere.length === 0 ? 'Helm is hosting no sessions.' : 'No session is open here.'}
+              </p>
+            )}
+          </Section>
+
+          {/* Its own group rather than a badge on a flat list. The
+              difference is not decoration: everything below this
+              heading has a different set of knowable facts, and a
+              heading is how a list says that once instead of on every
+              row. */}
+          {foreign.length > 0 && (
+            <Section label="Elsewhere on this machine" count={foreign.length}>
+              {foreign.map((session) => (
+                <Row
+                  key={session.pid}
+                  session={session}
+                  selected={session.pid === selectedPid}
+                  crowded={session.cwd !== null && crowded.has(session.cwd.toLowerCase())}
+                  onSelect={onSelect}
+                />
+              ))}
+            </Section>
+          )}
+        </>
+      )}
+    </>
+  )
 
   return (
     // On the pane (DESIGN.md 3): the bar, then the list beside the detail.
@@ -186,71 +291,29 @@ export function SessionsPane({
             )}
           >
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
-              {sessions.length === 0 && notOpenHere.length === 0 ? (
-                <EmptyState
-                  size="list"
-                  name="sessions-list"
-                  icon={<TerminalIcon width={18} height={18} />}
-                  title="Nothing running"
-                >
-                  A session started anywhere on this machine is listed here, in Helm or not.
-                </EmptyState>
+              {remoteHosts.length === 0 ? (
+                thisPc
               ) : (
                 <>
-                  {notOpenHere.length > 0 && (
-                    <Section label="Not open here" count={notOpenHere.length}>
-                      {notOpenHere.map((record) => (
-                        <NotOpenRow
-                          key={record.id}
-                          record={record}
-                          live={hosted.find((session) => session.helmSessionId === record.id) ?? null}
-                          onOpen={onOpenSession}
-                          onEnd={onEndSession}
-                        />
-                      ))}
-                    </Section>
-                  )}
-
-                  <Section label="In Helm" count={hostedHere.length}>
-                    {hostedHere.map((session) => (
-                      <Row
-                        key={session.pid}
-                        session={session}
-                        selected={session.pid === selectedPid}
-                        crowded={session.cwd !== null && crowded.has(session.cwd.toLowerCase())}
-                        resources={
-                          session.helmSessionId === null
-                            ? undefined
-                            : resources.get(session.helmSessionId)
-                        }
-                        onSelect={onSelect}
-                      />
-                    ))}
-                    {hostedHere.length === 0 && (
-                      <p className="px-2.5 py-2 text-[11px] text-fg-subtle">
-                        {notOpenHere.length === 0 ? 'Helm is hosting no sessions.' : 'No session is open here.'}
-                      </p>
+                  <HostSection id="local" name={THIS_PC} connected>
+                    {sessions.length === 0 && notOpenHere.length === 0 ? (
+                      <p className="px-2.5 py-2 text-[11px] text-fg-subtle">Nothing is running on this PC.</p>
+                    ) : (
+                      thisPc
                     )}
-                  </Section>
-
-                  {/* Its own group rather than a badge on a flat list. The
-                      difference is not decoration: everything below this
-                      heading has a different set of knowable facts, and a
-                      heading is how a list says that once instead of on every
-                      row. */}
-                  {foreign.length > 0 && (
-                    <Section label="Elsewhere on this machine" count={foreign.length}>
-                      {foreign.map((session) => (
-                        <Row
-                          key={session.pid}
-                          session={session}
-                          selected={session.pid === selectedPid}
-                          crowded={session.cwd !== null && crowded.has(session.cwd.toLowerCase())}
-                          onSelect={onSelect}
-                        />
+                  </HostSection>
+                  {remoteHosts.map((host) => (
+                    <HostSection key={host.id} id={host.id} name={host.name} connected={host.connected} remote>
+                      {host.sessions.map((session) => (
+                        <RemoteRow key={session.key} session={session} />
                       ))}
-                    </Section>
-                  )}
+                      {host.sessions.length === 0 && (
+                        <p className="px-2.5 py-2 text-[11px] text-fg-subtle">
+                          {host.connected ? 'Nothing is running there.' : 'Nothing listed yet.'}
+                        </p>
+                      )}
+                    </HostSection>
+                  ))}
                 </>
               )}
             </div>
@@ -292,6 +355,58 @@ export function SessionsPane({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * One host's part of the list: its name, then its sessions. A host this device
+ * is not connected to is dimmed and says it is retrying; its sessions are still
+ * running there, so its rows stay, dimmed with it.
+ */
+function HostSection({
+  id,
+  name,
+  connected,
+  remote = false,
+  children
+}: {
+  id: string
+  name: string
+  connected: boolean
+  remote?: boolean
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <section
+      aria-label={name}
+      data-sessions-host={id}
+      data-sessions-host-connected={connected}
+      className="mb-2"
+    >
+      <div className="flex min-w-0 items-center gap-2 px-2.5 pt-1.5 pb-1">
+        <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', connected ? 'bg-success' : 'bg-warn')} />
+        <span className={cn('min-w-0 truncate text-[12px] font-medium text-fg', remote && 'font-mono')}>{name}</span>
+        {!connected && <span className="shrink-0 text-[11px] text-warn">not connected, retrying</span>}
+      </div>
+      <div className={cn(!connected && 'opacity-50')}>{children}</div>
+    </section>
+  )
+}
+
+/** A running session on another computer's host: its state, name and folder. */
+function RemoteRow({ session }: { session: SessionsPaneRemoteSession }): JSX.Element {
+  return (
+    <div
+      data-remote-session={session.key}
+      title={`${session.name} - ${SESSION_STATE_LABEL[session.state]}\n${session.cwd}`}
+      className="flex min-w-0 flex-col gap-0.5 rounded-raised px-2.5 py-row"
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        <span aria-hidden data-session-dot className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[session.state])} />
+        <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">{session.name}</span>
+      </span>
+      <span className="min-w-0 truncate pl-[14px] font-mono text-[10.5px] text-fg-subtle">{session.cwd}</span>
     </div>
   )
 }

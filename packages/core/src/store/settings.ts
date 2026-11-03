@@ -22,6 +22,7 @@ import {
   PROJECT_SHELL_HEIGHT_PCT,
   QUIT_SESSIONS,
   RAIL_DESTINATIONS,
+  remoteHostsProblem,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -574,6 +575,13 @@ export const SETTING_VALIDATORS: SettingValidators = {
     }
     return null
   },
+
+  /**
+   * The hosts on other computers: each with an id that is never this PC's key,
+   * a name, and an ssh target or a command. A target that starts with a dash is
+   * refused here as well as in the form, because ssh would read it as an option.
+   */
+  hosts: (value) => remoteHostsProblem(value),
 
   /** An instant Helm wrote, checked as `lastUpdateCheckAt` is. */
   profilesCopiedToHostAt: (value) => {

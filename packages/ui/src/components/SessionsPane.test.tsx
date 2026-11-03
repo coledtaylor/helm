@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { LiveSession, SessionProcess, SessionRecord, SessionResources } from '@helm/core'
-import { SessionsPane, type SessionsPaneProps } from './SessionsPane'
+import { SessionsPane, type SessionsPaneHost, type SessionsPaneProps } from './SessionsPane'
 import { expectOnThePane } from './page.testkit'
 
 function live(over: Partial<LiveSession> & Pick<LiveSession, 'pid'>): LiveSession {
@@ -243,5 +243,55 @@ describe('SessionsPane on its pane', () => {
     expectOnThePane(document.body, 'sessions')
     // Nothing picked is a real empty state, not a paragraph.
     expect(document.querySelector('[data-empty-state="sessions-detail"]')).not.toBeNull()
+  })
+})
+
+describe('SessionsPane: every host under its name', () => {
+  const BUILD: SessionsPaneHost = {
+    id: 'h-build',
+    name: 'build-box',
+    connected: true,
+    sessions: [{ key: 'h-build:7', name: 'deploy', cwd: '/srv/infra', state: 'busy' }]
+  }
+  const LAB: SessionsPaneHost = {
+    id: 'h-lab',
+    name: 'lab',
+    connected: false,
+    sessions: [{ key: 'h-lab:3', name: 'logs', cwd: '/home/me/logs', state: 'idle' }]
+  }
+
+  it('lists this PC first with everything it ran before, then each remote host with its own running sessions', () => {
+    renderPane({ remoteHosts: [BUILD, LAB] })
+    const hosts = [...document.querySelectorAll('[data-sessions-host]')].map((host) => host.getAttribute('aria-label'))
+    expect(hosts).toEqual(['This PC', 'build-box', 'lab'])
+
+    const local = screen.getByRole('region', { name: 'This PC' })
+    expect(within(local).getByRole('region', { name: 'In Helm' })).toBeTruthy()
+    expect(within(local).getByRole('region', { name: 'Elsewhere on this machine' })).toBeTruthy()
+
+    const build = screen.getByRole('region', { name: 'build-box' })
+    expect(build.textContent).toContain('deploy')
+    expect(build.textContent).toContain('/srv/infra')
+    expect(build.textContent).not.toContain('logs')
+    expect(build.textContent).not.toContain('not connected')
+  })
+
+  it('dims a host that is not connected and says it is retrying, keeping its sessions listed', () => {
+    renderPane({ remoteHosts: [BUILD, LAB] })
+    const lab = screen.getByRole('region', { name: 'lab' })
+    expect(lab.getAttribute('data-sessions-host-connected')).toBe('false')
+    expect(lab.textContent).toContain('not connected, retrying')
+    const row = lab.querySelector('[data-remote-session="h-lab:3"]')
+    expect(row?.textContent).toContain('logs')
+    expect(row?.parentElement?.className).toContain('opacity-50')
+    // The connected one is not dimmed.
+    const build = screen.getByRole('region', { name: 'build-box' })
+    expect(build.querySelector('[data-remote-session]')?.parentElement?.className).not.toContain('opacity-50')
+  })
+
+  it('draws the list as it was while this PC is the only host', () => {
+    renderPane({ remoteHosts: [] })
+    expect(document.querySelectorAll('[data-sessions-host]')).toHaveLength(0)
+    expect(screen.getByRole('region', { name: 'In Helm' })).toBeTruthy()
   })
 })

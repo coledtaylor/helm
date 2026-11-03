@@ -119,6 +119,7 @@ export {
   type SettingsSectionId,
   type SettingsSectionsProps
 } from './components/SettingsSections'
+export { HostsSettings, type HostsSettingsProps, type SettingsHost } from './components/HostsSettings'
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { OwnDataBanner, type OwnDataBannerProps } from './components/OwnDataBanner'
 export { HostStoppedBanner, type HostStoppedBannerProps } from './components/HostStoppedBanner'
@@ -164,9 +165,14 @@ export {
   type SessionLost
 } from './components/SessionEndedBar'
 export { SessionHistory, type HistoryGrouping, type SessionHistoryProps } from './components/SessionHistory'
-export { SessionsPane, type SessionsPaneProps } from './components/SessionsPane'
+export {
+  SessionsPane,
+  type SessionsPaneHost,
+  type SessionsPaneProps,
+  type SessionsPaneRemoteSession
+} from './components/SessionsPane'
 export { Sidebar, SidebarAction, type SidebarProps } from './components/Sidebar'
-export { StatusBar, type StatusBarProps, type StatusPluginItem } from './components/StatusBar'
+export { StatusBar, type StatusBarProps, type StatusHostItem, type StatusPluginItem } from './components/StatusBar'
 export { TabBar, type Tab, type TabBarProps, type TabIndicator } from './components/TabBar'
 export {
   BROWSER_PAGE_MIME,

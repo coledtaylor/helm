@@ -205,6 +205,7 @@ describe('settings', () => {
       sessionMcp: false,
       sessionsInHost: true,
       quitSessions: { local: 'keep' },
+      hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
       profilesCopiedToHostAt: '2026-10-29T08:00:00.000Z',
       pluginsCopiedToHostAt: '2026-10-30T08:00:00.000Z'
     } satisfies AppSettings
@@ -265,8 +266,38 @@ describe('settings', () => {
       try {
         expect(readSettings(reopened).quitSessions).toEqual({ local: 'keep' })
         expect(quitEndsSessions(readSettings(reopened))).toBe(false)
-        // A host with no entry of its own still ends them.
-        expect(quitEndsSessions(readSettings(reopened), 'another host')).toBe(true)
+        // A host on another computer with no entry of its own keeps them.
+        expect(quitEndsSessions(readSettings(reopened), 'another host')).toBe(false)
+      } finally {
+        reopened.close()
+      }
+    })
+  })
+
+  it('S11: keeps each remote host’s quit choice on this device, Keep them running until set, while this PC’s still defaults to End', async () => {
+    await withFile((file, onFile) => {
+      const hosts = [
+        { id: 'h-build', name: 'build-box', transport: { kind: 'ssh', target: 'build-box' } },
+        { id: 'h-wsl', name: 'wsl', transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu', '--'] } }
+      ] as const
+      writeSettings(onFile, { hosts: [...hosts] })
+      const fresh = readSettings(onFile)
+      expect(quitEndsSessions(fresh)).toBe(true)
+      expect(quitEndsSessions(fresh, 'h-build')).toBe(false)
+      expect(quitEndsSessions(fresh, 'h-wsl')).toBe(false)
+
+      // Changing one host's choice changes only that host's.
+      writeSettings(onFile, { quitSessions: { ...fresh.quitSessions, 'h-build': 'end' } })
+      onFile.close()
+
+      const reopened = openStore({ file })
+      try {
+        const after = readSettings(reopened)
+        expect(after.hosts).toEqual(hosts)
+        expect(after.quitSessions).toEqual({ 'h-build': 'end' })
+        expect(quitEndsSessions(after, 'h-build')).toBe(true)
+        expect(quitEndsSessions(after, 'h-wsl')).toBe(false)
+        expect(quitEndsSessions(after)).toBe(true)
       } finally {
         reopened.close()
       }
@@ -806,6 +837,46 @@ describe('settings validation', () => {
       bad: [null, [], 'keep', { local: 'stop' }, { local: true }, { local: null }, { '': 'end' }, { ' ': 'keep' }]
     },
     {
+      // A target that starts with a dash would reach ssh as an option, and a
+      // host keyed `local` would take this PC's quit choice.
+      key: 'hosts',
+      good: [
+        [],
+        [{ id: 'a', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
+        [
+          { id: 'a', name: 'build-box', transport: { kind: 'ssh', target: 'build-box' } },
+          { id: 'b', name: 'wsl', transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu Dev'] } },
+          { id: 'c', name: 'tunnel', transport: { kind: 'command', program: 'C:\\tools\\tunnel.exe', args: [] } }
+        ]
+      ],
+      bad: [
+        null,
+        {},
+        'build-box',
+        [{ id: 'local', name: 'x', transport: { kind: 'ssh', target: 'x' } }],
+        [{ id: '', name: 'x', transport: { kind: 'ssh', target: 'x' } }],
+        [{ id: 'a', name: '', transport: { kind: 'ssh', target: 'x' } }],
+        [{ id: 'a', name: ' x ', transport: { kind: 'ssh', target: 'x' } }],
+        [{ id: 'a', name: 'This PC', transport: { kind: 'ssh', target: 'x' } }],
+        [{ id: 'a', name: 'x', transport: { kind: 'ssh', target: '' } }],
+        [{ id: 'a', name: 'x', transport: { kind: 'ssh', target: '-oProxyCommand=evil' } }],
+        [{ id: 'a', name: 'x', transport: { kind: 'ssh', target: 'build box' } }],
+        [{ id: 'a', name: 'x', transport: { kind: 'telnet', target: 'x' } }],
+        [{ id: 'a', name: 'x', transport: { kind: 'command', program: '', args: [] } }],
+        [{ id: 'a', name: 'x', transport: { kind: 'command', program: 'wsl.exe', args: [1] } }],
+        [{ id: 'a', name: 'x', transport: { kind: 'command', program: 'wsl.exe' } }],
+        [
+          { id: 'a', name: 'x', transport: { kind: 'ssh', target: 'x' } },
+          { id: 'a', name: 'y', transport: { kind: 'ssh', target: 'y' } }
+        ],
+        [
+          { id: 'a', name: 'box', transport: { kind: 'ssh', target: 'x' } },
+          { id: 'b', name: 'Box', transport: { kind: 'ssh', target: 'y' } }
+        ],
+        Array.from({ length: 33 }, (_, i) => ({ id: `h${String(i)}`, name: `h${String(i)}`, transport: { kind: 'ssh', target: 'x' } }))
+      ]
+    },
+    {
       // A value that is not an instant would read as "copied" and never copy.
       key: 'profilesCopiedToHostAt',
       good: [null, '2026-10-29T08:00:00.000Z'],
@@ -981,6 +1052,7 @@ describe('settings validation', () => {
       sessionMcp: false,
       sessionsInHost: true,
       quitSessions: { local: 'keep' },
+      hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
       profilesCopiedToHostAt: null,
       pluginsCopiedToHostAt: null
     })
@@ -1031,6 +1103,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   sessionMcp: false,
   sessionsInHost: true,
   quitSessions: { local: 'keep' },
+  hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
   profilesCopiedToHostAt: null,
   pluginsCopiedToHostAt: null
 })

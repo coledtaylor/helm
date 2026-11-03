@@ -1,4 +1,4 @@
-import type { JSX } from 'react'
+import { useState, type JSX } from 'react'
 import {
   ACCENT_SWATCHES,
   offerableUsageModes,
@@ -21,6 +21,7 @@ import {
   type BrowserSearch,
   type DetectedShell,
   type QuitSessions,
+  type RemoteHost,
   type TerminalCursorStyle,
   type Density,
   type ThemeDefinition,
@@ -49,8 +50,9 @@ import {
   Verdict,
   useDraft
 } from './SettingsKit'
-import { CheckIcon, CloseIcon, RefreshIcon } from './icons'
+import { CheckIcon, CloseIcon, PlusIcon, RefreshIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
+import { HostsSettings, type SettingsHost } from './HostsSettings'
 
 /**
  * Helm's own settings.
@@ -249,6 +251,13 @@ export interface SettingsPaneProps {
   onStopHost: () => void
   /** The log file this PC's host writes its standard error and panics to, as the host names it; null when there is none to name. */
   hostLogFile: string | null
+  /** Settings > Hosts: each host on another computer, its quit choice and where its link stands. */
+  hosts: readonly SettingsHost[]
+  onAddHost: (host: RemoteHost) => void
+  /** Forgets a host on this device. Ends nothing on it. */
+  onRemoveHost: (id: string) => void
+  /** One host's own quit choice; every other host's is left as it is. */
+  onHostQuitChange: (id: string, choice: QuitSessions) => void
 }
 
 /**
@@ -361,8 +370,13 @@ export function SettingsPane({
   onQuitSessionsChange,
   hostRunning,
   onStopHost,
-  hostLogFile
+  hostLogFile,
+  hosts,
+  onAddHost,
+  onRemoveHost,
+  onHostQuitChange
 }: SettingsPaneProps): JSX.Element {
+  const [addingHost, setAddingHost] = useState(false)
   const found = status !== null && status.path !== null && status.version !== null
   const overridden = status?.source === 'setting'
   const offerable = offerableUsageModes(hasCostEstimate)
@@ -374,7 +388,22 @@ export function SettingsPane({
   const sole = section !== 'general' && section !== 'workspace'
 
   return (
-    <SettingsPage data-settings-section={section} title={meta.label} hint={meta.hint} sole={sole}>
+    <SettingsPage
+      data-settings-section={section}
+      title={meta.label}
+      hint={meta.hint}
+      sole={sole}
+      aside={
+        section === 'hosts' && !addingHost ? (
+          <Action data-settings-add-host onClick={() => setAddingHost(true)}>
+            <span className="flex items-center gap-1.5">
+              <PlusIcon width={12} height={12} />
+              Add a host…
+            </span>
+          </Action>
+        ) : undefined
+      }
+    >
           {section === 'general' && (
             <>
                 <Group
@@ -644,6 +673,17 @@ export function SettingsPane({
               hostRunning={hostRunning}
               onStopHost={onStopHost}
               hostLogFile={hostLogFile}
+            />
+          )}
+
+          {section === 'hosts' && (
+            <HostsSettings
+              hosts={hosts}
+              onAdd={onAddHost}
+              onRemove={onRemoveHost}
+              onQuitChange={onHostQuitChange}
+              adding={addingHost}
+              onAddingChange={setAddingHost}
             />
           )}
 

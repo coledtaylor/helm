@@ -6,10 +6,12 @@ import {
   CORNER_RADIUS,
   DEFAULT_SETTINGS,
   PANE_GAP,
+  quitChoice,
   type ThemeDefinition,
   type ThemeListing,
   type ThemeState
 } from '@helm/core/types'
+import type { SettingsHost } from './HostsSettings'
 import {
   SettingsPane,
   updateOutcome,
@@ -132,6 +134,10 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     hostRunning: false,
     onStopHost: vi.fn(),
     hostLogFile: null,
+    hosts: [],
+    onAddHost: vi.fn(),
+    onRemoveHost: vi.fn(),
+    onHostQuitChange: vi.fn(),
     ...overrides
   }
   const view = render(<SettingsPane {...props} />)
@@ -154,6 +160,7 @@ describe('SettingsPane', () => {
       ['appearance', 'Appearance', ['Appearance']],
       ['terminal', 'Terminal', ['Terminal']],
       ['sessions', 'Sessions', ['Sessions']],
+      ['hosts', 'Hosts', ['Hosts']],
       ['workspace', 'Workspace', ['Workspace', 'Harness templates']],
       ['files', 'Files', ['Files']],
       ['browser', 'Browser', ['Browser']],
@@ -588,6 +595,111 @@ describe('SettingsPane', () => {
       'keep'
     )
     expect(group('Sessions').textContent).toContain('Quitting leaves the sessions Helm started running there')
+  })
+
+  it('S11: lists each remote host with its own When you quit choice, Keep them running when never set, and changes only that host’s', async () => {
+    const hosts: SettingsHost[] = [
+      {
+        host: { id: 'h-build', name: 'build-box', transport: { kind: 'ssh', target: 'build-box' } },
+        quit: quitChoice({ quitSessions: {} }, 'h-build'),
+        connection: null
+      },
+      {
+        host: { id: 'h-lab', name: 'lab', transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu Dev'] } },
+        quit: quitChoice({ quitSessions: { 'h-lab': 'end' } }, 'h-lab'),
+        connection: null
+      }
+    ]
+    const { props, rerender } = renderPane({ section: 'hosts', sessionsInHost: true, hosts })
+    const build = screen.getByRole('group', { name: 'build-box' })
+    const lab = screen.getByRole('group', { name: 'lab' })
+    // How each is reached, in mono.
+    expect(within(build).getByText('ssh build-box').className).toContain('font-mono')
+    expect(within(lab).getByText('wsl.exe -d "Ubuntu Dev"').className).toContain('font-mono')
+
+    const buildQuit = within(build).getByRole<HTMLSelectElement>('combobox', { name: 'When you quit, on build-box' })
+    const labQuit = within(lab).getByRole<HTMLSelectElement>('combobox', { name: 'When you quit, on lab' })
+    expect([...buildQuit.options].map((option) => option.textContent)).toEqual([
+      'End my sessions there',
+      'Keep them running'
+    ])
+    // Never set: Keep them running. This PC's own still defaults to End.
+    expect(buildQuit.value).toBe('keep')
+    expect(labQuit.value).toBe('end')
+    expect(quitChoice({ quitSessions: {} })).toBe('end')
+
+    await userEvent.selectOptions(buildQuit, 'end')
+    expect(props.onHostQuitChange).toHaveBeenCalledTimes(1)
+    expect(props.onHostQuitChange).toHaveBeenLastCalledWith('h-build', 'end')
+    expect(props.onQuitSessionsChange).not.toHaveBeenCalled()
+
+    await userEvent.click(within(lab).getByRole('button', { name: 'Remove' }))
+    expect(props.onRemoveHost).toHaveBeenCalledWith('h-lab')
+    rerender({ section: 'hosts', sessionsInHost: true, hosts: [] })
+    expect(screen.queryByRole('group', { name: 'lab' })).toBeNull()
+  })
+
+  it('adds a host by its ssh target or a command, and says what to fix instead of adding one it could not use', async () => {
+    const existing: SettingsHost = {
+      host: { id: 'h-build', name: 'build-box', transport: { kind: 'ssh', target: 'build-box' } },
+      quit: 'keep',
+      connection: null
+    }
+    const { props } = renderPane({ section: 'hosts', sessionsInHost: true, hosts: [existing] })
+    await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
+    const form = screen.getByRole('form', { name: 'Add a host' })
+    await userEvent.type(within(form).getByRole('textbox', { name: 'ssh target' }), '-oProxyCommand=x')
+    await userEvent.click(within(form).getByRole('button', { name: 'Add host' }))
+    expect(within(form).getByRole('alert').textContent).toContain('dash')
+    expect(props.onAddHost).not.toHaveBeenCalled()
+
+    await userEvent.clear(within(form).getByRole('textbox', { name: 'ssh target' }))
+    await userEvent.type(within(form).getByRole('textbox', { name: 'ssh target' }), 'you@lab')
+    await userEvent.click(within(form).getByRole('button', { name: 'Add host' }))
+    expect(props.onAddHost).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'you@lab', transport: { kind: 'ssh', target: 'you@lab' } })
+    )
+    // The form closes once the host is added.
+    expect(screen.queryByRole('form', { name: 'Add a host' })).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
+    const again = screen.getByRole('form', { name: 'Add a host' })
+    await userEvent.click(within(again).getByRole('radio', { name: 'Command' }))
+    await userEvent.type(within(again).getByRole('textbox', { name: 'Host name' }), 'wsl')
+    await userEvent.type(within(again).getByRole('textbox', { name: 'Command' }), 'wsl.exe -d "Ubuntu Dev" --')
+    await userEvent.click(within(again).getByRole('button', { name: 'Add host' }))
+    const added = vi.mocked(props.onAddHost).mock.lastCall?.[0]
+    expect(added).toMatchObject({
+      name: 'wsl',
+      transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu Dev', '--'] }
+    })
+    expect(added?.id).not.toBe('local')
+  })
+
+  it('fills each host’s connection slot: connected, retrying, the pairing line to run there, and the last line ssh wrote with its fix', () => {
+    const host = (id: string, connection: SettingsHost['connection']): SettingsHost => ({
+      host: { id, name: id, transport: { kind: 'ssh', target: `you@${id}` } },
+      quit: 'keep',
+      connection
+    })
+    renderPane({
+      section: 'hosts',
+      sessionsInHost: true,
+      hosts: [
+        host('up', { state: 'connected' }),
+        host('down', { state: 'retrying' }),
+        host('new', { state: 'pairing', code: 'K7Q-4MD' }),
+        host('locked', { state: 'failed', lastLine: 'you@locked: Permission denied (publickey,password).' })
+      ]
+    })
+    expect(screen.getByRole('group', { name: 'up' }).textContent).toContain('Connected')
+    expect(screen.getByRole('group', { name: 'down' }).textContent).toContain('Not connected, retrying')
+    expect(
+      within(screen.getByRole('group', { name: 'new' })).getByText('floti devices approve K7Q-4MD').className
+    ).toContain('font-mono')
+    const locked = screen.getByRole('group', { name: 'locked' })
+    expect(within(locked).getByText('you@locked: Permission denied (publickey,password).')).toBeTruthy()
+    expect(locked.textContent).toContain('Sign in with ssh you@locked in a terminal, then try again.')
   })
 
   it('stops this PC’s host from Settings through the question, and only while there is one', async () => {

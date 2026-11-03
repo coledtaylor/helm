@@ -84,10 +84,10 @@ describe('StatusBar: plugin items', () => {
   })
 })
 
-describe('StatusBar: the host sessions run in', () => {
+describe('StatusBar: the hosts sessions run in', () => {
   it('names this PC’s host and that quitting ends its sessions, and a press opens Settings', () => {
     const onOpen = vi.fn()
-    renderBar({ host: { name: 'This PC', quitEnds: true, onOpen } })
+    renderBar({ hosts: [{ id: 'local', name: 'This PC', quitEnds: true, onOpen }] })
     const item = screen.getByRole('button', { name: 'This PC · quit ends sessions' })
     expect(item.getAttribute('data-status-host')).toBe('ends')
     const all = segments()
@@ -101,14 +101,56 @@ describe('StatusBar: the host sessions run in', () => {
   })
 
   it('says quitting keeps them when the setting does', () => {
-    renderBar({ host: { name: 'This PC', quitEnds: false, onOpen: vi.fn() } })
+    renderBar({ hosts: [{ id: 'local', name: 'This PC', quitEnds: false, onOpen: vi.fn() }] })
     expect(screen.getByRole('button', { name: 'This PC · quit keeps sessions' }).getAttribute('data-status-host')).toBe(
       'keeps'
     )
   })
 
+  it('S12: names each host, this PC first, and what quitting does there, and each opens its own setting', () => {
+    const openLocal = vi.fn()
+    const openBuild = vi.fn()
+    const openLab = vi.fn()
+    renderBar({
+      hosts: [
+        { id: 'local', name: 'This PC', quitEnds: true, onOpen: openLocal },
+        { id: 'h-build', name: 'build-box', quitEnds: false, onOpen: openBuild },
+        { id: 'h-lab', name: 'lab', quitEnds: true, onOpen: openLab }
+      ]
+    })
+    const all = segments()
+    const first = all.indexOf('This PC · quit ends sessions')
+    expect(all.slice(first, first + 5)).toEqual([
+      'This PC · quit ends sessions',
+      '|',
+      'build-box · quit keeps sessions',
+      '|',
+      'lab · quit ends sessions'
+    ])
+    screen.getByRole('button', { name: 'build-box · quit keeps sessions' }).click()
+    expect(openBuild).toHaveBeenCalledTimes(1)
+    expect(openLocal).not.toHaveBeenCalled()
+    screen.getByRole('button', { name: 'lab · quit ends sessions' }).click()
+    expect(openLab).toHaveBeenCalledTimes(1)
+    screen.getByRole('button', { name: 'This PC · quit ends sessions' }).click()
+    expect(openLocal).toHaveBeenCalledTimes(1)
+  })
+
+  it('says a host it lost is not connected and retrying, and still says what quitting does in its tooltip', () => {
+    renderBar({
+      hosts: [
+        { id: 'local', name: 'This PC', quitEnds: true, onOpen: vi.fn() },
+        { id: 'h-build', name: 'build-box', quitEnds: false, retrying: true, onOpen: vi.fn() }
+      ]
+    })
+    const item = screen.getByRole('button', { name: 'build-box · not connected, retrying' })
+    expect(item.getAttribute('data-status-host')).toBe('retrying')
+    expect(item.getAttribute('title')).toContain('keeps running')
+    expect(item.className).toContain('text-warn')
+  })
+
   it('shows no host item while sessions run in Helm itself', () => {
-    renderBar({ host: null })
+    renderBar({ hosts: [] })
     expect(document.querySelectorAll('[data-status-host]')).toHaveLength(0)
     expect(segments().filter((segment) => segment === '|')).toHaveLength(2)
   })

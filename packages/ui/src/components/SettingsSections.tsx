@@ -15,6 +15,8 @@ export type SettingsSectionId =
   | 'appearance'
   | 'terminal'
   | 'sessions'
+  /** The hosts on other computers. Listed only while sessions run in the local host. */
+  | 'hosts'
   | 'workspace'
   | 'files'
   | 'browser'
@@ -42,6 +44,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'sessions', label: 'Sessions' },
+  { id: 'hosts', label: 'Hosts' },
   { id: 'workspace', label: 'Workspace', hint: 'The folders Helm scans, and what a new harness is written from.' },
   { id: 'files', label: 'Files' },
   { id: 'browser', label: 'Browser' },
@@ -63,15 +66,25 @@ export interface SettingsSectionsProps {
   current: SettingsSectionId
   onSelect: (id: SettingsSectionId) => void
   plugins?: readonly SettingsPluginLink[] | undefined
+  /**
+   * Whether Hosts is listed: only while "Run sessions in the local host" is
+   * on, since a host on another computer is reached only beside this PC's.
+   */
+  showHosts?: boolean | undefined
 }
 
 export const pluginSection = (path: string): SettingsSectionId => `plugin:${path}`
 
 /** The sidebar's list of sections, with the sidebar's own selected-row recipe. */
-export function SettingsSections({ current, onSelect, plugins = [] }: SettingsSectionsProps): JSX.Element {
+export function SettingsSections({
+  current,
+  onSelect,
+  plugins = [],
+  showHosts = false
+}: SettingsSectionsProps): JSX.Element {
   return (
     <nav aria-label="Settings sections" className="flex flex-col gap-px px-1.5 pb-1.5">
-      {SETTINGS_SECTIONS.map((section) => {
+      {SETTINGS_SECTIONS.filter((section) => showHosts || section.id !== 'hosts').map((section) => {
         const selected = section.id === current
         const link = (
           <button

@@ -2,18 +2,33 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { SETTINGS_SECTIONS, SettingsSections, pluginSection } from './SettingsSections'
 
+/** Every section but Hosts, which is listed only while sessions run in the local host. */
+const WITHOUT_HOSTS = SETTINGS_SECTIONS.filter((section) => section.id !== 'hosts').map((section) => section.label)
+
 describe('SettingsSections', () => {
   it('lists every section in order, marks the one on screen, and picks another', () => {
     const onSelect = vi.fn()
     render(<SettingsSections current="terminal" onSelect={onSelect} />)
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     const rows = [...nav.querySelectorAll('button')]
-    expect(rows.map((row) => row.textContent)).toEqual(SETTINGS_SECTIONS.map((section) => section.label))
+    expect(rows.map((row) => row.textContent)).toEqual(WITHOUT_HOSTS)
     expect(rows.filter((row) => row.getAttribute('aria-current') === 'page').map((row) => row.textContent)).toEqual([
       'Terminal'
     ])
     fireEvent.click(screen.getByRole('button', { name: 'Browser' }))
     expect(onSelect).toHaveBeenCalledWith('browser')
+  })
+
+  it('lists Hosts after Sessions only while sessions run in the local host', () => {
+    const onSelect = vi.fn()
+    render(<SettingsSections current="general" onSelect={onSelect} showHosts />)
+    const rows = [...screen.getByRole('navigation', { name: 'Settings sections' }).querySelectorAll('button')].map(
+      (row) => row.textContent
+    )
+    expect(rows).toEqual(SETTINGS_SECTIONS.map((section) => section.label))
+    expect(rows[rows.indexOf('Sessions') + 1]).toBe('Hosts')
+    fireEvent.click(screen.getByRole('button', { name: 'Hosts' }))
+    expect(onSelect).toHaveBeenCalledWith('hosts')
   })
 })
 
@@ -47,6 +62,6 @@ describe("SettingsSections: each plugin's page", () => {
   it('lists no plugins when there are none', () => {
     render(<SettingsSections current="plugins" onSelect={vi.fn()} plugins={[]} />)
     const rows = [...screen.getByRole('navigation', { name: 'Settings sections' }).querySelectorAll('button')]
-    expect(rows.map((row) => row.textContent)).toEqual(SETTINGS_SECTIONS.map((section) => section.label))
+    expect(rows.map((row) => row.textContent)).toEqual(WITHOUT_HOSTS)
   })
 })

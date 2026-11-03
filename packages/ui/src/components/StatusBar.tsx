@@ -1,4 +1,4 @@
-import type { JSX } from 'react'
+import { Fragment, type JSX } from 'react'
 import type { UsageDisplayMode, UsageSnapshot } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { UsageStatus } from './UsageStatus'
@@ -41,19 +41,23 @@ export interface StatusBarProps {
   /** Each plugin's item, in the order the plugins were added. Pressing one opens its panel. */
   plugins?: readonly StatusPluginItem[] | undefined
   /**
-   * The host sessions run in and what quitting Helm does there, while
-   * sessions run in the local host; absent otherwise, when there is no host
-   * to name. Pressing it opens the setting that decides.
+   * The hosts sessions run in and what quitting Helm does on each, this PC
+   * first, while sessions run in the local host; empty otherwise, when there
+   * is no host to name. Pressing one opens the setting that decides.
    */
-  host?: StatusHostItem | null | undefined
+  hosts?: readonly StatusHostItem[] | undefined
 }
 
 export interface StatusHostItem {
+  /** `local` for this PC's own host, a remote host's id otherwise. */
+  id: string
   /** What the bar calls the host: "This PC" for this PC's own. */
   name: string
   /** Whether quitting Helm ends the sessions it started there. */
   quitEnds: boolean
-  /** Opens Settings > Sessions, where what quitting does is set. */
+  /** The link to the host ended and is trying again by itself. Nothing there ended. */
+  retrying?: boolean | undefined
+  /** Opens the setting where what quitting does there is set. */
   onOpen: () => void
 }
 
@@ -99,7 +103,7 @@ export function StatusBar({
   update,
   onOpenUpdate,
   plugins = [],
-  host = null
+  hosts = []
 }: StatusBarProps): JSX.Element {
   const total = sessions.working + sessions.waiting + sessions.idle
   return (
@@ -198,21 +202,32 @@ export function StatusBar({
       )}
 
       {/* Where the sessions live and what a quit does to them, said before
-          anybody quits: a quit should never do what you did not expect. */}
-      {host !== null && (
-        <>
+          anybody quits: a quit should never do what you did not expect. One
+          item per host, this PC first, each behind a rule of its own. */}
+      {hosts.map((host) => (
+        <Fragment key={host.id}>
           <Divider />
           <button
-            type="button"
-            data-status-host={host.quitEnds ? 'ends' : 'keeps'}
-            onClick={host.onOpen}
-            title={`Sessions run in the host on ${host.name}, and quitting Helm ${host.quitEnds ? 'ends' : 'keeps running'} the ones it started there. Opens Settings.`}
-            className="-mx-1 shrink-0 rounded px-1 transition-colors hover:bg-hover hover:text-fg"
-          >
-            {host.name} · quit {host.quitEnds ? 'ends' : 'keeps'} sessions
+          type="button"
+          data-status-host={host.retrying === true ? 'retrying' : host.quitEnds ? 'ends' : 'keeps'}
+          data-status-host-id={host.id}
+          onClick={host.onOpen}
+          title={
+            (host.retrying === true
+              ? `Helm lost its connection to ${host.name} and is trying again. Nothing running there ended. `
+              : `Sessions run in the host on ${host.name}. `) +
+            `Quitting Helm ${host.quitEnds ? 'ends' : 'keeps running'} the ones it started there. Opens Settings.`
+          }
+          className={cn(
+            '-mx-1 flex shrink-0 items-center gap-1.5 rounded px-1 transition-colors hover:bg-hover hover:text-fg',
+            host.retrying === true && 'text-warn'
+          )}
+        >
+          {host.retrying === true && <span aria-hidden className="size-1.5 rounded-full bg-warn" />}
+          {host.name} · {host.retrying === true ? 'not connected, retrying' : `quit ${host.quitEnds ? 'ends' : 'keeps'} sessions`}
           </button>
-        </>
-      )}
+        </Fragment>
+      ))}
 
       <span className="flex-1" />
 
