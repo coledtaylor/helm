@@ -1,7 +1,10 @@
 //! The local socket clients connect on, which only this user can open: a
 //! named pipe with the user's access list on Windows, a `0600` Unix socket in
-//! a `0700` folder on macOS and Linux. The host has no other listener for
-//! clients, and none on a network interface.
+//! a `0700` folder on macOS and Linux. The host listens on two of them: its
+//! local endpoint, for clients on its own computer, and beside it its relay
+//! endpoint ([`Endpoint::relay`]), which `floti connect` opens for a client
+//! on another computer. It has no other listener for clients, and none on a
+//! network interface.
 //!
 //! One host per endpoint: binding refuses an endpoint a live host holds, and
 //! takes over one a killed host left behind.
@@ -57,6 +60,24 @@ impl Endpoint {
 
     pub fn as_path(&self) -> &Path {
         &self.0
+    }
+
+    /// The relay endpoint beside this one, open to this user only, as this
+    /// one is: a socket `<name>.relay` beside `<name>.sock`, which keeps it
+    /// one byte longer and inside a Unix socket path's length limit, or the
+    /// pipe name with `-relay` after it. A connection on it reached the host
+    /// from another computer.
+    pub fn relay(&self) -> Self {
+        if self
+            .0
+            .extension()
+            .is_some_and(|extension| extension == "sock")
+        {
+            return Self(self.0.with_extension("relay"));
+        }
+        let mut path = self.0.clone().into_os_string();
+        path.push("-relay");
+        Self(PathBuf::from(path))
     }
 }
 

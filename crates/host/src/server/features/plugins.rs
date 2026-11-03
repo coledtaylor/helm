@@ -42,7 +42,6 @@ use floti_protocol::channels::sessions::{
 use tokio::sync::broadcast;
 
 use super::{ActivityHandle, Caller, Feature, FeatureContext};
-use crate::devices::Role;
 use crate::plugins::log::PluginLogs;
 use crate::plugins::net::Net;
 use crate::plugins::runtime::{ChannelMessage, IsolateRuntime};
@@ -52,19 +51,6 @@ use crate::server::events::Publication;
 use crate::session::ClientId;
 pub(crate) use sessions::PluginSessions;
 use sessions::now_ms;
-
-/// Refuses a change only an admin device may make, naming what the caller
-/// is paired as.
-fn admin_only(caller: Caller) -> Result<(), String> {
-    let paired_as = match caller.role {
-        Role::Admin => return Ok(()),
-        Role::Operator => "an operator",
-        Role::Viewer => "a viewer",
-    };
-    Err(format!(
-        "Adding, removing or switching a plugin takes an admin device, and this device is paired as {paired_as}."
-    ))
-}
 
 pub(crate) struct Plugins {
     registry: Registry,
@@ -226,22 +212,16 @@ impl Feature for Plugins {
         let registry = &self.registry;
         router
             .handle::<PluginsList>(|()| Ok(registry.list()))
-            .handle::<PluginsAdd>(move |request| {
-                admin_only(caller)?;
-                registry.add(&request.path)
-            })
-            .handle::<PluginsRemove>(move |request| {
-                admin_only(caller)?;
+            // Admin only, as the connection's role table says before any
+            // of these is reached.
+            .handle::<PluginsAdd>(|request| registry.add(&request.path))
+            .handle::<PluginsRemove>(|request| {
                 registry.remove(&request.path, &request.delete_secrets)
             })
-            .handle::<PluginsSetEnabled>(move |request| {
-                admin_only(caller)?;
+            .handle::<PluginsSetEnabled>(|request| {
                 registry.set_enabled(&request.path, request.enabled)
             })
-            .handle::<PluginsSetTools>(move |request| {
-                admin_only(caller)?;
-                registry.set_tools(&request.path, request.enabled)
-            })
+            .handle::<PluginsSetTools>(|request| registry.set_tools(&request.path, request.enabled))
             .handle::<PluginsReload>(|request| registry.reload(&request.path))
             .handle::<PluginsLog>(|request| registry.log(&request.path))
             .handle::<PluginsMetrics>(|()| Ok(registry.metrics()))

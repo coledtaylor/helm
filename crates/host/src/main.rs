@@ -15,8 +15,13 @@
 //! folder> --ask | --stop` is what an installer runs before it replaces the
 //! binary: it says what stopping the host would end, then stops it.
 //! `floti devices` lists the devices paired with the host on this computer
-//! and those waiting to pair, and `floti devices approve <code> [--role
-//! viewer|operator|admin]` pairs the one waiting under the code it shows.
+//! and those waiting to pair, `floti devices approve <code>|- [--role
+//! viewer|operator|admin]` pairs the one waiting under the code it shows
+//! (`-` reads the code from standard input), and `floti devices revoke
+//! <fingerprint>` revokes a device, closing its connections at once.
+//! `floti bridge ... --pair <device name> --approve <role>` pairs in one
+//! step: it runs `floti devices approve - --role <role>` through the same
+//! transport, with its own code on that command's standard input.
 //! `floti keeper <data folder> <runtime folder>` is the session keeper a
 //! host starts for itself, which holds its sessions so they outlive it; it
 //! is not run by hand.
@@ -28,11 +33,12 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 
-use floti_host::bridge::{BridgeExit, Transport, run_bridge, run_bridge_through};
+use floti_host::bridge::{BridgeExit, Pair, Transport, run_bridge, run_bridge_through};
 use floti_host::connect::{ConnectStep, run_connect};
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
+use floti_protocol::channels::devices::DeviceRole;
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--pair <device name>] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code> [--role viewer|operator|admin]";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--pair <device name> [--approve viewer|operator|admin]] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code>|- [--role viewer|operator|admin]\n       floti devices revoke <fingerprint>";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -47,7 +53,7 @@ fn main() -> ExitCode {
     if args.first().is_some_and(|first| first == "bridge") && args.len() > 2 {
         return match bridge_through(&args[1..]) {
             Some((folder, pair, transport)) => ExitCode::from(
-                run_bridge_through(Path::new(&folder), pair.as_deref(), &transport).code(),
+                run_bridge_through(Path::new(&folder), pair.as_ref(), &transport).code(),
             ),
             None => usage(),
         };
@@ -99,14 +105,33 @@ fn usage() -> ExitCode {
 }
 
 /// What follows `bridge` when it reaches a host through a transport: the
-/// client folder, then `--pair <device name>` or nothing, then `--` and the
-/// program with its arguments, each kept as the OS gave it.
-fn bridge_through(args: &[OsString]) -> Option<(OsString, Option<String>, Transport)> {
+/// client folder, then `--pair <device name>` (and, to pair in one step,
+/// `--approve <role>`) or nothing, then `--` and the program with its
+/// arguments, each kept as the OS gave it.
+fn bridge_through(args: &[OsString]) -> Option<(OsString, Option<Pair>, Transport)> {
     let (folder, rest) = args.split_first()?;
     let (pair, rest) = match rest {
         [flag, name, rest @ ..] if flag == "--pair" => {
             let name = name.to_str().filter(|name| !name.trim().is_empty())?;
-            (Some(name.to_owned()), rest)
+            let (approve, rest) = match rest {
+                [flag, role, rest @ ..] if flag == "--approve" => {
+                    let role = match role.to_str()? {
+                        "viewer" => DeviceRole::Viewer,
+                        "operator" => DeviceRole::Operator,
+                        "admin" => DeviceRole::Admin,
+                        _ => return None,
+                    };
+                    (Some(role), rest)
+                }
+                _ => (None, rest),
+            };
+            (
+                Some(Pair {
+                    name: name.to_owned(),
+                    approve,
+                }),
+                rest,
+            )
         }
         _ => (None, rest),
     };

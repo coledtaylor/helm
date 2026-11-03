@@ -2,11 +2,13 @@
 //! `ssh <target> floti connect`, so a client on another computer reaches the
 //! host there.
 //!
-//! It finds the host's local socket exactly as `floti host` and `floti
-//! bridge` do: from the login's environment, `FLOTI_DATA_DIR`,
-//! `FLOTI_RUNTIME_DIR` and the other overrides included. It then copies every
-//! byte on its standard input to the socket and every byte from the socket
-//! to its standard output, unchanged and in order, both ways at once. It runs
+//! It finds the host's socket exactly as `floti host` and `floti bridge` do:
+//! from the login's environment, `FLOTI_DATA_DIR`, `FLOTI_RUNTIME_DIR` and
+//! the other overrides included. It opens the host's relay endpoint, beside
+//! its local one, so the host knows the client is on another computer and
+//! asks it for presence before an admin action. It then copies every byte on
+//! its standard input to the socket and every byte from the socket to its
+//! standard output, unchanged and in order, both ways at once. It runs
 //! no handshake and opens no key or client file: the client's Noise
 //! handshake crosses it as it would the socket, so the client holds the host
 //! to the key it pinned and proves its own device key exactly as on this
@@ -32,7 +34,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::client::is_closed;
 use crate::platform::folders::{self, UserEnv};
 use crate::platform::socket::{LocalSocket, Native as NativeSocket};
-use crate::server::{host_public_key, local_endpoint};
+use crate::server::{host_public_key, relay_endpoint};
 
 /// How `floti connect` ended, which is its exit status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,7 +124,7 @@ async fn relay(env: &UserEnv) -> ConnectExit {
         Ok(folders) => folders,
         Err(err) => return fail(ConnectExit::Failed, &err.to_string()),
     };
-    let Ok(socket) = NativeSocket.connect(&local_endpoint(&folders)).await else {
+    let Ok(socket) = NativeSocket.connect(&relay_endpoint(&folders)).await else {
         return no_host();
     };
     let (mut from_host, mut to_host) = tokio::io::split(socket);

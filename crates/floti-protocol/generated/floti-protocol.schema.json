@@ -3117,6 +3117,16 @@
           "type": "string"
         },
         {
+          "const": "notPermitted",
+          "description": "The device's role does not allow it; the message says what it takes\nand what the device is paired as.",
+          "type": "string"
+        },
+        {
+          "const": "presenceNeeded",
+          "description": "An admin action from another computer, with no presence confirmed on\nthat device in the last five minutes. Confirm presence\n(`devices:presence`) and ask again.",
+          "type": "string"
+        },
+        {
           "const": "other",
           "description": "A code this version does not know.",
           "type": "string"
@@ -8000,6 +8010,18 @@
       ],
       "type": "object"
     },
+    "RevokeDevice": {
+      "properties": {
+        "fingerprint": {
+          "description": "The device's key's fingerprint, as `devices:list` and `floti\ndevices` give it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fingerprint"
+      ],
+      "type": "object"
+    },
     "RootPath": {
       "description": "A scan root.",
       "properties": {
@@ -9934,6 +9956,10 @@
     "Welcome": {
       "description": "The host's answer to an accepted `hello`.",
       "properties": {
+        "away": {
+          "description": "Whether this connection reached the host from another computer,\nthrough `floti connect`: an admin action on it needs presence\n(`devices:presence`) within the last five minutes.",
+          "type": "boolean"
+        },
         "backends": {
           "description": "Every backend the host can run, with the features it declares.",
           "items": {
@@ -9955,6 +9981,17 @@
         "protocol": {
           "$ref": "#/$defs/ProtocolVersion",
           "description": "The version this connection speaks."
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeviceRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The role this connection's device is paired with; absent for a\nconnection that is not a paired device's (the host's own shell)."
         }
       },
       "required": [
@@ -10659,6 +10696,28 @@
       },
       "response": {
         "$ref": "#/$defs/DeviceListing"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "devices:presence",
+      "request": {
+        "type": "null"
+      },
+      "response": {
+        "type": "null"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "devices:revoke",
+      "request": {
+        "$ref": "#/$defs/RevokeDevice"
+      },
+      "response": {
+        "$ref": "#/$defs/PairedDevice"
       }
     },
     {

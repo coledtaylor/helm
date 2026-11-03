@@ -39,6 +39,8 @@ fn welcome() -> Welcome {
             BackendDescriptor::new(BackendId::claude_code(), "Claude Code", BackendFeature::ALL),
             BackendDescriptor::new(BackendId::new("any-cli"), "Any CLI", [BackendFeature::Run]),
         ],
+        role: None,
+        away: false,
     }
 }
 

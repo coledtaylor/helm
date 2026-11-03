@@ -25,13 +25,15 @@
 //!
 //! A key the registry does not know may instead ask to pair in its first
 //! handshake message; after `hello` it is told a short code to show and
-//! waits, in memory only (`pairing`), until someone on this computer runs
-//! `floti devices approve <code>`, the request expires after
-//! [`PAIRING_LIFETIME`], or it goes away. That command, and `floti
-//! devices`, connect as the host's own key, which only the host's OS user
-//! can read; such a connection is served `devices:list` and
-//! `devices:approve` and nothing else, and no paired device is served
-//! either. The code is never logged; requests are named by fingerprint.
+//! waits, in memory only (`pairing`), until an admin device approves it or
+//! someone on this computer runs `floti devices approve <code>`, the request
+//! expires after [`PAIRING_LIFETIME`], or it goes away. That command, and
+//! `floti devices`, connect as the host's own key, which only the host's OS
+//! user can read; such a connection is served the devices channels and
+//! nothing else. Every paired device is served what its role allows
+//! (`access`), and an admin on the relay endpoint `floti connect` opens
+//! confirms its presence first. The code is never logged; requests are
+//! named by fingerprint.
 //!
 //! Sessions outlive clients: a client leaving ends nothing. Stopping the host ends every
 //! session's process tree; a plain stop records each row as exited first, a
@@ -51,8 +53,10 @@
 //! is on the not-yet-served list ([`unserved`]) with the feature that will
 //! serve it, and is answered with an error naming it.
 
+mod access;
 mod agent_tools;
 mod browser_tools;
+mod clock;
 mod connection;
 mod enrolment;
 mod events;
@@ -99,7 +103,12 @@ use crate::session::ClientId;
 use crate::store::Store;
 use crate::{Error, Result};
 
+use access::{Confirmations, LiveConnections};
+pub use access::{PRESENCE_NEEDED, PRESENCE_WINDOW};
 use agent_tools::HostAgentTools;
+use clock::HostClock;
+#[cfg(any(test, feature = "testkit"))]
+pub use clock::TEST_HOST_CLOCK_MARKER;
 use connection::{Admission, ConnectionContext};
 use enrolment::Enrolment;
 pub use enrolment::{FIRST_ADMIN_NAME, LocalEnrolment, read_enrolment};
@@ -107,8 +116,6 @@ use features::Features;
 use hosted::Hosted;
 pub use hosted::Occupancy;
 use pairing::Pairing;
-#[cfg(any(test, feature = "testkit"))]
-pub use pairing::TEST_PAIRING_CLOCK_MARKER;
 pub use pairing::{MAX_WAITING, PAIRING_LIFETIME};
 use session_tools::HostWorld;
 
@@ -225,6 +232,12 @@ impl HostConfig {
 /// A client on this computer finds the host the same way.
 pub fn local_endpoint(folders: &Folders) -> Endpoint {
     socket::Native.endpoint(&folders.runtime, SOCKET_NAME)
+}
+
+/// Where the host over `folders` listens for clients on other computers,
+/// which `floti connect` opens: its relay endpoint, beside the local one.
+pub fn relay_endpoint(folders: &Folders) -> Endpoint {
+    local_endpoint(folders).relay()
 }
 
 /// How a host was started and for whom.
@@ -373,11 +386,15 @@ impl Host {
         ));
         // In memory only: a request to pair does not outlive the host.
         let pairing = Arc::new(Pairing::new(&folders.data, Arc::clone(&devices)));
+        // In memory only too: a device confirms its presence again after a
+        // restart.
+        let confirmations = Arc::new(Confirmations::new(HostClock::new(&folders.data)));
         let deadline = handshake_deadline(&folders.data);
         let hello_deadline = hello_deadline(&folders.data);
         // Launch folders a crashed run left, once their owners are gone.
         sweep_launch_folders(&folders.data, &process_tree::Native);
         let listener = socket::Native.bind(&endpoint)?;
+        let relay = socket::Native.bind(&endpoint.relay())?;
         let store = Store::open(&folders.data)?;
         // Sessions run in the keeper, which outlives this host; without one
         // they run here and end with it.
@@ -414,22 +431,32 @@ impl Host {
             hosted.terminals().exits(),
             Arc::downgrade(&hosted),
         ));
-        let accepting = tokio::spawn(accept(
-            listener,
-            Arc::clone(&features),
-            Arc::clone(&hosted),
-            Admission {
+        let accepted = Accepted {
+            features: Arc::clone(&features),
+            hosted: Arc::clone(&hosted),
+            admission: Admission {
                 host_key,
                 devices,
                 enrolment,
                 pairing,
                 deadline,
                 hello_deadline,
+                confirmations,
+                live: Arc::new(LiveConnections::default()),
             },
             identity,
-            stopper.clone(),
-            shutdown_rx,
-        ));
+            stopper: stopper.clone(),
+            shutdown: shutdown_rx,
+        };
+        let accepting = tokio::spawn({
+            let relayed = accepted.clone();
+            async move {
+                tokio::join!(
+                    accept(listener, false, accepted),
+                    accept(relay, true, relayed)
+                );
+            }
+        });
         Ok(Self {
             hosted,
             features,
@@ -460,6 +487,11 @@ impl Host {
     /// Where clients connect.
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    /// Where clients on other computers connect, through `floti connect`.
+    pub fn relay_endpoint(&self) -> Endpoint {
+        self.endpoint.relay()
     }
 
     /// How many sessions and plain terminals it runs and clients it has
@@ -589,15 +621,20 @@ fn lock_data_folder(folders: &Folders) -> Result<File> {
     }
 }
 
-async fn accept(
-    mut listener: socket::Listener,
+/// What every accepted connection is served with.
+#[derive(Clone)]
+struct Accepted {
     features: Arc<Features>,
     hosted: Arc<Hosted>,
     admission: Admission,
     identity: Arc<HostIdentity>,
     stopper: Stopper,
     shutdown: watch::Receiver<bool>,
-) {
+}
+
+/// Accepts clients on `listener` until the host stops; `away` says it is
+/// the relay endpoint, whose clients reached the host from another computer.
+async fn accept(mut listener: socket::Listener, away: bool, accepted: Accepted) {
     static NEXT_CLIENT: AtomicU64 = AtomicU64::new(1);
     loop {
         match listener.accept().await {
@@ -606,13 +643,14 @@ async fn accept(
                 tokio::spawn(connection::serve(
                     stream,
                     client,
+                    away,
                     ConnectionContext {
-                        features: Arc::clone(&features),
-                        hosted: Arc::clone(&hosted),
-                        admission: admission.clone(),
-                        identity: Arc::clone(&identity),
-                        stopper: stopper.clone(),
-                        shutdown: shutdown.clone(),
+                        features: Arc::clone(&accepted.features),
+                        hosted: Arc::clone(&accepted.hosted),
+                        admission: accepted.admission.clone(),
+                        identity: Arc::clone(&accepted.identity),
+                        stopper: accepted.stopper.clone(),
+                        shutdown: accepted.shutdown.clone(),
                     },
                 ));
             }

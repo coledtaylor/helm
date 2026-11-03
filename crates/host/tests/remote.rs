@@ -30,7 +30,7 @@ use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, R
 use floti_host::platform::socket::{
     Endpoint, LocalListener, LocalSocket, LocalStream, Native as NativeSocket,
 };
-use floti_host::server::{HostConfig, host_public_key, local_endpoint};
+use floti_host::server::{HostConfig, host_public_key, local_endpoint, relay_endpoint};
 use floti_host::testkit::{FakeAgent, PATIENCE, RunningHost, TestDirs, run_floti};
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
 use floti_protocol::channels::common::SessionRecord;
@@ -521,14 +521,15 @@ async fn tapped(tap: Tap) -> (Vec<u8>, Vec<u8>) {
 }
 
 /// A runtime folder of its own under `dirs`, with a tap in it relaying to
-/// the host over `dirs`.
+/// the host over `dirs`: at the relay endpoint `floti connect` opens there,
+/// to the host's own relay endpoint.
 fn tapped_runtime(dirs: &TestDirs) -> (PathBuf, Tap) {
     let runtime = dirs.folder("tap");
-    let at = local_endpoint(&floti_host::platform::folders::Folders {
+    let at = relay_endpoint(&floti_host::platform::folders::Folders {
         runtime: runtime.clone(),
         ..dirs.folders()
     });
-    let relay = tap(&at, local_endpoint(&dirs.folders()));
+    let relay = tap(&at, relay_endpoint(&dirs.folders()));
     (runtime, relay)
 }
 
@@ -930,9 +931,9 @@ async fn s5_a_request_to_pair_through_a_transport_that_expires_pins_nothing_and_
         .stderr_line_where(|line| line.starts_with(PAIRING_LINE_PREFIX))
         .await;
 
-    // The host's pairing clock is stepped past the request's life, then the
+    // The host's clock is stepped past the request's life, then the
     // host is asked, which drops what has expired as it answers.
-    dirs.step_pairing_clock(floti_host::server::PAIRING_LIFETIME + Duration::from_secs(1));
+    dirs.step_host_clock(floti_host::server::PAIRING_LIFETIME + Duration::from_secs(1));
     let mut list = floti_command(dirs, &dirs.runtime);
     list.arg("devices").stdin(Stdio::null());
     let listed = run_floti(list).await;

@@ -41,6 +41,8 @@ fn every_kind_of_message() -> Vec<Message> {
                 "Claude Code",
                 BackendFeature::ALL,
             )],
+            role: Some(floti_protocol::channels::devices::DeviceRole::Admin),
+            away: true,
         }),
         Message::Request(Request {
             id: 1,

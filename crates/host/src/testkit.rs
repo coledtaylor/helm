@@ -197,12 +197,13 @@ impl TestDirs {
         .expect("mark the test's data folder");
     }
 
-    /// Moves the pairing clock of a host over this tree's data folder
-    /// `ahead` of the real one, read at every check, so a test steps a
-    /// request to pair to its expiry rather than waiting it out.
-    pub fn step_pairing_clock(&self, ahead: Duration) {
+    /// Moves the clock of a host over this tree's data folder `ahead` of the
+    /// real one, read at every check, so a test steps a request to pair to
+    /// its expiry, or a device's presence past five minutes, rather than
+    /// waiting it out.
+    pub fn step_host_clock(&self, ahead: Duration) {
         std::fs::write(
-            self.data.join(crate::server::TEST_PAIRING_CLOCK_MARKER),
+            self.data.join(crate::server::TEST_HOST_CLOCK_MARKER),
             ahead.as_millis().to_string(),
         )
         .expect("mark the test's data folder");

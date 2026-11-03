@@ -9,8 +9,9 @@ use floti_protocol::noise::{
     KeyPair, PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN, PairingCode, PublicKey,
 };
 
-use super::{Full, MAX_WAITING, Outcome, PAIRING_LIFETIME, Pairing, TEST_PAIRING_CLOCK_MARKER};
+use super::{Full, MAX_WAITING, Outcome, PAIRING_LIFETIME, Pairing};
 use crate::devices::{DeviceRegistry, Role, Standing};
+use crate::server::clock::TEST_HOST_CLOCK_MARKER;
 use crate::testkit::TestDirs;
 
 struct Fixture {
@@ -135,9 +136,9 @@ async fn s9_just_short_of_ten_minutes_a_request_still_waits_and_is_approved() {
 async fn s9_a_request_read_after_its_time_is_dropped_and_its_connection_told() {
     let fx = fixture();
     let mut waiting = fx.ask(key(), "a phone");
-    // The test build's clock marker moves the pairing clock, not tokio's.
+    // The test build's clock marker moves the host's clock, not tokio's.
     std::fs::write(
-        fx.dirs.data.join(TEST_PAIRING_CLOCK_MARKER),
+        fx.dirs.data.join(TEST_HOST_CLOCK_MARKER),
         PAIRING_LIFETIME.as_millis().to_string(),
     )
     .unwrap();

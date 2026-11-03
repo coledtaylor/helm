@@ -43,6 +43,8 @@ use super::{
     serve_shell,
 };
 use crate::devices::{DeviceRegistry, Role, Standing};
+use crate::server::access::{Confirmations, LiveConnections};
+use crate::server::clock::HostClock;
 use crate::server::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME, read_enrolment};
 use crate::server::pairing::{MAX_WAITING, PAIRING_LIFETIME, Pairing};
 use crate::server::{
@@ -97,6 +99,8 @@ fn fixture_with(role: Role) -> Fixture {
             pairing,
             deadline: HANDSHAKE_DEADLINE,
             hello_deadline: HELLO_DEADLINE,
+            confirmations: Arc::new(Confirmations::new(HostClock::new(&dirs.data))),
+            live: Arc::new(LiveConnections::default()),
         },
         device,
         shutdown: watch::channel(false).0,

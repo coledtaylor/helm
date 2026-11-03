@@ -128,6 +128,26 @@ impl TestClient {
         Self::over(connection, capabilities).await
     }
 
+    /// Connects to the running host at `endpoint` as `device` through its
+    /// relay endpoint, as `floti connect` does for a client on another
+    /// computer, and is welcomed with `capabilities`: the host takes it as
+    /// away.
+    pub async fn connect_device_away(
+        endpoint: &Endpoint,
+        device: &floti_protocol::noise::KeyPair,
+        capabilities: &[&str],
+    ) -> Self {
+        let data = super::data_folder_of(endpoint);
+        let host = host_public_key(&data)
+            .expect("read the host's key")
+            .expect("the host has a key");
+        let relay = endpoint.relay();
+        let connection = client::connect(&relay, device, &host)
+            .await
+            .unwrap_or_else(|err| panic!("the host at {relay} did not let the device in: {err}"));
+        Self::over(connection, capabilities).await
+    }
+
     /// Asks the host at `endpoint` to pair the device whose keys are `keys`,
     /// named `name`, holding the host to the key in its data folder, and
     /// hands back the waiting request with the code to show; retries while
@@ -172,6 +192,8 @@ impl TestClient {
                 host_version: String::new(),
                 capabilities: Vec::new(),
                 backends: Vec::new(),
+                role: None,
+                away: false,
             },
         };
         client

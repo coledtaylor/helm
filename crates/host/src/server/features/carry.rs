@@ -6,7 +6,8 @@
 //! store, held only for that batch, so History, the session list and every
 //! other request are answered between batches. A batch that changed what
 //! History, the archive or usage read tells their subscribers. Only an admin
-//! device may send any of it: each writes the host's database. The host's
+//! device may send any of it, as the connection's role table says: each
+//! writes the host's database. The host's
 //! log says how many rows each batch merged, never what they hold.
 
 use std::sync::{Arc, MutexGuard};
@@ -20,7 +21,6 @@ use floti_protocol::channels::carry::{
 use super::history::HistoryHandle;
 use super::{Caller, Feature, FeatureContext};
 use crate::carry;
-use crate::devices::Role;
 use crate::history::archive;
 use crate::server::hosted::Hosted;
 use crate::store::Store;
@@ -50,18 +50,6 @@ impl Carry {
     }
 }
 
-/// Refuses a copy from a device that may not change the host.
-fn admin_only(caller: Caller) -> Result<(), String> {
-    let paired_as = match caller.role {
-        Role::Admin => return Ok(()),
-        Role::Operator => "an operator",
-        Role::Viewer => "a viewer",
-    };
-    Err(format!(
-        "Copying Helm's data into the host takes an admin device, and this device is paired as {paired_as}."
-    ))
-}
-
 fn said(merged: CarryMerged, what: &str) {
     log_line!(
         "floti host: copied {} {what} from Helm, kept {} already here",
@@ -71,20 +59,17 @@ fn said(merged: CarryMerged, what: &str) {
 }
 
 impl Feature for Carry {
-    fn requests<'a>(&'a self, caller: Caller, router: &mut Router<'a>) {
+    fn requests<'a>(&'a self, _caller: Caller, router: &mut Router<'a>) {
         router
-            .handle::<CarryStatusRead>(move |()| {
-                admin_only(caller)?;
+            .handle::<CarryStatusRead>(|()| {
                 carry::status(self.store().connection()).map_err(|err| err.to_string())
             })
-            .handle::<CarryMissing>(move |request| {
-                admin_only(caller)?;
+            .handle::<CarryMissing>(|request| {
                 carry::missing(self.store().connection(), &request.session_ids)
                     .map(|session_ids| CarrySessionIds { session_ids })
                     .map_err(|err| err.to_string())
             })
-            .handle::<CarryNames>(move |request| {
-                admin_only(caller)?;
+            .handle::<CarryNames>(|request| {
                 let merged = carry::merge_names(self.store().connection(), &request.names)
                     .map_err(|err| err.to_string())?;
                 said(merged, "session names");
@@ -93,15 +78,13 @@ impl Feature for Carry {
                 }
                 Ok(merged)
             })
-            .handle::<CarryVersions>(move |request| {
-                admin_only(caller)?;
+            .handle::<CarryVersions>(|request| {
                 let merged = carry::merge_versions(self.store().connection(), &request.versions)
                     .map_err(|err| err.to_string())?;
                 said(merged, "config file versions");
                 Ok(merged)
             })
-            .handle::<CarryUsage>(move |request| {
-                admin_only(caller)?;
+            .handle::<CarryUsage>(|request| {
                 let merged = carry::merge_usage(self.store().connection(), &request.rows)
                     .map_err(|err| err.to_string())?;
                 said(merged, "usage rows");
@@ -112,8 +95,7 @@ impl Feature for Carry {
                 }
                 Ok(merged)
             })
-            .handle::<CarryConversations>(move |request| {
-                admin_only(caller)?;
+            .handle::<CarryConversations>(|request| {
                 // Compressed before the store is taken.
                 let parts = carry::encode(&request.parts);
                 let merged = {
@@ -132,8 +114,7 @@ impl Feature for Carry {
                 }
                 Ok(merged)
             })
-            .handle::<CarryFinish>(move |()| {
-                admin_only(caller)?;
+            .handle::<CarryFinish>(|()| {
                 let status =
                     carry::finish(self.store().connection()).map_err(|err| err.to_string())?;
                 log_line!("floti host: copying Helm's data finished");

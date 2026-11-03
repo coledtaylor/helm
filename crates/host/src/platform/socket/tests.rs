@@ -139,6 +139,31 @@ async fn clients_connect_and_bytes_flow_both_ways() {
 }
 
 #[tokio::test]
+async fn s2_the_relay_endpoint_is_beside_the_local_one_no_longer_than_a_byte_more_and_listens_apart()
+ {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let relay = endpoint.relay();
+    assert_ne!(relay, endpoint);
+    assert_eq!(relay.as_path().parent(), endpoint.as_path().parent());
+    if cfg!(unix) {
+        // A Unix socket path has a length limit; the relay keeps inside it.
+        assert_eq!(
+            relay.as_path().as_os_str().len(),
+            endpoint.as_path().as_os_str().len() + 1
+        );
+    }
+    let _local = Native.bind(&endpoint).expect("bind the local endpoint");
+    let mut relayed = Native.bind(&relay).expect("bind the relay beside it");
+    let mut client = Native.connect(&relay).await.expect("connect to the relay");
+    let mut served = relayed.accept().await.expect("the relay accepts");
+    client.write_all(b"away").await.unwrap();
+    let mut buf = [0u8; 4];
+    served.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"away");
+}
+
+#[tokio::test]
 async fn a_second_host_at_the_same_endpoint_is_refused_and_the_first_keeps_serving() {
     let dirs = TestDirs::new();
     let endpoint = dirs.endpoint();

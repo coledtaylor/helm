@@ -32,10 +32,23 @@
 //!
 //! A connection whose device key is the host's own has proven it can read
 //! the host's key file, owner-only in its data folder: it is the host's OS
-//! user on the host's computer, which is `floti devices` in a shell there.
-//! It is let in without the registry, and served `devices:list` and
-//! `devices:approve` and nothing else. Every paired device asking either is
-//! refused, an admin's included.
+//! user on the host's computer, which is `floti devices` in a shell there
+//! (over ssh included). It is let in without the registry, and served the
+//! devices channels (`devices:list`, `devices:approve`, `devices:revoke`)
+//! and nothing else, never asked for presence.
+//!
+//! A paired device is served the devices channels too, as its role allows
+//! (`super::access`): an admin lists, approves and revokes; an operator or a
+//! viewer is refused, but may revoke itself. A connection accepted on the
+//! host's relay endpoint, which `floti connect` opens, is away: an admin
+//! action on it needs the device's presence within the last five minutes
+//! (`devices:presence`). The welcome tells the device its role and whether
+//! it is away.
+//!
+//! Revoking a device closes every live connection of its key at once: each
+//! welcomed connection is entered in the host's live connections
+//! (`super::access::LiveConnections`) and ends when its device is revoked,
+//! detaching from its sessions and ending none of them.
 //!
 //! Once its answer is written, the host gives the client its own deadline
 //! to say `hello` ([`HELLO_DEADLINE`](super::HELLO_DEADLINE) in a host). A
@@ -45,8 +58,11 @@
 //! with nothing paired, so another device can enrol with it.
 //!
 //! The role a device is paired with, read at its handshake (an admin for
-//! the first admin enrolling), goes with each of its requests to the
-//! features, which say what it may change.
+//! the first admin enrolling), decides what it is served: every request,
+//! subscription and stream is checked against its channel's least role
+//! (`super::access`) before any feature sees it, and a viewer's keystrokes
+//! are dropped where they arrive. The role also goes with each request to
+//! the features, for a plugin page's calls, which keep their own rule.
 //!
 //! A welcomed client is attached to the host with the device its key
 //! proved, which is who the sessions it starts are recorded as started by.
@@ -71,8 +87,12 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use floti_protocol::channel::{RequestChannel, Routed, Router};
-use floti_protocol::channels::devices::{DeviceListing, DevicesApprove, DevicesList, PairedDevice};
+use floti_protocol::channel::from_payload;
+use floti_protocol::channel::{ChannelKind, RequestChannel, Routed, Router};
+use floti_protocol::channels::devices::{
+    DeviceListing, DevicesApprove, DevicesList, DevicesPresence, DevicesRevoke, PairedDevice,
+    RevokeDevice,
+};
 use floti_protocol::channels::host::{HostStop, HostStopReason};
 use floti_protocol::message::{
     ErrorCode, ErrorReply, Event, Hello, Pairing as PairingStatus, PairingApproved, PairingWaiting,
@@ -91,6 +111,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, Wr
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{JoinHandle, JoinSet};
 
+use super::access::{Asker, Confirmations, Gate, Live, LiveConnections, PRESENCE_NEEDED, gate};
 use super::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME};
 use super::events::{Publication, Start};
 use super::features::{Caller, Features};
@@ -98,7 +119,7 @@ use super::hosted::Hosted;
 use super::pairing::{MAX_WAITING, Outcome, Pairing};
 use super::stopper::ReservedStop;
 use super::{CATALOGUE, Stopper, unserved};
-use crate::devices::{Device, DeviceRegistry, Role, Standing};
+use crate::devices::{Device, DeviceRegistry, Revocation, Role, Standing};
 use crate::platform::socket::LocalStream;
 use crate::session::{ClientId, Session, SessionOutput};
 
@@ -107,13 +128,17 @@ mod tests;
 
 const READ_CHUNK: usize = 64 * 1024;
 
-/// What a paired device asking to list or approve devices is told.
-const SHELL_ONLY: &str = "Devices are listed and approved only with `floti devices`, in a shell \
-                          on the host's computer.";
+/// The devices channels, which the connection serves itself.
+const DEVICE_CHANNELS: [&str; 4] = [
+    DevicesList::NAME,
+    DevicesApprove::NAME,
+    DevicesRevoke::NAME,
+    DevicesPresence::NAME,
+];
 
 /// The router that answers `caller`'s requests: every feature's handlers,
-/// `host:stop`, which records the stop asked for in `stop`, and the devices
-/// channels, which a paired device is refused whatever its role.
+/// and `host:stop`, which records the stop asked for in `stop`. The devices
+/// channels are added by [`devices_handlers`].
 fn router<'a>(
     features: &'a Features,
     capabilities: CapabilitySet,
@@ -127,13 +152,79 @@ fn router<'a>(
         Ok(())
     });
     router
-        .handle::<DevicesList>(|()| Err(SHELL_ONLY.to_owned()))
-        .handle::<DevicesApprove>(|_| Err(SHELL_ONLY.to_owned()));
+}
+
+/// Serves the devices channels on `router` for a connection that proved
+/// `asker`, answering from `admission`. Who may ask what is the role
+/// table's to say (`super::access`), before any of these is reached.
+fn devices_handlers<'a>(router: &mut Router<'a>, admission: &'a Admission, asker: PublicKey) {
     router
+        .handle::<DevicesList>(|()| {
+            let paired = admission.devices.devices().map_err(|err| err.to_string())?;
+            Ok(DeviceListing {
+                paired: paired.into_iter().map(paired_device).collect(),
+                waiting: admission.pairing.list(),
+            })
+        })
+        .handle::<DevicesApprove>(|request| {
+            admission
+                .pairing
+                .approve(&request.code, request.role.into())
+                .map(paired_device)
+        })
+        .handle::<DevicesRevoke>(|request| revoke(admission, &request.fingerprint))
+        .handle::<DevicesPresence>(move |()| {
+            admission.confirmations.confirm(asker);
+            log_line!(
+                "floti host: device {} confirmed its presence",
+                asker.fingerprint()
+            );
+            Ok(())
+        });
+}
+
+/// Revokes the device with `fingerprint`: closes every live connection of
+/// its key at once, forgets its presence, ends none of its sessions, and
+/// answers with it, now revoked. Refused, changing nothing, for a
+/// fingerprint no device has or one already revoked.
+fn revoke(admission: &Admission, fingerprint: &str) -> Result<PairedDevice, String> {
+    let shown: String = fingerprint
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    match admission
+        .devices
+        .revoke_fingerprint(fingerprint)
+        .map_err(|err| err.to_string())?
+    {
+        Revocation::Revoked(device) => {
+            admission.confirmations.forget(&device.key);
+            let closed = admission.live.close_all(&device.key);
+            log_line!(
+                "floti host: revoked device {} ({}); closed its {closed} live connections, and its sessions keep running",
+                device.key.fingerprint(),
+                device.role.with_article()
+            );
+            Ok(paired_device(device))
+        }
+        Revocation::AlreadyRevoked(device) => Err(format!(
+            "The device \"{}\" ({}) was revoked already, at {}; nothing changed.",
+            device.name,
+            device.key.fingerprint(),
+            device
+                .revoked_at
+                .map(|at| at.to_string())
+                .unwrap_or_default()
+        )),
+        Revocation::Unknown => Err(format!(
+            "No device paired with this host has the fingerprint {shown}; nothing changed."
+        )),
+    }
 }
 
 /// Every channel the host serves: what a client's requests are routed to,
-/// and the features' events and streams.
+/// the devices channels, and the features' events and streams.
 pub(crate) fn served_channels(features: &Features) -> BTreeSet<&'static str> {
     let mut stop = None;
     let router = router(
@@ -143,16 +234,17 @@ pub(crate) fn served_channels(features: &Features) -> BTreeSet<&'static str> {
         &mut stop,
     );
     let mut served: BTreeSet<&'static str> = router.handled().collect();
+    served.extend(DEVICE_CHANNELS);
     served.extend(features.served_events_and_streams());
     debug_assert!(served.contains(HostStop::NAME));
-    debug_assert!(served.contains(DevicesList::NAME) && served.contains(DevicesApprove::NAME));
     served
 }
 
 /// What the handshake needs: the host's key, the registry it checks each
 /// device against, the enrolment of a first admin, the requests to pair,
 /// how long a connection has to finish it, and how long it then has to say
-/// `hello`.
+/// `hello`; and what the devices channels answer from: each device's
+/// presence, and every live connection, which a revoke closes.
 #[derive(Clone)]
 pub(crate) struct Admission {
     pub host_key: Arc<KeyPair>,
@@ -161,6 +253,8 @@ pub(crate) struct Admission {
     pub pairing: Arc<Pairing>,
     pub deadline: Duration,
     pub hello_deadline: Duration,
+    pub confirmations: Arc<Confirmations>,
+    pub live: Arc<LiveConnections>,
 }
 
 /// A device the handshake let in.
@@ -265,8 +359,15 @@ struct OpenStream {
     forward: JoinHandle<()>,
 }
 
-/// Serves one client until it disconnects or the host stops.
-pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: ConnectionContext) {
+/// Serves one client until it disconnects, its device is revoked or the
+/// host stops. `away` says it was accepted on the relay endpoint: it reached
+/// the host from another computer.
+pub(crate) async fn serve(
+    mut stream: LocalStream,
+    client: ClientId,
+    away: bool,
+    context: ConnectionContext,
+) {
     let mut shutdown = context.shutdown;
     let admitted = admit_within_deadline(&mut stream, &context.admission, &mut shutdown).await;
     let Admitted {
@@ -306,6 +407,9 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
         decoder: FrameDecoder::new(),
         client,
         role,
+        device,
+        away,
+        admission: context.admission.clone(),
         features: context.features,
         stopper: context.stopper,
         outbox: Outbox::new(),
@@ -330,8 +434,23 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
     else {
         return;
     };
+    // Entered before the registry is read again, so a revoke that lands
+    // between the handshake and here closes the connection either way.
+    let mut live = context.admission.live.enter(device, client);
+    if !matches!(
+        context.admission.devices.standing(&device),
+        Ok(Standing::Paired)
+    ) {
+        log_line!(
+            "floti host: refused client {}: revoked device {}",
+            client.0,
+            device.fingerprint()
+        );
+        return;
+    }
     context.hosted.attach_client(client, device);
-    connection.run(channels, shutdown).await;
+    connection.run(channels, shutdown, &mut live).await;
+    drop(live);
     connection.detach_all();
     connection.features.events().leave(client);
     connection.features.client_left(client);
@@ -662,16 +781,16 @@ async fn serve_pairing<S: AsyncRead + AsyncWrite>(
     }
 }
 
-/// The host's own shell: `devices:list` and `devices:approve`, and every
-/// other request refused, until it goes.
+/// The host's own shell: the devices channels, and every other request
+/// refused, until it goes. It is never asked for presence.
 async fn serve_shell<S: AsyncRead + AsyncWrite>(
     mut sealed: Sealed<S>,
     client: ClientId,
     device: PublicKey,
     (identity, admission, shutdown): Serving<'_>,
 ) {
-    const SERVED: &str =
-        "The host's own shell is served `devices:list` and `devices:approve` only.";
+    const SERVED: &str = "The host's own shell is served `devices:list`, `devices:approve` and \
+                          `devices:revoke` only.";
     let Some(hello) = sealed
         .hello(client, device, admission.hello_deadline, shutdown)
         .await
@@ -688,8 +807,10 @@ async fn serve_shell<S: AsyncRead + AsyncWrite>(
     while let Some(message) = sealed.next(shutdown).await {
         let answer = match message {
             Message::Request(request) => {
-                if request.channel == DevicesList::NAME || request.channel == DevicesApprove::NAME {
-                    shell_router(admission, capabilities).dispatch(&request)
+                if request.channel != DevicesPresence::NAME
+                    && DEVICE_CHANNELS.contains(&request.channel.as_str())
+                {
+                    shell_router(admission, capabilities, device).dispatch(&request)
                 } else {
                     Message::Error(ErrorReply {
                         id: request.id,
@@ -717,23 +838,11 @@ async fn serve_shell<S: AsyncRead + AsyncWrite>(
     }
 }
 
-/// What answers the host's own shell: the devices channels, served.
-fn shell_router(admission: &Admission, capabilities: CapabilitySet) -> Router<'_> {
+/// What answers the host's own shell, whose key is `host`: the devices
+/// channels, served.
+fn shell_router(admission: &Admission, capabilities: CapabilitySet, host: PublicKey) -> Router<'_> {
     let mut router = Router::new(&CATALOGUE, capabilities);
-    router
-        .handle::<DevicesList>(|()| {
-            let paired = admission.devices.devices().map_err(|err| err.to_string())?;
-            Ok(DeviceListing {
-                paired: paired.into_iter().map(paired_device).collect(),
-                waiting: admission.pairing.list(),
-            })
-        })
-        .handle::<DevicesApprove>(|request| {
-            admission
-                .pairing
-                .approve(&request.code, request.role.into())
-                .map(paired_device)
-        });
+    devices_handlers(&mut router, admission, host);
     router
 }
 
@@ -771,6 +880,12 @@ struct Connection {
     client: ClientId,
     /// The role its device is paired with.
     role: Role,
+    /// The key its device proved.
+    device: PublicKey,
+    /// Whether it reached the host from another computer.
+    away: bool,
+    /// What the devices channels answer from.
+    admission: Admission,
     features: Arc<Features>,
     stopper: Stopper,
     outbox: Outbox,
@@ -840,7 +955,11 @@ impl Connection {
                 return None;
             }
         };
-        let (answer, capabilities) = identity.answer(&hello);
+        let (mut answer, capabilities) = identity.answer(&hello);
+        if let Message::Welcome(welcome) = &mut answer {
+            welcome.role = Some(self.role.into());
+            welcome.away = self.away;
+        }
         if capabilities.is_some()
             && let Some(claim) = enrolling
             && !self.enrol(claim)
@@ -874,6 +993,7 @@ impl Connection {
         &mut self,
         mut channels: ClientChannels<'static>,
         mut shutdown: watch::Receiver<bool>,
+        live: &mut Live,
     ) {
         let (output_tx, mut output_rx) = mpsc::unbounded_channel::<(u64, SessionOutput)>();
         let mut events = self.features.events().listen(self.client);
@@ -920,6 +1040,14 @@ impl Connection {
                     Ok(())
                 }
                 _ = shutdown.changed() => Err(End::Gone),
+                () = live.closed() => {
+                    log_line!(
+                        "floti host: closed client {}: its device {} was revoked",
+                        self.client.0,
+                        self.device.fingerprint()
+                    );
+                    Err(End::Gone)
+                }
             };
             if ended.is_err() {
                 // Whatever is already queued, such as the answer to a stop,
@@ -993,13 +1121,35 @@ impl Connection {
                 message: unserved::refusal(&request.channel, later),
             }));
         }
+        if CATALOGUE
+            .get(&request.channel)
+            .is_some_and(|decl| decl.kind() == ChannelKind::Request)
+        {
+            let itself = request.channel == DevicesRevoke::NAME
+                && from_payload::<RevokeDevice>(&request.payload).is_ok_and(|revoke| {
+                    revoke
+                        .fingerprint
+                        .trim()
+                        .eq_ignore_ascii_case(&self.device.fingerprint())
+                });
+            if let Some((code, message)) = self.refused(&request.channel, itself) {
+                return Routed::Now(Message::Error(ErrorReply {
+                    id: request.id,
+                    channel: request.channel.clone(),
+                    code,
+                    message,
+                }));
+            }
+        }
         let mut stop = None;
         let caller = Caller {
             client: self.client,
             role: self.role,
         };
-        let answer =
-            router(&self.features, channels.capabilities(), caller, &mut stop).route(request);
+        let mut router = router(&self.features, channels.capabilities(), caller, &mut stop);
+        devices_handlers(&mut router, &self.admission, self.device);
+        let answer = router.route(request);
+        drop(router);
         // Taken before the answer is queued, so nothing asked once the client
         // has its answer replaces it. A later stop finds it taken and is
         // answered all the same. `host:stop` is answered at once.
@@ -1009,6 +1159,23 @@ impl Connection {
             self.stop_after_flush = Some(reserved);
         }
         answer
+    }
+
+    /// Why this connection may not use `channel`, by its role and, for an
+    /// admin action from another computer, its presence: the error's code
+    /// and sentence. `None` when it may. `itself` says the request names
+    /// this connection's own device.
+    fn refused(&self, channel: &str, itself: bool) -> Option<(ErrorCode, String)> {
+        let asker = Asker {
+            role: self.role,
+            away: self.away,
+            present: self.away && self.admission.confirmations.recent(&self.device),
+        };
+        match gate(channel, asker, itself) {
+            Gate::Open => None,
+            Gate::NotPermitted(sentence) => Some((ErrorCode::NotPermitted, sentence)),
+            Gate::PresenceNeeded => Some((ErrorCode::PresenceNeeded, PRESENCE_NEEDED.to_owned())),
+        }
     }
 
     /// Starts a subscription: with its channel's state when it carries one,
@@ -1030,6 +1197,19 @@ impl Connection {
             return self
                 .outbox
                 .push(refuse(unserved::refusal(&subscribe.channel, later)));
+        }
+        if CATALOGUE.get(&subscribe.channel).is_some()
+            && let Some((code, message)) = self.refused(&subscribe.channel, false)
+        {
+            channels.unsubscribe(subscription);
+            return self
+                .outbox
+                .push(Message::SubscriptionError(SubscriptionError {
+                    subscription,
+                    channel: subscribe.channel.clone(),
+                    code,
+                    message,
+                }));
         }
         let decl = match channels.subscribe(subscribe) {
             Ok(decl) => decl,
@@ -1098,6 +1278,11 @@ impl Connection {
                 .outbox
                 .push(refuse(unserved::refusal(&open.channel, later)));
         }
+        if CATALOGUE.get(&open.channel).is_some()
+            && let Some((_, why)) = self.refused(&open.channel, false)
+        {
+            return self.outbox.push(refuse(why));
+        }
         let decl = match channels.open_stream(open) {
             Ok(decl) => decl,
             Err(close) => return self.outbox.push(Message::StreamClose(close)),
@@ -1141,15 +1326,22 @@ impl Connection {
         );
     }
 
-    /// Keys the client typed on a session's stream.
+    /// Keys the client typed on a session's stream. A viewer's are dropped:
+    /// it types nothing. Its credit is granted back all the same, so its
+    /// stream keeps flowing.
     fn input(&mut self, data: &StreamData) {
+        let viewer = self.role == Role::Viewer;
         let Some(open) = self.streams.get_mut(&data.stream) else {
             return;
         };
         if let Err(err) = open.input.accept(data) {
             return self.close_stream(data.stream, Some(err.to_string()), false);
         }
-        let typed = open.session.input(self.client, &data.data.0);
+        let typed = if viewer {
+            Ok(())
+        } else {
+            open.session.input(self.client, &data.data.0)
+        };
         let credit: StreamCredit = open.input.grant(data.data.0.len() as u64);
         self.outbox.push(Message::StreamCredit(credit));
         if let Err(err) = typed {

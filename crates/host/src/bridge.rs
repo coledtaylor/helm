@@ -45,6 +45,16 @@
 //! connects again as itself, and relays. A request nobody approves in time
 //! ends with [`BridgeExit::PairingExpired`].
 //!
+//! Given `--approve <role>` after the name as well, it pairs in one step:
+//! once the code is shown it runs the transport again with `floti devices
+//! approve - --role <role>` ([`approve_line`]) and writes the code, and a
+//! line ending, to that command's standard input, so the code is in no
+//! command line. The transport's own sign-in is what lets that command
+//! approve: it runs as the host's user on the host's computer. When it
+//! fails, the bridge says the last line it wrote on standard error,
+//! unedited, then the code line again, and keeps waiting for someone to
+//! approve by hand.
+//!
 //! A transport that cannot be started ends with
 //! [`BridgeExit::TransportNotStarted`]. One that ends before the handshake
 //! finished ends with [`BridgeExit::TransportEnded`], and the last line it
@@ -58,10 +68,11 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 
+use floti_protocol::channels::devices::DeviceRole;
 use floti_protocol::message::ClientKind;
 use floti_protocol::noise::PublicKey;
 use floti_protocol::{FrameDecoder, Message, encode_frame};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -194,13 +205,34 @@ pub const HOST_KEY_LINE: &str = "floti connect --host-key";
 /// desktop to show.
 pub const PAIRING_LINE_PREFIX: &str = "floti bridge: pairing code ";
 
+/// The line a transport runs on the host's computer to approve, with `role`,
+/// the request whose code it is given on standard input.
+pub fn approve_line(role: DeviceRole) -> String {
+    let role = match role {
+        DeviceRole::Viewer => "viewer",
+        DeviceRole::Operator => "operator",
+        DeviceRole::Admin => "admin",
+    };
+    format!("floti devices approve - --role {role}")
+}
+
+/// How a client that has pinned no host pairs through a transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pair {
+    /// The device name it asks to pair as.
+    pub name: String,
+    /// The role to approve it with through the same transport, in one step;
+    /// `None` waits for someone to approve it on the host's computer.
+    pub approve: Option<DeviceRole>,
+}
+
 /// Runs the bridge for the client whose keys are in `client_folder`, to the
 /// host `transport` reaches, pairing first as `pair` when the client has
 /// pinned no host, until its standard input closes or the connection ends,
 /// and says how it ended.
 pub fn run_bridge_through(
     client_folder: &Path,
-    pair: Option<&str>,
+    pair: Option<&Pair>,
     transport: &Transport,
 ) -> BridgeExit {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -217,7 +249,7 @@ pub fn run_bridge_through(
 
 async fn bridge_through(
     client_folder: &Path,
-    pair: Option<&str>,
+    pair: Option<&Pair>,
     transport: &Transport,
 ) -> BridgeExit {
     let mut keys = match ClientKeys::open(client_folder) {
@@ -225,10 +257,10 @@ async fn bridge_through(
         Err(err) => return fail(BridgeExit::Failed, &err.to_string()),
     };
     if keys.pinned_host().is_none() {
-        let Some(name) = pair else {
+        let Some(pair) = pair else {
             return fail(BridgeExit::NotPinned, &ClientError::NotPinned.to_string());
         };
-        if let Err(exit) = pair_through(&mut keys, name, transport).await {
+        if let Err(exit) = pair_through(&mut keys, pair, transport).await {
             return exit;
         }
     }
@@ -247,14 +279,15 @@ async fn bridge_through(
     }
 }
 
-/// Pairs the client in `keys`, named `name`, with the host `transport`
-/// reaches: learns its key, asks, shows the code, waits for approval and
-/// pins the key.
+/// Pairs the client in `keys` as `pair` says with the host `transport`
+/// reaches: learns its key, asks, shows the code, approves through the
+/// transport when `pair` names a role, waits for approval and pins the key.
 async fn pair_through(
     keys: &mut ClientKeys,
-    name: &str,
+    pair: &Pair,
     transport: &Transport,
 ) -> Result<(), BridgeExit> {
+    let name = pair.name.as_str();
     let host = read_host_key(transport).await?;
     let mut running = Running::start(transport, CONNECT_LINE)?;
     let stream = running.stream();
@@ -266,11 +299,34 @@ async fn pair_through(
         Err(err) => return Err(running.not_connected(err).await),
     };
     let code = request.code().to_owned();
-    say(&format!(
+    let code_line = format!(
         "{PAIRING_LINE_PREFIX}{code}, expires in {} seconds: run \"floti devices approve {code}\" on the host.",
         request.expires_in_seconds()
-    ));
-    let outcome = keys.finish_pairing(request).await;
+    );
+    say(&code_line);
+    let outcome = {
+        let answered = keys.finish_pairing(request);
+        tokio::pin!(answered);
+        match pair.approve {
+            None => answered.await,
+            Some(role) => {
+                let approving = approve_through(transport, role, &code);
+                tokio::pin!(approving);
+                tokio::select! {
+                    // Approved (or expired) before the command ended: it is
+                    // ended with the bridge's wait.
+                    outcome = &mut answered => outcome,
+                    approved = &mut approving => {
+                        if let Err(line) = approved {
+                            say(&line);
+                            say(&code_line);
+                        }
+                        answered.await
+                    }
+                }
+            }
+        }
+    };
     running.finish().await;
     match outcome {
         Ok(PairingOutcome::Approved(_)) => Ok(()),
@@ -279,6 +335,57 @@ async fn pair_through(
             "nobody approved the request to pair before it expired; nothing was pinned.",
         )),
         Err(err) => Err(fail(BridgeExit::Failed, &err.to_string())),
+    }
+}
+
+/// Approves the request waiting under `code` with `role`, by running
+/// [`approve_line`] through `transport` with the code on its standard input.
+/// `Err` holds the line to say when it fails: the last line the command
+/// wrote on standard error, unedited.
+async fn approve_through(
+    transport: &Transport,
+    role: DeviceRole,
+    code: &str,
+) -> Result<(), String> {
+    let mut running = Running::start(transport, &approve_line(role)).map_err(|_| {
+        format!(
+            "could not run {} to approve the request",
+            transport.program.to_string_lossy()
+        )
+    })?;
+    let mut stdin = running
+        .child
+        .stdin
+        .take()
+        .expect("the transport's stdin is piped");
+    // A command that ends without reading its input fails below, saying why.
+    let _ = stdin.write_all(format!("{code}\n").as_bytes()).await;
+    drop(stdin);
+    // What it prints on success is a sentence for a person; nobody reads it
+    // here, so it is drained rather than left to fill the pipe.
+    let mut stdout = running
+        .child
+        .stdout
+        .take()
+        .expect("the transport's stdout is piped");
+    let drained = tokio::spawn(async move {
+        let mut sink = Vec::new();
+        let _ = stdout.read_to_end(&mut sink).await;
+    });
+    let status = running.child.wait().await;
+    drained.abort();
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(running.last_written().await.unwrap_or_else(|| {
+            format!(
+                "{} failed ({status}) and wrote nothing on standard error",
+                running.described
+            )
+        })),
+        Err(err) => Err(format!(
+            "{} could not be waited on: {err}",
+            running.described
+        )),
     }
 }
 
@@ -431,18 +538,22 @@ impl Running {
         fail(BridgeExit::of_connect(&err), &err.to_string())
     }
 
-    /// The status for a transport that ended with `status`, a failure,
-    /// before the handshake finished, saying the last line it wrote.
-    async fn ended_with(&mut self, status: ExitStatus) -> BridgeExit {
-        let line = match self.last_line.take() {
+    /// The last line it wrote on standard error, once it has ended.
+    async fn last_written(&mut self) -> Option<String> {
+        match self.last_line.take() {
             Some(reading) => tokio::time::timeout(TRANSPORT_HANDSHAKE_DEADLINE, reading)
                 .await
                 .ok()
                 .and_then(Result::ok)
                 .flatten(),
             None => None,
-        };
-        match line {
+        }
+    }
+
+    /// The status for a transport that ended with `status`, a failure,
+    /// before the handshake finished, saying the last line it wrote.
+    async fn ended_with(&mut self, status: ExitStatus) -> BridgeExit {
+        match self.last_written().await {
             Some(line) => {
                 let no_host = status.code() == Some(i32::from(ConnectExit::NoHost.code()))
                     && line.starts_with("floti connect: ");

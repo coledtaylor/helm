@@ -1,7 +1,8 @@
 //! Requests to pair: a device the host does not know asks in its handshake
 //! ([`Initiator::start_pairing`](floti_protocol::noise::Initiator::start_pairing)),
 //! says `hello`, and waits under a short code it shows until someone on the
-//! host's computer approves it with `floti devices approve <code>`.
+//! host's computer, or an admin device, approves it with `floti devices
+//! approve <code>` or `devices:approve`.
 //!
 //! Requests live in this process's memory only, never on disk, and each
 //! waits [`PAIRING_LIFETIME`] at most. At most [`MAX_WAITING`] wait at once;
@@ -20,7 +21,7 @@
 //! device's fingerprint. A pairing code is never logged, printed or sent to
 //! anyone but the device it was made for, and `floti devices` lists no code.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -30,6 +31,7 @@ use floti_protocol::noise::{PairingCode, PublicKey};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use super::clock::HostClock;
 use crate::devices::{Device, DeviceRegistry, Role};
 
 /// How long a request to pair waits for approval.
@@ -38,13 +40,6 @@ pub const PAIRING_LIFETIME: Duration = Duration::from_secs(10 * 60);
 /// How many requests to pair wait at once, at most. A device that asks
 /// past it is closed without a byte.
 pub const MAX_WAITING: usize = 16;
-
-/// The file in a data folder that moves a test build's pairing clock ahead
-/// by the milliseconds it holds, read at every check, so the tests of
-/// expiry against the executable step time rather than wait it out. A
-/// production build never reads it.
-#[cfg(any(test, feature = "testkit"))]
-pub const TEST_PAIRING_CLOCK_MARKER: &str = "floti-test-pairing-clock";
 
 /// What became of a request, as its connection is told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +57,8 @@ pub(crate) struct Full;
 /// The host's requests to pair.
 pub(crate) struct Pairing {
     devices: Arc<DeviceRegistry>,
-    /// The data folder, where a test build finds its clock marker.
-    data: PathBuf,
+    /// What a request's age is read on.
+    clock: HostClock,
     state: Mutex<State>,
 }
 
@@ -99,7 +94,7 @@ impl Pairing {
     pub(crate) fn new(data: &Path, devices: Arc<DeviceRegistry>) -> Self {
         Self {
             devices,
-            data: data.to_path_buf(),
+            clock: HostClock::new(data),
             state: Mutex::new(State {
                 next_id: 0,
                 waiting: Vec::new(),
@@ -111,9 +106,9 @@ impl Pairing {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The pairing clock: now, moved ahead in a test build by its marker.
+    /// The host's clock: now, moved ahead in a test build by its marker.
     fn now(&self) -> Instant {
-        Instant::now() + clock_ahead(&self.data)
+        self.clock.now()
     }
 
     /// Drops every request whose time is up, telling its connection.
@@ -273,10 +268,10 @@ impl Pairing {
         Ok(device)
     }
 
-    /// When the request asked at `asked_at` expires, by the pairing clock
+    /// When the request asked at `asked_at` expires, by the host's clock
     /// as it reads now, on tokio's clock.
     fn expires_at(&self, asked_at: Instant) -> Instant {
-        let ahead = self.now().saturating_duration_since(Instant::now());
+        let ahead = self.clock.ahead();
         (asked_at + PAIRING_LIFETIME)
             .checked_sub(ahead)
             .unwrap_or_else(Instant::now)
@@ -301,7 +296,7 @@ impl Waiting {
         self.code
     }
 
-    /// How many seconds the request has left, by the pairing clock, a part
+    /// How many seconds the request has left, by the host's clock, a part
     /// of one counted as one.
     pub(crate) fn seconds_left(&self) -> u64 {
         seconds_up(
@@ -344,20 +339,6 @@ impl std::fmt::Debug for Waiting {
 /// any time left never says it has none.
 fn seconds_up(time: Duration) -> u64 {
     time.as_secs() + u64::from(time.subsec_nanos() > 0)
-}
-
-/// How far a test build's pairing clock is ahead, by the marker in `data`;
-/// always nothing in a production build.
-fn clock_ahead(data: &Path) -> Duration {
-    #[cfg(any(test, feature = "testkit"))]
-    if let Some(ms) = std::fs::read_to_string(data.join(TEST_PAIRING_CLOCK_MARKER))
-        .ok()
-        .and_then(|text| text.trim().parse().ok())
-    {
-        return Duration::from_millis(ms);
-    }
-    let _ = data;
-    Duration::ZERO
 }
 
 #[cfg(test)]

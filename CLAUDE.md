@@ -229,10 +229,24 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   (`platform/private_files`): `0600` on macOS and Linux, an access list naming
   only the user on Windows. Any other device pairs by asking in its
   handshake: the host tells it a short code to show, keeps the request in
-  memory only, for ten minutes, and pairs it once `floti devices approve
-  <code>` is run on the host's computer. That command proves the host's own
-  key, read from `host.key`, and only it is served `devices:list` and
-  `devices:approve`; no paired device is, an admin's included. A private
+  memory only, for ten minutes, and pairs it, with the role chosen, once an
+  admin device approves the code (`devices:approve`) or `floti devices
+  approve <code>` is run on the host's computer. That command proves the
+  host's own key, read from `host.key`; `approve -` reads the code from
+  standard input, which is how `floti bridge --pair <name> --approve <role>`
+  approves itself in one step through the same ssh target or command,
+  keeping the code out of every command line. One table
+  (`server/access.rs`) gives every channel its least role (viewer, operator,
+  admin) and is checked before any feature; a channel with no rule is served
+  to no device, and a viewer's keystrokes reach no session. `floti connect`
+  opens the host's relay endpoint beside its local one, and an admin
+  connected there is asked for presence (`devices:presence`, confirmed on the
+  device by Windows Hello or Touch ID) within five minutes on the host's
+  clock before an admin action; neither a local admin nor `floti devices` is
+  asked, and presence never raises a role. Revoking a device (an admin
+  device, `floti devices revoke <fingerprint>`, or the device itself, with no
+  presence) closes every live connection of its key at once and leaves its
+  sessions running. A private
   key or either code is never logged, printed, sent to another client or
   put in a session's environment (a pairing code goes only to the device it
   was made for); logs name a key by its fingerprint. Keys and the Noise sessions they prove come

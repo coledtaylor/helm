@@ -1052,7 +1052,7 @@ cwd: string | null, overlays: Array<string>, };
  */
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
-export type ErrorCode = "unknownChannel" | "notARequest" | "badPayload" | "unavailable" | "failed" | "missingCapability" | "notAnEvent" | "other";
+export type ErrorCode = "unknownChannel" | "notARequest" | "badPayload" | "unavailable" | "failed" | "missingCapability" | "notAnEvent" | "notPermitted" | "presenceNeeded" | "other";
 
 /**
  * A request that failed. The connection stays open.
@@ -2572,6 +2572,13 @@ export type ResumedSession = { session: SessionRecord,
  */
 history: HistorySession, };
 
+export type RevokeDevice = { 
+/**
+ * The device's key's fingerprint, as `devices:list` and `floti
+ * devices` give it.
+ */
+fingerprint: string, };
+
 /**
  * A scan root.
  */
@@ -3319,7 +3326,18 @@ capabilities: Array<Capability>,
 /**
  * Every backend the host can run, with the features it declares.
  */
-backends: Array<BackendDescriptor>, };
+backends: Array<BackendDescriptor>, 
+/**
+ * The role this connection's device is paired with; absent for a
+ * connection that is not a paired device's (the host's own shell).
+ */
+role?: DeviceRole, 
+/**
+ * Whether this connection reached the host from another computer,
+ * through `floti connect`: an admin action on it needs presence
+ * (`devices:presence`) within the last five minutes.
+ */
+away?: boolean, };
 
 export type WikilinkRequest = { scopePath: string, target: string, 
 /**
@@ -3418,6 +3436,8 @@ export interface RequestChannels {
   "content:write": { request: WriteConfigRequest; response: WriteConfigResult; capability: "files" };
   "devices:approve": { request: ApproveDevice; response: PairedDevice; capability: null };
   "devices:list": { request: null; response: DeviceListing; capability: null };
+  "devices:presence": { request: null; response: null; capability: null };
+  "devices:revoke": { request: RevokeDevice; response: PairedDevice; capability: null };
   "discovery:cached": { request: null; response: Array<CachedProject>; capability: null };
   "discovery:scan": { request: ScanRequest; response: DiscoveryResult; capability: null };
   "editor:highlight": { request: SourceToRender; response: EditorHighlight; capability: null };
@@ -3587,6 +3607,8 @@ export const CHANNELS = [
   { name: "content:write", kind: "request", capability: "files" },
   { name: "devices:approve", kind: "request", capability: null },
   { name: "devices:list", kind: "request", capability: null },
+  { name: "devices:presence", kind: "request", capability: null },
+  { name: "devices:revoke", kind: "request", capability: null },
   { name: "discovery:cached", kind: "request", capability: null },
   { name: "discovery:scan", kind: "request", capability: null },
   { name: "discovery:updated", kind: "event", capability: null },

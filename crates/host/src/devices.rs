@@ -102,6 +102,17 @@ pub enum FirstAdmin {
     KeyKnown,
 }
 
+/// What revoking a device by fingerprint came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Revocation {
+    /// It is revoked now.
+    Revoked(Device),
+    /// It was revoked already; nothing changed.
+    AlreadyRevoked(Device),
+    /// No device has that fingerprint; nothing changed.
+    Unknown,
+}
+
 /// One device the host has paired.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -267,6 +278,28 @@ impl DeviceRegistry {
         let revoked = device.clone();
         self.write(devices)?;
         Ok(Some(revoked))
+    }
+
+    /// Revokes the device whose key has `fingerprint`, as `floti devices`
+    /// prints it: whether it was revoked now, was already, or no device has
+    /// that fingerprint. Only a revoke now changes the file.
+    pub fn revoke_fingerprint(&self, fingerprint: &str) -> Result<Revocation> {
+        let _changing = CHANGING.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut devices = self.devices()?;
+        let wanted = fingerprint.trim();
+        let Some(device) = devices
+            .iter_mut()
+            .find(|device| device.key.fingerprint().eq_ignore_ascii_case(wanted))
+        else {
+            return Ok(Revocation::Unknown);
+        };
+        if device.revoked_at.is_some() {
+            return Ok(Revocation::AlreadyRevoked(device.clone()));
+        }
+        device.revoked_at = Some(Timestamp::now());
+        let revoked = device.clone();
+        self.write(devices)?;
+        Ok(Revocation::Revoked(revoked))
     }
 
     fn write(&self, devices: Vec<Device>) -> Result<()> {

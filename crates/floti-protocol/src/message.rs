@@ -94,6 +94,17 @@ pub struct Welcome {
     pub capabilities: Vec<Capability>,
     /// Every backend the host can run, with the features it declares.
     pub backends: Vec<BackendDescriptor>,
+    /// The role this connection's device is paired with; absent for a
+    /// connection that is not a paired device's (the host's own shell).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub role: Option<DeviceRole>,
+    /// Whether this connection reached the host from another computer,
+    /// through `floti connect`: an admin action on it needs presence
+    /// (`devices:presence`) within the last five minutes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
+    pub away: bool,
 }
 
 impl Welcome {
@@ -220,6 +231,13 @@ pub enum ErrorCode {
     MissingCapability,
     /// A subscription names a channel that is not an event channel.
     NotAnEvent,
+    /// The device's role does not allow it; the message says what it takes
+    /// and what the device is paired as.
+    NotPermitted,
+    /// An admin action from another computer, with no presence confirmed on
+    /// that device in the last five minutes. Confirm presence
+    /// (`devices:presence`) and ask again.
+    PresenceNeeded,
     /// A code this version does not know.
     #[serde(other)]
     Other,

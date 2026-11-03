@@ -4,7 +4,7 @@
 //! a shell on the host's computer. `floti devices` runs as its own process,
 //! with the same folders as the host.
 //!
-//! Expiry is tested by stepping the host's pairing clock (a marker in its
+//! Expiry is tested by stepping the host's clock (a marker in its
 //! data folder, read at every check) and then asking the host, which drops
 //! what has expired as it answers; no test waits ten minutes out.
 
@@ -388,39 +388,48 @@ async fn s5_a_code_no_request_waits_under_pairs_nothing_and_with_no_host_running
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s7_a_paired_device_even_an_admin_is_refused_listing_and_approving_and_pairs_nothing() {
+async fn s7_an_admin_device_lists_and_approves_and_an_operator_is_refused_naming_its_role() {
     let dirs = TestDirs::new();
     let host = start_host(&dirs);
     let endpoint = dirs.floti_endpoint();
     let mut admin_client = admin(&dirs).await;
-    let keys = device(&dirs, "laptop");
+    let mut keys = device(&dirs, "laptop");
     let request = TestClient::ask_to_pair(&keys, &endpoint, "a laptop", ClientKind::Desktop).await;
 
     let mut operator = TestClient::connect_as(&endpoint, "an operator", Role::Operator, &[]).await;
-    for client in [&mut admin_client, &mut operator] {
-        let listed = client.request::<DevicesList>(&()).await;
-        assert!(listed.is_err(), "{listed:?}");
-        let approved = client
-            .request::<DevicesApprove>(&ApproveDevice {
-                code: request.code().to_owned(),
-                role: DeviceRole::Admin,
-            })
-            .await;
-        let refusal = approved.expect_err("a paired device approved a request");
-        assert!(refusal.message.contains("floti devices"), "{refusal:?}");
-    }
-    let names: Vec<String> = paired(&dirs)
+    let refusal = operator
+        .request::<DevicesApprove>(&ApproveDevice {
+            code: request.code().to_owned(),
+            role: DeviceRole::Admin,
+        })
+        .await
+        .expect_err("an operator approved a request");
+    assert_eq!(
+        refusal.message,
+        "Listing, approving or revoking devices takes an admin device, and this device is paired as an operator."
+    );
+    assert!(operator.request::<DevicesList>(&()).await.is_err());
+
+    let listed = admin_client.request::<DevicesList>(&()).await.unwrap();
+    assert_eq!(listed.waiting.len(), 1, "{listed:?}");
+    let approved = admin_client
+        .request::<DevicesApprove>(&ApproveDevice {
+            code: request.code().to_owned(),
+            role: DeviceRole::Viewer,
+        })
+        .await
+        .expect("an admin device approves");
+    assert_eq!(approved.fingerprint, keys.device_key().fingerprint());
+    assert_eq!(
+        keys.finish_pairing(request).await.unwrap(),
+        PairingOutcome::Approved(DeviceRole::Viewer)
+    );
+    let mut names: Vec<String> = paired(&dirs)
         .into_iter()
         .map(|device| device.name)
         .collect();
-    assert_eq!(names, ["an operator"]);
-    // The request still waits, and the shell can still approve it.
-    assert!(
-        listing(&dirs)
-            .await
-            .contains(&keys.device_key().fingerprint())
-    );
-    drop(request);
+    names.sort();
+    assert_eq!(names, ["a laptop", "an operator"]);
     drop(operator);
     host.stop(admin_client).await;
 }
@@ -435,7 +444,7 @@ async fn s9_a_request_ten_minutes_old_is_told_it_expired_and_is_gone_and_pairs_n
     let request = TestClient::ask_to_pair(&keys, &endpoint, "a laptop", ClientKind::Desktop).await;
     let code = request.code().to_owned();
 
-    dirs.step_pairing_clock(PAIRING_LIFETIME);
+    dirs.step_host_clock(PAIRING_LIFETIME);
     let listed = listing(&dirs).await;
     assert!(!listed.contains(&fingerprint), "{listed}");
     assert_eq!(
@@ -464,7 +473,7 @@ async fn s9_a_request_just_short_of_ten_minutes_still_waits_and_is_approved() {
     let mut keys = device(&dirs, "laptop");
     let request = TestClient::ask_to_pair(&keys, &endpoint, "a laptop", ClientKind::Desktop).await;
 
-    dirs.step_pairing_clock(PAIRING_LIFETIME - Duration::from_secs(10));
+    dirs.step_host_clock(PAIRING_LIFETIME - Duration::from_secs(10));
     let listed = listing(&dirs).await;
     assert!(
         listed.contains(&keys.device_key().fingerprint()),
