@@ -20,7 +20,8 @@ pub const TEST_HOST_CLOCK_MARKER: &str = "floti-test-host-clock";
 /// The clock of the host whose data folder is `data`.
 #[derive(Debug, Clone)]
 pub(crate) struct HostClock {
-    /// Where a test build finds its marker.
+    /// Where a test build finds its marker; a production build never reads it.
+    #[cfg_attr(not(any(test, feature = "testkit")), allow(dead_code))]
     data: PathBuf,
 }
 

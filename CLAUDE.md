@@ -243,7 +243,10 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   connected there is asked for presence (`devices:presence`, confirmed on the
   device by Windows Hello or Touch ID) within five minutes on the host's
   clock before an admin action; neither a local admin nor `floti devices` is
-  asked, and presence never raises a role. Revoking a device (an admin
+  asked, and presence never raises a role. Helm confirms it with `floti
+  presence` (`platform/presence`, one file per OS; Linux answers
+  Unavailable), run by main over `presence:confirm`, and its answer says
+  nothing of who the user is. Revoking a device (an admin
   device, `floti devices revoke <fingerprint>`, or the device itself, with no
   presence) closes every live connection of its key at once and leaves its
   sessions running. A private
