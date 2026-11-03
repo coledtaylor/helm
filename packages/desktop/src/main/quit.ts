@@ -57,12 +57,15 @@ export function nextQuitStep({ running, agreed, asking }: QuitState): QuitStep {
 }
 
 /**
- * Whether a deliberate quit ends the sessions this device started: as the user
- * answered the question when it was asked, and as the setting says when it was
- * not (nothing would end, or a quit code started).
+ * Whether a deliberate quit ends the sessions this device started on one
+ * host: where that host's setting ends them, unless the user answered Keep
+ * running and quit this once. The question names only the hosts whose setting
+ * ends them, so an End answer never ends sessions on a host set to keep them;
+ * with nobody asked (nothing would end, or a quit code started) the setting
+ * decides.
  */
 export function quitEnds(answer: Exclude<QuitAnswer, 'cancel'> | null, settingEnds: boolean): boolean {
-  return answer === null ? settingEnds : answer === 'end'
+  return settingEnds && answer !== 'keep'
 }
 
 export interface QuitGateHost {

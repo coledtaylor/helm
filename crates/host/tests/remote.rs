@@ -1095,3 +1095,148 @@ async fn an_unpaired_client_given_no_pair_name_exits_4_without_running_the_trans
     assert_eq!(ended.code, Some(4), "{ended:?}");
     assert!(transport_runs(&dirs).is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// S7: the user's ssh as it is, and nothing of theirs touched
+// ---------------------------------------------------------------------------
+
+/// Every file under `folder`, by its path below it, with its bytes.
+fn files_under(folder: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut found = Vec::new();
+    let mut pending = vec![folder.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read a folder") {
+            let path = entry.expect("a folder entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let bytes = std::fs::read(&path).expect("read a file");
+                found.push((path.strip_prefix(folder).unwrap().to_path_buf(), bytes));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Pairs a new client folder through `transport` the way Helm does, with
+/// `--pair` on every run, approves it on the host, then connects again with
+/// `--pair` still given and the key pinned, and returns the folder.
+async fn pair_and_reconnect_as_helm_does(
+    world: &World,
+    name: &str,
+    transport: &[String],
+) -> PathBuf {
+    let dirs = &world.dirs;
+    let folder = dirs.root().join(name);
+    let mut pairing = Bridge::spawn(bridge_through(
+        dirs,
+        &dirs.runtime,
+        &folder,
+        Some(name),
+        transport,
+    ));
+    let line = pairing
+        .stderr_line_where(|line| line.starts_with(PAIRING_LINE_PREFIX))
+        .await;
+    let code = line[PAIRING_LINE_PREFIX.len()..]
+        .split(',')
+        .next()
+        .unwrap()
+        .to_owned();
+    let mut approve = floti_command(dirs, &dirs.runtime);
+    approve
+        .args(["devices", "approve", &code])
+        .stdin(Stdio::null());
+    let approved = run_floti(approve).await;
+    assert!(approved.status.success(), "{approved:?}");
+    pairing.welcomed().await;
+    pairing.close_stdin();
+    let paired = pairing.ended().await;
+    assert_eq!(paired.code, Some(0), "{paired:?}");
+
+    let mut again = Bridge::spawn(bridge_through(
+        dirs,
+        &dirs.runtime,
+        &folder,
+        Some(name),
+        transport,
+    ));
+    again.welcomed().await;
+    let listed = again.request::<SessionList>(1, &()).await;
+    assert!(listed.is_empty(), "{listed:?}");
+    again.close_stdin();
+    let ended = again.ended().await;
+    assert_eq!(ended.code, Some(0), "{ended:?}");
+    assert_eq!(
+        ended.stderr, "",
+        "a paired device asks nothing again: {ended:?}"
+    );
+    folder
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s7_through_ssh_and_a_custom_command_nothing_under_the_users_ssh_folder_changes_and_no_host_key_check_is_skipped()
+ {
+    let world = World::start();
+    let dirs = &world.dirs;
+    // The user's own ssh setup, in the fake home every floti here is given.
+    let ssh = dirs.home.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    for (file, text) in [
+        ("config", "Host build box\n  User me\n"),
+        (
+            "known_hosts",
+            "build-box ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n",
+        ),
+        (
+            "authorized_keys",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOther me@elsewhere\n",
+        ),
+        (
+            "id_ed25519",
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nnot a real key\n",
+        ),
+    ] {
+        std::fs::write(ssh.join(file), text).unwrap();
+    }
+    let before = files_under(&ssh);
+
+    let through_ssh = pair_and_reconnect_as_helm_does(&world, "a laptop", &ssh_transport()).await;
+    let through_command =
+        pair_and_reconnect_as_helm_does(&world, "a desktop", &custom_transport()).await;
+
+    // Nothing under ~/.ssh was written, added or removed.
+    assert_eq!(files_under(&ssh), before);
+    // A client folder holds the device's key and the pinned host key, and nothing else.
+    for folder in [&through_ssh, &through_command] {
+        let mut names: Vec<String> = std::fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let mut expected = vec![DEVICE_KEY_FILE.to_owned(), PINNED_HOST_FILE.to_owned()];
+        expected.sort();
+        assert_eq!(names, expected, "{}", folder.display());
+    }
+    // The transports ran with the options they were given, and floti added
+    // none that skips a host-key check or names a file of the user's.
+    let runs = transport_runs(dirs);
+    assert!(!runs.is_empty());
+    for run in &runs {
+        let argv = argv_of(run).join(" ");
+        assert!(
+            ![
+                "StrictHostKeyChecking",
+                "UserKnownHostsFile",
+                "known_hosts",
+                "IdentityFile",
+                ".ssh"
+            ]
+            .iter()
+            .any(|option| argv.contains(option)),
+            "{argv}"
+        );
+    }
+    world.stop().await;
+}

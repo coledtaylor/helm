@@ -79,7 +79,9 @@ import {
   type SessionHost,
   type SessionObserver
 } from './sessions'
-import { createDesktopHost, createLocalPageLinks, type DesktopHost } from './host/desktop'
+import { createDesktopHost, createDesktopRemoteHosts, createLocalPageLinks, type DesktopHost } from './host/desktop'
+import { routePageLinks } from './host/page-link'
+import type { RemoteHostLinks } from './host/remote'
 import { createActivityService } from './activity'
 import { createRestoreService, type RestoreService } from './restore'
 import { createResourcesService } from './resources'
@@ -535,13 +537,35 @@ function startApp(options: AppOptions = {}): void {
    * hidden window plugins' background pages run in. No other page - a plugin
    * frame, an artifact frame, a page in the Browser tab - may open one.
    */
-  const pageLinks = createLocalPageLinks(
+  const isHelmPage = (id: number): boolean =>
+    (win !== null && !win.isDestroyed() && win.webContents.id === id) || pluginBackground?.contents()?.id === id
+  // One counter for every host's page connections, so a number names one.
+  let nextPageConnection = 1
+  const nextConnection = (): number => nextPageConnection++
+  const localPageLinks = createLocalPageLinks(
     desktopHost?.link ?? null,
-    (id) =>
-      (win !== null && !win.isDestroyed() && win.webContents.id === id) ||
-      pluginBackground?.contents()?.id === id,
-    (line) => console.log(line)
+    isHelmPage,
+    (line) => console.log(line),
+    nextConnection
   )
+
+  /*
+   * The hosts on other computers this device added, each over its own link,
+   * beside this PC's: only with sessions in the local host. Each connects now
+   * and tries again by itself; a settings write that adds or removes one
+   * starts or ends its link (`ipc.ts`).
+   */
+  const remoteHosts: RemoteHostLinks | null =
+    desktopHost !== null
+      ? createDesktopRemoteHosts({
+          isHelmPage,
+          nextConnection,
+          changed: (states) => emit(win, 'remoteHosts:changed', states),
+          log: (line) => console.log(line)
+        })
+      : null
+  remoteHosts?.sync(services.settings.hosts)
+  const pageLinks = routePageLinks(localPageLinks, remoteHosts)
 
   const sessions: SessionHost =
     desktopHost?.sessions ??
@@ -556,16 +580,22 @@ function startApp(options: AppOptions = {}): void {
   /*
    * Whether quitting ends what this device started: always with the setting
    * off, where sessions live in Helm's own process; with it on, as the quit
-   * setting for this PC's host says, read at the quit so a change in Settings
+   * setting for each host says (End for this PC's when unset, Keep them
+   * running for a remote one), read at the quit so a change in Settings
    * counts at once.
    */
   const settingEnds = (): boolean => desktopHost === null || quitEndsSessions(services.settings)
+  const remoteEnds = (id: string): boolean => quitEndsSessions(services.settings, id)
+  /** What the quit question names on the hosts on other computers whose setting ends them. */
+  const remoteQuitParts = (): ReturnType<RemoteHostLinks['quitParts']> => remoteHosts?.quitParts(remoteEnds) ?? []
 
   // One question about running sessions, shared by the menu's Quit Helm and
   // the window's close, asked before anything ends (quit.ts). With the setting
   // keeping them, nothing would end, so nothing is asked.
   const quitGate = createQuitGate({
-    running: () => (settingEnds() ? sessions.runningCount() : 0),
+    running: () =>
+      (settingEnds() ? sessions.runningCount() : 0) +
+      remoteQuitParts().reduce((sum, part) => sum + part.sessions.length, 0),
     confirm: () => {
       // The question is drawn in the window, so the window is brought on
       // screen first: Cmd+Q works with it minimized to the Dock, and a quit
@@ -575,7 +605,7 @@ function startApp(options: AppOptions = {}): void {
         win.show()
         win.focus()
       }
-      if (desktopHost !== null) return desktopHost.askQuit()
+      if (desktopHost !== null) return desktopHost.askQuit({ local: settingEnds(), remote: remoteQuitParts() })
       return sessions.confirmCloseAll().then((agreed) => (agreed ? 'end' : 'cancel'))
     },
     quit: () => app.quit()
@@ -866,6 +896,7 @@ function startApp(options: AppOptions = {}): void {
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
     ...(desktopHost !== null ? { hostSettingsChanged: () => desktopHost.link.writeSettings() } : {}),
+    ...(remoteHosts !== null ? { remoteHosts } : {}),
     rendererReady: () => {
       pushTheme({ services, themes, plugins, window: () => win })
       // With sessions in the local host the window reads its settings and
@@ -1035,9 +1066,12 @@ function startApp(options: AppOptions = {}): void {
    * for this PC's host says when nothing was asked; ended ones are recorded
    * as ended) and main's own connection closes, bounded by
    * `HOST_STOP_DEADLINE_MS`; the quit then goes on as it always has. The
-   * host, left with no session and no client, exits by itself. A Helm that
-   * ends any other way tells it nothing, so nothing ends and the next start
-   * reattaches.
+   * host, left with no session and no client, exits by itself. Each host on
+   * another computer this device is connected to is told the same at the
+   * same time, by its own setting (Keep them running unless set) unless the
+   * answer kept them this once; one not connected is told nothing. A Helm that
+   * ends any other way tells no host anything, so nothing ends and the next
+   * start reattaches.
    */
   let hostStop: 'running' | 'stopping' | 'stopped' = desktopHost === null ? 'stopped' : 'running'
   app.on('before-quit', (event) => {
@@ -1053,10 +1087,13 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.files.shutdown()
         desktopHost.resources.stop()
         desktopHost.sessions.shutdown()
-        // Every page's bridge ends first, so none is left running.
-        void pageLinks
-          .stop()
-          .then(() => desktopHost.link.quit({ end: quitEnds(quitGate.answer(), settingEnds()) }))
+        // Every page's bridge ends first, so none is left running; each host is
+        // then told by its own setting, or the quit question's answer.
+        const answer = quitGate.answer()
+        void Promise.all([
+          pageLinks.stop().then(() => desktopHost.link.quit({ end: quitEnds(answer, settingEnds()) })),
+          remoteHosts?.quit((id) => quitEnds(answer, remoteEnds(id)))
+        ])
           .finally(() => {
             hostStop = 'stopped'
             app.quit()

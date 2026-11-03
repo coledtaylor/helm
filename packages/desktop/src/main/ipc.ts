@@ -1,5 +1,6 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type WebContents } from 'electron'
-import { FOREIGN_PAGE, type HelmPage, type PageLinks } from './host/page-link'
+import { FOREIGN_PAGE, type HelmPage, type HostPageLinks } from './host/page-link'
+import type { RemoteHostLinks } from './host/remote'
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename } from 'node:path'
@@ -140,8 +141,14 @@ export type IpcContext = IpcContextBase & HistoryWiring
 interface IpcContextBase {
   services: Services
   window: () => BrowserWindow | null
-  /** Each Helm page's own connection to the local host; see `host/page-link.ts`. */
-  pageLinks: PageLinks
+  /** Each Helm page's own connections to the local host and to each remote host; see `host/page-link.ts`. */
+  pageLinks: HostPageLinks
+  /**
+   * The links to the hosts on other computers this device added, with
+   * sessions in the local host; see `host/remote.ts`. A settings write that
+   * changes `hosts` starts or ends them.
+   */
+  remoteHosts?: RemoteHostLinks | undefined
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
   /**
@@ -354,6 +361,9 @@ export function registerIpc(ctx: IpcContext): void {
    */
   const settingsWritten = (patch: Partial<AppSettings>, next: AppSettings): void => {
     if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
+    // A host added starts its link; one removed has its link let go of, with
+    // nothing said to it, and its client folder removed.
+    if (patch.hosts !== undefined) ctx.remoteHosts?.sync(next.hosts)
     // Sessions in the local host run the `claude` and open the shell the
     // host was told, and get the browser and session tools and the browser's
     // reach as it was told, and the host holds its archive to the ceiling it
@@ -414,10 +424,12 @@ export function registerIpc(ctx: IpcContext): void {
   const requests: RequestHandlers = {
     // Only a Helm page's own frame: never a frame inside it, which is where
     // an artifact or a plugin page would be.
-    'hostLink:open': (_payload, event) => {
+    'hostLink:open': (payload, event) => {
       if (event.senderFrame !== event.sender.mainFrame) return Promise.reject(new Error(FOREIGN_PAGE))
-      return ctx.pageLinks.open(helmPageOf(event.sender))
+      return ctx.pageLinks.open(helmPageOf(event.sender), payload?.host ?? null)
     },
+
+    'remoteHosts:read': () => ctx.remoteHosts?.states() ?? {},
 
     // Sessions in Helm itself: no host, so no host log file.
     'app:info': async () => ({

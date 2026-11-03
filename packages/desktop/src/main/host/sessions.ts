@@ -14,6 +14,7 @@ import { CLAUDE_CODE_BACKEND } from '../../shared/host/backend'
 import type { EventChannel, EventPayload, QuitAnswer } from '../../shared/ipc'
 import type { HostConnection, HostSubscription } from './client'
 import type { HostLink } from './link'
+import type { HostQuitPart } from './remote'
 import type * as P from './protocol'
 import {
   activityFromHost,
@@ -142,15 +143,52 @@ export interface HostSessions {
    */
   adoptSession: (row: P.SessionRecord) => SessionRecord
   /**
-   * Asks what quitting does to the running sessions this device started in
-   * this PC's host - End and quit, Keep running and quit, or Cancel - saying
-   * how many and on which host. Answers End at once when there are none.
+   * Asks what quitting does to the running sessions this device started
+   * that it would end - End and quit, Keep running and quit, or Cancel -
+   * saying how many and on which host. `local` false leaves out this PC's
+   * host (its setting keeps them); `remote` are the hosts on other computers
+   * whose setting ends them. Answers End at once when there are none.
    */
-  askQuit: () => Promise<QuitAnswer>
+  askQuit: (options?: { local?: boolean; remote?: readonly HostQuitPart[] }) => Promise<QuitAnswer>
 }
 
-/** The quit question for `live`, the running sessions this device started in this PC's host. */
-export function quitQuestion(live: readonly SessionRecord[]): ConfirmRequest {
+const sessionsWord = (count: number): string => `${String(count)} session${count === 1 ? '' : 's'}`
+
+/** `a`, `a and b`, `a, b and c`. */
+function listed(parts: readonly string[]): string {
+  return parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1) ?? ''}`
+}
+
+/**
+ * The quit question for `live`, the running sessions this device started in
+ * this PC's host that a quit would end, and `remote`, those on each host on
+ * another computer whose setting ends them: how many, and on which host.
+ */
+export function quitQuestion(live: readonly SessionRecord[], remote: readonly HostQuitPart[] = []): ConfirmRequest {
+  const others = remote.filter((part) => part.sessions.length > 0)
+  if (others.length > 0) {
+    const where = [
+      ...(live.length > 0 ? [{ count: live.length, host: 'this PC’s host' }] : []),
+      ...others.map((part) => ({ count: part.sessions.length, host: part.name }))
+    ]
+    const total = where.reduce((sum, part) => sum + part.count, 0)
+    const message =
+      where.length === 1
+        ? `Quitting Helm ends ${sessionsWord(total)} on ${where[0]?.host ?? ''}.`
+        : `Quitting Helm ends ${sessionsWord(total)}: ${listed(where.map((part) => `${String(part.count)} on ${part.host}`))}.`
+    const them = total === 1 ? 'it' : 'them'
+    return {
+      kind: 'quit',
+      message,
+      detail:
+        `End and quit stops ${them}. Keep running and quit leaves ${them} running where ${total === 1 ? 'it is' : 'they are'}, ` +
+        'this once. Settings › Sessions and Settings › Hosts set what quitting does on each host.',
+      confirmLabel: 'End and quit',
+      keepLabel: 'Keep running and quit',
+      sessions: [...live],
+      otherNames: others.flatMap((part) => part.sessions.map((session) => `${session.name} on ${part.name}`))
+    }
+  }
   const count = live.length
   return {
     kind: 'quit',
@@ -337,9 +375,13 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   const confirmQuit: QuitConfirm =
     deps.confirmQuit ?? (async (request) => ((await deps.confirm(request)) ? 'end' : 'cancel'))
 
-  const askQuit = (): Promise<QuitAnswer> => {
-    const live = runningHere()
-    return live.length === 0 ? Promise.resolve('end') : confirmQuit(quitQuestion(live))
+  const askQuit = ({
+    local = true,
+    remote = []
+  }: { local?: boolean; remote?: readonly HostQuitPart[] } = {}): Promise<QuitAnswer> => {
+    const live = local ? runningHere() : []
+    const elsewhere = remote.reduce((sum, part) => sum + part.sessions.length, 0)
+    return live.length + elsewhere === 0 ? Promise.resolve('end') : confirmQuit(quitQuestion(live, remote))
   }
 
   /** A session with no profile and nothing composed: a folder, a name, and maybe a first message. */

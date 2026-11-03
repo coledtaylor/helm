@@ -26,6 +26,14 @@ import type { HostSettingsPatch } from './protocol'
  * place of one a desktop started (this Helm, or another whose host it found
  * and which says so in `app:info`); any other host is waited for, never
  * replaced. Every `onConnected` listener runs again on the new connection.
+ *
+ * A host on another computer is reached by a link of its own
+ * (`remote.ts`), made with the same function: its `start` never starts a
+ * host, it writes none of Helm's settings there (this PC's `claude` and shell
+ * mean nothing on another computer), and it keeps trying from its first
+ * connect (`keepConnected`). A link that merely drops sends nothing; only a
+ * quit sends `host:quit`, and forgetting a host (`release`) sends nothing at
+ * all.
  */
 
 /** How long a quit waits for the host's answer, and then for the bridge to exit. */
@@ -55,6 +63,19 @@ export interface HostLink {
    */
   quit(options: { end: boolean }): Promise<void>
   /**
+   * Lets go of the host without telling it anything: no `host:quit`, so
+   * nothing there ends, not even a plain terminal. Stops trying to connect;
+   * nothing connects after it. Resolves once the bridge has exited, or the
+   * deadline passed. For a host this device forgets.
+   */
+  release(): Promise<void>
+  /**
+   * Connects now, and keeps trying with the same backoff after every failed
+   * try as after a dropped connection, until it connects or the link is quit
+   * or released.
+   */
+  keepConnected(): void
+  /**
    * The user asked, and agreed to the count: stops the host (`host:stop`
    * with the plain-stop reason), so every session in it ends and is recorded
    * as ended, then lets go of the connection and its bridge. Resolves once
@@ -77,14 +98,19 @@ export interface HostLinkDeps {
    * and a host that does not answer is a failure rather than one to start.
    */
   start: (options: { startHost: boolean }) => Promise<LocalHost>
-  /** What Helm writes to the host on every connect. */
-  settings: () => HostSettingsPatch
+  /** What Helm writes to the host on every connect; nothing when absent. */
+  settings?: () => HostSettingsPatch
+  /** What the log calls the host: the local host when absent. */
+  name?: string
+  /** Hears why each connect attempt failed, before any retry is scheduled. */
+  onAttemptFailed?: (error: Error) => void
   log: (line: string) => void
   setTimeout: (run: () => void, ms: number) => unknown
   clearTimeout: (timer: unknown) => void
 }
 
 export function createHostLink(deps: HostLinkDeps): HostLink {
+  const name = deps.name ?? 'the local host'
   const listeners: Array<(connection: HostConnection) => void | Promise<void>> = []
   let local: LocalHost | null = null
   let attempt: Promise<HostConnection> | null = null
@@ -109,7 +135,7 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
       link.connection().then(
         () => undefined,
         (error: unknown) => {
-          deps.log(`host: the local host could not be reached again (${(error as Error).message})`)
+          deps.log(`host: ${name} could not be reached again (${(error as Error).message})`)
           scheduleRetry()
         }
       )
@@ -133,10 +159,11 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
   }
 
   const writeSettings = async (connection: HostConnection): Promise<void> => {
+    if (deps.settings === undefined) return
     try {
       await connection.request('settings:write', deps.settings())
     } catch (error) {
-      deps.log(`host: could not write Helm's settings to the local host (${(error as Error).message})`)
+      deps.log(`host: could not write Helm's settings to ${name} (${(error as Error).message})`)
     }
   }
 
@@ -162,7 +189,7 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
       }
       mayStart = desktopHost
       deps.log(
-        `host: the connection to the local host ended without a stop; ${
+        `host: the connection to ${name} ended without a stop; ${
           mayStart ? 'starting a new host' : 'connecting to it again once it answers'
         }`
       )
@@ -193,6 +220,7 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
       if (stopping !== null) return Promise.reject(new Error('Helm is quitting.'))
       attempt ??= connect().catch((error: unknown) => {
         attempt = null
+        deps.onAttemptFailed?.(error as Error)
         throw error
       })
       return attempt
@@ -238,20 +266,39 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
     restartsHost: () => (local === null ? mayStart : desktopHost),
 
     quit({ end }) {
-      if (retryTimer !== null) {
-        deps.clearTimeout(retryTimer)
-        retryTimer = null
-      }
-      stopping ??= (async () => {
-        if (attempt !== null) await bounded(attempt)
-        const host = local
-        if (host === null) return
-        local = null
-        await bounded(host.connection.request('host:quit', { end }))
-        await bounded(host.close())
-      })()
-      return stopping
+      return letGo((host) => bounded(host.connection.request('host:quit', { end })))
+    },
+
+    release() {
+      return letGo(() => Promise.resolve())
+    },
+
+    keepConnected() {
+      link.connection().then(
+        () => undefined,
+        (error: unknown) => {
+          deps.log(`host: ${name} could not be reached (${(error as Error).message})`)
+          scheduleRetry()
+        }
+      )
     }
+  }
+
+  /** Stops trying, says `last` to the host there is, then lets go of it. */
+  function letGo(last: (host: LocalHost) => Promise<void>): Promise<void> {
+    if (retryTimer !== null) {
+      deps.clearTimeout(retryTimer)
+      retryTimer = null
+    }
+    stopping ??= (async () => {
+      if (attempt !== null) await bounded(attempt)
+      const host = local
+      if (host === null) return
+      local = null
+      await last(host)
+      await bounded(host.close())
+    })()
+    return stopping
   }
   return link
 }

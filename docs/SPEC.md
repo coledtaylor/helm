@@ -1132,8 +1132,9 @@ option open and is what makes the app genuinely portable.
 
 **Helm contacts nothing on its own initiative except the update check.
 Everything else on the network happens because you asked for it: the browser
-pane fetches the page you navigate to, and a plugin you added reaches the hosts
-its manifest names.**
+pane fetches the page you navigate to, a plugin you added reaches the hosts its
+manifest names, and a host you added on another computer is reached through
+your own ssh, or the command you gave.**
 
 That replaced "Helm's own process opens exactly one outbound connection"
 (decided 2026-08-15). The browser pane made the old claim false, and the answer

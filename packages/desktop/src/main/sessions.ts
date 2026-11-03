@@ -128,6 +128,8 @@ export interface ConfirmRequest {
   keepLabel?: string
   /** The sessions the answer decides the fate of. */
   sessions: SessionRecord[]
+  /** Those on hosts on other computers, by what their tab says and the host's name, listed after `sessions`. */
+  otherNames?: readonly string[]
 }
 
 /** How the user is asked before Helm quits with sessions in the local host it would end. */
@@ -223,7 +225,7 @@ function rendererAsk(window: () => BrowserWindow | null, native: Ask, channel: C
         // What the tab says, not the `-n` name: this dialog is asking about the
         // sessions on screen, and a list naming them something else is a list
         // the user has to translate before answering.
-        sessionNames: request.sessions.map(sessionLabel)
+        sessionNames: [...request.sessions.map(sessionLabel), ...(request.otherNames ?? [])]
       })
     })
 

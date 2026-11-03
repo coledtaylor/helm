@@ -189,7 +189,7 @@ import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
-import { helm, hostSessionTabs, hostState, sessionsInHost } from './bridge'
+import { helm, hostSessionTabs, hostState, remoteHosts as remoteHostLinks, sessionsInHost } from './bridge'
 import { LOCAL_HOST_NAME } from './host/sessions'
 import { ProjectColumn } from './ProjectColumn'
 import { disposeShell, terminalShellKey } from './pterms'
@@ -467,6 +467,9 @@ export function App(): JSX.Element {
   const newSession = useNewSession()
   // Whether the window has its host: lost from a crash until it is back.
   const hostLink = useSyncExternalStore(hostState.subscribe, hostState.get)
+  // Each host on another computer: where its link stands and what runs there.
+  // A remote host's drop is its own and shows no host-stopped notice.
+  const remoteView = useSyncExternalStore(remoteHostLinks.subscribe, remoteHostLinks.get)
   // Asked again each time the window gets its host back: the new host offers what the old one lost.
   const restoreState = useRestore(hostLink.reconnects)
   const { offer: restoreOffer, restore: restoreLost, dismiss: dismissRestore } = restoreState
@@ -2626,10 +2629,18 @@ export function App(): JSX.Element {
             id: host.id,
             name: host.name,
             quitEnds: quitEndsSessions(currentSettings, host.id),
+            retrying: remoteView[host.id]?.connection?.state !== 'connected',
             onOpen: () => openSettings('hosts')
           }))
         ]
       : []
+  /** The sessions pane's group for each remote host, in the order they were added; none with no remote host. */
+  const sessionsPaneHosts = remoteHosts.map((host) => ({
+    id: host.id,
+    name: host.name,
+    connected: remoteView[host.id]?.connection?.state === 'connected',
+    sessions: remoteView[host.id]?.sessions ?? []
+  }))
 
   /** Settings > Plugins, Secrets and each plugin's page; every other section is `SettingsPane`'s. */
   const renderSettings = (): JSX.Element => {
@@ -2776,9 +2787,13 @@ export function App(): JSX.Element {
       hostRunning={hostRunning === true}
       onStopHost={askStopHost}
       hostLogFile={info?.hostLogFile ?? null}
-      // Each host's own quit choice, Keep them running until set. Where each
-      // link stands is the desktop's to fill.
-      hosts={remoteHosts.map((host) => ({ host, quit: quitChoice(currentSettings, host.id), connection: null }))}
+      // Each host's own quit choice, Keep them running until set, and where
+      // main's link to it stands.
+      hosts={remoteHosts.map((host) => ({
+        host,
+        quit: quitChoice(currentSettings, host.id),
+        connection: remoteView[host.id]?.connection ?? null
+      }))}
       onAddHost={(host) => writeSettings({ hosts: [...currentSettings.hosts, host] })}
       // Forgets it on this device with its quit choice; nothing on it ends.
       onRemoveHost={(id) => writeSettings(withoutRemoteHost(currentSettings, id))}
@@ -2887,6 +2902,7 @@ export function App(): JSX.Element {
             onEndSession={closeSession}
             onReveal={launcher.reveal}
             compact={compact}
+            remoteHosts={sessionsPaneHosts}
           />
         )
       case 'config':

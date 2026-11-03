@@ -1,3 +1,4 @@
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import type { EventPayload, HostLinkOpened } from '../../shared/ipc'
 import type { PageBridge } from './launcher'
 
@@ -44,6 +45,12 @@ export interface PageLinksDeps {
   howEnded: () => { planned: boolean; restarts: boolean }
   /** Starts a bridge whose host bytes go to `data`. */
   openBridge: (data: (bytes: Uint8Array) => void) => PageBridge
+  /**
+   * The number the next connection is opened under. Every host's page links
+   * share one counter, so a number names one connection whichever host it
+   * reaches; each counts from 1 on its own when absent.
+   */
+  nextConnection?: () => number
   log: (line: string) => void
 }
 
@@ -71,6 +78,7 @@ export function createPageLinks(deps: PageLinksDeps): PageLinks {
   const byPage = new Map<number, number>()
   const watched = new Set<number>()
   let next = 1
+  const nextConnection = deps.nextConnection ?? (() => next++)
   let stopped = false
 
   const end = (connection: number): void => {
@@ -98,7 +106,7 @@ export function createPageLinks(deps: PageLinksDeps): PageLinks {
       }
       const last = byPage.get(page.id)
       if (last !== undefined) end(last)
-      const connection = next++
+      const connection = nextConnection()
       byPage.set(page.id, connection)
       try {
         await deps.ready()
@@ -145,5 +153,42 @@ export function createPageLinks(deps: PageLinksDeps): PageLinks {
       for (const bridge of bridges) bridge.end()
       await Promise.all(bridges.map((bridge) => bridge.ended))
     }
+  }
+}
+
+/**
+ * Every Helm page's connections: to this PC's host, and to each host on
+ * another computer, named by its id in `hostLink:open`. Bytes and closes
+ * carry the connection's number, which every host's page links take from one
+ * counter, so each goes to the one link that opened it.
+ */
+export interface HostPageLinks {
+  /** Opens `page`'s connection to `host`: this PC's when null or `local`. */
+  open(page: HelmPage, host: string | null): Promise<HostLinkOpened>
+  send(pageId: number, connection: number, bytes: Uint8Array): void
+  close(pageId: number, connection: number): void
+  /** Ends this PC's host's page bridges; each remote host's are its link's. */
+  stop(): Promise<void>
+}
+
+export function routePageLinks(
+  local: PageLinks,
+  remote: { pageLinks(id: string): PageLinks | null; allPageLinks(): readonly PageLinks[] } | null
+): HostPageLinks {
+  const everyLink = (): readonly PageLinks[] => [local, ...(remote?.allPageLinks() ?? [])]
+  return {
+    open(page, host) {
+      if (host === null || host === LOCAL_HOST_KEY) return local.open(page)
+      const links = remote?.pageLinks(host) ?? null
+      if (links === null) return Promise.resolve({ inHost: true, unreachable: 'This PC has no such host.' })
+      return links.open(page)
+    },
+    send(pageId, connection, bytes) {
+      for (const links of everyLink()) links.send(pageId, connection, bytes)
+    },
+    close(pageId, connection) {
+      for (const links of everyLink()) links.close(pageId, connection)
+    },
+    stop: () => local.stop()
   }
 }

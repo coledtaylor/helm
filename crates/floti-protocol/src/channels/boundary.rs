@@ -90,6 +90,10 @@ pub const CLIENT_ONLY: &[Outside] = &[
         "a Helm page's own connection to the host, whose protocol frames the desktop's main process pipes to a bridge and never reads",
     ),
     outside(
+        "remoteHosts:*",
+        "where each host on another computer stands with this device: connected, retrying, the pairing code it was shown or its transport's last line, which the client's main process learns from its own links to those hosts and tells only its own window",
+    ),
+    outside(
         "ownSettings:*",
         "the settings the client keeps for itself: its window, theme, terminal and browser preferences, the programs it picked, which its main process tells the host, and its tabs, panes and splits, which are kept per device and never reach the host",
     ),

@@ -297,8 +297,9 @@ Code-signing the build would retire reason 1. It would not touch 2 or 3.
 
 **Helm contacts nothing on its own initiative except the update check.
 Everything else on the network happens because you asked for it: the browser
-pane fetches the page you navigate to, and a plugin you added reaches the hosts
-its manifest names.**
+pane fetches the page you navigate to, a plugin you added reaches the hosts its
+manifest names, and a host you added on another computer is reached through
+your own ssh, or the command you gave.**
 
 There is no telemetry, no crash reporting, no fonts and no CDN. With
 `updateCheck` off, Helm asks nothing by itself at all; the one remaining route

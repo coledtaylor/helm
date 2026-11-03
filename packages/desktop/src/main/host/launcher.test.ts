@@ -1,8 +1,7 @@
-import { EventEmitter } from 'node:events'
-import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { PATIENCE } from '../../../../../test/patience'
-import { FrameDecoder, encodeFrame } from './frame'
+import { FakeChild, connects, type Program } from '../../../test/fake-child'
+import { encodeFrame } from './frame'
 import {
   HOST_ALREADY_RUNNING_EXIT,
   HOST_RETRY_MS,
@@ -14,12 +13,9 @@ import {
   flotiBinary,
   hostEnvironment,
   startLocalHost,
-  type HostChild,
   type HostPlaces,
-  type LauncherDeps,
-  type SpawnOptions
+  type LauncherDeps
 } from './launcher'
-import { PROTOCOL_VERSION } from './protocol'
 
 const TURN_OFF = '; turn off “Run sessions in the local host” in Settings to use Helm’s own sessions.'
 
@@ -36,87 +32,6 @@ const WIN_PLACES: HostPlaces = {
 
 /** How the host Helm starts is run: told which Helm started it. */
 const HOST_PROGRAM = `host --desktop ${WIN_PLACES.execPath} --desktop-arg ${WIN_PLACES.appPath}`
-
-/** A child process with in-memory pipes, whose program the test plays. */
-class FakeChild extends EventEmitter implements HostChild {
-  readonly stdin = new PassThrough()
-  readonly stdout = new PassThrough()
-  readonly stderr = new PassThrough()
-  exitCode: number | null = null
-  signalCode: NodeJS.Signals | null = null
-  killed = false
-  unrefed = false
-
-  constructor(
-    readonly command: string,
-    readonly args: string[],
-    readonly options: SpawnOptions
-  ) {
-    super()
-  }
-
-  exit(code: number): void {
-    if (this.exitCode !== null) return
-    this.exitCode = code
-    this.stdout.end()
-    this.stderr.end()
-    this.emit('exit', code, null)
-  }
-
-  kill(): boolean {
-    if (!this.running) return false
-    this.killed = true
-    this.signalCode = 'SIGTERM'
-    this.stdout.end()
-    this.stderr.end()
-    queueMicrotask(() => this.emit('exit', null, 'SIGTERM'))
-    return true
-  }
-
-  unref(): void {
-    this.unrefed = true
-  }
-
-  /** Whether the program is still running: neither exited nor killed. */
-  get running(): boolean {
-    return this.exitCode === null && this.signalCode === null
-  }
-
-  /** Resolves once Helm has closed this program's standard input. */
-  inputClosed(): Promise<void> {
-    return new Promise((resolve) => {
-      if (this.stdin.writableFinished || this.stdin.readableEnded) resolve()
-      else this.stdin.once('end', () => resolve()).resume()
-    })
-  }
-}
-
-type Program = (child: FakeChild) => void
-
-/** A bridge connected to a host: it welcomes the hello and exits successfully when its input closes. */
-const connects: Program = (child) => {
-  const decoder = new FrameDecoder()
-  child.stdin.on('data', (chunk: Uint8Array) => {
-    decoder.push(chunk)
-    for (let next = decoder.next(); next !== null; next = decoder.next()) {
-      if ('message' in next && next.message.type === 'hello') {
-        child.stdout.write(
-          encodeFrame({
-            type: 'welcome',
-            protocol: {
-              major: PROTOCOL_VERSION.major,
-              minor: PROTOCOL_VERSION.minor
-            },
-            hostVersion: '0.4.1',
-            capabilities: ['terminal'],
-            backends: []
-          })
-        )
-      }
-    }
-  })
-  child.stdin.once('end', () => child.exit(0))
-}
 
 /** A bridge that says one line, which a real one would never put a secret in, and exits with `code`. */
 const exits =

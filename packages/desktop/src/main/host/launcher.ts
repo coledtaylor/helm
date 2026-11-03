@@ -166,7 +166,7 @@ export class LocalHostError extends Error {
   override name = 'LocalHostError'
 }
 
-function pathsFor(platform: NodeJS.Platform): typeof posix {
+export function pathsFor(platform: NodeJS.Platform): typeof posix {
   return platform === 'win32' ? win32 : posix
 }
 
@@ -267,7 +267,7 @@ function runtimeFolder(dataDir: string, deps: Pick<LauncherDeps, 'platform' | 'e
   return paths.join(base, name)
 }
 
-interface Exit {
+export interface Exit {
   code: number | null
   signal: NodeJS.Signals | null
   /** Set when the program could not be run at all. */
@@ -275,7 +275,7 @@ interface Exit {
 }
 
 /** Settles when `child` has exited or could not be started. */
-function exitOf(child: HostChild): Promise<Exit> {
+export function exitOf(child: HostChild): Promise<Exit> {
   return new Promise((resolve) => {
     child.once('exit', (code, signal) => resolve({ code, signal }))
     child.once('error', (error) => resolve({ code: null, signal: null, error }))
@@ -319,12 +319,12 @@ function couldNotRun(binary: string, error: Error): LocalHostError {
 }
 
 /** Ends a sentence's full stop, so a clause can follow it. */
-function clause(sentence: string): string {
+export function clause(sentence: string): string {
   return sentence.trim().replace(/\.$/, '')
 }
 
 /** Closes a child's standard input, which ends the bridge's connection. */
-function closeInput(child: HostChild): void {
+export function closeInput(child: HostChild): void {
   if (child.stdin !== null && !child.stdin.writableEnded && !child.stdin.destroyed) child.stdin.end()
 }
 
@@ -503,7 +503,7 @@ export function openPageBridge(
   }
 }
 
-function describeExit(exit: Exit): string {
+export function describeExit(exit: Exit): string {
   if (exit.error !== undefined)
     return `could not run: ${(exit.error as NodeJS.ErrnoException).code ?? exit.error.message}`
   return exit.code === null ? `stopped by ${exit.signal ?? 'a signal'}` : `status ${exit.code}`

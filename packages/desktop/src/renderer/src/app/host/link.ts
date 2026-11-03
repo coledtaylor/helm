@@ -65,6 +65,14 @@ export interface PageLinkDeps {
   log?: (line: string) => void
   /** The clock the waits before connecting again run on; the page's own by default. */
   setTimeout?: (run: () => void, ms: number) => unknown
+  /** A host on another computer, by its id; this PC's host when absent. */
+  host?: string
+  /**
+   * Whether the link connects again by itself after the host's side ended
+   * without a stop: true by default. A remote host's page link is told when
+   * to connect instead, once main's own link to that host is back.
+   */
+  retries?: boolean
 }
 
 /** The sentence when sessions do not run in the host this run, which no host adapter is asked in. */
@@ -145,11 +153,11 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
         deps.log?.(`host: hearing the connection end failed (${(error as Error).message})`)
       }
     }
-    if (!end.planned) scheduleRetry()
+    if (!end.planned && deps.retries !== false) scheduleRetry()
   }
 
   const open = (): Promise<HostLinkOpened> => {
-    const opened = deps.bridge.invoke('hostLink:open')
+    const opened = deps.bridge.invoke('hostLink:open', deps.host === undefined ? undefined : { host: deps.host })
     placement ??= opened.then(
       (answer) => answer.inHost,
       () => false

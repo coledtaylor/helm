@@ -1,4 +1,5 @@
 import type { HostState, HostStateStore } from './host/hostState'
+import type { RemoteHostsStore } from './host/remoteHosts'
 import type {
   EventChannel,
   EventPayload,
@@ -156,5 +157,13 @@ const CONNECTED: HostState = { lost: null, reconnects: 0 }
 /** The window's host, as `bridge.ts` reports it: connected, never lost, unless a test says otherwise. */
 export const hostState: HostStateStore = {
   get: () => CONNECTED,
+  subscribe: () => () => undefined
+}
+
+const NO_REMOTE_HOSTS = {}
+
+/** No host on another computer has said anything, unless a test says otherwise. */
+export const remoteHosts: RemoteHostsStore = {
+  get: () => NO_REMOTE_HOSTS,
   subscribe: () => () => undefined
 }

@@ -7,6 +7,7 @@ import { createHostState, type HostStateStore } from './host/hostState'
 import { WINDOW_CAPABILITIES, createPageLink } from './host/link'
 import { createPluginsAdapter } from './host/plugins'
 import { createProfilesAdapter } from './host/profiles'
+import { createRemoteHosts, type RemoteHostsStore } from './host/remoteHosts'
 import { createRouter, type HostAdapter } from './host/router'
 import { createSessionsAdapters } from './host/sessions'
 import { createWorkspaceAdapter } from './host/workspace'
@@ -53,6 +54,13 @@ const sessions = createSessionsAdapters({
 
 /** Whether the window has its host: lost from a crash until it is connected again (`host/hostState.ts`). */
 export const hostState: HostStateStore = createHostState(link)
+
+/**
+ * Each host on another computer this device added: where main's link to it
+ * stands, and its running sessions over the window's own connection to it
+ * (`host/remoteHosts.ts`). Empty with sessions in Helm.
+ */
+export const remoteHosts: RemoteHostsStore = createRemoteHosts({ bridge: window.helm, log })
 
 /** Whether sessions run in the local host this run: main says once, when the window first asks. */
 export const sessionsInHost = (): Promise<boolean> => link.inHost()

@@ -75,9 +75,14 @@ describe('nextQuitStep', () => {
 })
 
 describe('quitEnds', () => {
-  it('ends the sessions as the user answered, whatever the setting says', () => {
-    expect(quitEnds('end', false)).toBe(true)
+  it('ends the sessions where the host’s setting ends them, unless the user kept them this once', () => {
+    expect(quitEnds('end', true)).toBe(true)
     expect(quitEnds('keep', true)).toBe(false)
+  })
+
+  it('S13: an End answer never ends the sessions on a host whose setting keeps them', () => {
+    expect(quitEnds('end', false)).toBe(false)
+    expect(quitEnds('keep', false)).toBe(false)
   })
 
   it('does what the setting says when nobody was asked', () => {

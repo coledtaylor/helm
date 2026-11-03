@@ -77,6 +77,7 @@ import type {
   SecretInput,
   SecretsState
 } from '@helm/core'
+import type { RemoteHostConnection } from '@helm/core/types'
 import type { BrowserCommand } from './browserKeys'
 import type { ProbeOp, TermCreateOptions } from './protocol'
 
@@ -670,6 +671,12 @@ export type HostLinkOpened =
   | { inHost: true; connection: number; appVersion: string }
   | { inHost: true; unreachable: string }
 
+/**
+ * Where each host on another computer stands with this device, by its id
+ * (`RemoteHost.id`). A host nothing has been heard from yet is absent.
+ */
+export type RemoteHostStates = Record<string, RemoteHostConnection>
+
 /** What Helm's own build says of itself; `app:info` adds the `claude` version wherever sessions run. */
 export type OwnAppInfo = Omit<AppInfo, 'claudeVersion' | 'hostLogFile'>
 
@@ -710,11 +717,17 @@ export interface IpcRequests {
   'app:info': { request: void; response: AppInfo }
 
   /**
-   * Opens the asking page's own protocol connection to the local host, ending
-   * any it had. Main takes it only from Helm's own pages, and pipes the frames
-   * to a bridge without reading them; the device key never leaves the bridge.
+   * Opens the asking page's own protocol connection to a host, ending any it
+   * had to that host: this PC's when no host is named, or a host on another
+   * computer by its id. Main takes it only from Helm's own pages, and pipes
+   * the frames to a bridge without reading them; the device key never leaves
+   * the bridge. A remote host's connection opens only while main's own link
+   * to it is connected.
    */
-  'hostLink:open': { request: void; response: HostLinkOpened }
+  'hostLink:open': { request: { host: string } | undefined; response: HostLinkOpened }
+
+  /** Where each host on another computer stands with this device; changes arrive on `remoteHosts:changed`. */
+  'remoteHosts:read': { request: void; response: RemoteHostStates }
 
   'settings:read': { request: void; response: AppSettings }
   'settings:write': { request: Partial<AppSettings>; response: AppSettings }
@@ -922,8 +935,9 @@ export interface IpcRequests {
    *
    * **Helm contacts nothing on its own initiative except the update check.
    * Everything else on the network happens because you asked for it: the
-   * browser pane fetches the page you navigate to, and a plugin you added
-   * reaches the hosts its manifest names.**
+   * browser pane fetches the page you navigate to, a plugin you added
+   * reaches the hosts its manifest names, and a host you added on another
+   * computer is reached through your own ssh, or the command you gave.**
    *
    * That is the whole network posture, and it is written identically here, in
    * the README, in docs/PACKAGING.md and in SPEC 5. If it moves again, all four
@@ -1810,6 +1824,12 @@ export interface IpcEvents {
   'pluginBackground:changed': PluginBackgroundReport[]
   /** With sessions in the local host, where the copy of Helm's own database into it stands, after each change. */
   'ownData:changed': OwnDataCopyState
+  /**
+   * Where each host on another computer stands with this device, whole,
+   * after each change: connected, retrying, waiting for this device to be
+   * approved there (with the code), or what its transport last said.
+   */
+  'remoteHosts:changed': RemoteHostStates
   /** With sessions in the local host, a background page's ask for the window, from the hidden window through main. */
   'pluginWindow:asked': PluginUiRequest
   /** With sessions in the local host, the window closed a secret dialog the hidden window handed it. */
@@ -2044,6 +2064,7 @@ export interface HelmBridge {
 export const REQUEST_CHANNELS = Object.keys({
   'app:info': true,
   'hostLink:open': true,
+  'remoteHosts:read': true,
   'settings:read': true,
   'settings:write': true,
   'ownSettings:read': true,
@@ -2228,6 +2249,7 @@ export const EVENT_CHANNELS = Object.keys({
   'windowSessions:activate': true,
   'pluginBackground:changed': true,
   'ownData:changed': true,
+  'remoteHosts:changed': true,
   'pluginWindow:asked': true,
   'pluginWindow:answered': true,
   'profiles:changed': true,

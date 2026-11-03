@@ -1,8 +1,8 @@
 import { app, type BrowserWindow } from 'electron'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, rm, writeFile } from 'node:fs/promises'
+import { hostname, tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { listProfiles, readPluginFolders, readPluginSettings } from '@helm/core'
 import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
@@ -20,6 +20,9 @@ import { openPageBridge, startLocalHost, type HostChild, type HostPlaces, type L
 import { createHostLink, type HostLink } from './link'
 import { createOwnDataCopy, type OwnDataCopy } from './own-data'
 import { createPageLinks, type PageLinks } from './page-link'
+import { createRemoteHostLinks, type RemoteHostLinks } from './remote'
+import { openRemotePageBridge, remoteClientFolder, startRemoteHost } from './remote-launcher'
+import type { RemoteHostStates } from '../../shared/ipc'
 import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
 import { createHostPlugins, type HostPlugins } from './plugins'
 import { createHostProfiles, type HostProfiles } from './profiles'
@@ -122,9 +125,11 @@ export function connectLocalHost(log: (line: string) => void, startHost = true):
 export function createLocalPageLinks(
   link: HostLink | null,
   isHelmPage: (id: number) => boolean,
-  log: (line: string) => void
+  log: (line: string) => void,
+  nextConnection?: () => number
 ): PageLinks {
   return createPageLinks({
+    ...(nextConnection !== undefined ? { nextConnection } : {}),
     inHost: link !== null,
     appVersion: app.getVersion(),
     isHelmPage,
@@ -136,6 +141,40 @@ export function createLocalPageLinks(
     }),
     openBridge: (data) => openPageBridge(places(), programs, data),
     log
+  })
+}
+
+/**
+ * Helm's links to the hosts on other computers in its `hosts` setting, each
+ * through `floti bridge` and that host's own transport, with its own client
+ * folder in this run's data directory. This device asks to pair under this
+ * computer's name.
+ */
+export function createDesktopRemoteHosts(options: {
+  isHelmPage: (id: number) => boolean
+  nextConnection: () => number
+  changed: (states: RemoteHostStates) => void
+  log: (line: string) => void
+}): RemoteHostLinks {
+  const folderOf = (id: string): string => remoteClientFolder(places(), process.platform, id)
+  return createRemoteHostLinks({
+    start: (host, onPairing) =>
+      startRemoteHost(
+        places(),
+        { ...programs, appVersion: app.getVersion(), log: options.log },
+        { folder: folderOf(host.id), transport: host.transport, deviceName: hostname(), onPairing }
+      ),
+    openBridge: (host, data) =>
+      openRemotePageBridge(places(), programs, { folder: folderOf(host.id), transport: host.transport }, data),
+    // Its device key and the host key it pinned: nothing else is kept there.
+    forget: (host) => rm(folderOf(host.id), { recursive: true, force: true }),
+    changed: options.changed,
+    isHelmPage: options.isHelmPage,
+    appVersion: app.getVersion(),
+    nextConnection: options.nextConnection,
+    log: options.log,
+    setTimeout: (run, ms) => setTimeout(run, ms),
+    clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
   })
 }
 

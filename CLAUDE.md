@@ -149,7 +149,8 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   keeper. Quitting a client ends the sessions it started only where its
   setting for that host says so; a crash ends nothing; stopping the host
   ends every session. Helm's setting is `quitSessions`, kept in `helm.db` keyed by host
-  (this PC's is `local`, End when absent). Quitting with sessions it would
+  (this PC's is `local`, End when absent; a remote host's is its id, Keep
+  when absent). Quitting with sessions it would
   end asks first: End and quit, Keep running and quit (this quit only, never
   written to the setting), or Cancel. Helm never stops the host on its own:
   its deliberate quit sends `host:quit` and lets go, only Settings' Stop host
@@ -163,6 +164,15 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   is lost while it stays (its keeper died), comes back through the host's
   restore offer, which the window asks for again then; a lost shell, as a
   new shell in its folder.
+- A host on another computer is reached by main through `floti bridge`,
+  over the user's own `ssh -o BatchMode=yes <target>` or the command they
+  gave, one link per host and one page link per host for each window
+  (`hostLink:open` names it). Floti adds no ssh option, never skips a
+  host-key check, reads or writes nothing under `~/.ssh` and holds no SSH
+  secret: a transport that needs a password or a key accepted fails with its
+  last line, and the fix is `ssh <target>` in a terminal. The link never
+  starts that host and a drop ends nothing there; Remove ends the link and
+  removes the host's client folder, and ends nothing on the host.
 - With "Run sessions in the local host" on, every client sees every session
   in the host, and tabs, panes and splits are kept per device: `paneLayout`
   stays in `helm.db` and never reaches the host. A window gives a tab only to

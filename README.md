@@ -188,8 +188,9 @@ rather than a request.
 
 **Helm contacts nothing on its own initiative except the update check.
 Everything else on the network happens because you asked for it: the browser
-pane fetches the page you navigate to, and a plugin you added reaches the hosts
-its manifest names.** There is no telemetry, no crash reporting, no
+pane fetches the page you navigate to, a plugin you added reaches the hosts its
+manifest names, and a host you added on another computer is reached through
+your own ssh, or the command you gave.** There is no telemetry, no crash reporting, no
 fonts and no CDN, and with the tick off Helm asks nothing at all unless you
 press something.
 
