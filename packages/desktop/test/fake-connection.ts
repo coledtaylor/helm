@@ -147,6 +147,12 @@ export class FakeConnection {
   }
 }
 
+/** How the host's side of a connection ended, as a page's link says (`renderer/src/app/host/link.ts`). */
+export interface FakeHostEnd {
+  planned: boolean
+  restarts: boolean
+}
+
 /**
  * A page's link that connects to `first`, then to each connection the test
  * hands it, as a page reconnects after its connection ended.
@@ -154,9 +160,13 @@ export class FakeConnection {
 export function reconnectingReach(first: FakeConnection): {
   connection(): Promise<HostConnection>
   onConnected(listener: (connection: HostConnection) => void): void
+  onEnded(listener: (end: FakeHostEnd) => void): void
+  /** The host's side ends the connection there is now, as main says it did. */
+  lose(end: FakeHostEnd): void
   reconnect(next: FakeConnection): Promise<void>
 } {
   const listeners: Array<(connection: HostConnection) => void> = []
+  const endListeners: Array<(end: FakeHostEnd) => void> = []
   let current = first
   let attempt: Promise<HostConnection> | null = null
   const reach = {
@@ -169,6 +179,13 @@ export function reconnectingReach(first: FakeConnection): {
     },
     onConnected(listener: (connection: HostConnection) => void) {
       listeners.push(listener)
+    },
+    onEnded(listener: (end: FakeHostEnd) => void) {
+      endListeners.push(listener)
+    },
+    lose(end: FakeHostEnd) {
+      current.close()
+      for (const listener of endListeners) listener(end)
     },
     async reconnect(next: FakeConnection) {
       current.close()
@@ -191,6 +208,7 @@ export function fakeReach(
 ): {
   connection(): Promise<HostConnection>
   onConnected(listener: (connection: HostConnection) => void): void
+  onEnded(listener: (end: FakeHostEnd) => void): void
   connect(): Promise<void>
 } {
   const listeners: Array<(connection: HostConnection) => void> = []
@@ -207,6 +225,7 @@ export function fakeReach(
     onConnected(listener: (connection: HostConnection) => void) {
       listeners.push(listener)
     },
+    onEnded: () => undefined,
     async connect() {
       await reach.connection()
     }

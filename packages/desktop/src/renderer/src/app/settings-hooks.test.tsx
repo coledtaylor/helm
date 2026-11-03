@@ -157,6 +157,7 @@ describe('useLauncher', () => {
     migrations: [],
     versions: { electron: '43', chrome: '150', node: '24' },
     claudeVersion: null,
+    hostLogFile: null,
     windowsBuild: null,
     home: 'C:\\Users\\someone',
     releasesUrl: 'https://github.com/example/helm/releases/latest'

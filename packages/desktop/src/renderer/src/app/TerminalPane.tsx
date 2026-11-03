@@ -1,7 +1,7 @@
 import type { JSX } from 'react'
 import { useEffect, useRef } from 'react'
 import type { SessionRecord } from '@helm/core'
-import { SessionEndedBar } from '@helm/ui'
+import { SessionEndedBar, type SessionLost } from '@helm/ui'
 import { getTerminal, mountTerminal } from './terminals'
 
 export interface TerminalPaneProps {
@@ -10,6 +10,8 @@ export interface TerminalPaneProps {
   active: boolean
   windowsBuild: number | null
   onClose: (id: number) => void
+  /** Set when the session was lost with its host: the bar says so and offers Restore. */
+  lost?: SessionLost
 }
 
 /**
@@ -20,12 +22,7 @@ export interface TerminalPaneProps {
  * pane is, whether it is the visible one, and whether it still has a process
  * behind it.
  */
-export function TerminalPane({
-  session,
-  active,
-  windowsBuild,
-  onClose
-}: TerminalPaneProps): JSX.Element {
+export function TerminalPane({ session, active, windowsBuild, onClose, lost }: TerminalPaneProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -67,12 +64,19 @@ export function TerminalPane({
           exitCode={session.exitCode}
           durationMs={session.durationMs}
           onClose={() => onClose(session.id)}
+          {...(lost !== undefined && session.status === 'lost' ? { lost } : {})}
         />
       )}
       {/* The gutter is a wrapper rather than padding on the terminal's own
           container: xterm sizes the grid from that container's box, so the
-          element it measures has to be exactly the area it is allowed to fill. */}
-      <div className="min-h-0 flex-1 p-2.5">
+          element it measures has to be exactly the area it is allowed to fill.
+          A session lost with its host keeps its last screen, dimmed. */}
+      <div
+        data-terminal-lost={lost !== undefined && session.status === 'lost' ? true : undefined}
+        className={
+          lost !== undefined && session.status === 'lost' ? 'min-h-0 flex-1 p-2.5 opacity-60' : 'min-h-0 flex-1 p-2.5'
+        }
+      >
         <div ref={boxRef} className="h-full w-full" />
       </div>
     </div>

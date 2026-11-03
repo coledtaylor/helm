@@ -56,6 +56,23 @@ describe('useRestore', () => {
     expect(hook.current.report).toBeNull()
   })
 
+  it('asks again for what the host offers each time the window gets its host back after losing it', async () => {
+    const { result: hook, rerender } = renderHook(({ reconnects }) => useRestore(reconnects), {
+      initialProps: { reconnects: 0 }
+    })
+    await waitFor(() => expect(hook.current.offer).toEqual(OFFER))
+    const lost: RestoreOffer = {
+      ...OFFER,
+      sessions: [{ ...OFFER.sessions[0]!, id: 9, name: 'lost with its host' }]
+    }
+    bridge.answer('session:restorable', () => lost)
+
+    rerender({ reconnects: 1 })
+
+    await waitFor(() => expect(hook.current.offer).toEqual(lost))
+    expect(bridge.invoked('session:restorable')).toHaveLength(2)
+  })
+
   it('answers not now with nothing', async () => {
     bridge.answer('session:restore', () => ({ restored: [], failed: [] }))
     const { result: hook } = renderHook(() => useRestore())

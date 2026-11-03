@@ -395,10 +395,11 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       .toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, HOST_PROGRAM])
     const host = world.spawned[1]!
     // Apart from Helm, with no input to close: the host's exit is its own.
-    // Its standard output carries only the listening line Helm waits for.
+    // Its standard output carries only the listening line Helm waits for, and
+    // its standard error what it says before its own log file is open.
     expect(host.options).toEqual({
       env: world.spawned[0]!.options.env,
-      stdio: ['ignore', 'pipe', 'ignore'],
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       detached: true
     })
@@ -416,6 +417,40 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     expect(world.spawned[2]!.exitCode).toBe(0)
     expect(host.running).toBe(true)
     expect(host.killed).toBe(false)
+  })
+
+  it('keeps what the host it started writes to standard error in Helm’s log, until it lets go of the host', async () => {
+    const complains: Program = (child) => {
+      child.stderr.write('floti host: could not open its log file in C:\\data\\logs (Access is denied.)\r\n')
+      child.stderr.write('floti host: a second line, in two ')
+      child.stderr.write('pieces\n')
+      listens(child)
+    }
+    const world = new World({
+      bridges: [exits(3), connects],
+      hosts: [complains]
+    })
+    const local = await startLocalHost(WIN_PLACES, world.deps())
+    const host = world.spawned[1]!
+
+    await expect
+      .poll(() => world.log.filter((line) => line.startsWith('host: floti host said: ')), { timeout: PATIENCE })
+      .toEqual([
+        'host: floti host said: floti host: could not open its log file in C:\\data\\logs (Access is denied.)',
+        'host: floti host said: floti host: a second line, in two pieces'
+      ])
+    // Let go of: nothing more is read from it.
+    expect(host.stderr.destroyed).toBe(true)
+    await local.close()
+    expect(host.running).toBe(true)
+  })
+
+  it('only connects when asked to, and starts no host when none answers', async () => {
+    const world = new World({ bridges: [exits(3)], hosts: [] })
+    expect(await refusal(startLocalHost(WIN_PLACES, world.deps(), { startHost: false }))).toBe(
+      `No local host answered on its socket${TURN_OFF}`
+    )
+    expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`])
   })
 
   it('starts the host apart from Helm on macOS and Linux too', async () => {

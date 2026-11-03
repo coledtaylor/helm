@@ -121,6 +121,12 @@ export interface AppInfo {
    * going: the CLI is required to launch a session, not to browse config.
    */
   claudeVersion: string | null
+  /**
+   * The log file this PC's host writes its standard error and panics to,
+   * from the host's own `app:info`; null with sessions in Helm itself, or
+   * when the host could not be asked.
+   */
+  hostLogFile: string | null
   /** Windows build number; xterm uses it to pick ConPTY quirk handling. */
   windowsBuild: number | null
   /**
@@ -665,7 +671,7 @@ export type HostLinkOpened =
   | { inHost: true; unreachable: string }
 
 /** What Helm's own build says of itself; `app:info` adds the `claude` version wherever sessions run. */
-export type OwnAppInfo = Omit<AppInfo, 'claudeVersion'>
+export type OwnAppInfo = Omit<AppInfo, 'claudeVersion' | 'hostLogFile'>
 
 /** How many rows of each kind a copy of Helm's own data added to the local host. */
 export interface OwnDataCopied {
@@ -1977,8 +1983,19 @@ export interface IpcEvents {
 
   /** The host's protocol bytes on a page's own connection, as its bridge wrote them. */
   'hostLink:data': { connection: number; bytes: Uint8Array }
-  /** A page's connection ended on the bridge's side: null when it closed, or the sentence saying why. */
-  'hostLink:ended': { connection: number; why: string | null }
+  /**
+   * A page's connection ended on the bridge's side: null when it closed, or
+   * the sentence saying why. `planned` when main's link ended the host on
+   * purpose (Stop host, or a quit), which is no crash; `restarts` when Helm
+   * starts a new host in place of one that is gone, rather than waiting for
+   * it to answer again.
+   */
+  'hostLink:ended': {
+    connection: number
+    why: string | null
+    planned: boolean
+    restarts: boolean
+  }
 }
 
 // ---------------------------------------------------------------------------

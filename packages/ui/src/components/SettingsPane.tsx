@@ -247,6 +247,8 @@ export interface SettingsPaneProps {
   hostRunning: boolean
   /** Asks how many sessions stopping ends, and stops this PC's host on a yes. */
   onStopHost: () => void
+  /** The log file this PC's host writes its standard error and panics to, as the host names it; null when there is none to name. */
+  hostLogFile: string | null
 }
 
 /**
@@ -358,7 +360,8 @@ export function SettingsPane({
   quitSessions,
   onQuitSessionsChange,
   hostRunning,
-  onStopHost
+  onStopHost,
+  hostLogFile
 }: SettingsPaneProps): JSX.Element {
   const found = status !== null && status.path !== null && status.version !== null
   const overridden = status?.source === 'setting'
@@ -640,6 +643,7 @@ export function SettingsPane({
               onQuitChange={onQuitSessionsChange}
               hostRunning={hostRunning}
               onStopHost={onStopHost}
+              hostLogFile={hostLogFile}
             />
           )}
 
@@ -1506,7 +1510,8 @@ function SessionsGroup({
   quit,
   onQuitChange,
   hostRunning,
-  onStopHost
+  onStopHost,
+  hostLogFile
 }: {
   mcp: boolean
   onMcpChange: (next: boolean) => void
@@ -1518,6 +1523,7 @@ function SessionsGroup({
   onQuitChange: (next: QuitSessions) => void
   hostRunning: boolean
   onStopHost: () => void
+  hostLogFile: string | null
 }): JSX.Element {
   return (
     <Group
@@ -1606,6 +1612,20 @@ function SessionsGroup({
               Stop host
             </Action>
           </Row>
+          {hostRunning && hostLogFile !== null && (
+            <Row
+              label="Log file"
+              hint="Where this PC’s host writes what it says about itself, a crash included. It holds no key, code, prompt or session output."
+            >
+              <span
+                data-settings-host-log
+                className="block max-w-[22rem] truncate font-mono text-[11px] text-fg-muted select-text"
+                title={hostLogFile}
+              >
+                {hostLogFile}
+              </span>
+            </Row>
+          )}
         </>
       )}
     </Group>

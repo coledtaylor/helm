@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { posix, win32 } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
+import { RECONNECT_FIRST_MS } from '../../shared/host/reconnect'
 import { TURN_OFF } from '../../shared/host/sentences'
 import type { AppMode } from '../../shared/ipc'
 import { HostRefusedError, connectHost, type HostConnection } from './client'
@@ -25,9 +26,13 @@ import { HostRefusedError, connectHost, type HostConnection } from './client'
  *   start that finds them held waits it out, up to the start deadline.
  *
  * Helm never opens the enrolment file or a key: the bridge reads them, and
- * says what went wrong as an exit status. Nothing either program prints is
- * logged, and the one line shown is a host's reason for not starting, which
- * it writes to be shown and which names no code or key.
+ * says what went wrong as an exit status. Nothing the bridge prints is
+ * logged, nor anything on the host's standard output, and the one line shown
+ * is a host's reason for not starting, which it writes to be shown and which
+ * names no code or key. What a host Helm started writes to standard error
+ * before it has pointed it at its own log file goes into Helm's log, until
+ * Helm lets go of the host: a host that dies that early leaves its reason
+ * somewhere. The host writes nothing there that its log file may not hold.
  *
  * Everything that differs by OS for this (the program's name, how paths
  * join, and where the socket can live) is in this module and nowhere else.
@@ -59,8 +64,11 @@ export const HOST_START_DEADLINE_MS = 30_000
  */
 export const HOST_ALREADY_RUNNING_EXIT = 3
 
-/** How long a start waits before trying again while another host still has the folders. */
-export const HOST_RETRY_MS = 250
+/**
+ * How long a start waits before trying again while another host still has
+ * the folders, and the first wait before a lost connection is tried again.
+ */
+export const HOST_RETRY_MS = RECONNECT_FIRST_MS
 
 /**
  * The longest socket path macOS takes, in bytes (`sun_path` is 104 with its
@@ -107,8 +115,11 @@ export interface HostChild {
 
 export interface SpawnOptions {
   env: NodeJS.ProcessEnv
-  /** A bridge's three pipes; a host's standard output only, for its listening line. */
-  stdio: ['pipe', 'pipe', 'pipe'] | ['ignore', 'pipe', 'ignore']
+  /**
+   * A bridge's three pipes; a host's standard output, for its listening line,
+   * and its standard error, for what it says before its log file is open.
+   */
+  stdio: ['pipe', 'pipe', 'pipe'] | ['ignore', 'pipe', 'pipe']
   windowsHide: true
   /**
    * A host apart from Helm, so it outlives Helm however Helm ends. On macOS
@@ -317,10 +328,16 @@ function closeInput(child: HostChild): void {
 type BridgeAttempt = { connection: HostConnection; exited: Promise<Exit>; child: HostChild } | { exit: Exit }
 
 /**
- * Connects to the local host, starting it when none answers. Rejects with a
+ * Connects to the local host, starting it when none answers. With
+ * `startHost` false it only connects: a host that does not answer is a
+ * failure, for a host Helm waits for rather than replaces. Rejects with a
  * `LocalHostError` whose message is the one sentence to show.
  */
-export async function startLocalHost(places: HostPlaces, deps: LauncherDeps): Promise<LocalHost> {
+export async function startLocalHost(
+  places: HostPlaces,
+  deps: LauncherDeps,
+  { startHost: mayStart = true }: { startHost?: boolean } = {}
+): Promise<LocalHost> {
   const binary = flotiBinary(places, deps)
   if (!deps.exists(binary)) {
     throw failure(`Helm could not find the local host program at ${binary}`)
@@ -334,7 +351,7 @@ export async function startLocalHost(places: HostPlaces, deps: LauncherDeps): Pr
   }
   const hostOptions: SpawnOptions = {
     env,
-    stdio: ['ignore', 'pipe', 'ignore'],
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
     detached: true
   }
@@ -374,7 +391,7 @@ export async function startLocalHost(places: HostPlaces, deps: LauncherDeps): Pr
   // paired, no code" is also what it says when no host is running at all; a
   // host started then writes the code it enrols with. One already running
   // refuses to start a second on its folders, and the sentence stays "not paired".
-  if (first === BRIDGE_EXIT.unreachable || first === BRIDGE_EXIT.notPinned) {
+  if (mayStart && (first === BRIDGE_EXIT.unreachable || first === BRIDGE_EXIT.notPinned)) {
     deps.log(
       first === BRIDGE_EXIT.unreachable
         ? 'host: no local host answered; starting one'
@@ -544,10 +561,14 @@ async function startHostOnce(
 ): Promise<StartedHost> {
   const child = deps.spawn(binary, args, options)
   const exited = exitOf(child)
+  keepStandardError(child, deps)
   const release = (): void => {
     // What it says after its listening line is not read: a host whose
     // console has gone writes on regardless.
     child.stdout?.destroy()
+    // It points its standard error at its own log file first thing, so
+    // nothing more is expected there.
+    child.stderr?.destroy()
     child.unref()
   }
   const abandon = async (): Promise<void> => {
@@ -627,6 +648,37 @@ async function startHostOnce(
         : `The local host stopped before it was ready, with status ${outcome.code}`
     }; ${TURN_OFF}`
   )
+}
+
+/**
+ * Logs each line a host Helm started writes to standard error, prefixed so
+ * it reads as the host's, until the pipe is let go of or ends.
+ */
+function keepStandardError(child: HostChild, deps: Pick<LauncherDeps, 'log'>): void {
+  const stderr = child.stderr
+  if (stderr === null) return
+  let pending = ''
+  const say = (line: string): void => {
+    const text = line.replace(/\r$/, '')
+    if (text.trim() !== '') deps.log(`host: floti host said: ${text}`)
+  }
+  stderr.on('data', (chunk: Buffer | string) => {
+    pending += chunk.toString()
+    let newline = pending.indexOf('\n')
+    while (newline !== -1) {
+      say(pending.slice(0, newline))
+      pending = pending.slice(newline + 1)
+      newline = pending.indexOf('\n')
+    }
+  })
+  const done = (): void => {
+    if (pending !== '') say(pending)
+    pending = ''
+  }
+  stderr.once('end', done)
+  stderr.once('close', done)
+  // A pipe let go of while the host writes fails; that is nothing to report.
+  stderr.on('error', () => undefined)
 }
 
 /** A host Helm started that exited before it said it was listening. */

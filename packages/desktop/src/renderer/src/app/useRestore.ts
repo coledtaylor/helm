@@ -6,7 +6,9 @@ import { readable } from './errors'
 
 /**
  * The window's half of restoring after a crash: the offer main holds, read
- * once when the window mounts, and the one call that answers it.
+ * when the window mounts and again each time the window gets its host back
+ * after losing it (`reconnects`), since the new host offers what the old one
+ * lost; and the one call that answers it.
  *
  * Where the reopened sessions go is the caller's - it owns the panes. This
  * owns what is said about it afterwards.
@@ -61,7 +63,7 @@ export function restoreReport(
   return null
 }
 
-export function useRestore(): RestoreState {
+export function useRestore(reconnects = 0): RestoreState {
   const [offer, setOffer] = useState<RestoreOffer | null>(null)
   const [busy, setBusy] = useState(false)
   const [report, setReport] = useState<{ text: string; failed: boolean } | null>(null)
@@ -79,7 +81,7 @@ export function useRestore(): RestoreState {
     return () => {
       live = false
     }
-  }, [])
+  }, [reconnects])
 
   const restore = useCallback(
     async (

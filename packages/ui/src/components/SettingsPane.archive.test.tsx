@@ -108,6 +108,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onQuitSessionsChange: vi.fn(),
     hostRunning: false,
     onStopHost: vi.fn(),
+    hostLogFile: null,
     ...overrides
   }
   render(<SettingsPane {...props} />)

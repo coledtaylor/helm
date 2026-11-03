@@ -26,6 +26,36 @@ describe('SessionEndedBar', () => {
     expect(screen.getByRole('status').textContent).toBe('Session endedafter 800msClose tab')
   })
 
+  it('says a session lost with its host was lost, and offers Restore beside Close tab once the host offers it back', async () => {
+    const onRestore = vi.fn()
+    const onClose = vi.fn()
+    const { rerender } = render(
+      <SessionEndedBar
+        exitCode={null}
+        durationMs={null}
+        onClose={onClose}
+        lost={{ hostName: 'this PC’s host', restoreReady: false, onRestore }}
+      />
+    )
+    const bar = screen.getByRole('status')
+    expect(bar.textContent).toBe('Session lost: this PC’s host stoppedRestoreClose tab')
+    // Not yet offered: the host has not come back.
+    expect(screen.getByRole('button', { name: 'Restore' })).toHaveProperty('disabled', true)
+
+    rerender(
+      <SessionEndedBar
+        exitCode={null}
+        durationMs={null}
+        onClose={onClose}
+        lost={{ hostName: 'this PC’s host', restoreReady: true, onRestore }}
+      />
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
+    expect(onRestore).toHaveBeenCalledTimes(1)
+    await userEvent.click(screen.getByRole('button', { name: 'Close tab' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('rounds a duration to the coarsest unit that still says something', () => {
     expect(formatDuration(-5)).toBe('0ms')
     expect(formatDuration(999)).toBe('999ms')

@@ -1034,6 +1034,43 @@ function anchorFor(
 }
 
 /**
+ * Puts each reopened session in the tab of the lost session it reopened,
+ * where that tab still is: the same pane, the same place in its strip, and in
+ * front if that tab was. `pairs` maps a lost session's row id to the row id
+ * of the session that reopened it; a pair whose lost session has no tab here
+ * changes nothing. A tab the reopened session already had elsewhere goes, so
+ * it is open once.
+ */
+export function replaceSessionTabs(layout: PaneLayout, pairs: ReadonlyMap<number, number>): PaneLayout {
+  const swaps = new Map<number, number>()
+  for (const [from, to] of pairs) {
+    if (findTab(layout, paneId({ kind: 'session', id: from })) !== null) swaps.set(from, to)
+  }
+  if (swaps.size === 0) return layout
+  const reopened = new Set([...swaps.values()].map((id) => paneId({ kind: 'session', id })))
+  const groups = layout.groups.map((group): PaneGroup => {
+    const tabs = group.tabs
+      .filter((ref) => !reopened.has(paneId(ref)))
+      .map((ref): PaneRef => {
+        const to = ref.kind === 'session' ? swaps.get(ref.id) : undefined
+        return to === undefined ? ref : { kind: 'session', id: to }
+      })
+    const front = group.tabs.find((ref) => paneId(ref) === group.activeId)
+    const swapped = front?.kind === 'session' ? swaps.get(front.id) : undefined
+    const activeId =
+      swapped !== undefined
+        ? paneId({ kind: 'session', id: swapped })
+        : tabs.some((ref) => paneId(ref) === group.activeId)
+          ? group.activeId
+          : tabs.at(-1) === undefined
+            ? null
+            : paneId(tabs.at(-1)!)
+    return { ...group, tabs, activeId }
+  })
+  return { ...layout, groups }
+}
+
+/**
  * Puts reopened sessions where the sessions they replace were.
  *
  * `saved` is the layout the crashed run last wrote, and `pairs` maps each lost

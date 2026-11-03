@@ -419,7 +419,12 @@ export function registerIpc(ctx: IpcContext): void {
       return ctx.pageLinks.open(helmPageOf(event.sender))
     },
 
-    'app:info': async () => ({ ...ownAppInfo(), claudeVersion: await readClaudeVersion() }),
+    // Sessions in Helm itself: no host, so no host log file.
+    'app:info': async () => ({
+      ...ownAppInfo(),
+      claudeVersion: await readClaudeVersion(),
+      hostLogFile: null
+    }),
 
     'ownApp:info': () => ownAppInfo(),
     'ownData:state': () => ctx.ownData?.state() ?? { state: 'idle' },

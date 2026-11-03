@@ -318,6 +318,92 @@ describe('sessions over the window’s own connection', () => {
     await settle()
     expect(second.streamsFor('session:data', 7)).toHaveLength(1)
   })
+
+  describe('when the host connection ends', () => {
+    /** The window shows 7 and 9 running and 8 that ended, over a link the test ends. */
+    async function shownWorld() {
+      const first = new FakeConnection().answer('session:list', () => [
+        row({ id: 7 }),
+        row({
+          id: 8,
+          status: 'exited',
+          exitCode: 0,
+          endedAt: '2026-10-29T10:05:00.000Z',
+          durationMs: 300_000
+        }),
+        row({ id: 9, cwd: '/work dir/api' })
+      ])
+      const link = reconnectingReach(first)
+      const { own } = ownBridge()
+      const adapters = createSessionsAdapters({
+        link,
+        own,
+        front: { focused: () => true, onChange: () => undefined },
+        shelf: null
+      })
+      const exits = hear(adapters, 'session:exit')
+      await ask(adapters, 'session:list')
+      adapters.show([7, 8, 9])
+      const streams = [first.streamsFor('session:data', 7)[0]!, first.streamsFor('session:data', 9)[0]!]
+      return { first, link, adapters, exits, streams }
+    }
+
+    it('marks every session the window shows running lost, closes its terminal and tells the window, when the host went without a stop', async () => {
+      const w = await shownWorld()
+
+      w.link.lose({ planned: false, restarts: true })
+      await settle()
+
+      expect(w.exits.map((record) => [record.id, record.status, record.exitCode])).toEqual([
+        [7, 'lost', null],
+        [9, 'lost', null]
+      ])
+      expect(w.streams.every((stream) => stream.closed)).toBe(true)
+      const listed = await ask(w.adapters, 'session:list')
+      expect(listed.map((record) => [record.id, record.status])).toEqual([
+        [7, 'lost'],
+        [8, 'exited'],
+        [9, 'lost']
+      ])
+      // Keys pressed meanwhile reach no session.
+      send(w.adapters, 'session:input', { id: 7, data: 'yes\r' })
+      expect(w.streams[0]!.text()).toBe('')
+    })
+
+    it('takes the new host’s word for its sessions once reconnected, carrying only those that run', async () => {
+      const w = await shownWorld()
+      w.link.lose({ planned: false, restarts: true })
+      await settle()
+
+      // The new host reconciled what the dead one left running to lost.
+      const second = new FakeConnection().answer('session:list', () => [
+        row({ id: 7, status: 'lost' }),
+        row({ id: 8, status: 'exited', exitCode: 0 }),
+        row({ id: 9, status: 'lost' })
+      ])
+      await w.link.reconnect(second)
+      await settle()
+
+      const listed = await ask(w.adapters, 'session:list')
+      expect(listed.map((record) => [record.id, record.status])).toEqual([
+        [7, 'lost'],
+        [8, 'exited'],
+        [9, 'lost']
+      ])
+      expect(second.streams).toEqual([])
+    })
+
+    it('marks nothing lost when the host was stopped on purpose', async () => {
+      const w = await shownWorld()
+
+      w.link.lose({ planned: true, restarts: false })
+      await settle()
+
+      expect(w.exits).toEqual([])
+      const listed = await ask(w.adapters, 'session:list')
+      expect(listed.filter((record) => record.status === 'lost')).toEqual([])
+    })
+  })
 })
 
 describe('plain terminals over the window’s own connection', () => {

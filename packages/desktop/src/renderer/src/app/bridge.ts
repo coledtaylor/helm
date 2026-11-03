@@ -3,6 +3,7 @@ import type { HelmBridge } from '../../../shared/ipc'
 import { createConfigAdapter } from './host/config'
 import { createFilesAdapter } from './host/files'
 import { createHistoryAdapter } from './host/history'
+import { createHostState, type HostStateStore } from './host/hostState'
 import { WINDOW_CAPABILITIES, createPageLink } from './host/link'
 import { createPluginsAdapter } from './host/plugins'
 import { createProfilesAdapter } from './host/profiles'
@@ -49,6 +50,9 @@ const sessions = createSessionsAdapters({
   },
   log
 })
+
+/** Whether the window has its host: lost from a crash until it is connected again (`host/hostState.ts`). */
+export const hostState: HostStateStore = createHostState(link)
 
 /** Whether sessions run in the local host this run: main says once, when the window first asks. */
 export const sessionsInHost = (): Promise<boolean> => link.inHost()

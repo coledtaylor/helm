@@ -1,3 +1,4 @@
+import type { HostState, HostStateStore } from './host/hostState'
 import type {
   EventChannel,
   EventPayload,
@@ -149,3 +150,11 @@ export const bridge: FakeBridge = createBridge()
 
 /** The same object, under the name `bridge.ts` exports it by. */
 export const helm: HelmBridge = bridge
+
+const CONNECTED: HostState = { lost: null, reconnects: 0 }
+
+/** The window's host, as `bridge.ts` reports it: connected, never lost, unless a test says otherwise. */
+export const hostState: HostStateStore = {
+  get: () => CONNECTED,
+  subscribe: () => () => undefined
+}

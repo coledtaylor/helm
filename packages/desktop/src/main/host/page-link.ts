@@ -17,6 +17,10 @@ import type { PageBridge } from './launcher'
  * - A page has one connection at a time: opening again ends the last one, and
  *   a page that navigates, reloads or closes has its bridge ended.
  * - At quit every bridge is ended before main's link stops the host.
+ * - A bridge that ends by itself tells the page whether main's link ended the
+ *   host on purpose (Stop host, or a quit), and whether Helm starts a new host
+ *   in place of this one, so a page tells a crash from a stop and says what
+ *   comes next.
  */
 
 /** A Helm page, as much of its web contents as this needs. */
@@ -36,6 +40,8 @@ export interface PageLinksDeps {
   isHelmPage: (id: number) => boolean
   /** Settles once main's own link has connected; rejects with the sentence saying why it could not. */
   ready: () => Promise<unknown>
+  /** Whether main's link ended the host on purpose, and whether Helm starts a new one if it is gone. */
+  howEnded: () => { planned: boolean; restarts: boolean }
   /** Starts a bridge whose host bytes go to `data`. */
   openBridge: (data: (bytes: Uint8Array) => void) => PageBridge
   log: (line: string) => void
@@ -114,7 +120,7 @@ export function createPageLinks(deps: PageLinksDeps): PageLinks {
         open.delete(connection)
         if (byPage.get(page.id) === connection) byPage.delete(page.id)
         if (why !== null) deps.log('host: a page’s connection to the local host ended')
-        page.send('hostLink:ended', { connection, why })
+        page.send('hostLink:ended', { connection, why, ...deps.howEnded() })
       })
       return { inHost: true, connection, appVersion: deps.appVersion }
     },

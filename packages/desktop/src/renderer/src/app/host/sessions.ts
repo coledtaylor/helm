@@ -16,6 +16,7 @@ import { createTerminalStreams } from '../../../../shared/host/streams'
 import type { HelmBridge, SessionConfirmRequest, StartSessionRequest } from '../../../../shared/ipc'
 import { createLocalEvents } from './events'
 import type { HostReach } from './history'
+import type { PageLink } from './link'
 import type { HostAdapter } from './router'
 import { createTerminalsAdapter, type ShellShelf } from './terminals'
 
@@ -45,6 +46,13 @@ import { createTerminalsAdapter, type ShellShelf } from './terminals'
  * Every read goes through `link.connection()`, so a read asked before the
  * window has reached the host waits for the host's answer, and when the host
  * cannot be reached it rejects with the link's sentence, never an empty list.
+ *
+ * When the host goes without a stop or a quit (it crashed or was killed),
+ * every session still running here is lost with it: each becomes `lost`, its
+ * terminal is let go, and the window hears it on `session:exit`, so the tab
+ * keeps its last screen with input off. Once the link has reconnected, the
+ * new host's list is the word on each, and only those still running are
+ * carried again.
  */
 
 /** Whether the window is in front, and word when that changes. */
@@ -54,7 +62,7 @@ export interface WindowFront {
 }
 
 export interface SessionsAdapterDeps {
-  link: HostReach
+  link: HostReach & Pick<PageLink, 'onEnded'>
   /** The preload's bridge, for what main keeps: the quit question, notifications, the last run's layout. */
   own: Pick<HelmBridge, 'invoke' | 'send' | 'on'>
   front: WindowFront
@@ -194,6 +202,18 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
       relisting = false
     }
   }
+
+  link.onEnded((end) => {
+    // A stop or a quit ended each session on purpose, and the host said so.
+    if (end.planned) return
+    for (const record of records.values()) {
+      if (!isRunning(record)) continue
+      const lost: SessionRecord = { ...record, status: 'lost', exitCode: null }
+      records.set(record.id, lost)
+      streams.close('session:data', record.id)
+      events.tell('session:exit', lost)
+    }
+  })
 
   const onExit = (row: P.SessionRecord): void => {
     const record = sessionFromHost(row)

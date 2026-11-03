@@ -131,6 +131,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onQuitSessionsChange: vi.fn(),
     hostRunning: false,
     onStopHost: vi.fn(),
+    hostLogFile: null,
     ...overrides
   }
   const view = render(<SettingsPane {...props} />)
@@ -597,6 +598,29 @@ describe('SettingsPane', () => {
     // Turned on, but sessions run in Helm itself until it starts again.
     rerender({ section: 'sessions', sessionsInHost: true, hostRunning: false })
     expect(within(group('Sessions')).getByRole('button', { name: 'Stop host' })).toHaveProperty('disabled', true)
+  })
+
+  it('names this PC’s host’s log file by its full path while sessions run there', () => {
+    const path = 'C:\\Users\\me\\AppData\\Local\\Floti\\logs\\host.log'
+    const { rerender } = renderPane({
+      section: 'sessions',
+      sessionsInHost: true,
+      hostRunning: true,
+      hostLogFile: path
+    })
+    const row = within(group('Sessions')).getByText(path)
+    expect(row.className).toContain('font-mono')
+    expect(row.getAttribute('title')).toBe(path)
+    expect(group('Sessions').textContent).toContain('Log file')
+
+    // Sessions in Helm itself: no host, no log file.
+    rerender({
+      section: 'sessions',
+      sessionsInHost: true,
+      hostRunning: false,
+      hostLogFile: null
+    })
+    expect(group('Sessions').textContent).not.toContain('Log file')
   })
 })
 

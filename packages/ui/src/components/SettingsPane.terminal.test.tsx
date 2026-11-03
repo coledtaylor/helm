@@ -105,6 +105,7 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     onQuitSessionsChange: vi.fn(),
     hostRunning: false,
     onStopHost: vi.fn(),
+    hostLogFile: null,
     ...overrides
   }
 }

@@ -83,6 +83,13 @@ const BUILD: OwnAppInfo = {
   releasesUrl: 'https://example.invalid/releases'
 }
 
+/** What this PC's host says of itself. */
+const HOST_INFO = {
+  version: '0.4.1',
+  logFile: '/home/me/.local/state/floti/logs/host.log',
+  desktop: true
+} as unknown as P.AppInfo
+
 /** Helm's main process as the window's bridge reaches it: its own settings, build and picker. */
 function ownBridge(patch: Partial<AppSettings> = {}) {
   let settings: AppSettings = { ...DEFAULT_SETTINGS, ...patch }
@@ -133,6 +140,7 @@ function world(connection: FakeConnection | null = new FakeConnection(), own = o
     .answer('git:refresh', () => ({ [ALPHA]: git(5) }))
     .answer('roots:accept', ({ path }) => (host = { ...host, scanRoots: [...host.scanRoots, path] }).scanRoots)
     .answer('setup:status', () => ({ backends: { 'claude-code': backend() } }))
+    .answer('app:info', () => ({ ...HOST_INFO }))
     .answer('setup:locateBackend', () => backend())
     .answer('setup:complete', () => (host = { ...host, firstRunCompletedAt: '2026-10-30T11:00:00.000Z' }))
   const link = fakeReach(connection, UNREACHABLE)
@@ -343,8 +351,16 @@ describe('the window’s workspace over its own connection', () => {
     expect(host().scanRoots).toEqual([HUB])
   })
 
-  it('answers app:info with Helm’s own build and the host’s claude version', async () => {
-    await expect(ask(world().adapter, 'app:info')).resolves.toEqual({ ...BUILD, claudeVersion: '2.1.5 (Claude Code)' })
-    await expect(ask(world(null).adapter, 'app:info')).resolves.toEqual({ ...BUILD, claudeVersion: null })
+  it('answers app:info with Helm’s own build, the host’s claude version and the host’s log file', async () => {
+    await expect(ask(world().adapter, 'app:info')).resolves.toEqual({
+      ...BUILD,
+      claudeVersion: '2.1.5 (Claude Code)',
+      hostLogFile: HOST_INFO.logFile
+    })
+    await expect(ask(world(null).adapter, 'app:info')).resolves.toEqual({
+      ...BUILD,
+      claudeVersion: null,
+      hostLogFile: null
+    })
   })
 })

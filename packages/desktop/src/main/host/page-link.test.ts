@@ -50,6 +50,7 @@ function world(overrides: Partial<PageLinksDeps> = {}) {
     appVersion: '2.9.0',
     isHelmPage: (id) => id === WINDOW || id === BACKGROUND,
     ready: () => Promise.resolve(),
+    howEnded: () => ({ planned: false, restarts: true }),
     openBridge: (data) => {
       const bridge = new FakeBridge(data)
       bridges.push(bridge)
@@ -136,11 +137,44 @@ describe('each Helm page’s own connection to the local host', () => {
     await w.bridges[0]?.ended
     await Promise.resolve()
     expect(page.sent).toEqual([
-      { channel: 'hostLink:ended', payload: { connection: 1, why: 'The local host closed the connection; turn off …' } }
+      {
+        channel: 'hostLink:ended',
+        payload: {
+          connection: 1,
+          why: 'The local host closed the connection; turn off …',
+          planned: false,
+          restarts: true
+        }
+      }
     ])
     // Its bytes go nowhere now.
     w.links.send(BACKGROUND, 1, Uint8Array.of(1))
     expect(w.bridges[0]?.written).toEqual([])
+  })
+
+  it('tells the page a bridge that ended with a host Helm stopped on purpose was no crash, and whether Helm starts another', async () => {
+    let how = { planned: true, restarts: false }
+    const w = world({ howEnded: () => how })
+    const page = new FakePage(WINDOW)
+    await w.links.open(page)
+    w.bridges[0]?.exit(null)
+    await w.bridges[0]?.ended
+    await Promise.resolve()
+    how = { planned: false, restarts: false }
+    await w.links.open(page)
+    w.bridges[1]?.exit('The local host closed the connection; turn off …')
+    await w.bridges[1]?.ended
+    await Promise.resolve()
+
+    expect(page.sent.filter((s) => s.channel === 'hostLink:ended').map((s) => s.payload)).toEqual([
+      { connection: 1, why: null, planned: true, restarts: false },
+      {
+        connection: 2,
+        why: 'The local host closed the connection; turn off …',
+        planned: false,
+        restarts: false
+      }
+    ])
   })
 
   it('ends every bridge at quit, and opens none after', async () => {

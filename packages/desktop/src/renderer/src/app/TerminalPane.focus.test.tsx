@@ -69,4 +69,33 @@ describe('TerminalPane', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Close tab' }))
     expect(onClose).toHaveBeenCalledWith(3)
   })
+
+  it('keeps a session lost with its host on its last screen, dimmed with input off, and offers Restore', async () => {
+    const onRestore = vi.fn()
+    const lostSession: SessionRecord = {
+      ...SESSION,
+      status: 'lost',
+      exitCode: null
+    }
+    const { container } = render(
+      <TerminalPane
+        session={lostSession}
+        active
+        windowsBuild={null}
+        onClose={vi.fn()}
+        lost={{ hostName: 'this PC’s host', restoreReady: true, onRestore }}
+      />
+    )
+
+    expect(terminal.term.options).toMatchObject({
+      cursorBlink: false,
+      disableStdin: true
+    })
+    expect(terminal.term.focus).not.toHaveBeenCalled()
+    expect(screen.getByRole('status').textContent).toContain('Session lost: this PC’s host stopped')
+    expect(container.querySelector('[data-terminal-lost]')?.className).toContain('opacity-60')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
+    expect(onRestore).toHaveBeenCalledTimes(1)
+  })
 })

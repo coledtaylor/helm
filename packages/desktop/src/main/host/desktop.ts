@@ -96,8 +96,11 @@ const programs = {
     spawn(command, args, options)
 }
 
-/** One connection to this run's local host, through a bridge of its own; the host is started when none answers. */
-export function connectLocalHost(log: (line: string) => void): Promise<LocalHost> {
+/**
+ * One connection to this run's local host, through a bridge of its own; the
+ * host is started when none answers, unless `startHost` is false.
+ */
+export function connectLocalHost(log: (line: string) => void, startHost = true): Promise<LocalHost> {
   return startLocalHost(
     places(),
     {
@@ -106,7 +109,8 @@ export function connectLocalHost(log: (line: string) => void): Promise<LocalHost
       log,
       setTimeout: (run, ms) => setTimeout(run, ms),
       clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
-    }
+    },
+    { startHost }
   )
 }
 
@@ -124,7 +128,12 @@ export function createLocalPageLinks(
     inHost: link !== null,
     appVersion: app.getVersion(),
     isHelmPage,
-    ready: () => (link === null ? Promise.reject(new Error('Sessions do not run in the local host.')) : link.connection()),
+    ready: () =>
+      link === null ? Promise.reject(new Error('Sessions do not run in the local host.')) : link.connection(),
+    howEnded: () => ({
+      planned: link?.endedOnPurpose() ?? false,
+      restarts: link?.restartsHost() ?? false
+    }),
     openBridge: (data) => openPageBridge(places(), programs, data),
     log
   })
@@ -137,7 +146,7 @@ export function createLocalPageLinks(
  */
 export function createLocalHostLink(settings: () => HostSettingsPatch, log: (line: string) => void): HostLink {
   return createHostLink({
-    start: () => connectLocalHost(log),
+    start: ({ startHost }) => connectLocalHost(log, startHost),
     settings,
     log,
     setTimeout: (run, ms) => setTimeout(run, ms),

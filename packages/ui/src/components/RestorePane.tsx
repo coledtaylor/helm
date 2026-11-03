@@ -18,6 +18,11 @@ export interface RestorePaneProps {
   onNotNow: () => void
   /** The clock, for the time column. */
   now: number
+  /**
+   * The sessions ticked when the pane opens, such as the one a lost tab's
+   * Restore asked for; every one that can come back when not given.
+   */
+  preselected?: readonly number[]
 }
 
 const plural = (count: number, one: string, many: string): string =>
@@ -55,11 +60,19 @@ export function RestorePane({
   busy,
   onResume,
   onNotNow,
-  now
+  now,
+  preselected
 }: RestorePaneProps): JSX.Element {
   const headingId = useId()
   const [ticked, setTicked] = useState<ReadonlySet<number>>(
-    () => new Set(offer.sessions.filter((session) => session.blocked === null).map((session) => session.id))
+    () =>
+      new Set(
+        offer.sessions
+          .filter(
+            (session) => session.blocked === null && (preselected === undefined || preselected.includes(session.id))
+          )
+          .map((session) => session.id)
+      )
   )
   const chosen = offer.sessions.filter((session) => ticked.has(session.id)).map((session) => session.id)
 

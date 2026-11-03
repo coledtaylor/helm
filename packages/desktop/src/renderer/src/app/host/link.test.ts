@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { FrameDecoder, encodeFrame } from '../../../../shared/host/frame'
 import { PROTOCOL_VERSION, type Message } from '../../../../shared/host/protocol'
+import { RECONNECT_FIRST_MS } from '../../../../shared/host/reconnect'
 import type { EventChannel, EventPayload, HostLinkOpened } from '../../../../shared/ipc'
-import { WINDOW_CAPABILITIES, createPageLink, type PageLinkDeps } from './link'
+import { WINDOW_CAPABILITIES, createPageLink, type HostEnd, type PageLinkDeps } from './link'
 
 const UNREACHABLE =
   'No local host answered on its socket; turn off “Run sessions in the local host” in Settings to use Helm’s own sessions.'
@@ -80,16 +81,48 @@ class FakeMain {
     for (const listener of this.listeners.get(channel) ?? []) (listener as (payload: EventPayload<K>) => void)(payload)
   }
 
-  /** The bridge ends, as main says when it exits. */
-  end(connection: number, why: string | null): void {
-    queueMicrotask(() => this.emit('hostLink:ended', { connection, why }))
+  /** The bridge ends, as main says when it exits: by default the host went without a stop, and Helm starts another. */
+  end(connection: number, why: string | null, how: HostEnd = { planned: false, restarts: true }): void {
+    queueMicrotask(() => this.emit('hostLink:ended', { connection, why, ...how }))
   }
+}
+
+/** Timers the test fires by hand. */
+function steppedTimers() {
+  const pending = new Map<number, { run: () => void; ms: number }>()
+  let next = 1
+  return {
+    setTimeout: (run: () => void, ms: number): unknown => {
+      const id = next++
+      pending.set(id, { run, ms })
+      return id
+    },
+    clearTimeout: (timer: unknown) => {
+      pending.delete(timer as number)
+    },
+    fireAll() {
+      const due = [...pending.values()]
+      pending.clear()
+      for (const timer of due) timer.run()
+    },
+    pending: () => [...pending.values()].map((timer) => timer.ms)
+  }
+}
+
+/** Lets every promise already settled run its callbacks. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 30; i++) await Promise.resolve()
 }
 
 function world() {
   const main = new FakeMain()
-  const link = createPageLink({ bridge: main.bridge, capabilities: WINDOW_CAPABILITIES })
-  return { main, link }
+  const timers = steppedTimers()
+  const link = createPageLink({
+    bridge: main.bridge,
+    capabilities: WINDOW_CAPABILITIES,
+    ...timers
+  })
+  return { main, link, timers }
 }
 
 describe('a Helm page’s own connection to the local host', () => {
@@ -155,6 +188,71 @@ describe('a Helm page’s own connection to the local host', () => {
     const second = await w.link.connection()
     expect(second).not.toBe(first)
     expect(w.main.opens).toHaveLength(2)
+  })
+
+  it('connects again by itself after the host went without a stop, waiting twice as long after each failed try', async () => {
+    const w = world()
+    const ends: HostEnd[] = []
+    let connects = 0
+    w.link.onEnded((end) => ends.push(end))
+    w.link.onConnected(() => (connects += 1))
+    await w.link.connection()
+
+    w.main.end(1, 'The local host closed the connection; turn off …', {
+      planned: false,
+      restarts: true
+    })
+    await settle()
+    expect(ends).toEqual([{ planned: false, restarts: true }])
+
+    // Main cannot reach a host yet.
+    w.main.answer = () => ({ inHost: true, unreachable: UNREACHABLE })
+    const waits: number[] = []
+    for (let tries = 0; tries < 3; tries++) {
+      waits.push(...w.timers.pending())
+      w.timers.fireAll()
+      await settle()
+    }
+    expect(waits).toEqual([RECONNECT_FIRST_MS, RECONNECT_FIRST_MS * 2, RECONNECT_FIRST_MS * 4])
+
+    let next = 10
+    w.main.answer = () => ({
+      inHost: true,
+      connection: next++,
+      appVersion: '2.9.0'
+    })
+    w.timers.fireAll()
+    await settle()
+    expect(connects).toBe(2)
+    expect(w.timers.pending()).toEqual([])
+    expect(await (await w.link.connection()).request('history:summary', null)).toBe('answered')
+    // One open per try: the first, three that failed, and the one that connected.
+    expect(w.main.opens).toHaveLength(5)
+  })
+
+  it('does not connect by itself after main stopped the host on purpose, and says it was on purpose', async () => {
+    const w = world()
+    const ends: HostEnd[] = []
+    w.link.onEnded((end) => ends.push(end))
+    await w.link.connection()
+    w.main.end(1, null, { planned: true, restarts: false })
+    await settle()
+
+    expect(ends).toEqual([{ planned: true, restarts: false }])
+    expect(w.timers.pending()).toEqual([])
+    expect(w.main.opens).toHaveLength(1)
+  })
+
+  it('takes a connection the page closed itself for no loss of the host', async () => {
+    const w = world()
+    const ends: HostEnd[] = []
+    w.link.onEnded((end) => ends.push(end))
+    const connection = await w.link.connection()
+    connection.close()
+    await settle()
+
+    expect(ends).toEqual([])
+    expect(w.timers.pending()).toEqual([])
   })
 
   it('tells main when it closes its connection', async () => {

@@ -1,13 +1,31 @@
 import type { JSX } from 'react'
 import { cn } from '../lib/cn'
-import { CloseIcon } from './icons'
+import { CloseIcon, HistoryIcon } from './icons'
+
+/** A session that went with the host it ran in, and the way back to it. */
+export interface SessionLost {
+  /** The host it ran in, as the window names it: "this PC’s host". */
+  hostName: string
+  /** Whether the host it reconnected to offers this session back yet. */
+  restoreReady: boolean
+  /** Opens the offer with this session chosen. */
+  onRestore: () => void
+}
 
 export interface SessionEndedBarProps {
   /** Null when the process ended without one being observed. */
   exitCode: number | null
   durationMs: number | null
   onClose: () => void
+  /** Set when the session was lost with its host rather than ending. */
+  lost?: SessionLost
 }
+
+const barButton = cn(
+  'flex items-center gap-1 rounded px-1.5 py-0.5',
+  'text-fg-subtle transition hover:bg-hover hover:text-fg',
+  'disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-fg-subtle'
+)
 
 /**
  * What a terminal pane says once its process is gone.
@@ -15,49 +33,68 @@ export interface SessionEndedBarProps {
  * The tab stays: the scrollback is the record of what happened, and a session
  * that ends the moment something goes wrong is exactly the one worth reading.
  * So this reports the outcome and offers the close rather than performing it.
+ *
+ * A session lost with its host says so, and offers Restore beside the close:
+ * it resumes the conversation through the restore offer the host makes once
+ * it is back, so Restore waits until that offer holds this session.
  */
-export function SessionEndedBar({
-  exitCode,
-  durationMs,
-  onClose
-}: SessionEndedBarProps): JSX.Element {
-  const failed = exitCode !== null && exitCode !== 0
+export function SessionEndedBar({ exitCode, durationMs, onClose, lost }: SessionEndedBarProps): JSX.Element {
+  const failed = lost === undefined && exitCode !== null && exitCode !== 0
 
   return (
     <div
       role="status"
+      data-session-ended={lost === undefined ? 'ended' : 'lost'}
       className={cn(
         'flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-[11px]',
         failed
           ? 'border-danger/30 bg-danger/10 text-danger'
-          : 'border-border bg-surface-sunken text-fg-muted'
+          : lost !== undefined
+            ? 'border-warn/30 bg-warn/10 text-warn'
+            : 'border-border bg-surface-sunken text-fg-muted'
       )}
     >
       <span
         aria-hidden
-        className={cn('size-1.5 shrink-0 rounded-full', failed ? 'bg-danger' : 'bg-fg-subtle')}
+        className={cn(
+          'size-1.5 shrink-0 rounded-full',
+          failed ? 'bg-danger' : lost !== undefined ? 'bg-warn' : 'bg-fg-subtle'
+        )}
       />
       <span className="font-medium">
-        {exitCode === null
-          ? 'Session ended'
-          : failed
-            ? `Session exited with code ${String(exitCode)}`
-            : 'Session ended'}
+        {lost !== undefined
+          ? `Session lost: ${lost.hostName} stopped`
+          : exitCode === null
+            ? 'Session ended'
+            : failed
+              ? `Session exited with code ${String(exitCode)}`
+              : 'Session ended'}
       </span>
-      {durationMs !== null && (
+      {lost === undefined && durationMs !== null && (
         <span className="text-fg-subtle tabular-nums">after {formatDuration(durationMs)}</span>
       )}
-      <button
-        type="button"
-        onClick={onClose}
-        className={cn(
-          'ml-auto flex items-center gap-1 rounded px-1.5 py-0.5',
-          'text-fg-subtle transition hover:bg-hover hover:text-fg'
+      <span className="ml-auto flex items-center gap-1">
+        {lost !== undefined && (
+          <button
+            type="button"
+            onClick={lost.onRestore}
+            disabled={!lost.restoreReady}
+            title={
+              lost.restoreReady
+                ? 'Resume this conversation in its folder, in this tab'
+                : `Waiting for ${lost.hostName} to offer it back`
+            }
+            className={barButton}
+          >
+            <HistoryIcon width={11} height={11} />
+            Restore
+          </button>
         )}
-      >
-        <CloseIcon width={11} height={11} />
-        Close tab
-      </button>
+        <button type="button" onClick={onClose} className={barButton}>
+          <CloseIcon width={11} height={11} />
+          Close tab
+        </button>
+      </span>
     </div>
   )
 }

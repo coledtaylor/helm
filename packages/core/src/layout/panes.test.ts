@@ -23,6 +23,7 @@ import {
   placeIn,
   placeRestored,
   reconcile,
+  replaceSessionTabs,
   resizeSplit,
   retitleTab,
   savedGroups,
@@ -676,6 +677,31 @@ describe('upgradeSavedLayout', () => {
     for (const value of [null, 'history', [], {}, { groups: [] }, { panes: [] }]) {
       expect(upgradeSavedLayout(value, 45)).toBeNull()
     }
+  })
+})
+
+describe('replaceSessionTabs', () => {
+  it('puts each reopened session in the tab of the lost one it reopened: same pane, same place, in front if that was', () => {
+    let layout = layoutOf(row([g(HISTORY, session(1), session(2)), g(session(3), SETTINGS)]))
+    layout = activateTab(layout, 'session:2')
+    // `reconcile` gave the reopened 12 a tab of its own before it was placed.
+    layout = openTab(focusGroup(layout, 2), session(12))
+
+    const replaced = replaceSessionTabs(
+      layout,
+      new Map([
+        [2, 12],
+        [3, 13],
+        [9, 19]
+      ])
+    )
+
+    expect(replaced.groups.map((group) => group.tabs.map(paneId))).toEqual([
+      ['history', 'session:1', 'session:12'],
+      ['session:13', 'settings']
+    ])
+    expect(replaced.groups[0]!.activeId).toBe('session:12')
+    expect(replaceSessionTabs(layout, new Map())).toBe(layout)
   })
 })
 

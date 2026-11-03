@@ -121,6 +121,7 @@ export {
 } from './components/SettingsSections'
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { OwnDataBanner, type OwnDataBannerProps } from './components/OwnDataBanner'
+export { HostStoppedBanner, type HostStoppedBannerProps } from './components/HostStoppedBanner'
 export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'
 export {
@@ -158,13 +159,10 @@ export { SessionTree, type SessionTreeProps, type TreeReveal, type TreeSession }
 export {
   SessionEndedBar,
   formatDuration,
-  type SessionEndedBarProps
+  type SessionEndedBarProps,
+  type SessionLost
 } from './components/SessionEndedBar'
-export {
-  SessionHistory,
-  type HistoryGrouping,
-  type SessionHistoryProps
-} from './components/SessionHistory'
+export { SessionHistory, type HistoryGrouping, type SessionHistoryProps } from './components/SessionHistory'
 export { SessionsPane, type SessionsPaneProps } from './components/SessionsPane'
 export { Sidebar, SidebarAction, type SidebarProps } from './components/Sidebar'
 export { StatusBar, type StatusBarProps, type StatusPluginItem } from './components/StatusBar'

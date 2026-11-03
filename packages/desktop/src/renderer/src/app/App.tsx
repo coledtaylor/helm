@@ -1,5 +1,5 @@
 import type { JSX, ReactNode } from 'react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { Harness } from '@helm/core'
 import {
   activateTab,
@@ -28,6 +28,7 @@ import {
   placeBeside,
   placeIn,
   placeRestored,
+  replaceSessionTabs,
   reconcile,
   resizeSplit,
   savedGroups,
@@ -166,6 +167,7 @@ import {
   TitleBar,
   VersionBanner,
   OwnDataBanner,
+  HostStoppedBanner,
   WelcomePane,
   type LaunchChoice,
   type PaneDropZone,
@@ -184,7 +186,8 @@ import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
-import { helm, hostSessionTabs, sessionsInHost } from './bridge'
+import { helm, hostSessionTabs, hostState, sessionsInHost } from './bridge'
+import { LOCAL_HOST_NAME } from './host/sessions'
 import { ProjectColumn } from './ProjectColumn'
 import { disposeShell, terminalShellKey } from './pterms'
 import { disposeTerminal, estimateGrid } from './terminals'
@@ -459,7 +462,10 @@ export function App(): JSX.Element {
 
   const profileState = useProfiles()
   const newSession = useNewSession()
-  const restoreState = useRestore()
+  // Whether the window has its host: lost from a crash until it is back.
+  const hostLink = useSyncExternalStore(hostState.subscribe, hostState.get)
+  // Asked again each time the window gets its host back: the new host offers what the old one lost.
+  const restoreState = useRestore(hostLink.reconnects)
   const { offer: restoreOffer, restore: restoreLost, dismiss: dismissRestore } = restoreState
   const historyState = useHistory()
   const configState = useConfig()
@@ -1265,6 +1271,9 @@ export function App(): JSX.Element {
     }
   }, [setupNeeded, newSession, sessionState, placeSession, open.focused])
 
+  /** The sessions a lost tab's Restore asked for, ticked when the Restore sessions tab opens. */
+  const [restoreChosen, setRestoreChosen] = useState<readonly number[] | null>(null)
+
   /**
    * Reopens sessions a crash took and puts each back in the pane and place it
    * had, sized for that pane. Unasked is the `restoreWithoutAsking` path, which
@@ -1289,9 +1298,14 @@ export function App(): JSX.Element {
       if (result === null) return
       for (const { launched } of result.restored) sessionState.adopt(launched.session)
       const pairs = new Map(result.restored.map(({ from, launched }) => [from, launched.session.id]))
+      setRestoreChosen(null)
       commit((current) => {
-        // One the saved layout does not name still opens here: it was asked for.
-        let placed = placeRestored(closeTab(current, 'restore'), layout, pairs)
+        // A session lost with its host while its tab was open comes back in
+        // that tab; one lost with Helm goes back where the saved layout had
+        // it; one neither names still opens here: it was asked for.
+        const inPlace = replaceSessionTabs(closeTab(current, 'restore'), pairs)
+        const elsewhere = new Map([...pairs].filter(([from]) => findTab(current, `session:${String(from)}`) === null))
+        let placed = placeRestored(inPlace, layout, elsewhere)
         for (const id of pairs.values()) {
           if (findTab(placed, `session:${String(id)}`) === null) placed = openTab(placed, { kind: 'session', id })
         }
@@ -1309,6 +1323,18 @@ export function App(): JSX.Element {
    */
   const restoreUnasked = settings === null ? null : settings.restoreWithoutAsking
   const actedOn = useRef<RestoreOffer | null>(null)
+
+  /**
+   * A lost tab's Restore: the Restore sessions tab, with only that session
+   * ticked, through the one restore path there is.
+   */
+  const restoreSession = useCallback(
+    (id: number) => {
+      setRestoreChosen([id])
+      commit((current) => openTab(current, { kind: 'restore' }))
+    },
+    [commit]
+  )
   useEffect(() => {
     if (restoreOffer === null || restoreUnasked === null || actedOn.current === restoreOffer) return
     actedOn.current = restoreOffer
@@ -2712,6 +2738,7 @@ export function App(): JSX.Element {
       }
       hostRunning={hostRunning === true}
       onStopHost={askStopHost}
+      hostLogFile={info?.hostLogFile ?? null}
       filesWrap={filesWrap}
       onFilesWrapChange={setFilesWrap}
       onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>
@@ -3017,6 +3044,9 @@ export function App(): JSX.Element {
       case 'restore':
         return restoreOffer === null ? null : (
           <RestorePane
+            // Opened again with what a lost tab asked for ticked.
+            key={restoreChosen === null ? 'every' : restoreChosen.join(',')}
+            {...(restoreChosen === null ? {} : { preselected: restoreChosen })}
             offer={restoreOffer}
             withoutAsking={settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking}
             onWithoutAskingChange={(restoreWithoutAsking) => writeSettings({ restoreWithoutAsking })}
@@ -3215,6 +3245,18 @@ export function App(): JSX.Element {
                 active={isFront}
                 windowsBuild={info?.windowsBuild ?? null}
                 onClose={closeSession}
+                {...(session.status === 'lost' && hostRunning === true
+                  ? {
+                      lost: {
+                        hostName: LOCAL_HOST_NAME,
+                        restoreReady:
+                          hostLink.lost === null &&
+                          (restoreOffer?.sessions.some((each) => each.id === session.id && each.blocked === null) ??
+                            false),
+                        onRestore: () => restoreSession(session.id)
+                      }
+                    }
+                  : {})}
               />
             </div>
           )
@@ -3732,6 +3774,9 @@ export function App(): JSX.Element {
           ) : null}
           {ownData.unfinished !== null ? (
             <OwnDataBanner reason={ownData.unfinished} onDismiss={ownData.dismiss} />
+          ) : null}
+          {hostRunning === true && hostLink.lost !== null ? (
+            <HostStoppedBanner hostName={LOCAL_HOST_NAME} restarting={hostLink.lost.restarts} />
           ) : null}
         </>
       }
