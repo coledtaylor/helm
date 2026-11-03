@@ -165,13 +165,4 @@ mod tests {
         assert_eq!(codes, [0, 3, 4]);
         assert_ne!(PresenceExit::Usage.code(), 0);
     }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn s13_on_linux_presence_is_unavailable_without_asking_anyone() {
-        assert!(matches!(
-            crate::platform::presence::Native.confirm(None, "a reason"),
-            Presence::Unavailable(_)
-        ));
-    }
 }

@@ -411,7 +411,9 @@ impl SessionHost {
                 return Err(err);
             }
         };
-        link.label(
+        // A keeper that has gone takes the program with it, which routing it
+        // below then reports as lost.
+        if let Err(err) = link.label(
             handle,
             Label {
                 kind,
@@ -421,7 +423,9 @@ impl SessionHost {
                 launch_folder: spec.launch_folder.clone(),
                 opened_by,
             },
-        );
+        ) {
+            log_line!("floti host: {err}");
+        }
         let session = Arc::new(Session {
             id,
             pid,

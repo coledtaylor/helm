@@ -14,3 +14,16 @@ impl PresenceCheck for Native {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn s13_on_linux_presence_is_unavailable_without_asking_anyone() {
+        assert!(matches!(
+            Native.confirm(None, "a reason"),
+            Presence::Unavailable(_)
+        ));
+    }
+}

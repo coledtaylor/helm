@@ -105,8 +105,13 @@ pub(crate) enum ToKeeper {
         cols: u16,
         rows: u16,
     },
-    /// What `handle` is, kept for the next host.
-    Label { handle: u64, label: Label },
+    /// What `handle` is, kept for the next host; answered with
+    /// [`FromKeeper::Labelled`] naming `request` once it is kept.
+    Label {
+        request: u64,
+        handle: u64,
+        label: Label,
+    },
     /// Keys typed into `handle`.
     Input { handle: u64, bytes: ByteBuf },
     /// `handle`'s terminal is now this size.
@@ -148,6 +153,8 @@ pub(crate) enum FromKeeper {
         request: u64,
         outcome: Result<Spawned, String>,
     },
+    /// The answer to [`ToKeeper::Label`]: the label is kept.
+    Labelled { request: u64 },
     /// Bytes `handle`'s program wrote, exactly as its pty gave them.
     Data { handle: u64, bytes: ByteBuf },
     /// `handle`'s program has ended. Nothing more comes for it.

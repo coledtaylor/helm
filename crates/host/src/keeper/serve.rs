@@ -331,8 +331,13 @@ where
                     }
                 }
             }
-            ToKeeper::Label { handle, label } => {
+            ToKeeper::Label {
+                request,
+                handle,
+                label,
+            } => {
                 lock(&keeper.labels).insert(handle, label);
+                let _ = out.send(FromKeeper::Labelled { request });
             }
             ToKeeper::Input { handle, bytes } => {
                 if let Some(program) = keeper.program(handle)

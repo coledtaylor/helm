@@ -102,6 +102,8 @@ pub struct KeeperLink {
     out: mpsc::UnboundedSender<ToKeeper>,
     routes: Mutex<HashMap<u64, Route>>,
     starts: Mutex<HashMap<u64, std_mpsc::Sender<std::result::Result<Spawned, String>>>>,
+    /// Labels sent and not yet answered, by request.
+    labels: Mutex<HashMap<u64, std_mpsc::Sender<()>>>,
     next_request: AtomicU64,
     state: Mutex<LinkState>,
     /// Signalled when the connection ends.
@@ -196,9 +198,27 @@ impl KeeperLink {
         }
     }
 
-    /// Tells the keeper what `handle` is, for the next host.
-    pub fn label(&self, handle: u64, label: Label) {
-        self.send(ToKeeper::Label { handle, label });
+    /// Tells the keeper what `handle` is, for the next host, and waits until
+    /// it has kept it. Only then may the host say the program started: a
+    /// host that dies after saying so leaves a keeper that knows what it
+    /// holds, and the next host takes it back rather than offering it.
+    pub fn label(&self, handle: u64, label: Label) -> Result<()> {
+        let request = self.next_request.fetch_add(1, Ordering::SeqCst);
+        let (answer, answered) = std_mpsc::channel();
+        lock(&self.labels).insert(request, answer);
+        if self.is_ended() {
+            lock(&self.labels).remove(&request);
+            return Err(gone());
+        }
+        self.send(ToKeeper::Label {
+            request,
+            handle,
+            label,
+        });
+        answered.recv_timeout(ANSWER_WAIT).map_err(|_| {
+            lock(&self.labels).remove(&request);
+            gone()
+        })
     }
 
     pub fn input(&self, handle: u64, bytes: &[u8]) -> std::io::Result<()> {
@@ -367,6 +387,11 @@ impl KeeperLink {
                     }
                 }
             }
+            FromKeeper::Labelled { request } => {
+                if let Some(answer) = lock(&self.labels).remove(&request) {
+                    let _ = answer.send(());
+                }
+            }
             FromKeeper::Bye => *lock(&self.bye) = true,
             FromKeeper::Hello { .. } | FromKeeper::Held { .. } | FromKeeper::Ready => {}
         }
@@ -377,6 +402,7 @@ impl KeeperLink {
     fn end(&self) {
         let was = std::mem::replace(&mut *lock(&self.state), LinkState::Ended);
         lock(&self.starts).clear();
+        lock(&self.labels).clear();
         let routed: Vec<Weak<dyn KeptTerminal>> = {
             let mut routes = lock(&self.routes);
             let routed = routes
@@ -426,6 +452,7 @@ async fn serve<S>(
         out,
         routes: Mutex::new(HashMap::new()),
         starts: Mutex::new(HashMap::new()),
+        labels: Mutex::new(HashMap::new()),
         next_request: AtomicU64::new(1),
         state: Mutex::new(LinkState::Open),
         ended: Condvar::new(),

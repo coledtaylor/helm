@@ -1135,6 +1135,33 @@ async fn operator(dirs: &TestDirs, endpoint: &Endpoint) -> TestClient {
     TestClient::over(connection, CAPABILITIES).await
 }
 
+/// Stops `host`, still waiting for its first admin, as an admin device paired
+/// for that in `folder` (stopping a host takes an admin), and revokes that
+/// device once the host has exited, so the next host over `dirs` waits for
+/// its first admin again. Its stdout and its log.
+async fn stop_as_passing_admin(
+    host: HostProcess,
+    dirs: &TestDirs,
+    endpoint: &Endpoint,
+    folder: &str,
+) -> (String, String) {
+    let registry = DeviceRegistry::in_data_folder(&dirs.data);
+    let mut keys = ClientKeys::open(&dirs.folder(folder)).unwrap();
+    registry
+        .pair(keys.device_key(), "a passing admin", Role::Admin)
+        .expect("pair the admin");
+    keys.pin_host(host_key_of(dirs).await)
+        .expect("pin the host key");
+    let connection = connect_local_when_up(&mut keys, endpoint, &dirs.data).await;
+    let stopped = host
+        .stop(TestClient::over(connection, CAPABILITIES).await)
+        .await;
+    registry
+        .revoke(&keys.device_key())
+        .expect("revoke the admin");
+    stopped
+}
+
 /// What the host sends a connection before it closes it, or its answer to
 /// the first message once all of that has come.
 async fn answer_or_close(stream: &mut LocalStream) -> Vec<u8> {
@@ -1540,7 +1567,8 @@ async fn enrolment_s7_a_host_started_again_replaces_its_code_and_refuses_the_old
     let endpoint = binary_endpoint(&dirs);
     let first = HostProcess::start_unpaired(&dirs);
     let old = enrolment_of(&dirs, None).await;
-    let (first_out, first_log) = first.stop(operator(&dirs, &endpoint).await).await;
+    let (first_out, first_log) =
+        stop_as_passing_admin(first, &dirs, &endpoint, "first stopper").await;
 
     let again = HostProcess::start_unpaired(&dirs);
     let new = enrolment_of(&dirs, Some(&old.code)).await;
@@ -1566,7 +1594,9 @@ async fn enrolment_s7_a_host_started_again_replaces_its_code_and_refuses_the_old
             .matches(&new.code)
     );
 
-    let (again_out, again_log) = again.stop(serving).await;
+    drop(serving);
+    let (again_out, again_log) =
+        stop_as_passing_admin(again, &dirs, &endpoint, "second stopper").await;
     assert!(
         again_log.contains(&format!("unknown device {}", stale.public().fingerprint())),
         "{again_log}"
