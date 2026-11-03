@@ -463,7 +463,11 @@ export function SessionHistory({
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1"
           >
             {sessions.length === 0 ? (
-              <EmptyList loading={loading} filtering={search !== '' || resumableOnly || project !== null} />
+              <EmptyList
+                loading={loading}
+                filtering={search !== '' || resumableOnly || project !== null}
+                remoteHost={remoteHostShown(hostChoice)}
+              />
             ) : groups ? (
               groups.map((group) => (
                 <Fragment key={group.path.toLowerCase()}>
@@ -706,12 +710,36 @@ function Segment({
   )
 }
 
-function EmptyList({ loading, filtering }: { loading: boolean; filtering: boolean }): JSX.Element {
+/**
+ * The host on another computer whose sessions are shown, or null for this PC.
+ * The empty list names it, so "this machine" never reads as This PC while
+ * another host's history is on screen.
+ */
+function remoteHostShown(hostChoice: HostChoice | undefined): string | null {
+  const shown = hostChoice?.hosts.find((each) => each.id === hostChoice.host)
+  return shown?.remote === true ? shown.name : null
+}
+
+function EmptyList({
+  loading,
+  filtering,
+  remoteHost
+}: {
+  loading: boolean
+  filtering: boolean
+  remoteHost: string | null
+}): JSX.Element {
   if (loading) return <p className="px-2 py-6 text-center text-[12px] text-fg-subtle">Reading&hellip;</p>
   if (filtering) return <p className="px-3 py-6 text-center text-[12px] text-fg-subtle">No session matches that.</p>
   return (
     <EmptyState size="list" name="history-list" icon={<HistoryIcon width={18} height={18} />} title="No sessions yet">
-      A Claude Code session started anywhere on this machine is listed here.
+      {remoteHost === null ? (
+        'A Claude Code session started anywhere on this machine is listed here.'
+      ) : (
+        <>
+          A Claude Code session started anywhere on <span className="font-mono">{remoteHost}</span> is listed here.
+        </>
+      )}
     </EmptyState>
   )
 }

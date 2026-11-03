@@ -361,4 +361,17 @@ describe('SessionHistory on more than one host', () => {
     renderHistory({}, [session('a')])
     expect(screen.queryByRole('radiogroup', { name: 'History host' })).toBeNull()
   })
+
+  it('names build-box, not this machine, in the empty list while build-box is shown', () => {
+    renderHistory({ hostChoice: { hosts: HOSTS, host: 'h1', onHostChange: vi.fn() } })
+    const empty = document.querySelector('[data-empty-state="history-list"]') as HTMLElement
+    expect(empty.textContent).toContain('A Claude Code session started anywhere on build-box is listed here.')
+    expect(empty.textContent).not.toContain('this machine')
+  })
+
+  it('keeps this machine in the empty list while This PC is shown', () => {
+    renderHistory({ hostChoice: { hosts: HOSTS, host: 'local', onHostChange: vi.fn() } })
+    const empty = document.querySelector('[data-empty-state="history-list"]') as HTMLElement
+    expect(empty.textContent).toContain('A Claude Code session started anywhere on this machine is listed here.')
+  })
 })
