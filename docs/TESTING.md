@@ -24,12 +24,19 @@ release, and a branch merges only once all three passed. The end-to-end tier
 runs locally only, never in CI.
 
 **While building, run only the tests for what changed**: the test file beside
-the code (`pnpm vitest run <file>`), the host tests whose names match
-(`cargo nextest run -p floti-host <filter>`), and `pnpm test:posix <file>`
-for code that differs by OS. A full suite is a regression check, and CI is
-where it runs: push the branch and read the results on all three OSes, rather
-than running it locally. Locally, a full suite runs only for what CI does not
-run, `pnpm test:e2e` for a change to a user workflow.
+the code (`pnpm vitest run <file>`), the host's tests in the one test binary
+that holds them (`cargo nextest run -p floti-host --lib -E 'test(<name>)'` for
+a module's tests, `--test <file>` for one of `crates/host/tests/*.rs`), and
+`pnpm test:posix <file>` for code that differs by OS. Each file in
+`crates/host/tests` is a binary of its own, and a filter only chooses which
+tests run after the build: `cargo nextest run -p floti-host <filter>` compiles
+and links every one of them first, which costs minutes and several gigabytes
+of memory. `cargo check -p <crate>` finds compile errors without linking
+anything. A test that passed is run again only once the code it covers has
+changed. A full suite is a regression check, and CI is where it runs: push the
+branch and read the results on all three OSes, rather than running it locally.
+Locally, a full suite runs only for what CI does not run, `pnpm test:e2e` for a
+change to a user workflow.
 
 The protocol crate generates JSON Schema and TypeScript into
 `crates/floti-protocol/generated/`. A test fails when those files are out of
@@ -247,7 +254,9 @@ pnpm --filter @helm/desktop exec node scripts/playwright.mjs test -c e2e panes  
 cargo nextest run --workspace      # every crate's tests; CI adds --profile ci
 cargo nextest run -p floti-protocol   # the protocol crate, its ipc.ts coverage and generated-file check included
 cargo nextest run -p floti-host    # the host, with the fake agents (Node on PATH)
-cargo nextest run -p floti-host <filter>   # the tests whose names contain <filter>
+cargo nextest run -p floti-host --lib -E 'test(<name>)'   # matching unit tests, building only the library's test binary
+cargo nextest run -p floti-host --test <file>             # one integration file in crates/host/tests, building only that binary
+cargo check -p floti-host --all-targets                   # compile errors in the host and its tests, linking nothing
 cargo test --doc --workspace       # the doctests, which nextest does not run
 cargo run -p floti-protocol --bin generate                      # rewrite the generated schema and TypeScript
 pnpm exec tsc -p crates/floti-protocol/generated/tsconfig.json  # the generated TypeScript under strict settings

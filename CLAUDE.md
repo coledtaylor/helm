@@ -54,6 +54,12 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   regression check, and it runs on CI: push the branch and read its results
   on Windows, macOS and Linux. Run a full suite locally only for what CI does
   not run (`pnpm test:e2e`).
+- A Rust test run names the binary that holds the tests: `--lib` for a
+  module's tests, `--test <file>` for one of `crates/host/tests/*.rs`. A
+  filter alone (`cargo nextest run -p floti-host <filter>`) builds and links
+  every test binary in the crate first. `cargo check` finds compile errors
+  without linking. A test that passed runs again only after the code it
+  covers changed.
 - `pnpm check` is the gate. CI runs it on Windows, macOS and Linux on every
   push, then builds. All three jobs are required: a failure on any one fails
   the run and stops the release, and a branch merges only once all three
