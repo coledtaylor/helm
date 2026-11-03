@@ -2,7 +2,8 @@
 //! the protocol between its standard input and output and a real host's
 //! local socket, and `floti bridge` running a transport (the fake `ssh`, or
 //! a custom command) with `floti connect` as its last argument, the handshake
-//! crossing it, and pairing through it.
+//! crossing it, and a client with nothing pinned learning the host's key
+//! through it.
 //!
 //! No test reaches another computer or a real ssh: the fake transports in
 //! `test/fake-ssh/` run the line they are given on this computer, in the
@@ -22,12 +23,9 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
-use floti_host::bridge::{
-    CONNECT_LINE, HOST_KEY_LINE, PAIRING_LINE_PREFIX, Transport, remote_floti_problem,
-};
+use floti_host::bridge::{CONNECT_LINE, HOST_KEY_LINE, Transport, remote_floti_problem};
 use floti_host::client::{ClientError, ClientKeys, DEVICE_KEY_FILE, PINNED_HOST_FILE, duplex};
 use floti_host::connect::NO_HOST_LINE;
-use floti_host::devices::{DeviceRegistry, Role};
 use floti_host::fake_agent;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use floti_host::platform::socket::{
@@ -104,14 +102,11 @@ impl World {
             .expect("the host made its key")
     }
 
-    /// A client folder named `name` whose device the host has paired, as an
-    /// operator, and which has pinned the host's key.
-    fn paired_folder(&self, name: &str) -> PathBuf {
+    /// A client folder named `name`, with a device key the host has never
+    /// seen, which has pinned the host's key.
+    fn pinned_folder(&self, name: &str) -> PathBuf {
         let folder = self.dirs.folder(name);
         let mut keys = ClientKeys::open(&folder).expect("set up the client's keys");
-        DeviceRegistry::in_data_folder(&self.dirs.data)
-            .pair(keys.device_key(), name, Role::Operator)
-            .expect("pair the device");
         keys.pin_host(self.host_key()).expect("pin the host key");
         folder
     }
@@ -208,20 +203,10 @@ fn custom_transport() -> Vec<String> {
     ]
 }
 
-/// `floti bridge <folder> [--pair <name>] -- <transport>...`.
-fn bridge_through(
-    dirs: &TestDirs,
-    runtime: &Path,
-    folder: &Path,
-    pair: Option<&str>,
-    transport: &[String],
-) -> Command {
+/// `floti bridge <folder> -- <transport>...`.
+fn bridge_through(dirs: &TestDirs, runtime: &Path, folder: &Path, transport: &[String]) -> Command {
     let mut command = floti_command(dirs, runtime);
-    command.arg("bridge").arg(folder);
-    if let Some(name) = pair {
-        command.args(["--pair", name]);
-    }
-    command.arg("--").args(transport);
+    command.arg("bridge").arg(folder).arg("--").args(transport);
     command
 }
 
@@ -328,6 +313,7 @@ impl Bridge {
             client: ClientInfo {
                 name: "a remote test".to_owned(),
                 kind: ClientKind::Desktop,
+                device_name: None,
             },
             capabilities: vec!["terminal".to_owned()],
         }));
@@ -374,23 +360,6 @@ impl Bridge {
             {
                 bytes.extend_from_slice(&data.data.0);
             }
-        }
-    }
-
-    /// The first line on the bridge's standard error that `wanted` accepts,
-    /// once it has written it.
-    async fn stderr_line_where(&self, wanted: impl Fn(&str) -> bool) -> String {
-        let deadline = Instant::now() + PATIENCE;
-        loop {
-            let said = String::from_utf8_lossy(&self.stderr.lock().unwrap()).into_owned();
-            if let Some(line) = said.lines().find(|line| wanted(line)) {
-                return line.to_owned();
-            }
-            assert!(
-                Instant::now() < deadline,
-                "the bridge wrote no such line within {PATIENCE:?}: {said:?}"
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
@@ -650,7 +619,7 @@ async fn s1_floti_connect_carries_every_byte_unchanged_and_the_client_across_it_
  {
     let world = World::start();
     let dirs = &world.dirs;
-    let folder = world.paired_folder("a laptop");
+    let folder = world.pinned_folder("a laptop");
     let keys = ClientKeys::open(&folder).unwrap();
     let (runtime, relay) = tapped_runtime(dirs);
     let mut command = floti_command(dirs, &runtime);
@@ -703,7 +672,7 @@ async fn s1_a_host_that_does_not_prove_the_pinned_key_across_floti_connect_gets_
  {
     let world = World::start();
     let dirs = &world.dirs;
-    let folder = world.paired_folder("a laptop");
+    let folder = world.pinned_folder("a laptop");
     let mut keys = ClientKeys::open(&folder).unwrap();
     let pinned = KeyPair::generate().unwrap().public();
     keys.pin_host(pinned).unwrap();
@@ -764,19 +733,18 @@ async fn floti_connect_host_key_prints_the_hosts_public_key_and_nothing_secret()
 }
 
 // ---------------------------------------------------------------------------
-// S3, S4: a paired device through ssh and through a custom command
+// S3, S4: a device through ssh and through a custom command
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
 async fn s3_through_the_users_ssh_the_device_lists_sessions_gets_a_screen_and_types_into_it() {
     let world = World::start();
     let dirs = &world.dirs;
-    let folder = world.paired_folder("a laptop");
+    let folder = world.pinned_folder("a laptop");
     let mut bridge = Bridge::spawn(bridge_through(
         dirs,
         &dirs.runtime,
         &folder,
-        None,
         &ssh_transport(),
     ));
     list_attach_and_type(&mut bridge, &dirs.folder("a project")).await;
@@ -810,12 +778,11 @@ async fn s4_a_custom_command_is_run_as_given_without_a_shell_with_floti_connect_
  {
     let world = World::start();
     let dirs = &world.dirs;
-    let folder = world.paired_folder("a laptop");
+    let folder = world.pinned_folder("a laptop");
     let mut bridge = Bridge::spawn(bridge_through(
         dirs,
         &dirs.runtime,
         &folder,
-        None,
         &custom_transport(),
     ));
     list_attach_and_type(&mut bridge, &dirs.folder("a project")).await;
@@ -831,127 +798,63 @@ async fn s4_a_custom_command_is_run_as_given_without_a_shell_with_floti_connect_
 }
 
 // ---------------------------------------------------------------------------
-// S5: pairing through a transport
+// S5: a new device learns the host's key through a transport
 // ---------------------------------------------------------------------------
 
-#[tokio::test(flavor = "multi_thread")]
-async fn s5_a_device_pairs_through_ssh_once_floti_devices_approve_runs_on_the_host_then_connects_as_itself()
- {
-    let world = World::start();
+/// Runs a bridge from a new client folder through `transport` with nothing
+/// pinned, starts a session, and connects again from the same folder: each
+/// run is served with nothing asked, and the first pins the key it learned.
+async fn learn_the_key_and_reconnect(world: &World, name: &str, transport: &[String]) {
     let dirs = &world.dirs;
-    let folder = dirs.root().join("a laptop");
-    let mut bridge = Bridge::spawn(bridge_through(
-        dirs,
-        &dirs.runtime,
-        &folder,
-        Some("a laptop"),
-        &ssh_transport(),
-    ));
-
-    // The code, and how long it waits, on one line for the desktop to show.
-    let line = bridge
-        .stderr_line_where(|line| line.starts_with(PAIRING_LINE_PREFIX))
-        .await;
-    let rest = &line[PAIRING_LINE_PREFIX.len()..];
-    let code = rest.split(',').next().unwrap().to_owned();
-    assert!(
-        rest.contains(", expires in ")
-            && line.ends_with(&format!(
-                "run \"floti devices approve {code}\" on the host."
-            )),
-        "{line}"
-    );
-    assert!(
-        !folder.join(PINNED_HOST_FILE).exists(),
-        "nothing is pinned before approval"
-    );
-
-    // Someone runs `floti devices approve <code>` in a terminal on the host.
-    let mut approve = floti_command(dirs, &dirs.runtime);
-    approve
-        .args(["devices", "approve", &code])
-        .stdin(Stdio::null());
-    let approved = run_floti(approve).await;
-    assert!(approved.status.success(), "{approved:?}");
-
-    // The bridge pins the key it learned through ssh, connects as itself and
-    // relays.
+    let folder = dirs.root().join(name);
+    let mut bridge = Bridge::spawn(bridge_through(dirs, &dirs.runtime, &folder, transport));
     list_attach_and_type(&mut bridge, &dirs.folder("a project")).await;
     let keys = ClientKeys::open(&folder).unwrap();
     assert_eq!(keys.pinned_host(), Some(world.host_key()));
-    let paired = DeviceRegistry::in_data_folder(&dirs.data)
-        .devices()
-        .unwrap()
-        .into_iter()
-        .find(|device| device.key == keys.device_key())
-        .expect("the device is paired");
-    assert_eq!(paired.name, "a laptop");
     bridge.close_stdin();
     let ended = bridge.ended().await;
     assert_eq!(ended.code, Some(0), "{ended:?}");
-    assert_eq!(ended.stderr.lines().collect::<Vec<_>>(), [line.as_str()]);
+    assert_eq!(ended.stderr, "", "{ended:?}");
 
-    // From then on it connects as itself, with no --pair and no code.
-    let mut again = Bridge::spawn(bridge_through(
-        dirs,
-        &dirs.runtime,
-        &folder,
-        None,
-        &ssh_transport(),
-    ));
+    let mut again = Bridge::spawn(bridge_through(dirs, &dirs.runtime, &folder, transport));
     again.welcomed().await;
     let listed = again.request::<SessionList>(1, &()).await;
-    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert!(!listed.is_empty(), "{listed:?}");
     again.close_stdin();
     let second = again.ended().await;
     assert_eq!(second.code, Some(0), "{second:?}");
     assert_eq!(second.stderr, "", "{second:?}");
+}
 
-    // Through ssh it learned the key, asked, then connected twice as itself.
-    let lines: Vec<String> = transport_runs(dirs)
+#[tokio::test(flavor = "multi_thread")]
+async fn s2_a_new_device_through_ssh_learns_the_host_key_pins_it_once_proven_and_is_served_with_nothing_asked()
+ {
+    let world = World::start();
+    learn_the_key_and_reconnect(&world, "a laptop", &ssh_transport()).await;
+    // Through ssh it learned the key once, then connected twice as itself.
+    let lines: Vec<String> = transport_runs(&world.dirs)
         .iter()
         .map(|run| run["line"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(
-        lines,
-        [HOST_KEY_LINE, CONNECT_LINE, CONNECT_LINE, CONNECT_LINE]
-    );
+    assert_eq!(lines, [HOST_KEY_LINE, CONNECT_LINE, CONNECT_LINE]);
     world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s5_a_request_to_pair_through_a_transport_that_expires_pins_nothing_and_exits_9() {
+async fn s2_a_new_device_through_a_custom_command_learns_the_host_key_and_is_served_with_nothing_asked()
+ {
     let world = World::start();
-    let dirs = &world.dirs;
-    let folder = dirs.root().join("a laptop");
-    let bridge = Bridge::spawn(bridge_through(
-        dirs,
-        &dirs.runtime,
-        &folder,
-        Some("a laptop"),
-        &custom_transport(),
-    ));
-    bridge
-        .stderr_line_where(|line| line.starts_with(PAIRING_LINE_PREFIX))
-        .await;
-
-    // The host's clock is stepped past the request's life, then the
-    // host is asked, which drops what has expired as it answers.
-    dirs.step_host_clock(floti_host::server::PAIRING_LIFETIME + Duration::from_secs(1));
-    let mut list = floti_command(dirs, &dirs.runtime);
-    list.arg("devices").stdin(Stdio::null());
-    let listed = run_floti(list).await;
-    assert!(listed.status.success(), "{listed:?}");
-
-    let ended = bridge.ended().await;
-    assert_eq!(ended.code, Some(9), "{ended:?}");
-    let lines: Vec<&str> = ended.stderr.lines().collect();
-    assert_eq!(lines.len(), 2, "{ended:?}");
-    assert!(
-        lines[1].starts_with("floti bridge: nobody approved"),
-        "{ended:?}"
+    learn_the_key_and_reconnect(&world, "a desktop", &custom_transport()).await;
+    let runs = transport_runs(&world.dirs);
+    let argv: Vec<Vec<String>> = runs.iter().map(argv_of).collect();
+    assert_eq!(
+        argv,
+        [
+            ["--via", "a pipe", HOST_KEY_LINE],
+            ["--via", "a pipe", CONNECT_LINE],
+            ["--via", "a pipe", CONNECT_LINE]
+        ]
     );
-    assert!(!folder.join(PINNED_HOST_FILE).exists());
     world.stop().await;
 }
 
@@ -960,20 +863,14 @@ async fn s5_a_host_that_does_not_prove_the_pinned_key_through_ssh_gets_only_the_
  {
     let world = World::start();
     let dirs = &world.dirs;
-    let folder = world.paired_folder("a laptop");
+    let folder = world.pinned_folder("a laptop");
     let pinned = KeyPair::generate().unwrap().public();
     ClientKeys::open(&folder).unwrap().pin_host(pinned).unwrap();
     let (runtime, relay) = tapped_runtime(dirs);
 
-    let ended = Bridge::spawn(bridge_through(
-        dirs,
-        &runtime,
-        &folder,
-        None,
-        &ssh_transport(),
-    ))
-    .ended()
-    .await;
+    let ended = Bridge::spawn(bridge_through(dirs, &runtime, &folder, &ssh_transport()))
+        .ended()
+        .await;
     assert_eq!(ended.code, Some(5), "{ended:?}");
     let lines: Vec<&str> = ended.stderr.lines().collect();
     assert_eq!(lines.len(), 1, "{ended:?}");
@@ -1003,8 +900,8 @@ async fn s5_a_host_that_does_not_prove_the_pinned_key_through_ssh_gets_only_the_
 async fn a_failing_ssh_ends_the_bridge_with_8_and_ssh_s_last_line_unedited() {
     let world = World::start();
     let dirs = &world.dirs;
-    let paired = world.paired_folder("a laptop");
-    let unpaired = dirs.root().join("a new laptop");
+    let pinned = world.pinned_folder("a laptop");
+    let unpinned = dirs.root().join("a new laptop");
     for (failure, says) in [
         (
             "denied",
@@ -1023,14 +920,14 @@ async fn a_failing_ssh_ends_the_bridge_with_8_and_ssh_s_last_line_unedited() {
             format!("{TARGET}: Permission denied (publickey,password)."),
         ),
     ] {
-        for (folder, pair) in [(&paired, None), (&unpaired, Some("a new laptop"))] {
-            let mut command = bridge_through(dirs, &dirs.runtime, folder, pair, &ssh_transport());
+        for folder in [&pinned, &unpinned] {
+            let mut command = bridge_through(dirs, &dirs.runtime, folder, &ssh_transport());
             command.env("FAKE_SSH_FAIL", failure);
             let ended = Bridge::spawn(command).ended().await;
             assert_ended_with_line(&ended, 8, &says);
         }
     }
-    assert!(!unpaired.join(PINNED_HOST_FILE).exists());
+    assert!(!unpinned.join(PINNED_HOST_FILE).exists());
     world.stop().await;
 }
 
@@ -1042,13 +939,12 @@ async fn with_no_host_running_there_the_bridge_exits_3_with_floti_connects_line(
         .unwrap()
         .pin_host(KeyPair::generate().unwrap().public())
         .unwrap();
-    let unpaired = dirs.root().join("a new laptop");
-    for (folder, pair) in [(&folder, None), (&unpaired, Some("a new laptop"))] {
+    let unpinned = dirs.root().join("a new laptop");
+    for folder in [&folder, &unpinned] {
         let ended = Bridge::spawn(bridge_through(
             &dirs,
             &dirs.runtime,
             folder,
-            pair,
             &ssh_transport(),
         ))
         .ended()
@@ -1070,7 +966,6 @@ async fn a_transport_that_cannot_be_started_ends_the_bridge_with_7() {
         &dirs,
         &dirs.runtime,
         &folder,
-        None,
         &[missing.to_string_lossy().into_owned()],
     ))
     .ended()
@@ -1082,23 +977,6 @@ async fn a_transport_that_cannot_be_started_ends_the_bridge_with_7() {
         lines[0].starts_with("floti bridge: could not run "),
         "{ended:?}"
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn an_unpaired_client_given_no_pair_name_exits_4_without_running_the_transport() {
-    let dirs = TestDirs::new();
-    let folder = dirs.root().join("a laptop");
-    let ended = Bridge::spawn(bridge_through(
-        &dirs,
-        &dirs.runtime,
-        &folder,
-        None,
-        &ssh_transport(),
-    ))
-    .ended()
-    .await;
-    assert_eq!(ended.code, Some(4), "{ended:?}");
-    assert!(transport_runs(&dirs).is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,59 +1002,22 @@ fn files_under(folder: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     found
 }
 
-/// Pairs a new client folder through `transport` the way Helm does, with
-/// `--pair` on every run, approves it on the host, then connects again with
-/// `--pair` still given and the key pinned, and returns the folder.
-async fn pair_and_reconnect_as_helm_does(
-    world: &World,
-    name: &str,
-    transport: &[String],
-) -> PathBuf {
+/// Connects a new client folder through `transport` the way Helm does,
+/// learning the host's key the first time, then connects again with the key
+/// pinned, and returns the folder.
+async fn connect_twice_as_helm_does(world: &World, name: &str, transport: &[String]) -> PathBuf {
     let dirs = &world.dirs;
     let folder = dirs.root().join(name);
-    let mut pairing = Bridge::spawn(bridge_through(
-        dirs,
-        &dirs.runtime,
-        &folder,
-        Some(name),
-        transport,
-    ));
-    let line = pairing
-        .stderr_line_where(|line| line.starts_with(PAIRING_LINE_PREFIX))
-        .await;
-    let code = line[PAIRING_LINE_PREFIX.len()..]
-        .split(',')
-        .next()
-        .unwrap()
-        .to_owned();
-    let mut approve = floti_command(dirs, &dirs.runtime);
-    approve
-        .args(["devices", "approve", &code])
-        .stdin(Stdio::null());
-    let approved = run_floti(approve).await;
-    assert!(approved.status.success(), "{approved:?}");
-    pairing.welcomed().await;
-    pairing.close_stdin();
-    let paired = pairing.ended().await;
-    assert_eq!(paired.code, Some(0), "{paired:?}");
-
-    let mut again = Bridge::spawn(bridge_through(
-        dirs,
-        &dirs.runtime,
-        &folder,
-        Some(name),
-        transport,
-    ));
-    again.welcomed().await;
-    let listed = again.request::<SessionList>(1, &()).await;
-    assert!(listed.is_empty(), "{listed:?}");
-    again.close_stdin();
-    let ended = again.ended().await;
-    assert_eq!(ended.code, Some(0), "{ended:?}");
-    assert_eq!(
-        ended.stderr, "",
-        "a paired device asks nothing again: {ended:?}"
-    );
+    for _ in 0..2 {
+        let mut bridge = Bridge::spawn(bridge_through(dirs, &dirs.runtime, &folder, transport));
+        bridge.welcomed().await;
+        let listed = bridge.request::<SessionList>(1, &()).await;
+        assert!(listed.is_empty(), "{listed:?}");
+        bridge.close_stdin();
+        let ended = bridge.ended().await;
+        assert_eq!(ended.code, Some(0), "{ended:?}");
+        assert_eq!(ended.stderr, "", "nothing is asked: {ended:?}");
+    }
     folder
 }
 
@@ -1207,9 +1048,9 @@ async fn s7_through_ssh_and_a_custom_command_nothing_under_the_users_ssh_folder_
     }
     let before = files_under(&ssh);
 
-    let through_ssh = pair_and_reconnect_as_helm_does(&world, "a laptop", &ssh_transport()).await;
+    let through_ssh = connect_twice_as_helm_does(&world, "a laptop", &ssh_transport()).await;
     let through_command =
-        pair_and_reconnect_as_helm_does(&world, "a desktop", &custom_transport()).await;
+        connect_twice_as_helm_does(&world, "a desktop", &custom_transport()).await;
 
     // Nothing under ~/.ssh was written, added or removed.
     assert_eq!(files_under(&ssh), before);
@@ -1393,7 +1234,7 @@ async fn update_stop_on_a_computer_with_no_host_running_says_so_and_asks_nothing
 async fn where_the_login_path_has_no_floti_the_bridge_reaches_the_floti_it_names_by_full_path() {
     let world = World::start();
     let dirs = &world.dirs;
-    let folder = world.paired_folder("a laptop");
+    let folder = world.pinned_folder("a laptop");
     let floti = env!("CARGO_BIN_EXE_floti");
     let bridge_with = |named: Option<&str>| {
         let mut command = floti_command(dirs, &dirs.runtime);

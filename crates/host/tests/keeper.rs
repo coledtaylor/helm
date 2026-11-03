@@ -20,7 +20,7 @@ use floti_host::platform::process_tree::{Ending, Native as NativeTree, ProcessTr
 use floti_host::platform::socket::network_listeners;
 use floti_host::server::{HostConfig, HostRun};
 use floti_host::testkit::{
-    FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs, floti_exe, pair_test_device,
+    FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs, floti_exe, record_test_host,
 };
 use floti_protocol::EventChannel;
 use floti_protocol::Knowable;
@@ -64,7 +64,7 @@ impl KillableHost {
     }
 
     fn start_with(dirs: &TestDirs, agent: &FakeAgent, more: impl FnOnce(&mut Command)) -> Self {
-        pair_test_device(&dirs.floti_endpoint(), &dirs.data);
+        record_test_host(&dirs.floti_endpoint(), &dirs.data);
         let (log_var, log_dir) = agent.log_env();
         let mut command: Command = dirs.floti_command(env!("CARGO_BIN_EXE_floti"));
         command.arg("host").env(log_var, log_dir);
@@ -777,7 +777,7 @@ fn s11_a_host_dropped_without_a_stop_leaves_its_sessions_running_in_the_keeper()
         backends: vec![Arc::new(agent.backend(Vec::<&str>::new())) as Arc<dyn AgentBackend>],
         inherited_env: std::env::vars_os().collect(),
     };
-    pair_test_device(&dirs.floti_endpoint(), &dirs.data);
+    record_test_host(&dirs.floti_endpoint(), &dirs.data);
     let runtime = tokio::runtime::Runtime::new().expect("a runtime");
     let (session, pid) = runtime.block_on(async {
         let host = floti_host::server::Host::start(config()).expect("start the host");
@@ -825,7 +825,7 @@ async fn s8_a_reattached_session_ends_with_its_devices_quit_and_another_devices_
         .request::<SessionStart>(&start_request(&theirs))
         .await
         .unwrap();
-    let laptop = TestClient::pair_device(&endpoint, "a laptop", floti_host::devices::Role::Admin);
+    let laptop = TestClient::new_device();
     let mut quitting = TestClient::connect_device(&endpoint, &laptop, TERMINAL).await;
     let ended = quitting
         .request::<SessionStart>(&start_request(&mine))

@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
 use floti_host::client::ClientKeys;
-use floti_host::devices::{DeviceRegistry, Role};
 use floti_host::fake_agent;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use floti_host::server::{HostConfig, host_public_key, local_endpoint};
@@ -29,7 +28,7 @@ const TERMINAL: &[&str] = &["terminal"];
 const NOTHING_TO_END: i32 = 7;
 /// The status every client of the host ends with when no host answered.
 const NO_HOST: i32 = 3;
-/// The status when the client folder holds no paired client.
+/// The status when the client folder holds no client that has connected to a host.
 const NOT_PAIRED: i32 = 4;
 
 /// A host on `dirs`' folders, at the endpoint `floti` finds from them, whose
@@ -44,15 +43,11 @@ fn config(dirs: &TestDirs, agent: &FakeAgent) -> HostConfig {
     }
 }
 
-/// Helm's client folder, its device paired with the host on `dirs`' data
-/// folder as an admin, as Helm's own is once it has enrolled. The host key
-/// is pinned once the host has made one ([`pin_host`]).
+/// Helm's client folder, with a device key of its own. The host key is
+/// pinned once the host has made one ([`pin_host`]).
 fn helm_client(dirs: &TestDirs) -> PathBuf {
     let folder = dirs.root().join("Helm data").join("host-client");
-    let keys = ClientKeys::open(&folder).expect("set up Helm's client keys");
-    DeviceRegistry::in_data_folder(&dirs.data)
-        .pair(keys.device_key(), "Helm", Role::Admin)
-        .expect("pair Helm's device");
+    ClientKeys::open(&folder).expect("set up Helm's client keys");
     folder
 }
 
@@ -215,7 +210,7 @@ async fn with_no_host_running_it_asks_nothing_and_says_none_answered() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn with_no_paired_client_it_asks_nothing_and_makes_no_client_folder() {
+async fn with_no_client_folder_it_asks_nothing_and_makes_no_client_folder() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let host = RunningHost::start(config(&dirs, &agent));

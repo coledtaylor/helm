@@ -24,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 use super::manifest::Manifest;
-use crate::devices::Role;
 use crate::session::ClientId;
 
 /// A bridge call that failed for a reason the plugin is told.
@@ -159,8 +158,8 @@ impl fmt::Debug for CancelToken {
 pub enum CallOrigin {
     /// The host's engine.
     Host,
-    /// A page `client` frames, on a device paired as `role`.
-    Client { client: ClientId, role: Role },
+    /// A page `client` frames.
+    Client { client: ClientId },
 }
 
 /// What a method knows about the call it is answering.

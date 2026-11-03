@@ -9,8 +9,8 @@
 //! and when it started ([`start_line`]).
 //!
 //! What the host writes there names a key by its fingerprint and never holds
-//! a private key, an enrolment or pairing code, a credential, a prompt or
-//! anything a session reads or writes.
+//! a private key, a credential, a prompt or anything a session reads or
+//! writes.
 //!
 //! It is bounded. Once the host holds its data folder, a log past
 //! [`LOG_LIMIT`] becomes `host.log.1`, the one before it `host.log.2`, and so

@@ -192,13 +192,6 @@ releasesUrl: string, };
  */
 export type AppMode = "dev" | "dev-live" | "portable" | "installed";
 
-export type ApproveDevice = { 
-/**
- * The code the device shows, as typed: case, spaces and hyphens do not
- * matter.
- */
-code: string, role: DeviceRole, };
-
 /**
  * One message of an archived conversation.
  */
@@ -307,6 +300,46 @@ export type ArtifactHeader = { name: string, value: string, };
  * Where a frame may load an HTML artifact from.
  */
 export type ArtifactLink = { url: string, token: string, };
+
+/**
+ * A device holding at least one open connection to the host.
+ */
+export type AttachedDevice = { 
+/**
+ * Its key's fingerprint, as `welcome.device` gives each connection its
+ * own.
+ */
+fingerprint: string, 
+/**
+ * The name its client gave in `hello` when it attached: its device name,
+ * or the client's own name when it gave none.
+ */
+name: string, 
+/**
+ * Whether it is connected from another computer, through `floti
+ * connect`, rather than on the host's own.
+ */
+away: boolean, 
+/**
+ * When its first open connection was welcomed, by the host's clock, as
+ * RFC 3339 text.
+ */
+since: string, 
+/**
+ * How many connections it holds open: its window, its other pages and
+ * its sessions' screens each hold one.
+ */
+connections: number, };
+
+/**
+ * Every device attached to the host now.
+ */
+export type AttachedDevices = { 
+/**
+ * Each attached device once, however many connections it holds, in the
+ * order they attached.
+ */
+devices: Array<AttachedDevice>, };
 
 /**
  * One backend the host can run, and the features it declares.
@@ -554,7 +587,13 @@ export type ClientInfo = {
 /**
  * What the client calls itself, such as "Floti desktop 3.0.0".
  */
-name: string, kind: ClientKind, };
+name: string, kind: ClientKind, 
+/**
+ * The name of the device it runs on, such as the computer's name, shown
+ * in every client's list of attached devices. Absent, the list shows
+ * `name`.
+ */
+deviceName?: string, };
 
 export type ClientKind = "desktop" | "tui" | "phone" | "website" | "other";
 
@@ -887,15 +926,6 @@ label: string,
  */
 args: Array<string>, };
 
-export type DeviceListing = { paired: Array<PairedDevice>, waiting: Array<WaitingDevice>, };
-
-/**
- * What a device may do with the host. Each role can do all the one before
- * it can: a viewer sees, an operator also types into and runs sessions, an
- * admin also pairs and revokes devices and changes the host.
- */
-export type DeviceRole = "viewer" | "operator" | "admin";
-
 /**
  * A running session a device started.
  */
@@ -908,6 +938,12 @@ id: number,
  * What its tab says: its label, or its name when it has none.
  */
 name: string, };
+
+export type DisconnectDevice = { 
+/**
+ * The device's key's fingerprint, as `devices:attached` gives it.
+ */
+fingerprint: string, };
 
 /**
  * A root that could not be read, and why.
@@ -1052,7 +1088,7 @@ cwd: string | null, overlays: Array<string>, };
  */
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
-export type ErrorCode = "unknownChannel" | "notARequest" | "badPayload" | "unavailable" | "failed" | "missingCapability" | "notAnEvent" | "notPermitted" | "presenceNeeded" | "other";
+export type ErrorCode = "unknownChannel" | "notARequest" | "badPayload" | "unavailable" | "failed" | "missingCapability" | "notAnEvent" | "other";
 
 /**
  * A request that failed. The connection stays open.
@@ -1721,7 +1757,7 @@ snapshotId: number | null, };
 
 export type McpScope = "local" | "user" | "project";
 
-export type Message = { "type": "hello" } & Hello | { "type": "welcome" } & Welcome | { "type": "refused" } & Refused | { "type": "pairing" } & Pairing | { "type": "request" } & Request | { "type": "response" } & Response | { "type": "error" } & ErrorReply | { "type": "subscribe" } & Subscribe | { "type": "unsubscribe" } & Unsubscribe | { "type": "subscriptionError" } & SubscriptionError | { "type": "snapshot" } & Snapshot | { "type": "event" } & Event | { "type": "streamOpen" } & StreamOpen | { "type": "streamData" } & StreamData | { "type": "streamCredit" } & StreamCredit | { "type": "streamClose" } & StreamClose;
+export type Message = { "type": "hello" } & Hello | { "type": "welcome" } & Welcome | { "type": "refused" } & Refused | { "type": "request" } & Request | { "type": "response" } & Response | { "type": "error" } & ErrorReply | { "type": "subscribe" } & Subscribe | { "type": "unsubscribe" } & Unsubscribe | { "type": "subscriptionError" } & SubscriptionError | { "type": "snapshot" } & Snapshot | { "type": "event" } & Event | { "type": "streamOpen" } & StreamOpen | { "type": "streamData" } & StreamData | { "type": "streamCredit" } & StreamCredit | { "type": "streamClose" } & StreamClose;
 
 /**
  * Milliseconds, as a number that may have a fraction: a file's modification
@@ -1733,51 +1769,6 @@ export type Message = { "type": "hello" } & Hello | { "type": "welcome" } & Welc
 export type Millis = number;
 
 export type MovedFile = { from: string, to: string, };
-
-/**
- * A device in the host's registry.
- */
-export type PairedDevice = { 
-/**
- * The name it was paired under: the name it gave when it asked.
- */
-name: string, role: DeviceRole, 
-/**
- * When it was paired, as RFC 3339 text.
- */
-pairedAt: string, 
-/**
- * When it was revoked, as RFC 3339 text; absent while it is not.
- */
-revokedAt: string | null, 
-/**
- * Its key's fingerprint.
- */
-fingerprint: string, };
-
-/**
- * Where a device's request to pair stands, sent to the device that asked
- * and to no one else.
- */
-export type Pairing = { "state": "waiting" } & PairingWaiting | { "state": "approved" } & PairingApproved | { "state": "expired" };
-
-export type PairingApproved = { 
-/**
- * The role the device is paired with.
- */
-role: DeviceRole, };
-
-export type PairingWaiting = { 
-/**
- * The code the device shows, for `floti devices approve <code>` on the
- * host's computer: eight characters, none of them easily taken for
- * another.
- */
-code: string, 
-/**
- * How long the request waits for approval from now.
- */
-expiresInSeconds: number, };
 
 /**
  * How a session asks before it acts. The values are the ones the launcher
@@ -2572,13 +2563,6 @@ export type ResumedSession = { session: SessionRecord,
  */
 history: HistorySession, };
 
-export type RevokeDevice = { 
-/**
- * The device's key's fingerprint, as `devices:list` and `floti
- * devices` give it.
- */
-fingerprint: string, };
-
 /**
  * A scan root.
  */
@@ -3281,27 +3265,6 @@ dollars: number,
 messages: number, };
 
 /**
- * A request to pair that waits for approval.
- */
-export type WaitingDevice = { 
-/**
- * The name the device gave in its `hello`.
- */
-name: string, 
-/**
- * What kind of client it said it is.
- */
-kind: ClientKind, 
-/**
- * Its key's fingerprint.
- */
-fingerprint: string, 
-/**
- * How long the request waits before it expires.
- */
-secondsLeft: number, };
-
-/**
  * Which file the client's editor has open, or null to release the watch.
  */
 export type WatchConfigRequest = { path: string | null, };
@@ -3328,20 +3291,13 @@ capabilities: Array<Capability>,
  */
 backends: Array<BackendDescriptor>, 
 /**
- * The role this connection's device is paired with; absent for a
- * connection that is not a paired device's (the host's own shell).
- */
-role?: DeviceRole, 
-/**
  * Whether this connection reached the host from another computer,
- * through `floti connect`: an admin action on it needs presence
- * (`devices:presence`) within the last five minutes.
+ * through `floti connect`.
  */
 away?: boolean, 
 /**
- * The fingerprint of the device this connection proved, as `devices:list`
- * names it, so a client can tell its own row; absent for the host's own
- * shell.
+ * The fingerprint of the device this connection proved, as
+ * `devices:attached` names it, so a client can tell its own row.
  */
 device?: string, };
 
@@ -3440,10 +3396,7 @@ export interface RequestChannels {
   "content:snapshots": { request: ScopedFile; response: Array<ConfigSnapshotMeta>; capability: "files" };
   "content:wikilink": { request: WikilinkRequest; response: WikilinkTarget; capability: "files" };
   "content:write": { request: WriteConfigRequest; response: WriteConfigResult; capability: "files" };
-  "devices:approve": { request: ApproveDevice; response: PairedDevice; capability: null };
-  "devices:list": { request: null; response: DeviceListing; capability: null };
-  "devices:presence": { request: null; response: null; capability: null };
-  "devices:revoke": { request: RevokeDevice; response: PairedDevice; capability: null };
+  "devices:disconnect": { request: DisconnectDevice; response: null; capability: null };
   "discovery:cached": { request: null; response: Array<CachedProject>; capability: null };
   "discovery:scan": { request: ScanRequest; response: DiscoveryResult; capability: null };
   "editor:highlight": { request: SourceToRender; response: EditorHighlight; capability: null };
@@ -3534,6 +3487,7 @@ export interface EventChannels {
   "agentPlugin:cancel": { event: AgentPluginCallCancel; snapshot: null; capability: null };
   "archive:changed": { event: ArchiveStats; snapshot: ArchiveStats; capability: null };
   "config:externalChange": { event: ConfigExternalChange; snapshot: null; capability: null };
+  "devices:attached": { event: AttachedDevices; snapshot: AttachedDevices; capability: null };
   "discovery:updated": { event: DiscoveryResult; snapshot: DiscoveryResult | null; capability: null };
   "files:changed": { event: FilesChange; snapshot: null; capability: "files" };
   "git:updated": { event: { [key in string]?: GitState | null }; snapshot: { [key in string]?: GitState | null }; capability: null };
@@ -3611,10 +3565,8 @@ export const CHANNELS = [
   { name: "content:snapshots", kind: "request", capability: "files" },
   { name: "content:wikilink", kind: "request", capability: "files" },
   { name: "content:write", kind: "request", capability: "files" },
-  { name: "devices:approve", kind: "request", capability: null },
-  { name: "devices:list", kind: "request", capability: null },
-  { name: "devices:presence", kind: "request", capability: null },
-  { name: "devices:revoke", kind: "request", capability: null },
+  { name: "devices:attached", kind: "event", capability: null },
+  { name: "devices:disconnect", kind: "request", capability: null },
   { name: "discovery:cached", kind: "request", capability: null },
   { name: "discovery:scan", kind: "request", capability: null },
   { name: "discovery:updated", kind: "event", capability: null },

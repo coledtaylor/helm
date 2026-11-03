@@ -30,7 +30,6 @@ impl HostIdentity {
                     host_version: self.host_version.clone(),
                     capabilities: capabilities.to_vec(),
                     backends: self.backends.clone(),
-                    role: None,
                     away: false,
                     device: None,
                 };

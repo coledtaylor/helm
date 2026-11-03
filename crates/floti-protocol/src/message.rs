@@ -11,11 +11,6 @@
 //! `hello` and `refused` are frozen across majors: their fields are never
 //! renamed or removed, so any client, however old, can read why it was
 //! refused.
-//!
-//! A device that asked to pair in its handshake is not welcomed: the host
-//! answers its `hello` with `pairing`, saying the code to show, and later
-//! with `pairing` again once the request is approved or has expired. Nothing
-//! else crosses that connection.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -24,7 +19,6 @@ use ts_rs::TS;
 use crate::backend::{BackendDescriptor, BackendId, Support, feature_table};
 use crate::bytes::Bytes;
 use crate::capability::Capability;
-use crate::channels::devices::DeviceRole;
 use crate::version::{ProtocolVersion, UpdateSide};
 
 /// A channel payload before it is decoded against the channel's type.
@@ -36,7 +30,6 @@ pub enum Message {
     Hello(Hello),
     Welcome(Welcome),
     Refused(Refused),
-    Pairing(Pairing),
     Request(Request),
     Response(Response),
     Error(ErrorReply),
@@ -67,6 +60,12 @@ pub struct ClientInfo {
     /// What the client calls itself, such as "Floti desktop 3.0.0".
     pub name: String,
     pub kind: ClientKind,
+    /// The name of the device it runs on, such as the computer's name, shown
+    /// in every client's list of attached devices. Absent, the list shows
+    /// `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub device_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -94,20 +93,13 @@ pub struct Welcome {
     pub capabilities: Vec<Capability>,
     /// Every backend the host can run, with the features it declares.
     pub backends: Vec<BackendDescriptor>,
-    /// The role this connection's device is paired with; absent for a
-    /// connection that is not a paired device's (the host's own shell).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub role: Option<DeviceRole>,
     /// Whether this connection reached the host from another computer,
-    /// through `floti connect`: an admin action on it needs presence
-    /// (`devices:presence`) within the last five minutes.
+    /// through `floti connect`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(optional, as = "Option<bool>")]
     pub away: bool,
-    /// The fingerprint of the device this connection proved, as `devices:list`
-    /// names it, so a client can tell its own row; absent for the host's own
-    /// shell.
+    /// The fingerprint of the device this connection proved, as
+    /// `devices:attached` names it, so a client can tell its own row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub device: Option<String>,
@@ -145,41 +137,6 @@ pub struct Refused {
     pub update: UpdateSide,
     /// A sentence naming both versions and which side to update.
     pub message: String,
-}
-
-/// Where a device's request to pair stands, sent to the device that asked
-/// and to no one else.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(tag = "state", rename_all = "camelCase")]
-pub enum Pairing {
-    /// The answer to its `hello`: the request waits for someone on the
-    /// host's computer to approve it.
-    Waiting(PairingWaiting),
-    /// The request was approved: the device is paired, and connects as
-    /// itself from now on. The host closes the connection after this.
-    Approved(PairingApproved),
-    /// Nobody approved it in time. The host closes the connection after
-    /// this; the device may ask again.
-    Expired,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PairingWaiting {
-    /// The code the device shows, for `floti devices approve <code>` on the
-    /// host's computer: eight characters, none of them easily taken for
-    /// another.
-    pub code: String,
-    /// How long the request waits for approval from now.
-    #[ts(type = "number")]
-    pub expires_in_seconds: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PairingApproved {
-    /// The role the device is paired with.
-    pub role: DeviceRole,
 }
 
 /// A call on a request channel.
@@ -237,13 +194,6 @@ pub enum ErrorCode {
     MissingCapability,
     /// A subscription names a channel that is not an event channel.
     NotAnEvent,
-    /// The device's role does not allow it; the message says what it takes
-    /// and what the device is paired as.
-    NotPermitted,
-    /// An admin action from another computer, with no presence confirmed on
-    /// that device in the last five minutes. Confirm presence
-    /// (`devices:presence`) and ask again.
-    PresenceNeeded,
     /// A code this version does not know.
     #[serde(other)]
     Other,

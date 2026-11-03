@@ -19,7 +19,7 @@ use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::Endpoint;
 use floti_host::server::HostConfig;
 use floti_host::testkit::{
-    FakeAgent, GitRepo, HostProcess, PATIENCE, RunningHost, TestClient, TestDirs, pair_test_device,
+    FakeAgent, GitRepo, HostProcess, PATIENCE, RunningHost, TestClient, TestDirs, record_test_host,
 };
 use floti_protocol::channel::{EventChannel, from_payload, to_payload};
 use floti_protocol::channels::agent_browser::{
@@ -2590,7 +2590,7 @@ async fn s6_a_session_whose_port_is_taken_runs_on_without_tools_and_the_log_says
     // The next host is a `floti host` process, whose standard error is its
     // log.
     let endpoint = world.dirs.floti_endpoint();
-    pair_test_device(&endpoint, &world.dirs.data);
+    record_test_host(&endpoint, &world.dirs.data);
     let mut command = world.dirs.floti_command(env!("CARGO_BIN_EXE_floti"));
     command.arg("host");
     let second = HostProcess::spawn(command);

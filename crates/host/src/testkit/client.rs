@@ -1,6 +1,6 @@
 //! A protocol client for the host's tests: it connects on the local socket,
-//! runs the Noise handshake as the testkit's device, paired with the host and
-//! pinned to its key, says `hello`, makes typed requests and reads session
+//! runs the Noise handshake as the testkit's device, pinned to the host's key,
+//! which is all it takes to be served, says `hello`, makes typed requests and reads session
 //! terminals, granting credit back as it reads, as a real client would.
 
 use std::collections::{HashMap, VecDeque};
@@ -15,7 +15,7 @@ use floti_protocol::message::{
 use floti_protocol::{Bytes, Message, PROTOCOL_VERSION, Payload, StreamChannel};
 use tokio::time::Instant;
 
-use crate::client::{self, ClientError, ClientKeys, Connection, PairingRequest};
+use crate::client::{self, ClientError, Connection};
 use crate::platform::socket::Endpoint;
 use crate::server::host_public_key;
 
@@ -40,24 +40,19 @@ pub struct TestClient {
 }
 
 impl TestClient {
-    /// Connects to the host at `endpoint` as the testkit's device, paired
-    /// with that host and pinned to its key, and is welcomed with
+    /// Connects to the host at `endpoint` as the testkit's device, pinned to
+    /// that host's key, and is welcomed with
     /// `capabilities`, retrying while the host is still starting.
     ///
     /// The host is the one [`RunningHost`](super::RunningHost) started, or
     /// one whose endpoint came from [`TestDirs::endpoint`](super::TestDirs)
-    /// or was named to [`pair_test_device`](super::pair_test_device).
+    /// or was named to [`record_test_host`](super::record_test_host).
     pub async fn connect(endpoint: &Endpoint, capabilities: &[&str]) -> Self {
         let data = super::data_folder_of(endpoint);
         let deadline = Instant::now() + PATIENCE;
-        let mut paired = false;
         let connection = loop {
             let waited = match host_public_key(&data) {
                 Ok(Some(host)) => {
-                    if !paired {
-                        super::pair_into(&data);
-                        paired = true;
-                    }
                     match client::connect(endpoint, super::test_device(), &host).await {
                         Ok(connection) => break connection,
                         Err(err @ ClientError::Unreachable { .. }) => err.to_string(),
@@ -79,59 +74,51 @@ impl TestClient {
     }
 
     /// Connects to the running host at `endpoint` as a new device of its
-    /// own, paired as `name` with `role`, and is welcomed with
-    /// `capabilities`: for a test of what a device that is not an admin may
-    /// do. The host must already be answering, as it is once a
-    /// [`connect`](Self::connect) to it has returned.
-    pub async fn connect_as(
-        endpoint: &Endpoint,
-        name: &str,
-        role: crate::devices::Role,
-        capabilities: &[&str],
-    ) -> Self {
-        let device = Self::pair_device(endpoint, name, role);
-        Self::connect_device(endpoint, &device, capabilities).await
+    /// own, a key the host has never seen, named `name` in its `hello`, and
+    /// is welcomed with `capabilities`. The host must already be answering,
+    /// as it is once a [`connect`](Self::connect) to it has returned.
+    pub async fn connect_as(endpoint: &Endpoint, name: &str, capabilities: &[&str]) -> Self {
+        let device = Self::new_device();
+        let connection = Self::handshake(endpoint, &device).await;
+        Self::over_named(connection, Some(name), capabilities).await
     }
 
-    /// A new device key, paired with the host at `endpoint` as `name` with
-    /// `role`: for a test that connects as the same device more than once.
-    pub fn pair_device(
+    /// A new device key, which no host has seen: for a test that connects
+    /// as the same device more than once.
+    pub fn new_device() -> floti_protocol::noise::KeyPair {
+        floti_protocol::noise::KeyPair::generate().expect("make a device key")
+    }
+
+    /// The handshake with the running host at `endpoint` as `device`,
+    /// holding the host to the key in its data folder.
+    pub async fn handshake(
         endpoint: &Endpoint,
-        name: &str,
-        role: crate::devices::Role,
-    ) -> floti_protocol::noise::KeyPair {
+        device: &floti_protocol::noise::KeyPair,
+    ) -> Connection {
         let data = super::data_folder_of(endpoint);
-        let device = floti_protocol::noise::KeyPair::generate().expect("make a device key");
-        crate::devices::DeviceRegistry::in_data_folder(&data)
-            .pair(device.public(), name, role)
-            .unwrap_or_else(|err| panic!("pair {name} with the host: {err}"));
-        device
+        let host = host_public_key(&data)
+            .expect("read the host's key")
+            .expect("the host has a key");
+        client::connect(endpoint, device, &host)
+            .await
+            .unwrap_or_else(|err| panic!("the host at {endpoint} did not let the device in: {err}"))
     }
 
-    /// Connects to the running host at `endpoint` as `device`, which
-    /// [`Self::pair_device`] paired with it, and is welcomed with
-    /// `capabilities`.
+    /// Connects to the running host at `endpoint` as `device` and is
+    /// welcomed with `capabilities`.
     pub async fn connect_device(
         endpoint: &Endpoint,
         device: &floti_protocol::noise::KeyPair,
         capabilities: &[&str],
     ) -> Self {
-        let data = super::data_folder_of(endpoint);
-        let host = host_public_key(&data)
-            .expect("read the host's key")
-            .expect("the host has a key");
-        let connection = client::connect(endpoint, device, &host)
-            .await
-            .unwrap_or_else(|err| {
-                panic!("the host at {endpoint} did not let the device in: {err}")
-            });
+        let connection = Self::handshake(endpoint, device).await;
         Self::over(connection, capabilities).await
     }
 
     /// Connects to the running host at `endpoint` as `device` through its
     /// relay endpoint, as `floti connect` does for a client on another
     /// computer, and is welcomed with `capabilities`: the host takes it as
-    /// away.
+    /// on another computer.
     pub async fn connect_device_away(
         endpoint: &Endpoint,
         device: &floti_protocol::noise::KeyPair,
@@ -148,38 +135,19 @@ impl TestClient {
         Self::over(connection, capabilities).await
     }
 
-    /// Asks the host at `endpoint` to pair the device whose keys are `keys`,
-    /// named `name`, holding the host to the key in its data folder, and
-    /// hands back the waiting request with the code to show; retries while
-    /// the host is still starting.
-    pub async fn ask_to_pair(
-        keys: &ClientKeys,
-        endpoint: &Endpoint,
-        name: &str,
-        kind: ClientKind,
-    ) -> PairingRequest {
-        let data = super::data_folder_of(endpoint);
-        let deadline = Instant::now() + PATIENCE;
-        loop {
-            let waited = match keys.ask_local_to_pair(endpoint, &data, name, kind).await {
-                Ok(request) => return request,
-                Err(err @ ClientError::Unreachable { .. }) => err.to_string(),
-                Err(err) => {
-                    panic!("the host at {endpoint} did not take the request to pair: {err}")
-                }
-            };
-            assert!(
-                Instant::now() < deadline,
-                "no host took the request to pair at {endpoint} within {PATIENCE:?}: {waited}"
-            );
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-
     /// Says `hello` on `connection`, a handshake already done, and is
     /// welcomed with `capabilities`: for a test that connects as a device
     /// of its own.
     pub async fn over(connection: Connection, capabilities: &[&str]) -> Self {
+        Self::over_named(connection, None, capabilities).await
+    }
+
+    /// [`Self::over`], giving `device_name` in its `hello`.
+    pub async fn over_named(
+        connection: Connection,
+        device_name: Option<&str>,
+        capabilities: &[&str],
+    ) -> Self {
         let mut client = Self {
             connection,
             next_request: 1,
@@ -192,7 +160,6 @@ impl TestClient {
                 host_version: String::new(),
                 capabilities: Vec::new(),
                 backends: Vec::new(),
-                role: None,
                 away: false,
                 device: None,
             },
@@ -203,6 +170,7 @@ impl TestClient {
                 client: ClientInfo {
                     name: "floti host tests".to_owned(),
                     kind: ClientKind::Tui,
+                    device_name: device_name.map(str::to_owned),
                 },
                 capabilities: capabilities.iter().map(|name| (*name).to_owned()).collect(),
             }))

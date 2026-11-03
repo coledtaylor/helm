@@ -22,6 +22,7 @@ fn hello(major: u16, minor: u16) -> Hello {
         client: ClientInfo {
             name: "test client".into(),
             kind: ClientKind::Tui,
+            device_name: None,
         },
         capabilities: vec!["terminal".into()],
     }

@@ -58,7 +58,7 @@ impl World {
     fn ask<C: RequestChannel>(&self, request: &C::Request) -> Result<C::Response, String> {
         let mut router = Router::new(&CATALOGUE, CapabilitySet::default());
         self.features
-            .requests(Caller::admin(ClientId(1)), &mut router);
+            .requests(Caller::new(ClientId(1)), &mut router);
         let answer = router.dispatch(&Request {
             id: 7,
             channel: C::NAME.to_owned(),

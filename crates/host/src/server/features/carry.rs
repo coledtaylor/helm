@@ -5,9 +5,7 @@
 //! Each batch is merged ([`crate::carry`]) in one transaction over the shared
 //! store, held only for that batch, so History, the session list and every
 //! other request are answered between batches. A batch that changed what
-//! History, the archive or usage read tells their subscribers. Only an admin
-//! device may send any of it, as the connection's role table says: each
-//! writes the host's database. The host's
+//! History, the archive or usage read tells their subscribers. The host's
 //! log says how many rows each batch merged, never what they hold.
 
 use std::sync::{Arc, MutexGuard};

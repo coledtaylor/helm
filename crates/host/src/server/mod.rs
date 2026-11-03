@@ -4,36 +4,26 @@
 //! Starting takes, in this order and before anything else is opened: the
 //! data folder's lock, so the host alone opens `floti.db`; the host key
 //! ([`HOST_KEY_FILE`]), made on the first start and read on every later one,
-//! so a socket that answers always has its key; while no device is an admin,
-//! a fresh one-time code in [`ENROLMENT_FILE`] (see `enrolment`), so a client
-//! on this computer can enrol from the first connection on; the socket,
-//! which refuses an endpoint a live host holds; then the store, whose rows a
-//! crash or an update left running are reconciled to lost and offered back
-//! once.
+//! so a socket that answers always has its key; the socket, which refuses an
+//! endpoint a live host holds; then the store, whose rows a crash or an
+//! update left running are reconciled to lost and offered back once. The
+//! device list and one-time code an earlier version kept
+//! ([`RETIRED_FILES`]) are deleted on the way.
 //!
 //! Every connection starts with a Noise handshake (`floti_protocol::noise`),
-//! in which the host proves its key and the client its device key, checked
-//! against the device registry ([`DEVICES_FILE`], read fresh each time), or,
-//! for a key the registry does not know, the one-time code it carried. A
-//! connection that fails it, presents a key that is unknown or revoked, or
-//! does not finish within [`HANDSHAKE_DEADLINE`] is closed without a byte
-//! written, and the host's log (its stderr) gets one line saying why. Inside
-//! the session clients speak `floti-protocol`, starting at `hello`, every
-//! frame sealed; one that has not said `hello` within [`HELLO_DEADLINE`] of
-//! the host's answer is closed the same way, logged by its device's
-//! fingerprint.
-//!
-//! A key the registry does not know may instead ask to pair in its first
-//! handshake message; after `hello` it is told a short code to show and
-//! waits, in memory only (`pairing`), until an admin device approves it or
-//! someone on this computer runs `floti devices approve <code>`, the request
-//! expires after [`PAIRING_LIFETIME`], or it goes away. That command, and
-//! `floti devices`, connect as the host's own key, which only the host's OS
-//! user can read; such a connection is served the devices channels and
-//! nothing else. Every paired device is served what its role allows
-//! (`access`), and an admin on the relay endpoint `floti connect` opens
-//! confirms its presence first. The code is never logged; requests are
-//! named by fingerprint.
+//! in which the host proves its key and the client its device key. Whatever
+//! reaches the socket, which only the host's OS user can open, and completes
+//! the handshake is served in full: on the host's computer, or through that
+//! user's own ssh login or command running `floti connect`, which opens the
+//! relay endpoint. There is no pairing, approval, role or presence; the login
+//! is the access. A connection that fails the handshake or does not finish it
+//! within [`HANDSHAKE_DEADLINE`] is closed without a byte written, and the
+//! host's log (its stderr) gets one line saying why. Inside the session
+//! clients speak `floti-protocol`, starting at `hello`, every frame sealed;
+//! one that has not said `hello` within [`HELLO_DEADLINE`] of the host's
+//! answer is closed the same way, logged by its device's fingerprint. Every
+//! client sees which devices are attached and may disconnect one
+//! (`attached`).
 //!
 //! Sessions outlive clients: a client leaving ends nothing. Stopping the host ends every
 //! session's process tree; a plain stop records each row as exited first, a
@@ -53,17 +43,14 @@
 //! is on the not-yet-served list ([`unserved`]) with the feature that will
 //! serve it, and is answered with an error naming it.
 
-mod access;
 mod agent_tools;
+mod attached;
 mod browser_tools;
-mod clock;
 mod connection;
-mod enrolment;
 mod events;
 mod features;
 mod hosted;
 pub mod idle;
-mod pairing;
 mod plugin_tools;
 pub(crate) mod records;
 mod session_tools;
@@ -91,7 +78,6 @@ use tokio::task::JoinHandle;
 
 use crate::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
 use crate::agent::{AgentBackend, PlainCommandBackend, sweep_launch_folders};
-use crate::devices::DeviceRegistry;
 use crate::keeper::Keeper;
 use crate::keys::{load_or_create_key_pair, read_key_pair};
 use crate::platform::folders::{self, Folders, UserEnv};
@@ -103,20 +89,11 @@ use crate::session::ClientId;
 use crate::store::Store;
 use crate::{Error, Result};
 
-use access::{Confirmations, LiveConnections};
-pub use access::{PRESENCE_NEEDED, PRESENCE_WINDOW};
 use agent_tools::HostAgentTools;
-use clock::HostClock;
-#[cfg(any(test, feature = "testkit"))]
-pub use clock::TEST_HOST_CLOCK_MARKER;
 use connection::{Admission, ConnectionContext};
-use enrolment::Enrolment;
-pub use enrolment::{FIRST_ADMIN_NAME, LocalEnrolment, read_enrolment};
 use features::Features;
 use hosted::Hosted;
 pub use hosted::Occupancy;
-use pairing::Pairing;
-pub use pairing::{MAX_WAITING, PAIRING_LIFETIME};
 use session_tools::HostWorld;
 
 /// The socket's name in the runtime folder.
@@ -128,12 +105,10 @@ pub const LOCK_FILE: &str = "host.lock";
 /// The host's private key in the data folder, owner-only.
 pub const HOST_KEY_FILE: &str = "host.key";
 
-/// The device registry in the data folder, owner-only.
-pub const DEVICES_FILE: &str = "devices.json";
-
-/// The host's key and its one-time enrolment code in the data folder,
-/// owner-only, while the host waits for its first admin.
-pub const ENROLMENT_FILE: &str = "enrolment.json";
+/// What an earlier version kept in the data folder and this one deletes at
+/// start: its list of paired devices and its one-time enrolment code. Access
+/// is the user's login now, so neither means anything.
+pub const RETIRED_FILES: [&str; 2] = ["devices.json", "enrolment.json"];
 
 /// How long a connection has, from when it is accepted, to finish the Noise
 /// handshake before the host closes it.
@@ -184,10 +159,25 @@ fn test_deadline(data: &Path) -> Option<Duration> {
 const RELEASE_WAIT: Duration = Duration::from_secs(10);
 
 /// The public half of the host key kept in the data folder `data`, or
-/// `None` before a host has started there. For pairing a device and pinning
-/// a client to the host; the private half never leaves the host.
+/// `None` before a host has started there. For a client on this computer to
+/// pin the host it connects to (`floti connect --host-key`); the private
+/// half never leaves the host.
 pub fn host_public_key(data: &Path) -> Result<Option<PublicKey>> {
     Ok(read_key_pair(&data.join(HOST_KEY_FILE))?.map(|pair| pair.public()))
+}
+
+/// Deletes what an earlier version left in the data folder `data`
+/// ([`RETIRED_FILES`]). One that is not there is nothing to do; one that
+/// cannot be deleted is said in the log, and the host starts all the same:
+/// nothing reads it.
+fn remove_retired_files(data: &Path) {
+    for name in RETIRED_FILES {
+        match std::fs::remove_file(data.join(name)) {
+            Ok(()) => log_line!("floti host: deleted {name}, which an earlier version kept"),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => log_line!("floti host: could not delete {name}: {err}"),
+        }
+    }
 }
 
 /// Every channel of the protocol, built once.
@@ -370,25 +360,13 @@ impl Host {
         // that made it is gone.
         sweep_stale_temps(
             &folders.data,
-            &[HOST_KEY_FILE, DEVICES_FILE, ENROLMENT_FILE],
+            &[HOST_KEY_FILE, RETIRED_FILES[0], RETIRED_FILES[1]],
             &process_tree::Native,
         );
+        remove_retired_files(&folders.data);
         // Before the socket: a host that answers has its key.
         let host_key: Arc<KeyPair> =
             Arc::new(load_or_create_key_pair(&folders.data.join(HOST_KEY_FILE))?);
-        let devices = Arc::new(DeviceRegistry::in_data_folder(&folders.data));
-        // Before the socket too: a host waiting for its first admin has the
-        // code a client on this computer enrols with from the first connection.
-        let enrolment = Arc::new(Enrolment::prepare(
-            &folders.data,
-            host_key.public(),
-            &devices,
-        ));
-        // In memory only: a request to pair does not outlive the host.
-        let pairing = Arc::new(Pairing::new(&folders.data, Arc::clone(&devices)));
-        // In memory only too: a device confirms its presence again after a
-        // restart.
-        let confirmations = Arc::new(Confirmations::new(HostClock::new(&folders.data)));
         let deadline = handshake_deadline(&folders.data);
         let hello_deadline = hello_deadline(&folders.data);
         // Launch folders a crashed run left, once their owners are gone.
@@ -436,13 +414,8 @@ impl Host {
             hosted: Arc::clone(&hosted),
             admission: Admission {
                 host_key,
-                devices,
-                enrolment,
-                pairing,
                 deadline,
                 hello_deadline,
-                confirmations,
-                live: Arc::new(LiveConnections::default()),
             },
             identity,
             stopper: stopper.clone(),

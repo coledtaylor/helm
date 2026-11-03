@@ -7,53 +7,42 @@
 //! It finds the host exactly as `floti host` finds its own folders and
 //! socket: from the user's environment, `FLOTI_DATA_DIR`, `FLOTI_RUNTIME_DIR`
 //! and the other overrides included. It connects with
-//! [`ClientKeys::connect_local`], so a client that has pinned no host enrols
-//! with the host's enrolment file while the host waits for its first admin,
-//! and one that has connects pinned and carries no code. The client's folder
-//! holds the device key and the pinned host key and nothing else.
+//! [`ClientKeys::connect_local`]: a client that has pinned no host holds the
+//! host to the key in its data folder, which only this OS user can read, and
+//! pins it once the host has proven it; one that has connects holding the
+//! host to the key it pinned. The client's folder holds the device key and
+//! the pinned host key and nothing else.
 //!
 //! After the handshake both directions are `floti_protocol::frame` frames (a
 //! 4-byte big-endian length, then one CBOR message), each relayed in the
 //! order it came. Standard output carries the host's messages and nothing
 //! else; standard input carries the program's, starting with its `hello`,
 //! which the bridge does not send itself. Every other word goes to standard
-//! error as one line, and no line holds a code, key material or frame bytes:
+//! error as one line, and no line holds key material or frame bytes:
 //! a key is named by its fingerprint.
 //!
 //! How it ends is its exit status ([`BridgeExit`]): standard input closing
 //! closes the connection and is a success, and every failure has a status of
 //! its own.
 //!
-//! `floti bridge <client folder> [--pair <device name>] -- <program>
-//! [<arg>...]` reaches a host on another computer through a transport
-//! ([`Transport`]): a program that carries bytes unchanged, such as the
-//! user's own `ssh -o BatchMode=yes <target>`, or any command of the user's
-//! choosing. It runs the program as given, with no shell, adding one last
-//! argument, the line to run on the other side: `floti connect`
-//! ([`crate::connect`]). The handshake then runs over the program's standard
-//! input and output exactly as over the socket, holding the host to the key
-//! the client pinned; the transport only makes the host reachable. The
-//! client folder is the one kept for that host, and nothing about the
-//! transport is written to it.
+//! `floti bridge <client folder> -- <program> [<arg>...]` reaches a host on
+//! another computer through a transport ([`Transport`]): a program that
+//! carries bytes unchanged, such as the user's own `ssh -o BatchMode=yes
+//! <target>`, or any command of the user's choosing. It runs the program as
+//! given, with no shell, adding one last argument, the line to run on the
+//! other side: `floti connect` ([`crate::connect`]). The handshake then runs
+//! over the program's standard input and output exactly as over the socket,
+//! holding the host to the key the client pinned. The transport is the
+//! access: it is the user's own login on that computer, and nothing is
+//! approved there. The client folder is the one kept for that host, and
+//! nothing about the transport is written to it.
 //!
-//! A client that has pinned no host and is given `--pair <device name>`
-//! pairs first: it learns the host's public key through the same transport
-//! (`floti connect --host-key`), asks to pair while holding the host to it,
-//! writes the code and its expiry on standard error as one line
-//! ([`PAIRING_LINE_PREFIX`]), and waits for someone to run `floti devices
-//! approve <code>` on the host's computer. Once approved it pins the key,
-//! connects again as itself, and relays. A request nobody approves in time
-//! ends with [`BridgeExit::PairingExpired`].
-//!
-//! Given `--approve <role>` after the name as well, it pairs in one step:
-//! once the code is shown it runs the transport again with `floti devices
-//! approve - --role <role>` ([`approve_line`]) and writes the code, and a
-//! line ending, to that command's standard input, so the code is in no
-//! command line. The transport's own sign-in is what lets that command
-//! approve: it runs as the host's user on the host's computer. When it
-//! fails, the bridge says the last line it wrote on standard error,
-//! unedited, then the code line again, and keeps waiting for someone to
-//! approve by hand.
+//! A client that has pinned no host first learns the host's public key
+//! through the same transport (`floti connect --host-key`), holds the host
+//! to it, pins it once the host has proven it, and relays. A client that has
+//! pinned one refuses a host proving another, with
+//! [`BridgeExit::HostNotProven`], until the user removes the host and adds
+//! it again.
 //!
 //! A transport that cannot be started ends with
 //! [`BridgeExit::TransportNotStarted`]. One that ends before the handshake
@@ -68,18 +57,15 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 
-use floti_protocol::channels::devices::DeviceRole;
-use floti_protocol::message::ClientKind;
 use floti_protocol::noise::PublicKey;
 use floti_protocol::{FrameDecoder, Message, encode_frame};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, ChildStderr};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::client::{
-    ClientError, ClientKeys, Connection, PairingOutcome, TRANSPORT_HANDSHAKE_DEADLINE, duplex,
-    is_closed,
+    ClientError, ClientKeys, Connection, TRANSPORT_HANDSHAKE_DEADLINE, duplex, is_closed,
 };
 use crate::connect::ConnectExit;
 use crate::platform::folders::{self, UserEnv};
@@ -100,12 +86,12 @@ pub enum BridgeExit {
     Usage,
     /// No host answered on the socket.
     Unreachable,
-    /// The client has pinned no host key and the host's data folder holds no
-    /// enrolment file to enrol with.
+    /// The client has pinned no host key and no host has started on this
+    /// computer's data folder yet, so there is no key to hold one to.
     NotPinned,
-    /// The host on the socket did not prove the key the client expected: the
-    /// one it pinned, or the one the enrolment file names. Nothing past the
-    /// first handshake message was sent to it.
+    /// The host did not prove the key the client expected: the one it
+    /// pinned, or, before it had pinned one, the one it learned for the
+    /// host. Nothing past the first handshake message was sent to it.
     HostNotProven,
     /// The host closed the connection after the handshake.
     HostClosed,
@@ -115,13 +101,11 @@ pub enum BridgeExit {
     /// on standard error is the last one the transport wrote there,
     /// unedited.
     TransportEnded,
-    /// The request to pair through a transport expired before anyone
-    /// approved it. Nothing was pinned.
-    PairingExpired,
 }
 
 impl BridgeExit {
-    /// The process's exit status.
+    /// The process's exit status. 9 is retired and never given again: an
+    /// earlier version used it for a status this one no longer has.
     pub fn code(self) -> u8 {
         match self {
             Self::Closed => 0,
@@ -133,7 +117,6 @@ impl BridgeExit {
             Self::HostClosed => 6,
             Self::TransportNotStarted => 7,
             Self::TransportEnded => 8,
-            Self::PairingExpired => 9,
         }
     }
 
@@ -141,11 +124,10 @@ impl BridgeExit {
     pub fn of_connect(err: &ClientError) -> Self {
         match err {
             ClientError::Unreachable { .. } => Self::Unreachable,
-            ClientError::NotPinned => Self::NotPinned,
+            ClientError::NotPinned | ClientError::NotStarted { .. } => Self::NotPinned,
             ClientError::HostNotProven { .. }
             | ClientError::HostClosed { .. }
-            | ClientError::EnrolmentNotProven { .. }
-            | ClientError::PairingNotAnswered { .. } => Self::HostNotProven,
+            | ClientError::LearnedKeyNotProven { .. } => Self::HostNotProven,
             _ => Self::Failed,
         }
     }
@@ -254,48 +236,11 @@ const CONNECT: &str = "connect";
 /// What follows floti in [`HOST_KEY_LINE`].
 const HOST_KEY: &str = "connect --host-key";
 
-/// How the one line on standard error that shows a pairing code starts. The
-/// whole line is `floti bridge: pairing code <code>, expires in <seconds>
-/// seconds: run "floti devices approve <code>" on the host.`, for the
-/// desktop to show.
-pub const PAIRING_LINE_PREFIX: &str = "floti bridge: pairing code ";
-
-/// The line a transport runs on the host's computer to approve, with `role`,
-/// the request whose code it is given on standard input, with `floti` on
-/// that login's `PATH`.
-pub fn approve_line(role: DeviceRole) -> String {
-    format!("floti {}", approve(role))
-}
-
-/// What follows floti in [`approve_line`].
-fn approve(role: DeviceRole) -> String {
-    let role = match role {
-        DeviceRole::Viewer => "viewer",
-        DeviceRole::Operator => "operator",
-        DeviceRole::Admin => "admin",
-    };
-    format!("devices approve - --role {role}")
-}
-
-/// How a client that has pinned no host pairs through a transport.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Pair {
-    /// The device name it asks to pair as.
-    pub name: String,
-    /// The role to approve it with through the same transport, in one step;
-    /// `None` waits for someone to approve it on the host's computer.
-    pub approve: Option<DeviceRole>,
-}
-
 /// Runs the bridge for the client whose keys are in `client_folder`, to the
-/// host `transport` reaches, pairing first as `pair` when the client has
-/// pinned no host, until its standard input closes or the connection ends,
-/// and says how it ended.
-pub fn run_bridge_through(
-    client_folder: &Path,
-    pair: Option<&Pair>,
-    transport: &Transport,
-) -> BridgeExit {
+/// host `transport` reaches, learning and pinning its key first when the
+/// client has pinned none, until its standard input closes or the connection
+/// ends, and says how it ended.
+pub fn run_bridge_through(client_folder: &Path, transport: &Transport) -> BridgeExit {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -303,150 +248,40 @@ pub fn run_bridge_through(
         Ok(runtime) => runtime,
         Err(err) => return fail(BridgeExit::Failed, &format!("could not start: {err}")),
     };
-    let exit = runtime.block_on(bridge_through(client_folder, pair, transport));
+    let exit = runtime.block_on(bridge_through(client_folder, transport));
     runtime.shutdown_background();
     exit
 }
 
-async fn bridge_through(
-    client_folder: &Path,
-    pair: Option<&Pair>,
-    transport: &Transport,
-) -> BridgeExit {
+async fn bridge_through(client_folder: &Path, transport: &Transport) -> BridgeExit {
     let mut keys = match ClientKeys::open(client_folder) {
         Ok(keys) => keys,
         Err(err) => return fail(BridgeExit::Failed, &err.to_string()),
     };
-    if keys.pinned_host().is_none() {
-        let Some(pair) = pair else {
-            return fail(BridgeExit::NotPinned, &ClientError::NotPinned.to_string());
-        };
-        if let Err(exit) = pair_through(&mut keys, pair, transport).await {
-            return exit;
-        }
-    }
+    // Learned before the connection that relays: the line that prints it
+    // ends once it has.
+    let learned = match keys.pinned_host() {
+        Some(pinned) => pinned,
+        None => match read_host_key(transport).await {
+            Ok(host) => host,
+            Err(exit) => return exit,
+        },
+    };
     let mut running = match Running::start(transport, &transport.line(CONNECT)) {
         Ok(running) => running,
         Err(exit) => return exit,
     };
     let stream = running.stream();
-    match keys.connect_over(stream, &running.described).await {
+    match keys
+        .connect_learning_over(stream, &running.described, &learned)
+        .await
+    {
         Ok(connection) => {
             let exit = relay(connection).await;
             running.finish().await;
             exit
         }
         Err(err) => running.not_connected(err).await,
-    }
-}
-
-/// Pairs the client in `keys` as `pair` says with the host `transport`
-/// reaches: learns its key, asks, shows the code, approves through the
-/// transport when `pair` names a role, waits for approval and pins the key.
-async fn pair_through(
-    keys: &mut ClientKeys,
-    pair: &Pair,
-    transport: &Transport,
-) -> Result<(), BridgeExit> {
-    let name = pair.name.as_str();
-    let host = read_host_key(transport).await?;
-    let mut running = Running::start(transport, &transport.line(CONNECT))?;
-    let stream = running.stream();
-    let request = match keys
-        .ask_to_pair_over(stream, &running.described, &host, name, ClientKind::Desktop)
-        .await
-    {
-        Ok(request) => request,
-        Err(err) => return Err(running.not_connected(err).await),
-    };
-    let code = request.code().to_owned();
-    let code_line = format!(
-        "{PAIRING_LINE_PREFIX}{code}, expires in {} seconds: run \"floti devices approve {code}\" on the host.",
-        request.expires_in_seconds()
-    );
-    say(&code_line);
-    let outcome = {
-        let answered = keys.finish_pairing(request);
-        tokio::pin!(answered);
-        match pair.approve {
-            None => answered.await,
-            Some(role) => {
-                let approving = approve_through(transport, role, &code);
-                tokio::pin!(approving);
-                tokio::select! {
-                    // Approved (or expired) before the command ended: it is
-                    // ended with the bridge's wait.
-                    outcome = &mut answered => outcome,
-                    approved = &mut approving => {
-                        if let Err(line) = approved {
-                            say(&line);
-                            say(&code_line);
-                        }
-                        answered.await
-                    }
-                }
-            }
-        }
-    };
-    running.finish().await;
-    match outcome {
-        Ok(PairingOutcome::Approved(_)) => Ok(()),
-        Ok(PairingOutcome::Expired) => Err(fail(
-            BridgeExit::PairingExpired,
-            "nobody approved the request to pair before it expired; nothing was pinned.",
-        )),
-        Err(err) => Err(fail(BridgeExit::Failed, &err.to_string())),
-    }
-}
-
-/// Approves the request waiting under `code` with `role`, by running
-/// [`approve_line`] through `transport` with the code on its standard input.
-/// `Err` holds the line to say when it fails: the last line the command
-/// wrote on standard error, unedited.
-async fn approve_through(
-    transport: &Transport,
-    role: DeviceRole,
-    code: &str,
-) -> Result<(), String> {
-    let mut running = Running::start(transport, &transport.line(&approve(role))).map_err(|_| {
-        format!(
-            "could not run {} to approve the request",
-            transport.program.to_string_lossy()
-        )
-    })?;
-    let mut stdin = running
-        .child
-        .stdin
-        .take()
-        .expect("the transport's stdin is piped");
-    // A command that ends without reading its input fails below, saying why.
-    let _ = stdin.write_all(format!("{code}\n").as_bytes()).await;
-    drop(stdin);
-    // What it prints on success is a sentence for a person; nobody reads it
-    // here, so it is drained rather than left to fill the pipe.
-    let mut stdout = running
-        .child
-        .stdout
-        .take()
-        .expect("the transport's stdout is piped");
-    let drained = tokio::spawn(async move {
-        let mut sink = Vec::new();
-        let _ = stdout.read_to_end(&mut sink).await;
-    });
-    let status = running.child.wait().await;
-    drained.abort();
-    match status {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(running.last_written().await.unwrap_or_else(|| {
-            format!(
-                "{} failed ({status}) and wrote nothing on standard error",
-                running.described
-            )
-        })),
-        Err(err) => Err(format!(
-            "{} could not be waited on: {err}",
-            running.described
-        )),
     }
 }
 
@@ -585,8 +420,7 @@ impl Running {
         let ended_early = matches!(
             err,
             ClientError::HostClosed { .. }
-                | ClientError::PairingNotAnswered { .. }
-                | ClientError::PairingEnded
+                | ClientError::LearnedKeyNotProven { .. }
                 | ClientError::Io(_)
         );
         if ended_early

@@ -4,38 +4,30 @@
 //!
 //! In the folder a client names it keeps two files and nothing else: its
 //! device key ([`DEVICE_KEY_FILE`]), made once and owner-only, and the host
-//! key it pinned at pairing ([`PINNED_HOST_FILE`]). Screens, files,
-//! transcripts and everything else a host sends stay in the client's memory.
+//! key it pinned the first time it connected ([`PINNED_HOST_FILE`]).
+//! Screens, files, transcripts and everything else a host sends stay in the
+//! client's memory.
 //!
 //! [`connect`] runs the handshake as the initiator before anything else
 //! crosses the socket, and refuses a host that does not prove the pinned key
 //! without sending it anything more than the first handshake message, which
 //! only the pinned key can read.
 //!
-//! A client on the host's own computer that has pinned no host yet enrols
-//! with [`ClientKeys::connect_local`]: while the host waits for its first
-//! admin, its data folder holds the enrolment file
-//! ([`ENROLMENT_FILE`](crate::server::ENROLMENT_FILE)) naming its key and a
-//! one-time code. The client carries the code in its first handshake
-//! message, holds the host to the file's key, and pins that key only once
-//! the host has proven it. The code is never printed or stored by the client.
-//!
-//! Any other client pairs by asking: [`ClientKeys::ask_to_pair`] holds the
-//! host to a key the client learned another way (a client on the host's
-//! computer reads it from the host's data folder,
-//! [`ClientKeys::ask_local_to_pair`]), asks in its first handshake message,
-//! says `hello`, and is told a short code to show. Someone on the host's
-//! computer approves that code with `floti devices approve`;
-//! [`ClientKeys::finish_pairing`] waits for that, and pins the host key only
-//! once the host says the device is paired. From then on the client connects
-//! as itself ([`ClientKeys::connect`]).
+//! Nothing else is asked: whatever reaches the host's socket and
+//! completes the handshake is served. A client that has pinned no host yet
+//! learns the host's key the way it reaches the host (on the host's own
+//! computer from the host's data folder, [`ClientKeys::connect_local`];
+//! through a transport, from `floti connect --host-key` run over it), holds
+//! the host to it, and pins it only once the host has proven it
+//! ([`ClientKeys::connect_learning_over`]). From then on a host proving
+//! another key is refused.
 //!
 //! A host on another computer is reached through a transport that carries
 //! bytes unchanged, such as `ssh <target> floti connect`: its standard output
 //! and input, joined by [`duplex`], are the stream
-//! [`ClientKeys::connect_over`] and [`ClientKeys::ask_to_pair_over`] run the
-//! same handshake over. The transport only makes the host reachable; the
-//! handshake is what lets the client in, and holds the host to its key.
+//! [`ClientKeys::connect_over`] runs the same handshake over. The transport
+//! is the access: it is the user's own login on that computer. The handshake
+//! holds the host to its key.
 
 use std::fmt;
 use std::io::ErrorKind;
@@ -45,12 +37,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
-use floti_protocol::channels::devices::DeviceRole;
-use floti_protocol::message::{
-    ClientInfo, ClientKind, ErrorReply, Hello, Pairing, Request, Welcome,
-};
+use floti_protocol::message::{ClientInfo, ClientKind, ErrorReply, Hello, Request, Welcome};
 use floti_protocol::noise::{
-    EnrolmentCode, Initiator, InitiatorStep, KeyPair, NoiseError, Opener, PublicKey, Sealer,
+    Initiator, InitiatorStep, KeyPair, NoiseError, Opener, PublicKey, Sealer,
 };
 use floti_protocol::{FrameDecoder, Message, PROTOCOL_VERSION, ProtocolError, encode_frame};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -59,7 +48,7 @@ use crate::keys::{load_or_create_key_pair, read_key_pair};
 use crate::platform::private_files::{Native as NativeFiles, PrivateFiles, sweep_stale_temps};
 use crate::platform::process_tree;
 use crate::platform::socket::{Endpoint, LocalSocket, LocalStream, Native as NativeSocket};
-use crate::server::{HANDSHAKE_DEADLINE, host_public_key, read_enrolment};
+use crate::server::{HANDSHAKE_DEADLINE, host_public_key};
 use crate::{Error, Result};
 
 /// The client's device key in its folder.
@@ -108,9 +97,9 @@ impl ClientKeys {
 
     /// The keys in `folder` when it holds both a device key and a pinned
     /// host key, and `None` otherwise, making and changing nothing: for a
-    /// program that must reach only a host this client already paired with,
-    /// never pair or enrol, and leave a folder it does not use as it was.
-    pub fn open_paired(folder: &Path) -> Result<Option<Self>> {
+    /// program that must reach only a host this client has already connected
+    /// to, never pin one, and leave a folder it does not use as it was.
+    pub fn open_pinned(folder: &Path) -> Result<Option<Self>> {
         let Some(device) = read_key_pair(&folder.join(DEVICE_KEY_FILE))? else {
             return Ok(None);
         };
@@ -125,7 +114,7 @@ impl ClientKeys {
         &self.folder
     }
 
-    /// The device's public key, the one a host's registry holds.
+    /// The device's public key, which names this device to every host.
     pub fn device_key(&self) -> PublicKey {
         self.device.public()
     }
@@ -168,211 +157,78 @@ impl ClientKeys {
             TRANSPORT_HANDSHAKE_DEADLINE,
             &self.device,
             &pinned,
-            Ask::Plain,
         )
         .await
     }
 
+    /// Connects over `stream`, holding the host to `learned`, the key
+    /// learned the way `stream` reaches it, while this client has pinned no
+    /// host, and pins that key once the host has proven it. A client that
+    /// has pinned one connects as [`Self::connect_over`] does, holding the
+    /// host to that one.
+    pub async fn connect_learning_over(
+        &mut self,
+        stream: LocalStream,
+        at: &str,
+        learned: &PublicKey,
+    ) -> Result<Connection, ClientError> {
+        if self.pinned.is_some() {
+            return self.connect_over(stream, at).await;
+        }
+        let connection = connect_over(
+            stream,
+            at,
+            TRANSPORT_HANDSHAKE_DEADLINE,
+            &self.device,
+            learned,
+        )
+        .await
+        .map_err(|err| not_proven_as_learned(err, learned))?;
+        self.pin_host(connection.host_key())
+            .map_err(ClientError::Local)?;
+        Ok(connection)
+    }
+
     /// Connects to the host on this computer at `endpoint`, whose data
-    /// folder is `host_data`. While that host waits for its first admin, its
-    /// enrolment file is there: a client that has pinned no host enrols with
-    /// it, holding the host to the file's key, and pins that key once the
-    /// host has proven it; one pinned to the file's key carries the code
-    /// too. Otherwise it connects as [`Self::connect`] does, and a client
-    /// with no pinned key reports [`ClientError::NotPinned`] without
-    /// connecting.
+    /// folder is `host_data`. A client that has pinned a host connects as
+    /// [`Self::connect`] does. One that has pinned none holds the host to the
+    /// key kept in that folder, which only this OS user can read, and pins it
+    /// once the host has proven it; [`ClientError::NotStarted`] when no host
+    /// has started there yet.
     pub async fn connect_local(
         &mut self,
         endpoint: &Endpoint,
         host_data: &Path,
     ) -> Result<Connection, ClientError> {
-        let enrolment = read_enrolment(host_data).map_err(ClientError::Local)?;
-        match (self.pinned, enrolment) {
-            (None, Some(enrolment)) => {
-                let host = enrolment.host_key;
-                let connection =
-                    connect_with(endpoint, &self.device, &host, Ask::Enrol(&enrolment.code))
-                        .await
-                        .map_err(|err| match err {
-                            ClientError::HostNotProven { at, .. }
-                            | ClientError::HostClosed { at, .. } => {
-                                ClientError::EnrolmentNotProven {
-                                    at,
-                                    host: host.fingerprint(),
-                                }
-                            }
-                            other => other,
-                        })?;
-                drop(enrolment);
-                self.pin_host(connection.host_key())
-                    .map_err(ClientError::Local)?;
-                Ok(connection)
-            }
-            (Some(pinned), Some(enrolment)) if enrolment.host_key == pinned => {
-                connect_with(endpoint, &self.device, &pinned, Ask::Enrol(&enrolment.code)).await
-            }
-            _ => self.connect(endpoint).await,
+        if self.pinned.is_some() {
+            return self.connect(endpoint).await;
         }
-    }
-
-    /// Asks the host at `endpoint`, holding it to `host`, to pair this
-    /// device, which it does not know yet, named `name`: the handshake asking,
-    /// then `hello`, then the code the host answers with, to show. Pins
-    /// nothing; [`Self::finish_pairing`] waits for the outcome.
-    pub async fn ask_to_pair(
-        &self,
-        endpoint: &Endpoint,
-        host: &PublicKey,
-        name: &str,
-        kind: ClientKind,
-    ) -> Result<PairingRequest, ClientError> {
-        let stream = open_socket(endpoint).await?;
-        let at = endpoint.to_string();
-        self.ask_to_pair_with(stream, &at, HANDSHAKE_DEADLINE, host, name, kind)
-            .await
-    }
-
-    /// [`Self::ask_to_pair`], over `stream`, a byte stream that reaches the
-    /// host some other way than its local socket ([`Self::connect_over`]),
-    /// named `at` in errors. `host` is the key learned through the same
-    /// transport (`floti connect --host-key`), and the host is held to it.
-    pub async fn ask_to_pair_over(
-        &self,
-        stream: LocalStream,
-        at: &str,
-        host: &PublicKey,
-        name: &str,
-        kind: ClientKind,
-    ) -> Result<PairingRequest, ClientError> {
-        self.ask_to_pair_with(stream, at, TRANSPORT_HANDSHAKE_DEADLINE, host, name, kind)
-            .await
-    }
-
-    async fn ask_to_pair_with(
-        &self,
-        stream: LocalStream,
-        at: &str,
-        deadline: Duration,
-        host: &PublicKey,
-        name: &str,
-        kind: ClientKind,
-    ) -> Result<PairingRequest, ClientError> {
-        let mut connection = connect_over(stream, at, deadline, &self.device, host, Ask::Pair)
-            .await
-            .map_err(|err| match err {
-                ClientError::HostNotProven { at, .. } | ClientError::HostClosed { at, .. } => {
-                    ClientError::PairingNotAnswered {
-                        at,
-                        host: host.fingerprint(),
-                    }
-                }
-                other => other,
-            })?;
-        connection.send(&hello(name, kind)).await?;
-        match connection.next().await? {
-            Some(Message::Pairing(Pairing::Waiting(waiting))) => Ok(PairingRequest {
-                connection,
-                code: waiting.code,
-                expires_in_seconds: waiting.expires_in_seconds,
-            }),
-            Some(Message::Refused(refused)) => Err(ClientError::Refused(refused.message)),
-            Some(other) => Err(ClientError::Unexpected(kind_of(&other))),
-            None => Err(ClientError::PairingEnded),
-        }
-    }
-
-    /// [`Self::ask_to_pair`], to the host on this computer at `endpoint`,
-    /// whose data folder is `host_data`: the host is held to the key kept
-    /// there.
-    pub async fn ask_local_to_pair(
-        &self,
-        endpoint: &Endpoint,
-        host_data: &Path,
-        name: &str,
-        kind: ClientKind,
-    ) -> Result<PairingRequest, ClientError> {
         let host = host_public_key(host_data)
             .map_err(ClientError::Local)?
-            .ok_or_else(|| ClientError::Unreachable {
-                at: endpoint.to_string(),
-                source: Error::Refused(format!(
-                    "no host has started on {} yet",
-                    host_data.display()
-                )),
+            .ok_or_else(|| ClientError::NotStarted {
+                folder: host_data.display().to_string(),
             })?;
-        self.ask_to_pair(endpoint, &host, name, kind).await
+        let connection = connect(endpoint, &self.device, &host)
+            .await
+            .map_err(|err| not_proven_as_learned(err, &host))?;
+        self.pin_host(connection.host_key())
+            .map_err(ClientError::Local)?;
+        Ok(connection)
     }
+}
 
-    /// Waits for `request` to be approved or to expire. Once approved, the
-    /// host key it proved is pinned, and the client connects as itself from
-    /// then on.
-    pub async fn finish_pairing(
-        &mut self,
-        mut request: PairingRequest,
-    ) -> Result<PairingOutcome, ClientError> {
-        loop {
-            match request.connection.next().await? {
-                Some(Message::Pairing(Pairing::Approved(approved))) => {
-                    self.pin_host(request.connection.host_key())
-                        .map_err(ClientError::Local)?;
-                    return Ok(PairingOutcome::Approved(approved.role));
-                }
-                Some(Message::Pairing(Pairing::Expired)) => return Ok(PairingOutcome::Expired),
-                Some(_) => {}
-                None => return Err(ClientError::PairingEnded),
+/// A host that did not prove the key a client learned for it, before the
+/// client pinned anything, said as that rather than as a pinned key.
+fn not_proven_as_learned(err: ClientError, host: &PublicKey) -> ClientError {
+    match err {
+        ClientError::HostNotProven { at, .. } | ClientError::HostClosed { at, .. } => {
+            ClientError::LearnedKeyNotProven {
+                at,
+                host: host.fingerprint(),
             }
         }
+        other => other,
     }
-}
-
-/// A request to pair that waits on the host: its connection, held open until
-/// the host says how it ended, and the code to show. Dropping it withdraws
-/// the request.
-pub struct PairingRequest {
-    connection: Connection,
-    code: String,
-    expires_in_seconds: u64,
-}
-
-impl PairingRequest {
-    /// The code to show, for `floti devices approve <code>` on the host's
-    /// computer.
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-
-    /// How long, from when the host answered, the request waits.
-    pub fn expires_in_seconds(&self) -> u64 {
-        self.expires_in_seconds
-    }
-
-    /// The key the host proved, which the client pins once approved.
-    pub fn host_key(&self) -> PublicKey {
-        self.connection.host_key()
-    }
-
-    /// Sends the host `message` on the waiting connection, which the host
-    /// answers by withdrawing the request: for a test of just that.
-    pub async fn send(&mut self, message: &Message) -> Result<(), ClientError> {
-        self.connection.send(message).await
-    }
-}
-
-impl fmt::Debug for PairingRequest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PairingRequest")
-            .field("host", &self.connection.host_key())
-            .finish_non_exhaustive()
-    }
-}
-
-/// How a request to pair ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairingOutcome {
-    /// Approved with this role; the host key is pinned.
-    Approved(DeviceRole),
-    /// Nobody approved it in time; nothing was pinned.
-    Expired,
 }
 
 /// A client's `hello` naming it `name`, of `kind`, declaring no capability.
@@ -382,6 +238,7 @@ fn hello(name: &str, kind: ClientKind) -> Message {
         client: ClientInfo {
             name: name.to_owned(),
             kind,
+            device_name: None,
         },
         capabilities: Vec::new(),
     })
@@ -392,7 +249,6 @@ fn kind_of(message: &Message) -> &'static str {
         Message::Welcome(_) => "a welcome",
         Message::Response(_) => "a response",
         Message::Error(_) => "an error",
-        Message::Pairing(_) => "a pairing message",
         _ => "another message",
     }
 }
@@ -429,8 +285,13 @@ impl fmt::Debug for ClientKeys {
 /// Why a client could not connect or talk to a host.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
-    #[error("this client has pinned no host key yet; pair it with a host first")]
+    #[error("this client has pinned no host key yet; connect it to a host first")]
     NotPinned,
+
+    /// No host has started on this computer's data folder yet, so there is
+    /// no key to hold one to.
+    #[error("no host has started on {folder} yet")]
+    NotStarted { folder: String },
 
     #[error("no host answered at {at}: {source}")]
     Unreachable {
@@ -446,41 +307,28 @@ pub enum ClientError {
     )]
     HostNotProven { at: String, pinned: String },
 
-    /// The host closed the connection without answering. A host holding
-    /// another key than the pinned one does that, since it cannot read the
-    /// first message, and so does the pinned host to a device it does not
-    /// know or has revoked; a host never says which.
+    /// The host closed the connection without answering, as a host holding
+    /// another key than the pinned one does, since it cannot read the first
+    /// message.
     #[error(
-        "the host at {at} did not prove the key this client pinned ({pinned}): it closed the connection during the handshake, as a host holding another key does, and as a host does to a device it has not paired or has revoked"
+        "the host at {at} did not prove the key this client pinned ({pinned}): it closed the connection during the handshake, as a host holding another key does"
     )]
     HostClosed { at: String, pinned: String },
 
-    /// The host on the socket is not the one the enrolment file names: it
-    /// holds another key, so it could not read the first message and closed
-    /// the connection, or its answer was not the one that key makes. Nothing
-    /// more was sent to it and no key was pinned.
+    /// A client that had pinned nothing held the host to the key it learned
+    /// for it, and the host did not prove it: it holds another key, so it
+    /// could not read the first message and closed the connection, or its
+    /// answer was not the one that key makes. Nothing more was sent to it
+    /// and no key was pinned.
     #[error(
-        "the host at {at} did not prove the key its enrolment file names ({host}), so nothing more was sent to it and no host key was pinned"
+        "the host at {at} did not prove the key it was known by ({host}), so nothing more was sent to it and no host key was pinned"
     )]
-    EnrolmentNotProven { at: String, host: String },
+    LearnedKeyNotProven { at: String, host: String },
 
-    /// A file of the client's or the host's enrolment file could not be read
-    /// or written.
+    /// A file of the client's, or the host's key, could not be read or
+    /// written.
     #[error("{0}")]
     Local(Error),
-
-    /// The host closed a connection asking to pair during the handshake, or
-    /// its answer was not the one the key the client held it to makes.
-    /// Nothing more was sent to it and no key was pinned.
-    #[error(
-        "the host at {at} did not answer this device's request to pair: it holds another key than {host}, has paired or revoked this device already, or has as many requests waiting as it takes"
-    )]
-    PairingNotAnswered { at: String, host: String },
-
-    /// The host closed a connection asking to pair without saying how the
-    /// request ended: the device asked again elsewhere, or the host stopped.
-    #[error("the host closed the connection without saying how the request to pair ended")]
-    PairingEnded,
 
     /// The host refused the client's `hello`, saying why.
     #[error("{0}")]
@@ -511,27 +359,6 @@ pub async fn connect(
     device: &KeyPair,
     host: &PublicKey,
 ) -> Result<Connection, ClientError> {
-    connect_with(endpoint, device, host, Ask::Plain).await
-}
-
-/// What a first handshake message carries besides the device's key.
-#[derive(Clone, Copy)]
-enum Ask<'a> {
-    /// Nothing: a paired device.
-    Plain,
-    /// The code a first admin enrols with.
-    Enrol(&'a EnrolmentCode),
-    /// The ask to pair.
-    Pair,
-}
-
-/// [`connect`], with the first handshake message carrying `ask`.
-async fn connect_with(
-    endpoint: &Endpoint,
-    device: &KeyPair,
-    host: &PublicKey,
-    ask: Ask<'_>,
-) -> Result<Connection, ClientError> {
     let stream = open_socket(endpoint).await?;
     connect_over(
         stream,
@@ -539,7 +366,6 @@ async fn connect_with(
         HANDSHAKE_DEADLINE,
         device,
         host,
-        ask,
     )
     .await
 }
@@ -555,7 +381,7 @@ async fn open_socket(endpoint: &Endpoint) -> Result<LocalStream, ClientError> {
         })
 }
 
-/// [`connect_with`], over `stream`, however it reaches the host: the local
+/// [`connect`], over `stream`, however it reaches the host: the local
 /// socket, or a transport's standard input and output. `at` names it in
 /// errors.
 async fn connect_over(
@@ -564,9 +390,8 @@ async fn connect_over(
     deadline: Duration,
     device: &KeyPair,
     host: &PublicKey,
-    ask: Ask<'_>,
 ) -> Result<Connection, ClientError> {
-    let handshake = tokio::time::timeout(deadline, handshake(&mut stream, device, host, ask));
+    let handshake = tokio::time::timeout(deadline, handshake(&mut stream, device, host));
     let (transport, rest) = match handshake.await {
         Ok(Ok(done)) => done,
         Ok(Err(Handshake::NotProven)) => {
@@ -616,14 +441,9 @@ async fn handshake(
     stream: &mut LocalStream,
     device: &KeyPair,
     host: &PublicKey,
-    ask: Ask<'_>,
 ) -> std::result::Result<(floti_protocol::noise::Transport, Vec<u8>), Handshake> {
-    let started = match ask {
-        Ask::Plain => Initiator::start(device, host),
-        Ask::Enrol(code) => Initiator::start_enrolling(device, host, code),
-        Ask::Pair => Initiator::start_pairing(device, host),
-    };
-    let (mut initiator, first) = started.map_err(|err| Handshake::Failed(err.into()))?;
+    let (mut initiator, first) =
+        Initiator::start(device, host).map_err(|err| Handshake::Failed(err.into()))?;
     stream
         .write_all(&first)
         .await

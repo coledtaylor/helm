@@ -48,9 +48,9 @@ use floti_protocol::{ClientChannels, Payload};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::HostRun;
+use super::attached::Attached;
 use super::events::Events;
 use super::hosted::Hosted;
-use crate::devices::Role;
 use crate::platform::folders::Folders;
 use crate::session::{ClientId, Session, SessionOutput};
 pub(crate) use agent_browser::BrowserRelay;
@@ -68,22 +68,16 @@ pub(crate) struct FeatureContext {
     pub workspace: Arc<WorkspaceContext>,
 }
 
-/// Who a request comes from: the client, and the role its device is paired
-/// with, which says what it may change.
+/// Who a request comes from: the client. Every client is served in full,
+/// so nothing else about it changes what it may ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Caller {
     pub client: ClientId,
-    pub role: Role,
 }
 
 impl Caller {
-    /// `client`, on an admin device: what the host's own lists of what it
-    /// serves, and a feature's tests, ask as.
-    pub fn admin(client: ClientId) -> Self {
-        Self {
-            client,
-            role: Role::Admin,
-        }
+    pub fn new(client: ClientId) -> Self {
+        Self { client }
     }
 }
 
@@ -170,6 +164,7 @@ impl<'a> Streams<'a> {
 pub(crate) struct Features {
     features: Vec<Box<dyn Feature>>,
     events: Arc<Events>,
+    attached: Arc<Attached>,
     resources: ResourcesHandle,
     activity: ActivityHandle,
     settings: Arc<SettingsService>,
@@ -201,6 +196,7 @@ impl Features {
             PluginRelay::new(&context.events)
                 .naming_callers(plugins::tool_caller(Arc::downgrade(&plugin_sessions))),
         );
+        let attached = Arc::new(Attached::serve(Arc::clone(&context.events))?);
         let history = history::History::new(&context)?;
         let carry = carry::Carry::new(&context, history.handle());
         let features: Vec<Box<dyn Feature>> = vec![
@@ -226,6 +222,7 @@ impl Features {
         Ok(Self {
             features,
             events: context.events,
+            attached,
             resources: handle,
             activity,
             settings: Arc::clone(&context.workspace.settings),
@@ -236,6 +233,11 @@ impl Features {
 
     pub fn events(&self) -> &Events {
         &self.events
+    }
+
+    /// Who is attached now, which each welcomed connection enters.
+    pub fn attached(&self) -> &Arc<Attached> {
+        &self.attached
     }
 
     /// The activity pass, for what inside the host reads the listing now.

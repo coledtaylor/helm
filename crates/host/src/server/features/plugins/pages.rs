@@ -36,7 +36,6 @@ use tokio::sync::oneshot;
 
 use super::sessions::PluginSessions;
 use crate::agent::new_conversation_id;
-use crate::devices::Role;
 use crate::plugins::call::{
     CallContext, CallOrigin, CancelToken, Methods, PluginCallError, answer,
 };
@@ -54,10 +53,6 @@ const SESSION_NAME_MAX: usize = 60;
 
 /// The sentence a page that may not ask for a session is refused with.
 const SESSION_FROM_A_CLICK: &str = "only a panel or a tab can ask for a session, from a click";
-
-/// The sentence a viewer device is refused a session with.
-const SESSION_NOT_FOR_VIEWERS: &str =
-    "Starting a session takes an operator or admin device, and this device is paired as a viewer.";
 
 /// The calls and asks the pages of every client have open.
 pub(crate) struct Pages {
@@ -220,7 +215,6 @@ impl Pages {
             args: request.args,
             origin: CallOrigin::Client {
                 client: caller.client,
-                role: caller.role,
             },
             cancel,
         };
@@ -339,15 +333,7 @@ impl Pages {
                     SESSION_FROM_A_CLICK,
                 ));
             }
-            CallOrigin::Client {
-                role: Role::Viewer, ..
-            } => {
-                return Err(PluginCallError::new(
-                    PluginErrorCode::NotAllowed,
-                    SESSION_NOT_FOR_VIEWERS,
-                ));
-            }
-            CallOrigin::Client { client, .. } => client,
+            CallOrigin::Client { client } => client,
         };
         if context.surface == PluginSurfaceKind::Background {
             return Err(PluginCallError::new(
@@ -439,12 +425,6 @@ impl Pages {
         if !start {
             let _ = ask.settled.send(Settled::Cancelled);
             return Ok(None);
-        }
-        if caller.role == Role::Viewer {
-            let _ = ask
-                .settled
-                .send(Settled::Failed(SESSION_NOT_FOR_VIEWERS.to_owned()));
-            return Err(SESSION_NOT_FOR_VIEWERS.to_owned());
         }
         let Some(hosted) = self.hosted.upgrade() else {
             let message = "The host is shutting down.".to_owned();

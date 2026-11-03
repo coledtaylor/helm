@@ -2,10 +2,9 @@
 //! `setTools`, `reload`, `setSetting`, `command`, `log`, `metrics`,
 //! `ownSecrets` and `file`, and `plugins:changed`.
 //!
-//! A plugin runs code on the host with the user's rights, so adding,
-//! removing or switching one, or its tools, is an admin's to do: any other
-//! device is refused with a sentence saying so, and nothing changes. The
-//! rest is open to every paired device.
+//! A plugin runs code on the host with the user's rights. Every connected
+//! device may ask for any of these: whoever reached the host did so with the
+//! user's own login.
 //!
 //! `plugins:changed` carries the whole list: a subscription starts with it,
 //! and every change a client asks for that moved something, and whatever a
@@ -212,8 +211,6 @@ impl Feature for Plugins {
         let registry = &self.registry;
         router
             .handle::<PluginsList>(|()| Ok(registry.list()))
-            // Admin only, as the connection's role table says before any
-            // of these is reached.
             .handle::<PluginsAdd>(|request| registry.add(&request.path))
             .handle::<PluginsRemove>(|request| {
                 registry.remove(&request.path, &request.delete_secrets)

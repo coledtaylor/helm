@@ -6,23 +6,24 @@
 //! from the login's environment, `FLOTI_DATA_DIR`, `FLOTI_RUNTIME_DIR` and
 //! the other overrides included. It opens the host's relay endpoint, beside
 //! its local one, so the host knows the client is on another computer and
-//! asks it for presence before an admin action. It then copies every byte on
+//! says so in its list of attached devices. It then copies every byte on
 //! its standard input to the socket and every byte from the socket to its
 //! standard output, unchanged and in order, both ways at once. It runs
 //! no handshake and opens no key or client file: the client's Noise
 //! handshake crosses it as it would the socket, so the client holds the host
 //! to the key it pinned and proves its own device key exactly as on this
-//! computer. The transport only makes the host reachable; it is not what
-//! lets a client in.
+//! computer. The transport is the user's own login on the host's computer,
+//! and that login is the access: whatever reaches the socket through it and
+//! completes the handshake is served in full.
 //!
 //! Standard output carries the host's bytes and nothing else. Every other
 //! word goes to standard error as one line, starting `floti connect: `. It
 //! starts no host: with none running, it says so.
 //!
 //! `floti connect --host-key` prints the host's public key, as 64 hex
-//! digits on one line, for a device that has not paired yet to hold the host
-//! to while it asks to pair, learned through the same login it will connect
-//! through. Only the public key is printed; the private key it is read from
+//! digits on one line, for a device that has pinned no host yet to hold the
+//! host to the first time it connects, learned through the same login it
+//! connects through. Only the public key is printed; the private key it is read from
 //! never leaves this process.
 //!
 //! How it ends is its exit status ([`ConnectExit`]).
