@@ -200,6 +200,23 @@ fn linux_definition_is_a_user_unit_wanted_by_default_target_with_the_path_quoted
         .collect();
     assert_eq!(wanted, ["WantedBy=default.target"], "{unit}");
 
+    // The host alone is signalled and killed, so the session keeper in the
+    // unit's control group outlives a host that dies, and only a host that
+    // ended with a failure (a crash or a kill) is started again.
+    let service: Vec<&str> = unit
+        .lines()
+        .filter(|line| {
+            ["KillMode=", "Restart=", "RestartSec="]
+                .iter()
+                .any(|key| line.starts_with(key))
+        })
+        .collect();
+    assert_eq!(
+        service,
+        ["KillMode=process", "Restart=on-failure", "RestartSec=1"],
+        "{unit}"
+    );
+
     for absent in [
         "User=",
         "Group=",

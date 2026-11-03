@@ -13,8 +13,18 @@
 //!   GUI domain launchd loads it at the next sign-in.
 //! - The systemd user unit: the unit file goes in `~/.config/systemd/user`,
 //!   replacing the one there, and the user's own service manager reloads,
-//!   enables and starts it (`systemctl --user`). Keeping it running with
-//!   nobody signed in (lingering) is not set here.
+//!   enables and starts it (`systemctl --user`). First, on a server, lingering
+//!   is turned on for the user ([`Linger`]), so the user's service manager,
+//!   and the host with it, runs from boot with nobody signed in. A server is
+//!   a computer whose default target (`systemctl get-default`) is not
+//!   `graphical.target`, or one where that cannot be told; a computer that
+//!   boots to a desktop keeps lingering as it is, so its host runs in the
+//!   desktop session with the desktop's environment (design A3).
+//!   `floti setup --linger` and `--no-linger` choose either way. Lingering is
+//!   turned on with the user's own `loginctl enable-linger`, never through
+//!   sudo or as root, and only once `loginctl show-user` says it is off; it
+//!   is never turned off. When loginctl refuses, nothing is written,
+//!   registered or started.
 //!
 //! Every step is one OS command run through a [`SignInSystem`], never a
 //! shell, and nothing asks for admin rights or touches a system folder or a
@@ -127,9 +137,30 @@ impl SignInSystem for NativeSystem {
 pub enum Started {
     /// Registered, and started in the user's signed-in session.
     Running,
+    /// Registered and started by a service manager that keeps running with
+    /// nobody signed in: the systemd user unit with lingering on.
+    KeepsRunning,
     /// Registered; nobody is signed in, so it starts at the next sign-in.
     AtNextSignIn,
 }
+
+/// Whether setup turns lingering on for the systemd user unit, so the host
+/// runs with nobody signed in. Only the user unit asks; the logon task and
+/// the LaunchAgent have no such thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Linger {
+    /// On for a server, as it is on a computer that boots to a desktop: what
+    /// setup does with no flag, and what the desktop's install runs.
+    #[default]
+    ByComputer,
+    /// On, whatever the computer boots to (`floti setup --linger`).
+    On,
+    /// As it is, never asked about or changed (`floti setup --no-linger`).
+    AsItIs,
+}
+
+/// The default target of a computer that boots to a desktop.
+pub const DESKTOP_TARGET: &str = "graphical.target";
 
 /// The folder the logon task's XML is kept in, under the data folder: Task
 /// Scheduler keeps its own copy once it is imported.
@@ -149,15 +180,21 @@ pub fn definition_file(definition: &StartupDefinition, home: &Path, data: &Path)
 
 /// Writes `definition` where its OS reads it, replacing what was there,
 /// registers it with the OS's per-user mechanism, and starts the host
-/// through that mechanism when the user is signed in. `Err` is the one line
-/// to say: the last line the failing command wrote, unedited, or why the
-/// file could not be written.
+/// through that mechanism when the user is signed in. For the user unit,
+/// lingering is settled first, as `linger` says, so a refusal leaves the
+/// unit there as it was. `Err` is the one line to say: the last line the
+/// failing command wrote, unedited, or why the file could not be written.
 pub fn register_and_start(
     system: &dyn SignInSystem,
     definition: &StartupDefinition,
     home: &Path,
     data: &Path,
+    linger: Linger,
 ) -> Result<Started, String> {
+    let lingering = match definition.kind {
+        StartupKind::SystemdUserUnit => settle_lingering(system, linger)?,
+        StartupKind::LogonTask | StartupKind::LaunchAgent => false,
+    };
     let file = definition_file(definition, home, data);
     let previous = std::fs::read(&file).ok();
     let bytes = definition.file_bytes();
@@ -166,7 +203,7 @@ pub fn register_and_start(
     match definition.kind {
         StartupKind::LogonTask => logon_task(system, definition, &file),
         StartupKind::LaunchAgent => launch_agent(system, definition, &file, changed),
-        StartupKind::SystemdUserUnit => user_unit(system, definition),
+        StartupKind::SystemdUserUnit => user_unit(system, definition, lingering),
     }
 }
 
@@ -198,11 +235,7 @@ fn launch_agent(
     file: &Path,
     changed: bool,
 ) -> Result<Started, String> {
-    let uid = must(system, &OsCommand::new("id", &["-u"]))?;
-    let uid = uid.stdout.trim();
-    if uid.is_empty() || !uid.chars().all(|c| c.is_ascii_digit()) {
-        return Err(format!("`id -u` answered {uid:?}, which is not a user id"));
-    }
+    let uid = user_id(system)?;
     let domain = format!("gui/{uid}");
     let service = format!("{domain}/{}", definition.name);
     // No GUI domain: nobody is signed in at the screen, and launchd loads the
@@ -229,7 +262,83 @@ fn launch_agent(
     Ok(Started::Running)
 }
 
-fn user_unit(system: &dyn SignInSystem, definition: &StartupDefinition) -> Result<Started, String> {
+/// This user's numeric id, from `id -u`.
+fn user_id(system: &dyn SignInSystem) -> Result<String, String> {
+    let uid = must(system, &OsCommand::new("id", &["-u"]))?;
+    let uid = uid.stdout.trim();
+    if uid.is_empty() || !uid.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("`id -u` answered {uid:?}, which is not a user id"));
+    }
+    Ok(uid.to_owned())
+}
+
+/// Settles lingering for the user unit as `linger` says, and answers whether
+/// it is on: whether the user's service manager, and the host it starts,
+/// keeps running with nobody signed in.
+///
+/// Turning it on is the user's own `loginctl enable-linger`, which names no
+/// user and so acts on the caller, after `loginctl show-user <uid>` says it
+/// is off. On a computer whose loginctl refuses (its policy lets only an
+/// administrator turn lingering on) it fails with loginctl's last line,
+/// unedited, and the line that administrator runs.
+fn settle_lingering(system: &dyn SignInSystem, linger: Linger) -> Result<bool, String> {
+    let wanted = match linger {
+        Linger::On => true,
+        Linger::AsItIs => false,
+        Linger::ByComputer => !boots_to_desktop(system),
+    };
+    if !wanted {
+        return Ok(false);
+    }
+    let uid = user_id(system)?;
+    let shown = system.run(&OsCommand::new(
+        "loginctl",
+        &["show-user", &uid, "--property=Linger", "--value"],
+    ));
+    // `show-user` fails for a user with no session and lingering off, and
+    // where loginctl cannot be run the enable below says why: either way
+    // lingering is not known to be on.
+    if shown.is_ok_and(|shown| shown.success && shown.stdout.trim() == "yes") {
+        return Ok(true);
+    }
+    let said = match system.run(&OsCommand::new("loginctl", &["enable-linger"])) {
+        Ok(enabled) if enabled.success => return Ok(true),
+        Ok(enabled) => enabled.last_line().map(str::to_owned).unwrap_or_else(|| {
+            "loginctl enable-linger failed and wrote nothing on standard error".to_owned()
+        }),
+        Err(err) => format!("could not run loginctl: {err}"),
+    };
+    let user = system
+        .run(&OsCommand::new("id", &["-un"]))
+        .ok()
+        .filter(|named| named.success)
+        .map(|named| named.stdout.trim().to_owned())
+        .filter(|name| !name.is_empty() && !name.contains(char::is_whitespace))
+        .unwrap_or(uid);
+    Err(linger_refused_line(&said, &user))
+}
+
+/// The one line setup fails with when lingering could not be turned on for
+/// `user`: what loginctl said, unedited, then the fix.
+pub fn linger_refused_line(said: &str, user: &str) -> String {
+    format!(
+        "could not turn on lingering, which keeps the host running with nobody signed in: {said}. Ask an administrator here to run sudo loginctl enable-linger {user}, then run floti setup again."
+    )
+}
+
+/// Whether this computer boots to a desktop: its default target is
+/// [`DESKTOP_TARGET`]. Where that cannot be told it is taken for a server.
+fn boots_to_desktop(system: &dyn SignInSystem) -> bool {
+    system
+        .run(&OsCommand::new("systemctl", &["get-default"]))
+        .is_ok_and(|target| target.success && target.stdout.trim() == DESKTOP_TARGET)
+}
+
+fn user_unit(
+    system: &dyn SignInSystem,
+    definition: &StartupDefinition,
+    lingering: bool,
+) -> Result<Started, String> {
     let unit = definition.name.as_str();
     must(
         system,
@@ -244,7 +353,11 @@ fn user_unit(system: &dyn SignInSystem, definition: &StartupDefinition) -> Resul
         system,
         &OsCommand::new("systemctl", &["--user", "start", unit]),
     )?;
-    Ok(Started::Running)
+    Ok(if lingering {
+        Started::KeepsRunning
+    } else {
+        Started::Running
+    })
 }
 
 fn write_file(file: &Path, bytes: &[u8]) -> Result<(), String> {

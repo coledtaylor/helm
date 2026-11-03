@@ -6,7 +6,10 @@
 //! runs goes to a [`FakeOs`] that records it and plays Task Scheduler,
 //! launchd or systemd's user manager: it keeps their entries in memory, and
 //! "starts the host" by starting a real one in-process on the test's own
-//! folders, so setup's wait for it to answer meets a real host. Every
+//! folders, so setup's wait for it to answer meets a real host. For Linux it
+//! also plays `systemctl get-default` (a desktop, a server, or a computer
+//! that cannot tell) and logind's lingering through `loginctl show-user` and
+//! `loginctl enable-linger` (off, on, or refused). Every
 //! folder is in the test's temporary tree, the home folder included, and
 //! all three OSes are played on every OS.
 
@@ -21,11 +24,13 @@ use floti_host::fake_agent;
 use floti_host::platform::folders::{
     CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR, UserEnv,
 };
+use floti_host::platform::startup::register::linger_refused_line;
 use floti_host::platform::startup::register::{OsCommand, Ran, SignInSystem};
 use floti_host::platform::startup::{StartupDefinition, linux, macos, windows};
 use floti_host::server::{HOST_KEY_FILE, HostConfig, host_public_key, local_endpoint};
 use floti_host::setup::{
-    AT_NEXT_SIGN_IN_EXIT, AT_NEXT_SIGN_IN_LINE, RUNNING_LINE, SetupOutcome, setup,
+    AT_NEXT_SIGN_IN_EXIT, AT_NEXT_SIGN_IN_LINE, KEEPS_RUNNING_LINE, Linger, RUNNING_LINE,
+    SetupOutcome, parse_linger, setup,
 };
 use floti_host::testkit::{FakeAgent, PATIENCE, RunningHost, TestDirs};
 use floti_protocol::channels::host::HostStopReason;
@@ -73,36 +78,82 @@ struct OsState {
     loaded: BTreeMap<String, Vec<u8>>,
     /// The user units systemd's user manager has enabled.
     enabled: BTreeSet<String>,
+    /// Whether lingering is on for the user, as logind keeps it.
+    lingering: bool,
     /// How many times the mechanism started the host.
     starts: usize,
     /// The host it started, running on the test's folders.
     host: Option<RunningHost>,
 }
 
+/// What `loginctl enable-linger` writes where policy lets only an
+/// administrator turn lingering on.
+const LINGER_REFUSED: &str = "Could not enable linger: Access denied";
+
+/// The user `id -un` names.
+const USER_NAME: &str = "me";
+
 /// An OS that is signed in to or not, plays Task Scheduler, launchd and
 /// systemd's user manager in memory, and starts the host when one of them
-/// is asked to.
+/// is asked to. On Linux it also plays `systemctl get-default`, answering
+/// `default_target` (or failing, when it is `None`, as a computer that cannot
+/// tell), and logind's lingering through `loginctl`.
 struct FakeOs {
     signed_in: bool,
     /// A command line that starts with this fails, writing `fails_with`.
     fails: Option<(String, String)>,
+    default_target: Option<String>,
+    /// `loginctl enable-linger` is refused, writing [`LINGER_REFUSED`].
+    linger_refused: bool,
     config: Mutex<Option<HostConfig>>,
     state: Mutex<OsState>,
 }
 
 impl FakeOs {
+    /// A computer that boots to a desktop, with lingering off.
     fn new(dirs: &TestDirs, agent: &FakeAgent, signed_in: bool) -> Self {
         Self {
             signed_in,
             fails: None,
+            default_target: Some("graphical.target".to_owned()),
+            linger_refused: false,
             config: Mutex::new(Some(host_config(dirs, agent))),
             state: Mutex::new(OsState::default()),
         }
     }
 
+    /// A Linux computer that boots to no desktop, signed in to over ssh,
+    /// with lingering off.
+    fn server(dirs: &TestDirs, agent: &FakeAgent) -> Self {
+        Self::new(dirs, agent, true).booting_to(Some("multi-user.target"))
+    }
+
     fn failing(mut self, line: &str, says: &str) -> Self {
         self.fails = Some((line.to_owned(), says.to_owned()));
         self
+    }
+
+    fn booting_to(mut self, target: Option<&str>) -> Self {
+        self.default_target = target.map(str::to_owned);
+        self
+    }
+
+    fn lingering(self) -> Self {
+        self.state.lock().unwrap().lingering = true;
+        self
+    }
+
+    fn refusing_linger(mut self) -> Self {
+        self.linger_refused = true;
+        self
+    }
+
+    fn lingers(&self) -> bool {
+        self.state.lock().unwrap().lingering
+    }
+
+    fn enabled(&self) -> Vec<String> {
+        self.state.lock().unwrap().enabled.iter().cloned().collect()
     }
 
     fn runs(&self) -> Vec<String> {
@@ -217,6 +268,23 @@ impl SignInSystem for FakeOs {
                 self.start_host(&mut state);
                 ok("")
             }
+            ("id", ["-un"]) => ok(&format!("{USER_NAME}\n")),
+            ("systemctl", ["get-default"]) => match &self.default_target {
+                Some(target) => ok(&format!("{target}\n")),
+                None => failed(
+                    "System has not been booted with systemd as init system (PID 1). Can't operate.\nFailed to connect to bus: Host is down",
+                ),
+            },
+            ("loginctl", ["show-user", uid, "--property=Linger", "--value"]) if *uid == UID => {
+                ok(if state.lingering { "yes\n" } else { "no\n" })
+            }
+            ("loginctl", ["enable-linger"]) => {
+                if self.linger_refused {
+                    return failed(&format!("{LINGER_REFUSED}\n"));
+                }
+                state.lingering = true;
+                ok("")
+            }
             ("systemctl", ["--user", "daemon-reload"]) => ok(""),
             ("systemctl", ["--user", "enable", unit]) => {
                 state.enabled.insert((*unit).to_owned());
@@ -235,9 +303,19 @@ impl SignInSystem for FakeOs {
     }
 }
 
-/// Runs setup for `definition` as the test's user against `os`.
+/// Runs setup for `definition` as the test's user against `os`, with no
+/// flag, as the desktop's install runs it.
 async fn run_setup(dirs: &TestDirs, os: &FakeOs, definition: &StartupDefinition) -> SetupOutcome {
-    setup(&user(dirs), os, definition, PATIENCE).await
+    run_setup_with(dirs, os, definition, Linger::ByComputer).await
+}
+
+async fn run_setup_with(
+    dirs: &TestDirs,
+    os: &FakeOs,
+    definition: &StartupDefinition,
+    linger: Linger,
+) -> SetupOutcome {
+    setup(&user(dirs), os, definition, linger, PATIENCE).await
 }
 
 fn logon_task(binary: &str) -> StartupDefinition {
@@ -381,17 +459,231 @@ async fn s4_on_linux_setup_writes_the_user_unit_enables_and_starts_it_with_the_u
         std::fs::read(unit_file(&dirs)).unwrap(),
         definition.file_bytes()
     );
+    // A computer that boots to a desktop: lingering is left as it is, never
+    // asked about, and the host runs in the desktop session.
     assert_eq!(
         os.runs(),
         [
+            "systemctl get-default",
             "systemctl --user daemon-reload",
             "systemctl --user enable floti.service",
             "systemctl --user start floti.service",
         ]
     );
+    assert_eq!(outcome.printed(), Some(RUNNING_LINE));
+    assert!(!os.lingers());
     assert_per_user_only(&os.runs());
     assert_host_answers_with_the_key_setup_made(&dirs).await;
     os.stop().await;
+}
+
+// ---------------------------------------------------------------------------
+// A Linux server: lingering on, so the host runs with nobody signed in
+// ---------------------------------------------------------------------------
+
+/// What setup runs on a Linux server with lingering off, before the unit.
+fn turning_lingering_on() -> Vec<String> {
+    [
+        "systemctl get-default",
+        "id -u",
+        "loginctl show-user 501 --property=Linger --value",
+        "loginctl enable-linger",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+fn registering_the_unit() -> Vec<String> {
+    [
+        "systemctl --user daemon-reload",
+        "systemctl --user enable floti.service",
+        "systemctl --user start floti.service",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s1_on_a_linux_server_setup_turns_lingering_on_as_the_user_then_starts_the_unit_and_says_it_keeps_running_with_nobody_signed_in()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let os = FakeOs::server(&dirs, &agent);
+    let definition = linux::user_unit(Path::new(UNIX_FLOTI)).unwrap();
+
+    let outcome = run_setup(&dirs, &os, &definition).await;
+
+    assert_eq!(outcome, SetupOutcome::KeepsRunning);
+    assert_eq!(outcome.code(), 0);
+    assert_eq!(outcome.printed(), Some(KEEPS_RUNNING_LINE));
+    assert!(!KEEPS_RUNNING_LINE.contains('\n'));
+    // Lingering first, with the user's own loginctl naming no user, then the
+    // unit through the user's own service manager.
+    assert_eq!(
+        os.runs(),
+        [turning_lingering_on(), registering_the_unit()].concat()
+    );
+    assert_per_user_only(&os.runs());
+    assert!(os.lingers());
+    assert_eq!(
+        std::fs::read(unit_file(&dirs)).unwrap(),
+        definition.file_bytes()
+    );
+    assert_eq!(os.starts(), 1);
+    assert_host_answers_with_the_key_setup_made(&dirs).await;
+    os.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s1_a_linux_computer_that_cannot_tell_its_default_target_is_set_up_as_a_server() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let os = FakeOs::new(&dirs, &agent, true).booting_to(None);
+    let definition = linux::user_unit(Path::new(UNIX_FLOTI)).unwrap();
+
+    let outcome = run_setup(&dirs, &os, &definition).await;
+
+    assert_eq!(outcome, SetupOutcome::KeepsRunning);
+    assert_eq!(
+        os.runs(),
+        [turning_lingering_on(), registering_the_unit()].concat()
+    );
+    os.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s2_on_a_linux_server_with_lingering_on_setup_run_again_for_an_update_leaves_it_and_replaces_its_one_unit()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let os = FakeOs::server(&dirs, &agent).lingering();
+    let first = linux::user_unit(Path::new(UNIX_FLOTI)).unwrap();
+    assert_eq!(
+        run_setup(&dirs, &os, &first).await,
+        SetupOutcome::KeepsRunning
+    );
+    let moved = linux::user_unit(Path::new("/home/me/bin/floti")).unwrap();
+    assert_eq!(
+        run_setup(&dirs, &os, &moved).await,
+        SetupOutcome::KeepsRunning
+    );
+
+    // Asked whether it is on, each time, and never told to change it.
+    let asked: Vec<String> = [
+        "systemctl get-default",
+        "id -u",
+        "loginctl show-user 501 --property=Linger --value",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    assert_eq!(
+        os.runs(),
+        [
+            asked.clone(),
+            registering_the_unit(),
+            asked,
+            registering_the_unit()
+        ]
+        .concat()
+    );
+    assert!(os.lingers());
+    assert_eq!(os.enabled(), ["floti.service"]);
+    assert_eq!(std::fs::read(unit_file(&dirs)).unwrap(), moved.file_bytes());
+    assert_eq!(
+        std::fs::read_dir(unit_file(&dirs).parent().unwrap())
+            .unwrap()
+            .count(),
+        1
+    );
+    assert_host_answers_with_the_key_setup_made(&dirs).await;
+    os.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3_where_loginctl_refuses_lingering_setup_registers_and_starts_nothing_and_fails_with_its_line_and_the_fix()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let os = FakeOs::server(&dirs, &agent).refusing_linger();
+    // A unit from an earlier setup, which a refusal leaves as it was.
+    let earlier = b"[Unit]\nDescription=an earlier floti host\n";
+    std::fs::create_dir_all(unit_file(&dirs).parent().unwrap()).unwrap();
+    std::fs::write(unit_file(&dirs), earlier).unwrap();
+
+    let outcome = run_setup(
+        &dirs,
+        &os,
+        &linux::user_unit(Path::new(UNIX_FLOTI)).unwrap(),
+    )
+    .await;
+
+    let SetupOutcome::Failed(line) = &outcome else {
+        panic!("setup did not fail: {outcome:?}");
+    };
+    assert_eq!(*line, linger_refused_line(LINGER_REFUSED, USER_NAME));
+    assert!(line.contains(LINGER_REFUSED), "{line}");
+    assert!(
+        line.contains("Ask an administrator here to run sudo loginctl enable-linger me"),
+        "{line}"
+    );
+    assert!(!line.contains('\n'), "{line}");
+    assert_eq!(outcome.code(), 1);
+    assert_eq!(outcome.printed(), None);
+    // Nothing registered or started, and the earlier unit is as it was.
+    assert_eq!(
+        os.runs(),
+        [turning_lingering_on(), vec!["id -un".to_owned()]].concat()
+    );
+    assert_per_user_only(&os.runs());
+    assert!(os.enabled().is_empty());
+    assert_eq!(os.starts(), 0);
+    assert!(!os.lingers());
+    assert_eq!(std::fs::read(unit_file(&dirs)).unwrap(), earlier);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s4_with_linger_a_linux_desktop_gets_lingering_on_as_a_server_does() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let os = FakeOs::new(&dirs, &agent, true);
+    let definition = linux::user_unit(Path::new(UNIX_FLOTI)).unwrap();
+
+    let outcome = run_setup_with(&dirs, &os, &definition, Linger::On).await;
+
+    assert_eq!(outcome, SetupOutcome::KeepsRunning);
+    // The flag decides: what the computer boots to is not asked.
+    assert_eq!(
+        os.runs(),
+        [turning_lingering_on()[1..].to_vec(), registering_the_unit()].concat()
+    );
+    assert!(os.lingers());
+    os.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s4_with_no_linger_a_linux_server_keeps_lingering_as_it_is_and_the_host_starts_at_each_sign_in()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let os = FakeOs::server(&dirs, &agent);
+    let definition = linux::user_unit(Path::new(UNIX_FLOTI)).unwrap();
+
+    let outcome = run_setup_with(&dirs, &os, &definition, Linger::AsItIs).await;
+
+    assert_eq!(outcome, SetupOutcome::Running);
+    assert_eq!(outcome.printed(), Some(RUNNING_LINE));
+    assert_eq!(os.runs(), registering_the_unit());
+    assert!(!os.lingers());
+    os.stop().await;
+}
+
+#[test]
+fn floti_setup_takes_linger_or_no_linger_and_nothing_else() {
+    assert_eq!(parse_linger(&[]), Some(Linger::ByComputer));
+    assert_eq!(parse_linger(&["--linger"]), Some(Linger::On));
+    assert_eq!(parse_linger(&["--no-linger"]), Some(Linger::AsItIs));
+    assert_eq!(parse_linger(&["--linger", "--no-linger"]), None);
+    assert_eq!(parse_linger(&["--sudo"]), None);
 }
 
 // ---------------------------------------------------------------------------

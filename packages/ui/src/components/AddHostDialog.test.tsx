@@ -374,6 +374,36 @@ describe('the add-a-host dialog', () => {
     expect(w.checks).toHaveLength(2)
   })
 
+  it('a Linux server installs, its setup says the host keeps running with nobody signed in, and it is added and connected with no next-sign-in note', async () => {
+    const w = world()
+    await pick(w)
+    await userEvent.click(w.button('Connect'))
+    w.checks[0]?.answer.resolve({ kind: 'offer', id: 'offer-1', offer: OFFER })
+    await vi.waitFor(() => expect(w.step()).toBe('install'))
+    await userEvent.click(w.button('Install on build-box'))
+    w.installs[0]?.answer.resolve({ ok: true, floti: '/home/me/.local/bin/floti', startsAtNextSignIn: false })
+    await vi.waitFor(() => expect(w.adds).toHaveLength(1))
+    w.adds[0]?.answer.resolve(added(w.adds[0].request))
+    await vi.waitFor(() => expect(w.step()).toBe('added'))
+    expect(w.dialog().textContent).toContain('Connected')
+    expect(w.dialog().textContent).not.toMatch(/sign-in|signs in/i)
+  })
+
+  it('a Linux server whose loginctl refuses lingering shows setup’s line unedited and adds nothing', async () => {
+    const line =
+      'floti setup: could not turn on lingering, which keeps the host running with nobody signed in: Could not enable linger: Access denied. Ask an administrator here to run sudo loginctl enable-linger me, then run floti setup again.'
+    const w = world()
+    await pick(w)
+    await userEvent.click(w.button('Connect'))
+    w.checks[0]?.answer.resolve({ kind: 'offer', id: 'offer-1', offer: OFFER })
+    await vi.waitFor(() => expect(w.step()).toBe('install'))
+    await userEvent.click(w.button('Install on build-box'))
+    w.installs[0]?.answer.resolve({ ok: false, step: 'setup', lastLine: line })
+    await vi.waitFor(() => expect(w.step()).toBe('failed'))
+    expect(w.dialog().querySelector('[data-add-host-line]')?.textContent).toBe(line)
+    expect(w.actions.add).not.toHaveBeenCalled()
+  })
+
   it('S13: a host key that changed is told from one never seen, from all ssh wrote', async () => {
     const w = world()
     await pick(w)

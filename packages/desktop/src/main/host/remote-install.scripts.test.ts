@@ -96,6 +96,40 @@ describe('the install scripts, run where floti goes', () => {
   )
 
   it(
+    'S5: on a server, setup turns lingering on and says the host keeps running with nobody signed in: running, with no next sign-in to wait for',
+    { timeout: PATIENCE },
+    async () => {
+      const { root, env, installed } = await computer('server')
+      const own = join(root, 'own floti')
+      const bytes = Buffer.from('this is floti for a server\n')
+      await writeFile(own, bytes)
+      const { outcome } = await checkAndInstall(
+        { ...env, FAKE_SSH_SETUP: 'server' },
+        { ownBuild: async () => ({ path: own, sha256: sha256(bytes) }) }
+      )
+      expect(outcome).toEqual({ ok: true, floti: installed, startsAtNextSignIn: false })
+    }
+  )
+
+  it(
+    'S5: on a server whose loginctl refuses lingering, setup’s one line comes back unedited as the setup step’s failure',
+    { timeout: PATIENCE },
+    async () => {
+      const { root, env } = await computer('refused')
+      const own = join(root, 'own floti')
+      const bytes = Buffer.from('this is floti for a server\n')
+      await writeFile(own, bytes)
+      const line =
+        'floti setup: could not turn on lingering, which keeps the host running with nobody signed in: Could not enable linger: Access denied. Ask an administrator here to run sudo loginctl enable-linger me, then run floti setup again.'
+      const { outcome } = await checkAndInstall(
+        { ...env, FAKE_SSH_SETUP: `fail:${line}` },
+        { ownBuild: async () => ({ path: own, sha256: sha256(bytes) }) }
+      )
+      expect(outcome).toEqual({ ok: false, step: 'setup', lastLine: line })
+    }
+  )
+
+  it(
     'S15: a file whose SHA-256 does not match is not installed, the floti there keeps working, and the script’s last line says why',
     { timeout: PATIENCE },
     async () => {

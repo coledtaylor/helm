@@ -27,7 +27,12 @@
 //! as JSON on standard input. `floti version` prints one line:
 //! Floti's version, the protocol version, and this OS and CPU. `floti setup`
 //! registers the host to start at this user's sign-in and starts it in the
-//! signed-in session. `floti keeper <data folder> <runtime folder>` is the
+//! signed-in session; on a Linux server it first turns lingering on, so the
+//! host runs with nobody signed in, and `--linger` or `--no-linger` chooses
+//! either way on any Linux computer. A host started by the OS's mechanism
+//! exits with status 0 whenever it is stopped on purpose, so the systemd
+//! unit's restart on failure starts again only a host that crashed or was
+//! killed. `floti keeper <data folder> <runtime folder>` is the
 //! session keeper a host starts for itself, which holds its sessions so they
 //! outlive it; it is not run by hand.
 
@@ -45,7 +50,7 @@ use floti_host::doctor::{DoctorStep, run_doctor};
 use floti_host::version;
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--floti <path>] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti doctor [--record]\n       floti version\n       floti setup\n       floti update-stop [<client folder>] --ask | --stop";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--floti <path>] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti doctor [--record]\n       floti version\n       floti setup [--linger | --no-linger]\n       floti update-stop [<client folder>] --ask | --stop";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -96,7 +101,10 @@ fn main() -> ExitCode {
             println!("{}", version::version_line());
             ExitCode::SUCCESS
         }
-        ["setup"] => ExitCode::from(floti_host::setup::run_setup()),
+        ["setup", flags @ ..] => match floti_host::setup::parse_linger(flags) {
+            Some(linger) => ExitCode::from(floti_host::setup::run_setup(linger)),
+            None => usage(),
+        },
         ["--version"] | ["-V"] => {
             println!("floti {}", version::FLOTI_VERSION);
             ExitCode::SUCCESS

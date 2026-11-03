@@ -1,7 +1,10 @@
 //! Starting at sign-in on Linux: the systemd user unit `floti.service`,
 //! wanted by `default.target` of the user's own service manager. It names no
-//! `User=` and no system target, so it is never a system service; a server
-//! with lingering on starts it without a sign-in.
+//! `User=` and no system target, so it is never a system service. On a
+//! server `floti setup` turns lingering on for the user, so the user's
+//! service manager starts it at boot and keeps it running with nobody signed
+//! in; on a computer that boots to a desktop it starts at sign-in, in the
+//! desktop session ([`register`](super::register)).
 
 use std::path::Path;
 
@@ -27,9 +30,15 @@ impl StartAtSignIn for Native {
 /// The user unit that runs `binary host` when the user's service manager
 /// reaches `default.target`.
 ///
-/// `KillMode=mixed` sends the stop signal to the host alone, so the host ends
-/// each session's process tree and records it itself before systemd kills
-/// whatever is left.
+/// `KillMode=process` sends the stop signal to the host alone and kills
+/// nothing else in the unit, at a stop or when the host dies. At a stop the
+/// host ends each session's process tree and the session keeper itself, and
+/// records them. When the host dies without a stop, the session keeper,
+/// which shares the unit's control group, keeps the sessions running, and
+/// `Restart=on-failure` starts the host again, which takes them back from the
+/// keeper: on a server nobody signs in to start it. Every deliberate end of
+/// the host (a stop from a client or the OS's stop signal, a stop for an
+/// update) exits with status 0, so only a crash or a kill restarts it.
 pub fn user_unit(binary: &Path) -> Result<StartupDefinition> {
     let exec = quote_exec_word(binary_text(binary, |path| path.starts_with('/'))?);
     let contents = format!(
@@ -39,7 +48,9 @@ Description=Floti host
 [Service]
 Type=simple
 ExecStart={exec} host
-KillMode=mixed
+KillMode=process
+Restart=on-failure
+RestartSec=1
 
 [Install]
 WantedBy=default.target

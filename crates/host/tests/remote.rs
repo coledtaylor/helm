@@ -9,7 +9,9 @@
 //! `test/fake-ssh/` run the line they are given on this computer, in the
 //! test's own folders, with `floti` mapped to the binary built here. Nothing
 //! reads or writes `~/.ssh`. Every folder is in the test's temporary tree, a
-//! host is a [`RunningHost`] the test stops, and a bridge ends when the
+//! host is a [`RunningHost`] the test stops, or the `floti host` executable
+//! run as a server's user unit runs it, which the test stops or kills and
+//! starts again as systemd would, and a bridge ends when the
 //! test's pipe to its standard input closes, which takes its transport and
 //! the `floti connect` behind it along: each sees its standard input close.
 
@@ -17,7 +19,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -31,14 +33,17 @@ use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, R
 use floti_host::platform::socket::{
     Endpoint, LocalListener, LocalSocket, LocalStream, Native as NativeSocket,
 };
+use floti_host::platform::startup;
 use floti_host::server::{HostConfig, host_public_key, local_endpoint, relay_endpoint};
-use floti_host::testkit::{FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs, run_floti};
+use floti_host::testkit::{
+    FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs, record_test_host, run_floti,
+};
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
 use floti_protocol::channels::common::SessionRecord;
-use floti_protocol::channels::host::HostStopReason;
+use floti_protocol::channels::host::{HostQuit, HostQuitRequest, HostStopReason};
 use floti_protocol::channels::sessions::{
-    SessionList, SessionRestorable, SessionStart, SessionStreamOpen, SessionTerminal,
-    StartSessionRequest,
+    CloseSessionRequest, SessionClose, SessionList, SessionRestorable, SessionStart,
+    SessionStreamOpen, SessionTerminal, StartSessionRequest,
 };
 use floti_protocol::message::{ClientInfo, ClientKind, Hello, Request, StreamData, StreamOpen};
 use floti_protocol::noise::{KeyPair, PublicKey};
@@ -1476,4 +1481,393 @@ async fn floti_doctor_record_refuses_what_is_not_a_list_of_hosts_and_records_not
     assert_eq!(refused.code, Some(3), "{refused:?}");
     assert!(refused.stderr.starts_with("floti doctor: "), "{refused:?}");
     assert!(!dirs.data.join(floti_host::doctor::HOSTS_FILE).exists());
+}
+
+// ---------------------------------------------------------------------------
+// A headless server: `floti host` as its user unit runs it, reached through
+// the user's ssh, its sessions outliving every client (design A10)
+// ---------------------------------------------------------------------------
+
+/// `floti host` as a server's user unit runs it: `<floti> host`, with no
+/// desktop, started by the user's service manager rather than by a login, so
+/// with no SSH variables; every folder in `dirs`. One still running when it
+/// is dropped is killed there.
+struct UnitHost(Option<Child>);
+
+impl UnitHost {
+    fn start(dirs: &TestDirs, agent: &FakeAgent) -> Self {
+        record_test_host(&local_endpoint(&dirs.folders()), &dirs.data);
+        let (log_var, log_dir) = agent.log_env();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_floti"));
+        command
+            .arg("host")
+            .env(DATA_DIR_VAR, &dirs.data)
+            .env(LOG_DIR_VAR, &dirs.logs)
+            .env(CONFIG_DIR_VAR, &dirs.config)
+            .env(RUNTIME_DIR_VAR, &dirs.runtime)
+            .env("HOME", &dirs.home)
+            .env("USERPROFILE", &dirs.home)
+            // The shell sessions run where `%COMSPEC%` is not set, rather
+            // than the user's own and whatever its start-up files print.
+            .env("SHELL", "/bin/sh")
+            .env(log_var, log_dir)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("SSH_CONNECTION")
+            .env_remove("SSH_CLIENT")
+            .env_remove("SSH_TTY")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        startup::stoppable(&mut command);
+        Self(Some(command.spawn().expect("run floti host")))
+    }
+
+    fn id(&self) -> u32 {
+        self.0.as_ref().expect("the host's process").id()
+    }
+
+    /// Its exit status once it exits by itself, within [`PATIENCE`].
+    fn exited(&mut self) -> ExitStatus {
+        let child = self.0.as_mut().expect("the host's process");
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            if let Some(status) = child.try_wait().expect("poll the host") {
+                self.0 = None;
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the host did not exit within {PATIENCE:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Kills it alone, as a crash takes a host down: no stop runs.
+    fn kill(&mut self) -> ExitStatus {
+        let mut child = self.0.take().expect("the host's process");
+        let _ = child.kill();
+        child.wait().expect("reap the host")
+    }
+}
+
+impl Drop for UnitHost {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Whether the user unit's `Restart=on-failure` starts the host again after
+/// it exited with `status`: after a crash or a kill, never after status 0.
+fn restarted_on_failure(status: ExitStatus) -> bool {
+    !status.success()
+}
+
+impl Bridge {
+    /// Ends the bridge as a desktop that crashes takes it down: killed with
+    /// nothing said first. Its transport and the `floti connect` behind it
+    /// see their input close.
+    fn crash(mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    /// Opens the screen of session `id` on `stream`, and reads it until
+    /// `shows` accepts what it drew.
+    async fn screen_of(&mut self, stream: u64, id: u64, shows: impl Fn(&str) -> bool) -> String {
+        self.send(&Message::StreamOpen(StreamOpen {
+            stream,
+            channel: SessionTerminal::NAME.to_owned(),
+            params: to_payload(&SessionStreamOpen { id }).unwrap(),
+        }));
+        self.read_stream_until(stream, shows).await
+    }
+
+    fn type_into(&mut self, stream: u64, text: &str) {
+        self.send(&Message::StreamData(StreamData {
+            stream,
+            data: Bytes(text.as_bytes().to_vec()),
+        }));
+    }
+
+    /// The ids of the sessions the host runs.
+    async fn listed(&mut self, request: u64) -> Vec<u64> {
+        self.request::<SessionList>(request, &())
+            .await
+            .iter()
+            .map(|row| row.id)
+            .collect()
+    }
+}
+
+/// Starts a session in `folder` through `bridge`, runs the fake agent in its
+/// shell once the shell has drawn its prompt, and types `said` into it until
+/// the agent answers: a user starting a session and working in it.
+async fn work_in_a_session(
+    bridge: &mut Bridge,
+    request: u64,
+    stream: u64,
+    agent: &FakeAgent,
+    folder: &Path,
+    said: &str,
+) -> SessionRecord {
+    let session: SessionRecord = bridge
+        .request::<SessionStart>(request, &start_request(folder))
+        .await;
+    bridge
+        .screen_of(stream, session.id, |text| !text.is_empty())
+        .await;
+    let runs = agent.records().len();
+    bridge.type_into(stream, &format!("\"{}\"\r", agent.exe().display()));
+    let deadline = Instant::now() + PATIENCE;
+    while agent.records().len() == runs {
+        assert!(
+            Instant::now() < deadline,
+            "the fake agent did not start in the session within {PATIENCE:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    bridge.type_into(stream, &format!("{said}\r"));
+    let answer = format!("echo: {said}");
+    bridge
+        .read_stream_until(stream, |text| text.contains(&answer))
+        .await;
+    session
+}
+
+/// The status recorded for session `id` in the host's store.
+fn row_status(dirs: &TestDirs, id: u64) -> String {
+    let db = rusqlite::Connection::open(dirs.data.join("floti.db")).expect("open floti.db");
+    db.query_row(
+        "SELECT status FROM sessions WHERE id = ?1",
+        [i64::try_from(id).unwrap()],
+        |row| row.get(0),
+    )
+    .expect("the session's row")
+}
+
+/// Polls the store until session `id`'s row reads `status`.
+async fn row_becomes(dirs: &TestDirs, id: u64, status: &str) {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let now = row_status(dirs, id);
+        if now == status {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "session {id} is {now}, not {status}, after {PATIENCE:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_servers_host_as_its_unit_runs_it_serves_the_desktop_through_ssh_and_its_sessions_end_only_when_a_client_ends_them_or_it_stops()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let mut host = UnitHost::start(&dirs, &agent);
+    let endpoint = local_endpoint(&dirs.folders());
+    // Another device, on the server itself, with a session of its own.
+    let mut other = TestClient::connect(&endpoint, &["terminal"]).await;
+    let theirs = other
+        .request::<SessionStart>(&start_request(&dirs.folder("their project")))
+        .await
+        .expect("start another device's session");
+
+    // S6: the desktop, which has pinned nothing, reaches it through
+    // `ssh <target> floti connect`, learns and pins the host's key with
+    // nothing asked there, starts a session, sees its screen and types into
+    // it.
+    let desktop = dirs.root().join("the desktop");
+    let through_ssh = || bridge_through(&dirs, &dirs.runtime, &desktop, &ssh_transport());
+    let mut bridge = Bridge::spawn(through_ssh());
+    bridge.welcomed().await;
+    let mine = work_in_a_session(
+        &mut bridge,
+        1,
+        1,
+        &agent,
+        &dirs.folder("a project"),
+        "typed far away",
+    )
+    .await;
+    assert_eq!(
+        ClientKeys::open(&desktop).unwrap().pinned_host(),
+        host_public_key(&dirs.data).unwrap()
+    );
+    let runs = transport_runs(&dirs);
+    let lines: Vec<Value> = runs.iter().map(|run| run["line"].clone()).collect();
+    assert_eq!(lines, [HOST_KEY_LINE, CONNECT_LINE]);
+    for run in &runs {
+        assert_eq!(argv_of(run)[..3], ["-o", "BatchMode=yes", TARGET]);
+    }
+
+    // S7: the desktop crashes, and nothing there ends; connecting again, it
+    // finds both sessions and its screen as it was.
+    bridge.crash();
+    let mut bridge = Bridge::spawn(through_ssh());
+    bridge.welcomed().await;
+    assert_eq!(bridge.listed(1).await, [theirs.id, mine.id]);
+    bridge
+        .screen_of(1, mine.id, |text| text.contains("echo: typed far away"))
+        .await;
+    bridge.type_into(1, "back again\r");
+    bridge
+        .read_stream_until(1, |text| text.contains("echo: back again"))
+        .await;
+
+    // S8: it quits keeping its sessions running, and a desktop that connects
+    // later finds them.
+    let kept = work_in_a_session(&mut bridge, 2, 2, &agent, &dirs.folder("kept"), "kept").await;
+    bridge
+        .request::<HostQuit>(3, &HostQuitRequest { end: false })
+        .await;
+    bridge.close_stdin();
+    assert_eq!(bridge.ended().await.code, Some(0));
+    let mut bridge = Bridge::spawn(through_ssh());
+    bridge.welcomed().await;
+    assert_eq!(bridge.listed(1).await, [theirs.id, mine.id, kept.id]);
+
+    // S10: closing one session's tab, once the window has asked, ends that
+    // session alone.
+    let closed = work_in_a_session(
+        &mut bridge,
+        2,
+        1,
+        &agent,
+        &dirs.folder("closed"),
+        "close me",
+    )
+    .await;
+    let _ = bridge
+        .request::<SessionClose>(
+            3,
+            &CloseSessionRequest {
+                id: closed.id,
+                force: true,
+            },
+        )
+        .await;
+    row_becomes(&dirs, closed.id, "exited").await;
+    assert_eq!(bridge.listed(4).await, [theirs.id, mine.id, kept.id]);
+
+    // S9: it quits ending its sessions: the ones this desktop started end,
+    // and the other device's keeps running.
+    bridge
+        .request::<HostQuit>(5, &HostQuitRequest { end: true })
+        .await;
+    bridge.close_stdin();
+    assert_eq!(bridge.ended().await.code, Some(0));
+    row_becomes(&dirs, mine.id, "exited").await;
+    row_becomes(&dirs, kept.id, "exited").await;
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let still: Vec<u64> = other
+            .request::<SessionList>(&())
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.id)
+            .collect();
+        if still == [theirs.id] {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "still listed after {PATIENCE:?}: {still:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(row_status(&dirs, theirs.id), "running");
+    drop(other);
+
+    // S11: `systemctl --user stop floti.service` sends the host its stop
+    // signal: every session there ends with its row recorded, the host exits
+    // with status 0, which the unit does not restart, and the next start
+    // offers nothing back.
+    startup::terminate(host.id()).expect("stop the host");
+    let status = host.exited();
+    assert!(status.success(), "{status}");
+    assert!(!restarted_on_failure(status));
+    assert_eq!(row_status(&dirs, theirs.id), "exited");
+    let next = RunningHost::start(config(&dirs, &agent));
+    let mut client = TestClient::connect(&endpoint, &["terminal"]).await;
+    assert_eq!(
+        client.request::<SessionRestorable>(&()).await.unwrap(),
+        None
+    );
+    assert!(client.request::<SessionList>(&()).await.unwrap().is_empty());
+    drop(client);
+    next.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_servers_host_that_is_killed_is_started_again_by_its_unit_and_takes_its_sessions_back_and_one_stopped_for_an_update_is_not()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = local_endpoint(&dirs.folders());
+    let mut host = UnitHost::start(&dirs, &agent);
+    let desktop = dirs.root().join("the desktop");
+    let through_ssh = || bridge_through(&dirs, &dirs.runtime, &desktop, &ssh_transport());
+    let mut bridge = Bridge::spawn(through_ssh());
+    bridge.welcomed().await;
+    let session = work_in_a_session(
+        &mut bridge,
+        1,
+        1,
+        &agent,
+        &dirs.folder("a project"),
+        "before",
+    )
+    .await;
+
+    // S12: killed, the host ends with a failure and the session runs on in
+    // the keeper; the unit starts the host again, as systemd does.
+    let status = host.kill();
+    assert!(restarted_on_failure(status), "{status}");
+    drop(bridge);
+    assert_eq!(row_status(&dirs, session.id), "running");
+    let runs = agent.records().len();
+    let mut host = UnitHost::start(&dirs, &agent);
+
+    // The restarted host took the session back from the keeper: the desktop
+    // reconnecting finds it, its screen as it was, and types into it, with
+    // nothing started anew and nothing offered back.
+    let mut client = TestClient::connect(&endpoint, &["terminal"]).await;
+    assert_eq!(
+        client.request::<SessionRestorable>(&()).await.unwrap(),
+        None
+    );
+    drop(client);
+    let mut bridge = Bridge::spawn(through_ssh());
+    bridge.welcomed().await;
+    assert_eq!(bridge.listed(1).await, [session.id]);
+    bridge
+        .screen_of(1, session.id, |text| text.contains("echo: before"))
+        .await;
+    bridge.type_into(1, "after\r");
+    bridge
+        .read_stream_until(1, |text| text.contains("echo: after"))
+        .await;
+    assert_eq!(agent.records().len(), runs);
+    bridge.close_stdin();
+    assert_eq!(bridge.ended().await.code, Some(0));
+
+    // Stopped for an update, through the login as the installer stops it:
+    // status 0, so the unit leaves it stopped until setup starts the new one.
+    let stopped = run_line(&dirs, &ssh_transport(), "floti update-stop --stop").await;
+    assert_eq!(stopped.status.code(), Some(0), "{stopped:?}");
+    let status = host.exited();
+    assert!(status.success(), "{status}");
+    assert!(!restarted_on_failure(status));
+    let next = RunningHost::start(config(&dirs, &agent));
+    next.stop(HostStopReason::Stop).await;
 }

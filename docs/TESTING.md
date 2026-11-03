@@ -605,12 +605,26 @@ real ones. They share `common.mjs`:
   or Windows' cmd says it. A line `<floti> setup` is always played, never run,
   because a real one registers the host to start at sign-in with this
   computer's scheduler: `FAKE_SSH_SETUP` is `running` (the default, status 0),
-  `next-sign-in` (status 10) or `fail:<line>` (status 1). The install scripts
-  themselves run for real, with `HOME` and `LOCALAPPDATA` set to the test's
-  own folder (`remote-install.scripts.test.ts`).
+  `server` (a Linux server with lingering turned on: `The Floti host is
+  running, and keeps running with nobody signed in.`, status 0),
+  `next-sign-in` (status 10) or `fail:<line>` (status 1), which plays a
+  refused lingering too. The install scripts themselves run for real, with
+  `HOME` and `LOCALAPPDATA` set to the test's own folder
+  (`remote-install.scripts.test.ts`).
 
 The host's tests (`crates/host/tests/remote.rs`) drive both through
-`floti bridge`; the desktop's run the same files through its own bridge.
+`floti bridge`; the desktop's run the same files through its own bridge. A
+headless server's host is the `floti host` executable as its user unit runs
+it (no desktop, no SSH variables), which the test stops with its stop signal
+as `systemctl --user stop` does, or kills and starts again as the unit's
+`Restart=on-failure` does.
+
+`floti setup` itself is tested against a fake OS (`crates/host/tests/setup.rs`)
+that plays Task Scheduler, launchd and systemd's user manager in memory, and,
+for Linux, `systemctl get-default` (a desktop, a server, or a computer that
+cannot tell) and lingering through `loginctl show-user` and `loginctl
+enable-linger` (off, on, or refused). Nothing there registers anything with
+this computer or turns lingering on for real.
 
 ## Rules for every test
 

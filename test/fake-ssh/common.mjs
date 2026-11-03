@@ -30,6 +30,12 @@ function playSetup(outcome) {
     process.stdout.write('The Floti host starts at the next sign-in.\n')
     process.exit(10)
   }
+  // A Linux server: lingering was turned on, so the host keeps running with
+  // nobody signed in.
+  if (outcome === 'server') {
+    process.stdout.write('The Floti host is running, and keeps running with nobody signed in.\n')
+    process.exit(0)
+  }
   if (outcome.startsWith('fail:')) {
     process.stderr.write(`${outcome.slice('fail:'.length)}\n`)
     process.exit(1)
@@ -107,7 +113,8 @@ export function runLine(line) {
   }
   // `<floti> setup` is played, never run: a real one registers the host to
   // start at sign-in with this computer's own scheduler. FAKE_SSH_SETUP picks
-  // what it says: `running` (the default), `next-sign-in`, or `fail:<line>`.
+  // what it says: `running` (the default), `server` (a Linux server, with
+  // lingering on), `next-sign-in`, or `fail:<line>`.
   if (args.length === 1 && args[0] === 'setup') playSetup(process.env.FAKE_SSH_SETUP || 'running')
   // FAKE_SSH_MISSING_LINE plays a computer that cannot run one line: a line
   // starting with it fails as `sh` says a program it cannot find, with 127.
