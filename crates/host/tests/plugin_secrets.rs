@@ -182,7 +182,7 @@ impl HostWorld {
         );
         SecretStore::new(
             Arc::new(Mutex::new(Store::open(&self.dirs.data).unwrap())),
-            seal::for_data_folder(&self.dirs.data),
+            seal::for_host(&HostRun::default(), &self.dirs.data),
             Box::new(|_| ()),
         )
     }
@@ -308,7 +308,7 @@ async fn a_saved_value_is_stored_sealed_with_canonical_origins_and_every_client_
         "the value is stored in plain text"
     );
     assert_eq!(
-        seal::for_data_folder(&world.dirs.data)
+        seal::for_host(&HostRun::default(), &world.dirs.data)
             .unseal(&sealed)
             .unwrap(),
         b"ghp_secret",
@@ -611,7 +611,7 @@ impl RegistryWorld {
         let store = Arc::new(Mutex::new(Store::open(&dirs.data).unwrap()));
         let secrets = Arc::new(SecretStore::new(
             Arc::clone(&store),
-            seal::for_data_folder(&dirs.data),
+            seal::for_host(&HostRun::default(), &dirs.data),
             Box::new(|_| ()),
         ));
         let background = Arc::new(Recorder::default());

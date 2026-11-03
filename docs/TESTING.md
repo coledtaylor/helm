@@ -230,7 +230,9 @@ file inside a marked folder (`TestDirs::without_secret_store` makes it a
 computer with no store instead); a production build never reads the marker.
 The Windows seal (DPAPI) has round-trip tests of its own, which store nothing;
 the Linux one is tested only where there is no session bus, where it reports
-that sealing is unavailable.
+that sealing is unavailable. The name of the macOS and Linux store entry, the
+installed host's and each moved data folder's own, is tested as plain logic on
+every OS and touches no store.
 
 ## Running them
 

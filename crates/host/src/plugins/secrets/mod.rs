@@ -12,8 +12,9 @@
 //! - [`store`]: the secrets table in `floti.db`, today's schema, with every
 //!   value sealed ([`SecretStore`]).
 //! - [`seal`]: what seals the values: this OS's store for this user
-//!   ([`crate::platform::secret_seal`]), or in a test build, a key file in a
-//!   data folder the testkit marked.
+//!   ([`crate::platform::secret_seal`]), in an entry of the installed host's
+//!   or, for a host whose data folder was moved, one named from that folder;
+//!   or in a test build, a key file in a data folder the testkit marked.
 //!
 //! The registry and the `floti.*` methods reach secrets through
 //! [`SecretsAccess`], so the store is the only thing that ever holds a value

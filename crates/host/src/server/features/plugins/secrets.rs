@@ -28,7 +28,7 @@ impl Secrets {
         let events = Arc::clone(&context.events);
         let store = Arc::new(SecretStore::new(
             context.hosted.ledger().shared_store(),
-            seal::for_data_folder(&context.workspace.folders.data),
+            seal::for_host(&context.workspace.run, &context.workspace.folders.data),
             Box::new(move |state| {
                 // A list nobody could be sent is not a reason to fail the
                 // change that made it: the next one carries it.

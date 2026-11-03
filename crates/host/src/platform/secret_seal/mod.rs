@@ -10,6 +10,10 @@
 //! - Linux: one random 256-bit key in a Secret Service entry Floti owns.
 //!
 //! On macOS and Linux the key seals with XChaCha20-Poly1305 ([`KeySeal`]).
+//! Its entry is named by a [`StoreEntry`]: the installed host's is the one it
+//! has always used, and a host whose data folder was moved has one of its
+//! own, named from that folder, so a development run never reads or makes the
+//! installed host's key. Windows is given the entry and stores nothing.
 //! Where no store answers (Linux with no Secret Service, as in WSL and CI),
 //! [`SecretSeal::available`] is false and every seal is refused: a value is
 //! stored sealed or not at all.
@@ -25,6 +29,7 @@ use std::fmt;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 
+mod entry;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -32,6 +37,7 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
+pub use entry::{StoreEntry, data_folder_tag};
 #[cfg(target_os = "linux")]
 pub use linux::Native;
 #[cfg(target_os = "macos")]
