@@ -367,6 +367,22 @@
         }
       ]
     },
+    "ApproveDevice": {
+      "properties": {
+        "code": {
+          "description": "The code the device shows, as typed: case, spaces and hyphens do not\nmatter.",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/DeviceRole"
+        }
+      },
+      "required": [
+        "code",
+        "role"
+      ],
+      "type": "object"
+    },
     "ArchiveMessage": {
       "description": "One message of an archived conversation.",
       "properties": {
@@ -2491,6 +2507,36 @@
         "args"
       ],
       "type": "object"
+    },
+    "DeviceListing": {
+      "properties": {
+        "paired": {
+          "items": {
+            "$ref": "#/$defs/PairedDevice"
+          },
+          "type": "array"
+        },
+        "waiting": {
+          "items": {
+            "$ref": "#/$defs/WaitingDevice"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "paired",
+        "waiting"
+      ],
+      "type": "object"
+    },
+    "DeviceRole": {
+      "description": "What a device may do with the host. Each role can do all the one before\nit can: a viewer sees, an operator also types into and runs sessions, an\nadmin also pairs and revokes devices and changes the host.",
+      "enum": [
+        "viewer",
+        "operator",
+        "admin"
+      ],
+      "type": "string"
     },
     "DeviceSession": {
       "description": "A running session a device started.",
@@ -4969,6 +5015,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/Pairing",
+          "properties": {
+            "type": {
+              "const": "pairing",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/Request",
           "properties": {
             "type": {
@@ -5143,6 +5202,117 @@
       "required": [
         "from",
         "to"
+      ],
+      "type": "object"
+    },
+    "PairedDevice": {
+      "description": "A device in the host's registry.",
+      "properties": {
+        "fingerprint": {
+          "description": "Its key's fingerprint.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name it was paired under: the name it gave when it asked.",
+          "type": "string"
+        },
+        "pairedAt": {
+          "description": "When it was paired, as RFC 3339 text.",
+          "type": "string"
+        },
+        "revokedAt": {
+          "description": "When it was revoked, as RFC 3339 text; absent while it is not.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/DeviceRole"
+        }
+      },
+      "required": [
+        "name",
+        "role",
+        "pairedAt",
+        "fingerprint"
+      ],
+      "type": "object"
+    },
+    "Pairing": {
+      "description": "Where a device's request to pair stands, sent to the device that asked\nand to no one else.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/PairingWaiting",
+          "description": "The answer to its `hello`: the request waits for someone on the\nhost's computer to approve it.",
+          "properties": {
+            "state": {
+              "const": "waiting",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PairingApproved",
+          "description": "The request was approved: the device is paired, and connects as\nitself from now on. The host closes the connection after this.",
+          "properties": {
+            "state": {
+              "const": "approved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Nobody approved it in time. The host closes the connection after\nthis; the device may ask again.",
+          "properties": {
+            "state": {
+              "const": "expired",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PairingApproved": {
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/DeviceRole",
+          "description": "The role the device is paired with."
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "type": "object"
+    },
+    "PairingWaiting": {
+      "properties": {
+        "code": {
+          "description": "The code the device shows, for `floti devices approve <code>` on the\nhost's computer: eight characters, none of them easily taken for\nanother.",
+          "type": "string"
+        },
+        "expiresInSeconds": {
+          "description": "How long the request waits for approval from now.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "code",
+        "expiresInSeconds"
       ],
       "type": "object"
     },
@@ -9709,6 +9879,36 @@
       ],
       "type": "object"
     },
+    "WaitingDevice": {
+      "description": "A request to pair that waits for approval.",
+      "properties": {
+        "fingerprint": {
+          "description": "Its key's fingerprint.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ClientKind",
+          "description": "What kind of client it said it is."
+        },
+        "name": {
+          "description": "The name the device gave in its `hello`.",
+          "type": "string"
+        },
+        "secondsLeft": {
+          "description": "How long the request waits before it expires.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "fingerprint",
+        "secondsLeft"
+      ],
+      "type": "object"
+    },
     "WatchConfigRequest": {
       "description": "Which file the client's editor has open, or null to release the watch.",
       "properties": {
@@ -10427,6 +10627,28 @@
       },
       "response": {
         "$ref": "#/$defs/WriteConfigResult"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "devices:approve",
+      "request": {
+        "$ref": "#/$defs/ApproveDevice"
+      },
+      "response": {
+        "$ref": "#/$defs/PairedDevice"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "devices:list",
+      "request": {
+        "type": "null"
+      },
+      "response": {
+        "$ref": "#/$defs/DeviceListing"
       }
     },
     {

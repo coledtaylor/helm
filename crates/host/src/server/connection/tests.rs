@@ -21,22 +21,35 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use floti_protocol::message::{ClientInfo, ClientKind, Hello};
-use floti_protocol::noise::{
-    EnrolmentCode, Initiator, InitiatorStep, KeyPair, Opener, PublicKey, Transport,
+use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
+use floti_protocol::channels::devices::{
+    ApproveDevice, DeviceListing, DeviceRole, DevicesApprove, DevicesList, PairedDevice,
 };
-use floti_protocol::{FrameDecoder, Message, PROTOCOL_VERSION, encode_frame};
+use floti_protocol::message::{
+    ClientInfo, ClientKind, ErrorCode, Hello, Pairing as PairingStatus, PairingApproved, Request,
+};
+use floti_protocol::noise::{
+    EnrolmentCode, Initiator, InitiatorStep, KeyPair, Opener, PairingCode, PublicKey, Transport,
+};
+use floti_protocol::{
+    FrameDecoder, HostIdentity, Message, PROTOCOL_VERSION, Payload, encode_frame,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use super::{Admission, Refusal, admit_within_deadline, hello_within_deadline};
+use super::{
+    Admission, Entry, Refusal, Sealed, admit_within_deadline, hello_within_deadline, serve_pairing,
+    serve_shell,
+};
 use crate::devices::{DeviceRegistry, Role, Standing};
 use crate::server::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME, read_enrolment};
+use crate::server::pairing::{MAX_WAITING, PAIRING_LIFETIME, Pairing};
 use crate::server::{
     ENROLMENT_FILE, HANDSHAKE_DEADLINE, HELLO_DEADLINE, TEST_HANDSHAKE_DEADLINE_MARKER,
     handshake_deadline, hello_deadline,
 };
+use crate::session::ClientId;
 use crate::testkit::TestDirs;
 
 /// Room for both handshake messages and more.
@@ -75,11 +88,13 @@ fn fixture_with(role: Role) -> Fixture {
     devices.pair(device.public(), "a laptop", role).unwrap();
     let host_key = Arc::new(KeyPair::generate().unwrap());
     let enrolment = Arc::new(Enrolment::prepare(&dirs.data, host_key.public(), &devices));
+    let pairing = Arc::new(Pairing::new(&dirs.data, Arc::clone(&devices)));
     Fixture {
         admission: Admission {
             host_key,
             devices,
             enrolment,
+            pairing,
             deadline: HANDSHAKE_DEADLINE,
             hello_deadline: HELLO_DEADLINE,
         },
@@ -745,4 +760,338 @@ async fn s7_a_code_from_before_a_restart_is_refused_as_unknown() {
     assert_eq!(refusal(&admitted), unknown(&device));
     assert!(written(&mut client).await.is_empty());
     assert!(restarted.enrolment.waiting());
+}
+
+// ---------------------------------------------------------------------------
+// Asking to pair, and the host's own shell
+// ---------------------------------------------------------------------------
+
+fn identity() -> HostIdentity {
+    HostIdentity {
+        protocol: PROTOCOL_VERSION,
+        host_version: "0.0.0".to_owned(),
+        backends: Vec::new(),
+    }
+}
+
+/// The next message the host sends on `client`, opened with the device's
+/// half of the session; `None` once the host has closed the pipe.
+async fn next_from_host(
+    client: &mut DuplexStream,
+    transport: &mut Transport,
+    decoder: &mut FrameDecoder,
+) -> Option<Message> {
+    let mut buf = vec![0; PIPE];
+    loop {
+        if let Some(message) = decoder.next_message().unwrap() {
+            return Some(message);
+        }
+        let n = client.read(&mut buf).await.unwrap();
+        if n == 0 {
+            return None;
+        }
+        decoder.push(&transport.open(&buf[..n]).unwrap());
+    }
+}
+
+fn request(id: u64, channel: &str, payload: Payload) -> Message {
+    Message::Request(Request {
+        id,
+        channel: channel.to_owned(),
+        payload,
+    })
+}
+
+/// A device's side of a connection the host let in, and the host's side
+/// served on a task of its own.
+struct Served {
+    client: DuplexStream,
+    transport: Transport,
+    decoder: FrameDecoder,
+    serving: tokio::task::JoinHandle<()>,
+}
+
+impl Served {
+    async fn next(&mut self) -> Option<Message> {
+        next_from_host(&mut self.client, &mut self.transport, &mut self.decoder).await
+    }
+
+    async fn send(&mut self, message: &Message) {
+        let sealed = self
+            .transport
+            .seal(&encode_frame(message).unwrap())
+            .unwrap();
+        self.client.write_all(&sealed).await.unwrap();
+    }
+}
+
+impl Fixture {
+    /// Runs `initiator`'s handshake for `device`, which must be let in as
+    /// `entry`, says hello, and serves the host's side as that.
+    async fn served(
+        &self,
+        device: &KeyPair,
+        initiator: Initiator,
+        first: &[u8],
+        entry: Entry,
+    ) -> Served {
+        let (mut client, mut host) = duplex(PIPE);
+        client.write_all(first).await.unwrap();
+        let mut shutdown = self.shutdown.subscribe();
+        let admitted = admit_within_deadline(&mut host, &self.admission, &mut shutdown)
+            .await
+            .unwrap_or_else(|_| panic!("the device was refused"));
+        assert_eq!(admitted.entry, entry);
+        assert_eq!(admitted.device, device.public());
+        let mut transport = finish_handshake(&mut client, initiator).await;
+        client
+            .write_all(&sealed_hello(&mut transport))
+            .await
+            .unwrap();
+        let sealed = Sealed::new(host, admitted.transport, &admitted.rest).unwrap();
+        let admission = self.admission.clone();
+        let key = device.public();
+        let serving = tokio::spawn(async move {
+            let identity = identity();
+            let serving = (&identity, &admission, &mut shutdown);
+            match entry {
+                Entry::Pairing => serve_pairing(sealed, ClientId(1), key, serving).await,
+                Entry::Shell => serve_shell(sealed, ClientId(1), key, serving).await,
+                Entry::Device => unreachable!("a client is served by its connection"),
+            }
+        });
+        Served {
+            client,
+            transport,
+            decoder: FrameDecoder::new(),
+            serving,
+        }
+    }
+
+    /// `phone` asks to pair and is told its code.
+    async fn asking(&self, phone: &KeyPair) -> (Served, String) {
+        let (initiator, first) = Initiator::start_pairing(phone, &self.host()).unwrap();
+        let mut served = self.served(phone, initiator, &first, Entry::Pairing).await;
+        let code = match served.next().await {
+            Some(Message::Pairing(PairingStatus::Waiting(waiting))) => {
+                assert_eq!(waiting.expires_in_seconds, PAIRING_LIFETIME.as_secs());
+                waiting.code
+            }
+            other => panic!("the host did not answer with a code: {other:?}"),
+        };
+        (served, code)
+    }
+}
+
+#[tokio::test]
+async fn s1_s3_a_device_asking_to_pair_is_told_its_code_and_then_its_approval_and_closed() {
+    let fx = fixture();
+    let phone = KeyPair::generate().unwrap();
+    let (mut served, code) = fx.asking(&phone).await;
+    assert!(code.parse::<PairingCode>().is_ok(), "{code}");
+    assert_eq!(fx.role_of(&phone.public()), None, "paired only on approval");
+
+    let paired = fx.admission.pairing.approve(&code, Role::Viewer).unwrap();
+
+    assert_eq!(paired.name, "a late client");
+    assert_eq!(
+        served.next().await,
+        Some(Message::Pairing(PairingStatus::Approved(PairingApproved {
+            role: DeviceRole::Viewer
+        })))
+    );
+    assert_eq!(served.next().await, None, "closed after the approval");
+    (&mut served.serving).await.unwrap();
+    assert_eq!(fx.role_of(&phone.public()), Some(Role::Viewer));
+}
+
+#[tokio::test]
+async fn s2_a_device_that_sends_anything_while_it_waits_is_answered_nothing_and_its_request_withdrawn()
+ {
+    let fx = fixture();
+    let phone = KeyPair::generate().unwrap();
+    let (mut served, code) = fx.asking(&phone).await;
+
+    served
+        .send(&request(1, DevicesList::NAME, to_payload(&()).unwrap()))
+        .await;
+
+    (&mut served.serving).await.unwrap();
+    assert_eq!(served.next().await, None, "nothing answered");
+    assert!(fx.admission.pairing.list().is_empty());
+    assert!(fx.admission.pairing.approve(&code, Role::Operator).is_err());
+    assert_eq!(fx.role_of(&phone.public()), None);
+}
+
+#[tokio::test]
+async fn s2_s11_a_waiting_key_that_connects_without_asking_is_closed_unanswered_and_withdraws_its_request()
+ {
+    let fx = fixture();
+    let phone = KeyPair::generate().unwrap();
+    let (mut served, _code) = fx.asking(&phone).await;
+
+    let (admitted, written) = fx
+        .admit(&Initiator::start(&phone, &fx.host()).unwrap().1)
+        .await;
+
+    assert_eq!(refusal(&admitted), unknown(&phone));
+    assert!(written.is_empty());
+    (&mut served.serving).await.unwrap();
+    assert_eq!(
+        served.next().await,
+        None,
+        "the waiting connection ends unanswered"
+    );
+    assert!(fx.admission.pairing.list().is_empty());
+}
+
+#[tokio::test]
+async fn s11_a_paired_or_revoked_key_that_asks_to_pair_is_closed_without_a_byte() {
+    let fx = fixture();
+    let (admitted, written) = fx
+        .admit(&Initiator::start_pairing(&fx.device, &fx.host()).unwrap().1)
+        .await;
+    assert_eq!(
+        refusal(&admitted),
+        Some(format!(
+            "device {} asks to pair but is paired already",
+            fx.device.public().fingerprint()
+        ))
+    );
+    assert!(written.is_empty());
+
+    let lost = KeyPair::generate().unwrap();
+    fx.admission
+        .devices
+        .pair(lost.public(), "a lost phone", Role::Operator)
+        .unwrap();
+    fx.admission.devices.revoke(&lost.public()).unwrap();
+    let (admitted, written) = fx
+        .admit(&Initiator::start_pairing(&lost, &fx.host()).unwrap().1)
+        .await;
+    assert_eq!(
+        refusal(&admitted),
+        Some(format!("revoked device {}", lost.public().fingerprint()))
+    );
+    assert!(written.is_empty());
+    assert!(fx.admission.pairing.list().is_empty());
+}
+
+#[tokio::test]
+async fn a_device_asking_to_pair_while_sixteen_wait_is_closed_without_a_byte() {
+    let fx = fixture();
+    let _held: Vec<_> = (0..MAX_WAITING)
+        .map(|_| {
+            fx.admission
+                .pairing
+                .ask(
+                    KeyPair::generate().unwrap().public(),
+                    "a phone",
+                    ClientKind::Phone,
+                )
+                .unwrap()
+        })
+        .collect();
+    let one_more = KeyPair::generate().unwrap();
+
+    let (admitted, written) = fx
+        .admit(&Initiator::start_pairing(&one_more, &fx.host()).unwrap().1)
+        .await;
+
+    assert_eq!(
+        refusal(&admitted),
+        Some(format!(
+            "device {} asks to pair while {MAX_WAITING} requests wait",
+            one_more.public().fingerprint()
+        ))
+    );
+    assert!(written.is_empty());
+}
+
+#[tokio::test]
+async fn the_shell_is_let_in_only_for_the_hosts_own_key_asking_for_nothing() {
+    let fx = fixture();
+    let host_key = &*fx.admission.host_key;
+    for first in [
+        Initiator::start_pairing(host_key, &fx.host()).unwrap().1,
+        enrolling_first(host_key, &fx.host(), &EnrolmentCode::generate().unwrap()),
+    ] {
+        let (admitted, written) = fx.admit(&first).await;
+        assert_eq!(refusal(&admitted), unknown(host_key));
+        assert!(written.is_empty());
+    }
+    let (admitted, written) = fx
+        .admit(&Initiator::start(host_key, &fx.host()).unwrap().1)
+        .await;
+    assert_eq!(
+        admitted.map(|admitted| admitted.entry).ok(),
+        Some(Entry::Shell)
+    );
+    assert!(!written.is_empty());
+    // Every other key is the registry's to judge.
+    let (admitted, _) = fx.admit(&fx.first_message()).await;
+    assert_eq!(
+        admitted.map(|admitted| admitted.entry).ok(),
+        Some(Entry::Device)
+    );
+}
+
+#[tokio::test]
+async fn s3_s6_the_shell_lists_and_approves_devices_and_is_served_nothing_else() {
+    let fx = fixture();
+    let phone = KeyPair::generate().unwrap();
+    let (mut asking, code) = fx.asking(&phone).await;
+    let host_key = &*fx.admission.host_key;
+    let (initiator, first) = Initiator::start(host_key, &fx.host()).unwrap();
+    let mut shell = fx.served(host_key, initiator, &first, Entry::Shell).await;
+    assert!(matches!(shell.next().await, Some(Message::Welcome(_))));
+
+    shell
+        .send(&request(1, DevicesList::NAME, to_payload(&()).unwrap()))
+        .await;
+    let Some(Message::Response(listed)) = shell.next().await else {
+        panic!("the shell's list was not answered");
+    };
+    let listing: DeviceListing = from_payload(&listed.payload).unwrap();
+    assert_eq!(listing.paired.len(), 1);
+    assert_eq!(
+        listing.paired[0].fingerprint,
+        fx.device.public().fingerprint()
+    );
+    assert_eq!(listing.waiting.len(), 1);
+    assert_eq!(listing.waiting[0].fingerprint, phone.public().fingerprint());
+
+    let approve = ApproveDevice {
+        code,
+        role: DeviceRole::Operator,
+    };
+    shell
+        .send(&request(
+            2,
+            DevicesApprove::NAME,
+            to_payload(&approve).unwrap(),
+        ))
+        .await;
+    let Some(Message::Response(approved)) = shell.next().await else {
+        panic!("the shell's approval was not answered");
+    };
+    let paired: PairedDevice = from_payload(&approved.payload).unwrap();
+    assert_eq!(paired.role, DeviceRole::Operator);
+    assert_eq!(paired.fingerprint, phone.public().fingerprint());
+    assert!(matches!(
+        asking.next().await,
+        Some(Message::Pairing(PairingStatus::Approved(_)))
+    ));
+
+    shell
+        .send(&request(3, "session:list", to_payload(&()).unwrap()))
+        .await;
+    match shell.next().await {
+        Some(Message::Error(error)) => {
+            assert_eq!((error.id, error.code), (3, ErrorCode::Unavailable));
+        }
+        other => panic!("the shell was served another channel: {other:?}"),
+    }
+    drop(shell.client);
+    shell.serving.await.unwrap();
 }

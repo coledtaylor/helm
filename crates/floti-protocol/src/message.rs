@@ -11,6 +11,11 @@
 //! `hello` and `refused` are frozen across majors: their fields are never
 //! renamed or removed, so any client, however old, can read why it was
 //! refused.
+//!
+//! A device that asked to pair in its handshake is not welcomed: the host
+//! answers its `hello` with `pairing`, saying the code to show, and later
+//! with `pairing` again once the request is approved or has expired. Nothing
+//! else crosses that connection.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -19,6 +24,7 @@ use ts_rs::TS;
 use crate::backend::{BackendDescriptor, BackendId, Support, feature_table};
 use crate::bytes::Bytes;
 use crate::capability::Capability;
+use crate::channels::devices::DeviceRole;
 use crate::version::{ProtocolVersion, UpdateSide};
 
 /// A channel payload before it is decoded against the channel's type.
@@ -30,6 +36,7 @@ pub enum Message {
     Hello(Hello),
     Welcome(Welcome),
     Refused(Refused),
+    Pairing(Pairing),
     Request(Request),
     Response(Response),
     Error(ErrorReply),
@@ -121,6 +128,41 @@ pub struct Refused {
     pub update: UpdateSide,
     /// A sentence naming both versions and which side to update.
     pub message: String,
+}
+
+/// Where a device's request to pair stands, sent to the device that asked
+/// and to no one else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum Pairing {
+    /// The answer to its `hello`: the request waits for someone on the
+    /// host's computer to approve it.
+    Waiting(PairingWaiting),
+    /// The request was approved: the device is paired, and connects as
+    /// itself from now on. The host closes the connection after this.
+    Approved(PairingApproved),
+    /// Nobody approved it in time. The host closes the connection after
+    /// this; the device may ask again.
+    Expired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingWaiting {
+    /// The code the device shows, for `floti devices approve <code>` on the
+    /// host's computer: eight characters, none of them easily taken for
+    /// another.
+    pub code: String,
+    /// How long the request waits for approval from now.
+    #[ts(type = "number")]
+    pub expires_in_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingApproved {
+    /// The role the device is paired with.
+    pub role: DeviceRole,
 }
 
 /// A call on a request channel.

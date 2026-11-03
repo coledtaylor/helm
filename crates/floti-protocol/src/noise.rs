@@ -15,9 +15,17 @@
 //! file's [`EnrolmentCode`] as its payload, which only that host's private
 //! key can decrypt. The host finds it on the [`PendingDevice`] and decides;
 //! the handshake is otherwise the same, and a host that refuses still writes
-//! nothing. A first message takes exactly two lengths: with no payload, the
-//! paired device's handshake byte for byte, and with a code. Any other is
-//! not a handshake.
+//! nothing.
+//!
+//! A device the host does not know can ask to pair instead: it starts with
+//! [`Initiator::start_pairing`], holding the host to a key it learned another
+//! way, and its first message carries [`PAIRING_MARKER`]. The host finds the
+//! ask with [`PendingDevice::asks_to_pair`], and answers a device it lets ask
+//! with a short [`PairingCode`] once the session is up.
+//!
+//! A first message takes exactly three lengths: with no payload, the paired
+//! device's handshake byte for byte; with a code; and with the pairing
+//! marker. Any other is not a handshake.
 //!
 //! On the stream every Noise message, handshake and transport alike, is a
 //! 2-byte big-endian length and then at most [`MAX_MESSAGE_LEN`] bytes. A
@@ -37,6 +45,7 @@
 
 mod code;
 mod keys;
+mod pairing;
 mod transport;
 mod wire;
 
@@ -49,6 +58,7 @@ use zeroize::Zeroize;
 
 pub use code::{ENROLMENT_CODE_LEN, EnrolmentCode};
 pub use keys::{KEY_LEN, KeyPair, PrivateKey, PublicKey};
+pub use pairing::{PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN, PAIRING_MARKER, PairingCode};
 pub use transport::{Opener, Sealer, Transport};
 
 use wire::{OneMessage, put_prefixed};
@@ -76,8 +86,26 @@ const MESSAGE_1_LEN: usize = KEY_LEN + KEY_LEN + TAG_LEN + TAG_LEN;
 /// IK's first message carrying an enrolment code, encrypted.
 const ENROLLING_MESSAGE_1_LEN: usize = MESSAGE_1_LEN + ENROLMENT_CODE_LEN;
 
-/// The lengths a first message takes: a paired device's and an enrolling one's.
-const MESSAGE_1_LENS: &[usize] = &[MESSAGE_1_LEN, ENROLLING_MESSAGE_1_LEN];
+/// IK's first message asking to pair: the pairing marker, encrypted.
+const PAIRING_MESSAGE_1_LEN: usize = MESSAGE_1_LEN + PAIRING_MARKER.len();
+
+/// The lengths a first message takes: a paired device's, an enrolling one's
+/// and one asking to pair.
+const MESSAGE_1_LENS: &[usize] = &[
+    MESSAGE_1_LEN,
+    ENROLLING_MESSAGE_1_LEN,
+    PAIRING_MESSAGE_1_LEN,
+];
+
+/// The most payload a first message carries.
+const MAX_MESSAGE_1_PAYLOAD: usize = if ENROLMENT_CODE_LEN > PAIRING_MARKER.len() {
+    ENROLMENT_CODE_LEN
+} else {
+    PAIRING_MARKER.len()
+};
+
+// Each kind of first message is told apart by its length alone.
+const _: () = assert!(PAIRING_MARKER.len() != ENROLMENT_CODE_LEN && !PAIRING_MARKER.is_empty());
 
 /// IK's second message with no payload: the host's ephemeral key and the
 /// empty payload's tag.
@@ -120,6 +148,11 @@ pub enum NoiseError {
     /// Text that is not an enrolment code: 64 hex digits.
     #[error("not an enrolment code")]
     InvalidCode,
+
+    /// Text that is not a pairing code: eight characters from
+    /// [`PAIRING_CODE_ALPHABET`].
+    #[error("not a pairing code")]
+    InvalidPairingCode,
 
     /// The Noise library could not do what was asked, such as reading the
     /// operating system's random source.
@@ -172,6 +205,17 @@ impl Initiator {
         Self::start_with(device, host, code.expose_secret())
     }
 
+    /// Starts a handshake as `device`, which the host holding `host` does
+    /// not know yet, asking it to pair. Returns the bytes to send first; only
+    /// that host can read the ask in them. The host's answer is checked as
+    /// [`Self::start`]'s is.
+    pub fn start_pairing(
+        device: &KeyPair,
+        host: &PublicKey,
+    ) -> Result<(Self, Vec<u8>), NoiseError> {
+        Self::start_with(device, host, PAIRING_MARKER)
+    }
+
     fn start_with(
         device: &KeyPair,
         host: &PublicKey,
@@ -183,7 +227,7 @@ impl Initiator {
             .and_then(|builder| builder.prologue(PROLOGUE))
             .and_then(Builder::build_initiator)
             .map_err(library)?;
-        let mut message = [0; ENROLLING_MESSAGE_1_LEN];
+        let mut message = [0; MESSAGE_1_LEN + MAX_MESSAGE_1_PAYLOAD];
         let len = state
             .write_message(payload, &mut message)
             .map_err(library)?;
@@ -275,28 +319,29 @@ impl Responder {
         let Some(message) = self.inbound.message() else {
             return Ok(ResponderStep::Pending(self));
         };
-        let mut payload = [0; ENROLLING_MESSAGE_1_LEN];
+        let mut payload = [0; MESSAGE_1_LEN + MAX_MESSAGE_1_PAYLOAD];
         let read = self.state.read_message(message, &mut payload);
-        let code = match read {
-            Ok(0) => Ok(None),
+        let ask = match read {
+            Ok(0) => Ok(Ask::Plain),
             Ok(ENROLMENT_CODE_LEN) => {
                 let mut bytes = [0; ENROLMENT_CODE_LEN];
                 bytes.copy_from_slice(&payload[..ENROLMENT_CODE_LEN]);
                 let code = EnrolmentCode::from_bytes(bytes);
                 bytes.zeroize();
-                Ok(Some(code))
+                Ok(Ask::Enrol(code))
             }
+            Ok(len) if payload[..len] == PAIRING_MARKER[..] => Ok(Ask::Pair),
             _ => Err(NoiseError::FirstMessageUnreadable),
         };
         payload.zeroize();
-        let code = code?;
+        let ask = ask?;
         let key = keys::public_from(self.state.get_remote_static())
             .ok_or(NoiseError::FirstMessageUnreadable)?;
         Ok(ResponderStep::Received {
             device: PendingDevice {
                 state: self.state,
                 key,
-                code,
+                ask,
             },
             used,
         })
@@ -315,7 +360,17 @@ impl fmt::Debug for Responder {
 pub struct PendingDevice {
     state: Box<HandshakeState>,
     key: PublicKey,
-    code: Option<EnrolmentCode>,
+    ask: Ask,
+}
+
+/// What a device's first message carried besides its key.
+enum Ask {
+    /// Nothing: a paired device's handshake.
+    Plain,
+    /// An enrolment code.
+    Enrol(EnrolmentCode),
+    /// The pairing marker.
+    Pair,
 }
 
 impl PendingDevice {
@@ -327,7 +382,16 @@ impl PendingDevice {
     /// The enrolment code the device carried, when it started with
     /// [`Initiator::start_enrolling`]. Only this host's key could read it.
     pub fn enrolment_code(&self) -> Option<&EnrolmentCode> {
-        self.code.as_ref()
+        match &self.ask {
+            Ask::Enrol(code) => Some(code),
+            Ask::Plain | Ask::Pair => None,
+        }
+    }
+
+    /// Whether the device asks to pair: it started with
+    /// [`Initiator::start_pairing`].
+    pub fn asks_to_pair(&self) -> bool {
+        matches!(self.ask, Ask::Pair)
     }
 
     /// Lets the device in: the session, and the host's answer to send.
@@ -350,7 +414,8 @@ impl fmt::Debug for PendingDevice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PendingDevice")
             .field("key", &self.key)
-            .field("enrolling", &self.code.is_some())
+            .field("enrolling", &self.enrolment_code().is_some())
+            .field("asks_to_pair", &self.asks_to_pair())
             .finish_non_exhaustive()
     }
 }

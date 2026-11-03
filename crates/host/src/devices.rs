@@ -6,6 +6,11 @@
 //! a device on the host's computer enrols itself with the host's one-time
 //! code ([`DeviceRegistry::pair_first_admin`]), and becomes that admin.
 //!
+//! Every other device asks to pair and shows the short code the host
+//! answers with; `floti devices approve <code>`, run in a shell on the
+//! host's computer, pairs it ([`DeviceRegistry::pair`]) under the name it
+//! gave, with the role chosen there.
+//!
 //! It is `devices.json` in the host's data folder ([`DEVICES_FILE`]), owner-
 //! only and rewritten whole and atomically on every change
 //! ([`private_files`](crate::platform::private_files)). It is not in
@@ -20,6 +25,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
+use floti_protocol::channels::devices::DeviceRole;
 use floti_protocol::noise::PublicKey;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -52,6 +58,37 @@ pub enum Role {
     Viewer,
     Operator,
     Admin,
+}
+
+impl Role {
+    /// The role with its article, as a sentence says it: "an operator".
+    pub fn with_article(self) -> &'static str {
+        match self {
+            Self::Viewer => "a viewer",
+            Self::Operator => "an operator",
+            Self::Admin => "an admin",
+        }
+    }
+}
+
+impl From<Role> for DeviceRole {
+    fn from(role: Role) -> Self {
+        match role {
+            Role::Viewer => Self::Viewer,
+            Role::Operator => Self::Operator,
+            Role::Admin => Self::Admin,
+        }
+    }
+}
+
+impl From<DeviceRole> for Role {
+    fn from(role: DeviceRole) -> Self {
+        match role {
+            DeviceRole::Viewer => Self::Viewer,
+            DeviceRole::Operator => Self::Operator,
+            DeviceRole::Admin => Self::Admin,
+        }
+    }
 }
 
 /// How a first admin's enrolment went.

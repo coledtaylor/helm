@@ -47,6 +47,7 @@ mod events;
 mod features;
 mod hosted;
 pub mod idle;
+mod pairing;
 mod plugin_tools;
 pub(crate) mod records;
 mod session_tools;
@@ -92,6 +93,10 @@ pub use enrolment::{FIRST_ADMIN_NAME, LocalEnrolment, read_enrolment};
 use features::Features;
 use hosted::Hosted;
 pub use hosted::Occupancy;
+use pairing::Pairing;
+#[cfg(any(test, feature = "testkit"))]
+pub use pairing::TEST_PAIRING_CLOCK_MARKER;
+pub use pairing::{MAX_WAITING, PAIRING_LIFETIME};
 use session_tools::HostWorld;
 
 /// The socket's name in the runtime folder.
@@ -341,6 +346,8 @@ impl Host {
             host_key.public(),
             &devices,
         ));
+        // In memory only: a request to pair does not outlive the host.
+        let pairing = Arc::new(Pairing::new(&folders.data, Arc::clone(&devices)));
         let deadline = handshake_deadline(&folders.data);
         let hello_deadline = hello_deadline(&folders.data);
         // Launch folders a crashed run left, once their owners are gone.
@@ -383,6 +390,7 @@ impl Host {
                 host_key,
                 devices,
                 enrolment,
+                pairing,
                 deadline,
                 hello_deadline,
             },

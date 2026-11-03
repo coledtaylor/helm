@@ -4,8 +4,8 @@
 use floti_protocol::message::{ClientInfo, ClientKind, Hello, StreamData};
 use floti_protocol::noise::{
     ENROLMENT_CODE_LEN, EnrolmentCode, Initiator, InitiatorStep, KeyPair, MAX_MESSAGE_LEN,
-    MAX_PLAINTEXT_LEN, NoiseError, Opener, PendingDevice, PrivateKey, PublicKey, Responder,
-    ResponderStep, Sealer, TAG_LEN, Transport,
+    MAX_PLAINTEXT_LEN, NoiseError, Opener, PAIRING_MARKER, PendingDevice, PrivateKey, PublicKey,
+    Responder, ResponderStep, Sealer, TAG_LEN, Transport,
 };
 use floti_protocol::{Bytes, FrameDecoder, Message, ProtocolVersion, encode_frame};
 
@@ -387,6 +387,55 @@ fn a_first_message_with_no_payload_carries_no_code_and_is_the_same_length_as_bef
 }
 
 #[test]
+fn s1_a_device_asking_to_pair_says_so_inside_the_first_message_and_completes() {
+    let device = keys();
+    let host = keys();
+
+    let (initiator, message_1) = Initiator::start_pairing(&device, &host.public()).unwrap();
+    assert_eq!(message_1.len(), 2 + 96 + PAIRING_MARKER.len());
+    assert_ne!(PAIRING_MARKER.len(), ENROLMENT_CODE_LEN);
+    assert!(
+        !message_1
+            .windows(PAIRING_MARKER.len())
+            .any(|window| window == PAIRING_MARKER),
+        "the ask crossed the wire in the clear"
+    );
+
+    let pending = receive(&host, &message_1).unwrap();
+    assert_eq!(pending.device_key(), device.public());
+    assert!(pending.asks_to_pair());
+    assert!(pending.enrolment_code().is_none());
+    assert!(format!("{pending:?}").contains("asks_to_pair: true"));
+
+    let (mut host_side, message_2) = pending.accept().unwrap();
+    let mut device_side = finish(initiator, &message_2).unwrap();
+    assert_eq!(device_side.peer(), host.public());
+    let sealed = device_side.seal(b"hello").unwrap();
+    assert_eq!(host_side.open(&sealed).unwrap(), b"hello");
+}
+
+#[test]
+fn s11_a_first_message_that_does_not_ask_to_pair_is_not_read_as_asking() {
+    let host = keys();
+    let (_, plain) = Initiator::start(&keys(), &host.public()).unwrap();
+    assert!(!receive(&host, &plain).unwrap().asks_to_pair());
+    let code = EnrolmentCode::generate().unwrap();
+    let (_, enrolling) = Initiator::start_enrolling(&keys(), &host.public(), &code).unwrap();
+    assert!(!receive(&host, &enrolling).unwrap().asks_to_pair());
+}
+
+#[test]
+fn a_pairing_first_message_made_for_another_host_key_is_not_read() {
+    let host = keys();
+    let another = keys();
+    let (_, message_1) = Initiator::start_pairing(&keys(), &another.public()).unwrap();
+    assert_eq!(
+        receive(&host, &message_1).unwrap_err(),
+        NoiseError::FirstMessageUnreadable
+    );
+}
+
+#[test]
 fn an_enrolling_first_message_made_for_another_host_key_is_not_read() {
     let host = keys();
     let another = keys();
@@ -399,9 +448,9 @@ fn an_enrolling_first_message_made_for_another_host_key_is_not_read() {
 }
 
 #[test]
-fn a_first_message_of_any_length_but_the_two_a_device_sends_fails_at_its_prefix() {
+fn a_first_message_of_any_length_but_the_three_a_device_sends_fails_at_its_prefix() {
     let host = keys();
-    for len in [0_u16, 95, 97, 112, 127, 129, 512] {
+    for len in [0_u16, 95, 97, 111, 113, 127, 129, 512] {
         assert!(
             matches!(
                 Responder::new(&host).unwrap().push(&len.to_be_bytes()),
@@ -410,7 +459,7 @@ fn a_first_message_of_any_length_but_the_two_a_device_sends_fails_at_its_prefix(
             "a first message of {len} bytes"
         );
     }
-    // Split anywhere, the two lengths a device sends are still gathered.
+    // Split anywhere, the lengths a device sends are still gathered.
     let code = EnrolmentCode::generate().unwrap();
     let (_, message_1) = Initiator::start_enrolling(&keys(), &host.public(), &code).unwrap();
     let mut responder = Responder::new(&host).unwrap();
@@ -599,4 +648,26 @@ fn the_halves_of_a_session_can_move_to_other_threads() {
     sendable::<Initiator>();
     sendable::<Responder>();
     sendable::<PendingDevice>();
+}
+
+#[test]
+fn every_pairing_message_crosses_a_frame_and_reads_back() {
+    use floti_protocol::channels::devices::DeviceRole;
+    use floti_protocol::message::{Pairing, PairingApproved, PairingWaiting};
+
+    for pairing in [
+        Pairing::Waiting(PairingWaiting {
+            code: "ABCD2345".into(),
+            expires_in_seconds: 600,
+        }),
+        Pairing::Approved(PairingApproved {
+            role: DeviceRole::Operator,
+        }),
+        Pairing::Expired,
+    ] {
+        let message = Message::Pairing(pairing);
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&encode_frame(&message).unwrap());
+        assert_eq!(decoder.next_message().unwrap(), Some(message));
+    }
 }

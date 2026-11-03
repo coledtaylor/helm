@@ -182,6 +182,13 @@ releasesUrl: string, };
  */
 export type AppMode = "dev" | "dev-live" | "portable" | "installed";
 
+export type ApproveDevice = { 
+/**
+ * The code the device shows, as typed: case, spaces and hyphens do not
+ * matter.
+ */
+code: string, role: DeviceRole, };
+
 /**
  * One message of an archived conversation.
  */
@@ -869,6 +876,15 @@ label: string,
  * The arguments the host would launch it with.
  */
 args: Array<string>, };
+
+export type DeviceListing = { paired: Array<PairedDevice>, waiting: Array<WaitingDevice>, };
+
+/**
+ * What a device may do with the host. Each role can do all the one before
+ * it can: a viewer sees, an operator also types into and runs sessions, an
+ * admin also pairs and revokes devices and changes the host.
+ */
+export type DeviceRole = "viewer" | "operator" | "admin";
 
 /**
  * A running session a device started.
@@ -1695,7 +1711,7 @@ snapshotId: number | null, };
 
 export type McpScope = "local" | "user" | "project";
 
-export type Message = { "type": "hello" } & Hello | { "type": "welcome" } & Welcome | { "type": "refused" } & Refused | { "type": "request" } & Request | { "type": "response" } & Response | { "type": "error" } & ErrorReply | { "type": "subscribe" } & Subscribe | { "type": "unsubscribe" } & Unsubscribe | { "type": "subscriptionError" } & SubscriptionError | { "type": "snapshot" } & Snapshot | { "type": "event" } & Event | { "type": "streamOpen" } & StreamOpen | { "type": "streamData" } & StreamData | { "type": "streamCredit" } & StreamCredit | { "type": "streamClose" } & StreamClose;
+export type Message = { "type": "hello" } & Hello | { "type": "welcome" } & Welcome | { "type": "refused" } & Refused | { "type": "pairing" } & Pairing | { "type": "request" } & Request | { "type": "response" } & Response | { "type": "error" } & ErrorReply | { "type": "subscribe" } & Subscribe | { "type": "unsubscribe" } & Unsubscribe | { "type": "subscriptionError" } & SubscriptionError | { "type": "snapshot" } & Snapshot | { "type": "event" } & Event | { "type": "streamOpen" } & StreamOpen | { "type": "streamData" } & StreamData | { "type": "streamCredit" } & StreamCredit | { "type": "streamClose" } & StreamClose;
 
 /**
  * Milliseconds, as a number that may have a fraction: a file's modification
@@ -1707,6 +1723,51 @@ export type Message = { "type": "hello" } & Hello | { "type": "welcome" } & Welc
 export type Millis = number;
 
 export type MovedFile = { from: string, to: string, };
+
+/**
+ * A device in the host's registry.
+ */
+export type PairedDevice = { 
+/**
+ * The name it was paired under: the name it gave when it asked.
+ */
+name: string, role: DeviceRole, 
+/**
+ * When it was paired, as RFC 3339 text.
+ */
+pairedAt: string, 
+/**
+ * When it was revoked, as RFC 3339 text; absent while it is not.
+ */
+revokedAt: string | null, 
+/**
+ * Its key's fingerprint.
+ */
+fingerprint: string, };
+
+/**
+ * Where a device's request to pair stands, sent to the device that asked
+ * and to no one else.
+ */
+export type Pairing = { "state": "waiting" } & PairingWaiting | { "state": "approved" } & PairingApproved | { "state": "expired" };
+
+export type PairingApproved = { 
+/**
+ * The role the device is paired with.
+ */
+role: DeviceRole, };
+
+export type PairingWaiting = { 
+/**
+ * The code the device shows, for `floti devices approve <code>` on the
+ * host's computer: eight characters, none of them easily taken for
+ * another.
+ */
+code: string, 
+/**
+ * How long the request waits for approval from now.
+ */
+expiresInSeconds: number, };
 
 /**
  * How a session asks before it acts. The values are the ones the launcher
@@ -3203,6 +3264,27 @@ dollars: number,
 messages: number, };
 
 /**
+ * A request to pair that waits for approval.
+ */
+export type WaitingDevice = { 
+/**
+ * The name the device gave in its `hello`.
+ */
+name: string, 
+/**
+ * What kind of client it said it is.
+ */
+kind: ClientKind, 
+/**
+ * Its key's fingerprint.
+ */
+fingerprint: string, 
+/**
+ * How long the request waits before it expires.
+ */
+secondsLeft: number, };
+
+/**
  * Which file the client's editor has open, or null to release the watch.
  */
 export type WatchConfigRequest = { path: string | null, };
@@ -3324,6 +3406,8 @@ export interface RequestChannels {
   "content:snapshots": { request: ScopedFile; response: Array<ConfigSnapshotMeta>; capability: "files" };
   "content:wikilink": { request: WikilinkRequest; response: WikilinkTarget; capability: "files" };
   "content:write": { request: WriteConfigRequest; response: WriteConfigResult; capability: "files" };
+  "devices:approve": { request: ApproveDevice; response: PairedDevice; capability: null };
+  "devices:list": { request: null; response: DeviceListing; capability: null };
   "discovery:cached": { request: null; response: Array<CachedProject>; capability: null };
   "discovery:scan": { request: ScanRequest; response: DiscoveryResult; capability: null };
   "editor:highlight": { request: SourceToRender; response: EditorHighlight; capability: null };
@@ -3491,6 +3575,8 @@ export const CHANNELS = [
   { name: "content:snapshots", kind: "request", capability: "files" },
   { name: "content:wikilink", kind: "request", capability: "files" },
   { name: "content:write", kind: "request", capability: "files" },
+  { name: "devices:approve", kind: "request", capability: null },
+  { name: "devices:list", kind: "request", capability: null },
   { name: "discovery:cached", kind: "request", capability: null },
   { name: "discovery:scan", kind: "request", capability: null },
   { name: "discovery:updated", kind: "event", capability: null },

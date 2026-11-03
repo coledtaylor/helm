@@ -82,6 +82,7 @@ pub mod agent_plugin;
 pub mod boundary;
 pub mod carry;
 pub mod common;
+pub mod devices;
 pub mod host;
 pub mod plugins;
 pub mod sessions;
@@ -93,6 +94,7 @@ use crate::channel::Catalogue;
 pub fn declare(catalogue: &mut Catalogue) {
     common::declare(catalogue);
     host::declare(catalogue);
+    devices::declare(catalogue);
     sessions::declare(catalogue);
     workspace::declare(catalogue);
     plugins::declare(catalogue);
