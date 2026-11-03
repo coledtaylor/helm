@@ -19,12 +19,16 @@ use floti_host::devices::{Device, DeviceRegistry, Role};
 use floti_host::fake_agent;
 use floti_host::keys::read_key_pair;
 use floti_host::platform::socket::Endpoint;
+use floti_host::server::audit::AUDIT_FILE;
 use floti_host::server::{FIRST_ADMIN_NAME, HOST_KEY_FILE, PAIRING_LIFETIME, read_enrolment};
 use floti_host::testkit::{
     HostProcess, PATIENCE, TEST_DEVICE_NAME, TestClient, TestDirs, host_key_when_made,
     pair_test_device, raw_connection, read_until_closed, run_floti,
 };
-use floti_protocol::channels::devices::{ApproveDevice, DeviceRole, DevicesApprove, DevicesList};
+use floti_protocol::channels::devices::{
+    ApproveDevice, AuditActor, AuditDevice, AuditEntry, AuditEvent, DeviceRole, DevicesApprove,
+    DevicesList,
+};
 use floti_protocol::channels::sessions::{SessionList, SessionStart, StartSessionRequest};
 use floti_protocol::message::{ClientKind, Message};
 use floti_protocol::noise::{Initiator, KeyPair, PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN};
@@ -781,4 +785,96 @@ async fn a_host_that_enrols_pairs_and_runs_a_session_logs_no_key_code_prompt_or_
             "the session's output is in {what}: {text}"
         );
     }
+}
+
+/// The audit log's entries' events in `dirs`' data folder, oldest first.
+fn audited_events(dirs: &TestDirs) -> (Vec<AuditEvent>, String) {
+    let text = std::fs::read_to_string(dirs.data.join(AUDIT_FILE)).unwrap_or_default();
+    let events = text
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<AuditEntry>(line)
+                .unwrap_or_else(|err| panic!("an audit line does not read ({err}): {line}"))
+                .event
+        })
+        .collect();
+    (events, text)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s9_a_request_approved_in_the_shell_and_the_first_admins_enrolment_are_recorded_and_never_their_codes()
+ {
+    let dirs = TestDirs::new();
+    let host = start_unpaired_host(&dirs);
+    let endpoint = dirs.floti_endpoint();
+    let mut keys = device(&dirs, "laptop");
+    let request = ask_when_up(&keys, &endpoint, &dirs.data).await;
+    let pairing_code = request.code().to_owned();
+    let enrolment = read_enrolment(&dirs.data)
+        .unwrap()
+        .expect("the host waits for its first admin");
+    approve(&dirs, &pairing_code, Some("operator")).await;
+    assert_eq!(
+        keys.finish_pairing(request).await.unwrap(),
+        PairingOutcome::Approved(DeviceRole::Operator)
+    );
+
+    let mut desk = device(&dirs, "desk");
+    let connection = desk
+        .connect_local(&endpoint, &dirs.data)
+        .await
+        .expect("enrol");
+    let desk_client = TestClient::over(connection, &[]).await;
+
+    let laptop = keys.device_key().fingerprint();
+    let wanted = [
+        AuditEvent::PairingAsked {
+            device: AuditDevice {
+                fingerprint: laptop.clone(),
+                name: Some("a laptop".to_owned()),
+                role: None,
+            },
+            away: false,
+        },
+        AuditEvent::PairingApproved {
+            device: AuditDevice {
+                fingerprint: laptop,
+                name: Some("a laptop".to_owned()),
+                role: Some(DeviceRole::Operator),
+            },
+            by: AuditActor::HostShell,
+            away: false,
+        },
+        AuditEvent::Enrolled {
+            device: AuditDevice {
+                fingerprint: desk.device_key().fingerprint(),
+                name: Some(FIRST_ADMIN_NAME.to_owned()),
+                role: Some(DeviceRole::Admin),
+            },
+        },
+    ];
+    // The enrolment is written as the desk's hello is read; wait for it.
+    let deadline = Instant::now() + PATIENCE;
+    let (pairings, text) = loop {
+        let (events, text) = audited_events(&dirs);
+        let pairings: Vec<AuditEvent> = events
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    AuditEvent::PairingAsked { .. }
+                        | AuditEvent::PairingApproved { .. }
+                        | AuditEvent::Enrolled { .. }
+                )
+            })
+            .collect();
+        if pairings.len() >= wanted.len() || Instant::now() >= deadline {
+            break (pairings, text);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(pairings, wanted, "{text}");
+    assert_code_absent(&pairing_code, &text, "the audit log");
+    assert_code_absent(enrolment.code.expose_hex().as_str(), &text, "the audit log");
+    host.stop(desk_client).await;
 }

@@ -1203,3 +1203,139 @@ async fn s8_a_connection_that_closes_before_sending_a_byte_is_not_recorded_and_o
         ]
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn s8_each_refused_attempt_is_recorded_with_its_fixed_sentence_fingerprint_and_whether_away()
+{
+    use floti_protocol::channels::devices::AuditEvent;
+
+    let fx = fixture();
+    let mut shutdown = fx.shutdown.subscribe();
+    let mut refused = Vec::new();
+
+    // A revoked key.
+    let lost = KeyPair::generate().unwrap();
+    fx.admission
+        .devices
+        .pair(lost.public(), "a lost phone", Role::Operator)
+        .unwrap();
+    fx.admission.devices.revoke(&lost.public()).unwrap();
+    let (admitted, written) = fx
+        .admit(&Initiator::start(&lost, &fx.host()).unwrap().1)
+        .await;
+    assert!(written.is_empty(), "a revoked key was answered");
+    let Err(Some(revoked)) = admitted else {
+        panic!("a revoked key was admitted");
+    };
+    assert!(matches!(revoked, Refusal::Revoked(_)));
+    refused.push((revoked, true));
+
+    // A handshake that fails: its first message does not open.
+    let mut first = fx.first_message();
+    let last = first.len() - 1;
+    first[last] ^= 0xff;
+    let (admitted, written) = fx.admit(&first).await;
+    assert!(written.is_empty(), "a failed handshake was answered");
+    let Err(Some(failed)) = admitted else {
+        panic!("a handshake that does not open was admitted");
+    };
+    assert!(matches!(failed, Refusal::Failed(_)), "{failed}");
+    refused.push((failed, false));
+
+    // A handshake that runs out of time, on the paused clock.
+    let (_client, mut host) = duplex(PIPE);
+    let Err(Some(timed_out)) = admit_within_deadline(&mut host, &fx.admission, &mut shutdown).await
+    else {
+        panic!("a silent connection was admitted");
+    };
+    assert!(matches!(timed_out, Refusal::TimedOut(_)));
+    refused.push((timed_out, true));
+
+    // No hello in time, from a paired device that finished the handshake.
+    let (initiator, first) = Initiator::start(&fx.device, &fx.host()).unwrap();
+    let Answered {
+        mut host,
+        // Held open: a device that has gone is not one that said no hello.
+        client: _client,
+        mut opener,
+        mut decoder,
+        device,
+        ..
+    } = fx.answered(initiator, &first).await;
+    let Err(Some(no_hello)) = fx
+        .hello_from(&mut host, &mut opener, &mut decoder, device)
+        .await
+    else {
+        panic!("a device that said no hello was read");
+    };
+    assert!(matches!(no_hello, Refusal::NoHello(..)));
+    refused.push((no_hello, false));
+
+    // A paired device asking to pair.
+    let (admitted, written) = fx
+        .admit(&Initiator::start_pairing(&fx.device, &fx.host()).unwrap().1)
+        .await;
+    assert!(
+        written.is_empty(),
+        "a paired device asking to pair was answered"
+    );
+    let Err(Some(paired_asks)) = admitted else {
+        panic!("a paired device asking to pair was let in");
+    };
+    assert!(matches!(paired_asks, Refusal::PairedAsks(_)));
+    refused.push((paired_asks, true));
+
+    // Too many requests waiting.
+    let _held: Vec<_> = (0..MAX_WAITING)
+        .map(|_| {
+            fx.admission
+                .pairing
+                .ask(
+                    KeyPair::generate().unwrap().public(),
+                    "a phone",
+                    ClientKind::Phone,
+                    false,
+                )
+                .unwrap()
+        })
+        .collect();
+    let one_more = KeyPair::generate().unwrap();
+    let (admitted, written) = fx
+        .admit(&Initiator::start_pairing(&one_more, &fx.host()).unwrap().1)
+        .await;
+    assert!(written.is_empty(), "a request past the limit was answered");
+    let Err(Some(too_many)) = admitted else {
+        panic!("a request past the limit was let in");
+    };
+    assert!(matches!(too_many, Refusal::TooManyWaiting(_)));
+    refused.push((too_many, false));
+
+    for (n, (refusal, away)) in refused.iter().enumerate() {
+        refuse(&fx.admission, ClientId(n as u64 + 1), refusal, *away);
+    }
+
+    let recorded: Vec<AuditEvent> = audited(&fx)
+        .into_iter()
+        .filter(|event| matches!(event, AuditEvent::Refused { .. }))
+        .collect();
+    let refused_as = |reason: &str, key: Option<&KeyPair>, away: bool| AuditEvent::Refused {
+        reason: reason.to_owned(),
+        fingerprint: key.map(|key| key.public().fingerprint()),
+        away,
+    };
+    assert_eq!(
+        recorded,
+        [
+            refused_as("A revoked key", Some(&lost), true),
+            refused_as("The handshake failed", None, false),
+            refused_as("The handshake ran out of time", None, true),
+            refused_as("No hello came in time", Some(&fx.device), false),
+            refused_as("A paired device asked to pair", Some(&fx.device), true),
+            refused_as(
+                "Too many requests to pair were waiting",
+                Some(&one_more),
+                false
+            ),
+        ]
+    );
+}
