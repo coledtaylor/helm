@@ -27,7 +27,10 @@ function Install-Floti {
       [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
       (New-Object Net.WebClient).DownloadFile("$From/$File", $tmp)
     }
-    $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmp).Hash.ToLowerInvariant()
+    # .NET, not Get-FileHash: a script function that Windows PowerShell cannot
+    # load when it inherits PowerShell 7's PSModulePath (an ssh shell of pwsh).
+    $s = [IO.File]::OpenRead($tmp)
+    try { $got = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($s)).Replace('-', '').ToLowerInvariant() } finally { $s.Close() }
     if ($got -ne $Sha256) { throw "$File did not match its SHA-256, so it was not installed." }
     $dest = Join-Path $dir 'floti.exe'
     $old = Join-Path $dir 'floti.old.exe'

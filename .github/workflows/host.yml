@@ -73,6 +73,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # The v8 crate's build script downloads V8 as a static library into
+      # target/debug/gn_out, outside what rust-cache keeps: its cache brings
+      # back the build script's output, which names that folder, without the
+      # library in it, and compiling v8 then fails with "could not find native
+      # static library rusty_v8". The folder is cached on its own (this step's
+      # save runs before rust-cache prunes), and when the library is still
+      # missing, v8 is cleaned so its build script runs and fetches it again.
+      - name: Cache V8's static library
+        uses: actions/cache@v4
+        with:
+          path: target/debug/gn_out
+          key: rusty-v8-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: rusty-v8-${{ runner.os }}-
+
+      - name: Fetch V8 again when its static library is missing
+        shell: bash
+        run: |
+          if [ ! -f target/debug/gn_out/obj/rusty_v8.lib ] && [ ! -f target/debug/gn_out/obj/librusty_v8.a ]; then
+            cargo clean -p v8
+          fi
+
       - name: Format
         run: cargo fmt --all --check
 

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { releaseFileName, type FlotiOs, type HostTransport } from '@helm/core/types'
+import { FLOTI_TARGETS, releaseFileName, type FlotiOs, type HostTransport } from '@helm/core/types'
 import { describe, expect, inject, it } from 'vitest'
 import { PATIENCE } from '../../../../../test/patience'
 import { RUN_ROOT } from '../../../../../test/run-root'
@@ -22,13 +22,26 @@ const TRANSPORT: HostTransport = { kind: 'command', program: process.execPath, a
 const OS: FlotiOs = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux'
 const VERSION = '9.9.9'
 
-/** This OS with the other CPU: floti's name for it, and what `uname -sm` or Windows' cmd says. */
-const OTHER_CPU = process.arch === 'arm64' ? 'x64' : 'arm64'
-const OTHER_SYSTEM = {
-  windows: OTHER_CPU === 'x64' ? 'Windows_NT AMD64' : 'Windows_NT ARM64',
-  macos: OTHER_CPU === 'x64' ? 'Darwin x86_64' : 'Darwin arm64',
-  linux: OTHER_CPU === 'x64' ? 'Linux x86_64' : 'Linux aarch64'
-}[OS]
+/** What `uname -sm`, or Windows' cmd, says on each computer a release carries floti for. */
+const SYSTEM_SAYS: Record<string, string> = {
+  'windows-x64': 'Windows_NT AMD64',
+  'windows-arm64': 'Windows_NT ARM64',
+  'macos-arm64': 'Darwin arm64',
+  'linux-x64': 'Linux x86_64',
+  'linux-arm64': 'Linux aarch64'
+}
+
+/**
+ * A computer this Helm's own build does not fit but whose install script runs
+ * here: this OS with the other CPU, or, where the release carries no other CPU
+ * for this OS (macOS is Apple Silicon only), the other POSIX OS with this CPU.
+ */
+const isPosix = (os: FlotiOs): boolean => os !== 'windows'
+const notOwn = FLOTI_TARGETS.filter((each) => !(each.os === OS && each.arch === process.arch))
+const OTHER =
+  notOwn.find((each) => each.os === OS) ?? notOwn.find((each) => isPosix(each.os) === isPosix(OS) && each.arch === process.arch)
+if (!OTHER) throw new Error(`no release target on another CPU or OS for ${OS} ${process.arch}`)
+const OTHER_SYSTEM = SYSTEM_SAYS[OTHER.name]
 
 const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
@@ -107,7 +120,7 @@ describe('the install scripts, run where floti goes', () => {
       const release = join(root, 'release v9.9.9')
       await mkdir(release)
       const bytes = Buffer.from('floti for the other CPU\n')
-      const file = releaseFileName(VERSION, OS, OTHER_CPU)
+      const file = releaseFileName(VERSION, OTHER.os, OTHER.cpu)
       await writeFile(join(release, file), bytes)
       const { check, outcome } = await checkAndInstall(
         { ...env, FAKE_SSH_SYSTEM: OTHER_SYSTEM },

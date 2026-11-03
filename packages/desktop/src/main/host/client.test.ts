@@ -133,7 +133,12 @@ describe('the host client', { timeout: PATIENCE }, () => {
       update: 'client',
       message: sentence
     })
-    await expect(connecting).rejects.toThrow(new HostRefusedError(sentence))
+    await expect(connecting).rejects.toThrow(
+      new HostRefusedError(sentence, { host: { major: 2, minor: 0 }, client: { major: 1, minor: 0 }, update: 'client' })
+    )
+    await expect(connecting).rejects.toMatchObject({
+      refused: { host: { major: 2, minor: 0 }, client: { major: 1, minor: 0 }, update: 'client' }
+    })
     await outputEnded(host)
   })
 
