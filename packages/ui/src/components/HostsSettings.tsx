@@ -440,7 +440,7 @@ function useInstallFlow(actions: HostInstallActions): InstallFlow {
       >
         <p className="text-[12.5px] text-danger">{stage.title}</p>
         {stage.line !== null && stage.line !== '' && (
-          <p data-settings-host-problem-line className="font-mono text-[11px] break-all text-fg select-text">
+          <p data-settings-host-problem-line className="font-mono text-[11px] break-words text-fg select-text">
             {stage.line}
           </p>
         )}
