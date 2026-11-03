@@ -219,6 +219,7 @@ impl Features {
                 &context,
                 activity.clone(),
                 plugin_sessions,
+                Arc::clone(&plugin_tools),
             )?),
             Box::new(Arc::clone(&browser)),
             Box::new(Arc::clone(&plugin_tools)),

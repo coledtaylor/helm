@@ -1,8 +1,8 @@
 import type { HelmContext, HelmTheme, PluginParams, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
 import { pluginThemeOf } from '@helm/core/types'
 import { isMac } from '@helm/ui'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import {
-  PLUGIN_SCHEME,
   type HelmBridge as Ipc,
   type PluginCallOutcome,
   type PluginDelivery,
@@ -10,6 +10,7 @@ import {
   type PluginToolCall,
   type PluginToolOutcome
 } from '../../../shared/ipc'
+import { hostLabel, parsePluginOrigin } from '../../../shared/plugins/origin'
 import {
   CONNECT,
   HELLO,
@@ -59,9 +60,15 @@ const TITLE_MAX = 120
 const NEEDS_ACTIVATION: ReadonlySet<string> = new Set(['sessions.start', 'open'])
 
 export interface SurfaceSpec {
-  /** One frame per key, for as long as its surface is open. */
+  /** One frame per key, for as long as its surface is open. A remote host's frame's key names its host (`hostFrameKey`). */
   key: string
   plugin: string
+  /**
+   * The remote host whose plugin this page is, by its id; absent for This
+   * PC's. Its page is on that host's own origin for the plugin, and every call
+   * it makes goes to that host only.
+   */
+  host?: string
   /** The plugin's revision this page belongs to. A newer one reloads it. */
   revision: number
   url: string
@@ -126,7 +133,19 @@ interface Frame {
   timer: ReturnType<typeof setTimeout> | null
 }
 
-export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: RelayHooks }): PluginRelay {
+export interface PluginRelayOptions {
+  win: Window
+  /** This PC's bridge: its plugins' calls, and what main says to every frame (the theme, tool calls). */
+  ipc: Ipc
+  /**
+   * A remote host's bridge, for its plugins' calls and deliveries; with none,
+   * a remote host's page is answered that its host cannot be reached.
+   */
+  hostIpc?: (host: string) => Ipc
+  hooks?: RelayHooks
+}
+
+export function createPluginRelay(options: PluginRelayOptions): PluginRelay {
   const { win, ipc } = options
   let hooks: RelayHooks = options.hooks ?? {}
   const frames = new Map<string, Frame>()
@@ -153,6 +172,46 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
     ipc.send('plugins:toolResult', outcome)
   }
 
+  /** Each remote host's deliveries, heard from the first frame of that host on. */
+  const hostDeliveries = new Map<string, () => void>()
+
+  /**
+   * The bridge a frame's calls go over: its host's, and only its host's. Null
+   * for a remote host's frame with no way to reach it.
+   */
+  const ipcOf = (spec: SurfaceSpec): Ipc | null => {
+    if (spec.host === undefined || spec.host === LOCAL_HOST_KEY) return ipc
+    return options.hostIpc?.(spec.host) ?? null
+  }
+
+  /** Whether a frame is the page of `host`'s plugin: undefined and `LOCAL_HOST_KEY` both name This PC. */
+  const onHost = (spec: SurfaceSpec, host: string | undefined): boolean =>
+    (spec.host ?? LOCAL_HOST_KEY) === (host ?? LOCAL_HOST_KEY)
+
+  /** The label in a frame's origin: null for This PC's. */
+  const labelOf = (spec: SurfaceSpec): string | null =>
+    spec.host === undefined || spec.host === LOCAL_HOST_KEY ? null : hostLabel(spec.host)
+
+  const deliver = (host: string | undefined, delivery: PluginDelivery): void => {
+    for (const frame of frames.values()) {
+      if (frame.spec.plugin !== delivery.plugin || !onHost(frame.spec, host)) continue
+      if (delivery.to === 'background' && frame.spec.surface !== 'background') continue
+      event(frame, delivery.event, delivery.data)
+    }
+  }
+
+  /** Starts hearing a remote host's deliveries, once, for its frames. */
+  const hearHost = (spec: SurfaceSpec): void => {
+    const host = spec.host
+    if (host === undefined || host === LOCAL_HOST_KEY || hostDeliveries.has(host)) return
+    const bridge = ipcOf(spec)
+    if (bridge === null) return
+    hostDeliveries.set(
+      host,
+      bridge.on('plugins:deliver', (delivery: PluginDelivery) => deliver(host, delivery))
+    )
+  }
+
   /** Every tool call the page was handed and will now never answer, failed for the session waiting on it. */
   const failTools = (frame: Frame): void => {
     for (const id of frame.tools) {
@@ -163,7 +222,7 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
 
   /** Ends the current connection: its calls are cancelled in main and its port closed. */
   const disconnect = (frame: Frame): void => {
-    for (const callId of frame.calls.values()) ipc.send('plugins:cancel', { callId })
+    for (const callId of frame.calls.values()) ipcOf(frame.spec)?.send('plugins:cancel', { callId })
     frame.calls.clear()
     failTools(frame)
     if (frame.port !== null) {
@@ -197,12 +256,19 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
   const onWindowMessage = (event: MessageEvent): void => {
     const data = event.data as { type?: unknown } | null
     if (data === null || typeof data !== 'object' || data.type !== HELLO) return
-    const prefix = `${PLUGIN_SCHEME}://`
-    if (!event.origin.startsWith(prefix)) return
-    const id = event.origin.slice(prefix.length)
+    // The origin names the plugin and its host: a page is known as the
+    // frame made for that very plugin on that very host, and no other.
+    const origin = parsePluginOrigin(event.origin)
+    if (origin === null) return
     let frame: Frame | undefined
     for (const candidate of frames.values()) {
-      if (candidate.spec.plugin === id && candidate.element.contentWindow === event.source) frame = candidate
+      if (
+        candidate.spec.plugin === origin.plugin &&
+        labelOf(candidate.spec) === origin.label &&
+        candidate.element.contentWindow === event.source
+      ) {
+        frame = candidate
+      }
     }
     if (frame === undefined || event.source === null) return
     connect(frame, event.source as Window, event.origin)
@@ -222,7 +288,7 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
     port.addEventListener('close', () => {
       if (frame.port !== port || frames.get(frame.spec.key) !== frame || frame.connection !== connection) return
       frame.port = null
-      for (const callId of frame.calls.values()) ipc.send('plugins:cancel', { callId })
+      for (const callId of frame.calls.values()) ipcOf(frame.spec)?.send('plugins:cancel', { callId })
       frame.calls.clear()
       failTools(frame)
       clearTimer(frame)
@@ -293,7 +359,7 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
         const callId = frame.calls.get(id)
         if (callId === undefined) return
         frame.calls.delete(id)
-        ipc.send('plugins:cancel', { callId })
+        ipcOf(frame.spec)?.send('plugins:cancel', { callId })
         return
       }
       case 'key': {
@@ -352,7 +418,12 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
         post(frame, { t: 'result', id, ok: false, code: outcome.code, message: outcome.message })
       }
     }
-    ipc
+    const bridge = ipcOf(frame.spec)
+    if (bridge === null) {
+      settle({ ok: false, code: 'unavailable', message: `${frame.spec.host ?? 'That host'} cannot be reached from this page.` })
+      return
+    }
+    bridge
       .invoke('plugins:call', {
         plugin: frame.spec.plugin,
         surface: frame.spec.surface,
@@ -378,21 +449,23 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
     for (const frame of frames.values()) if (frame.port !== null) event(frame, 'theme', next)
   })
 
-  const offDeliver = ipc.on('plugins:deliver', (delivery: PluginDelivery) => {
-    for (const frame of frames.values()) {
-      if (frame.spec.plugin !== delivery.plugin) continue
-      if (delivery.to === 'background' && frame.spec.surface !== 'background') continue
-      event(frame, delivery.event, delivery.data)
-    }
-  })
+  // This PC's deliveries reach This PC's frames; each remote host's, its own (`hearHost`).
+  const offDeliver = ipc.on('plugins:deliver', (delivery: PluginDelivery) => deliver(undefined, delivery))
 
-  // A session's tool call, for the plugin's background page. Main sends these
-  // to the background host only, and every one is answered: by the page, or
-  // here when there is no page connected to answer it.
+  // A session's tool call, for the plugin's background page on the host the
+  // session runs on, and no other host's. Main sends these to the background
+  // host only, and every one is answered: by the page, or here when there is
+  // no page connected to answer it.
   const offTool = ipc.on('plugins:tool', (call: PluginToolCall) => {
     let frame: Frame | undefined
     for (const candidate of frames.values()) {
-      if (candidate.spec.plugin === call.plugin && candidate.spec.surface === 'background') frame = candidate
+      if (
+        candidate.spec.plugin === call.plugin &&
+        candidate.spec.surface === 'background' &&
+        onHost(candidate.spec, call.host)
+      ) {
+        frame = candidate
+      }
     }
     if (frame === undefined || frame.port === null) {
       toolResult({ id: call.id, ok: false, message: "The plugin's background page is not running." })
@@ -451,6 +524,7 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
       timer: null
     }
     element.addEventListener('load', () => onLoad(frame))
+    hearHost(spec)
     element.src = spec.url
     return frame
   }
@@ -486,7 +560,13 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
       const previous = existing.spec
       existing.spec = spec
       if (previous.title !== spec.title) existing.element.title = spec.title
-      if (previous.revision !== spec.revision || previous.url !== spec.url || previous.plugin !== spec.plugin) {
+      if (
+        previous.revision !== spec.revision ||
+        previous.url !== spec.url ||
+        previous.plugin !== spec.plugin ||
+        !onHost(previous, spec.host)
+      ) {
+        hearHost(spec)
         restart(existing)
       }
       return existing.element
@@ -549,6 +629,8 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
       offDeliver()
       offTool()
       offToolCancel()
+      for (const off of hostDeliveries.values()) off()
+      hostDeliveries.clear()
       for (const frame of [...frames.values()]) drop(frame)
       listeners.clear()
     }

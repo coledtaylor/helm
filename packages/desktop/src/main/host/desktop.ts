@@ -36,7 +36,9 @@ import { openRemotePageBridge, remoteClientFolder, startRemoteHost } from './rem
 import { createRemoteInstaller, spawnTransportRun, type RemoteInstaller } from './remote-install'
 import { PROTOCOL_VERSION } from './protocol'
 import { RELEASES_DOWNLOAD } from '../update'
-import type { RemoteHostStates } from '../../shared/ipc'
+import type { PluginBackgroundReport, RemoteHostStates } from '../../shared/ipc'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
+import { createBackgroundNeeds, createRemotePlugins, type RemotePlugins } from './remote-plugins'
 import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
 import { createHostPlugins, type HostPlugins } from './plugins'
 import { createHostProfiles, type HostProfiles } from './profiles'
@@ -61,6 +63,10 @@ export interface DesktopHost extends HostSessions {
   profiles: HostProfiles
   /** Plugin folders, switches, settings, secrets and page files, which the host keeps while sessions run there. */
   plugins: HostPlugins
+  /** Each remote host's plugins and tool relay, attached to its main link (`remote-plugins.ts`). */
+  remotePlugins: RemotePlugins
+  /** What the hidden window has reported of every host's background pages, each remote one naming its host. */
+  pluginReports(): PluginBackgroundReport[]
   /**
    * Discovery, scan roots, harnesses, setup, templates and the host's half of
    * the settings, which the host keeps while sessions run there.
@@ -168,6 +174,8 @@ export function createDesktopRemoteHosts(options: {
   isHelmPage: (id: number) => boolean
   nextConnection: () => number
   changed: (states: RemoteHostStates) => void
+  /** Each host's plugins and tool relay, on its main link. */
+  plugins: RemotePlugins
   log: (line: string) => void
 }): RemoteHostLinks {
   const folderOf = (id: string): string => remoteClientFolder(places(), process.platform, id)
@@ -195,6 +203,7 @@ export function createDesktopRemoteHosts(options: {
     // Its device key and the host key it pinned: nothing else is kept there.
     forget: (host) => rm(folderOf(host.id), { recursive: true, force: true }),
     changed: options.changed,
+    linked: (host, link) => options.plugins.attach(host.id, link),
     isHelmPage: options.isHelmPage,
     appVersion: app.getVersion(),
     nextConnection: options.nextConnection,
@@ -360,19 +369,31 @@ export function createDesktopHost({
     writeFile: (path, text) => writeFile(path, text, 'utf8'),
     log
   })
+  // One hidden window for every host's background pages: open while any needs it.
+  const backgroundNeeds = createBackgroundNeeds(pluginBackground)
+  const pluginReports = (): PluginBackgroundReport[] => [...hostPlugins.reports(), ...remotePlugins.reports()]
+  // The window lays these over each host's list, which it reads itself.
+  const reportsChanged = (): void => send('pluginBackground:changed', pluginReports())
   const hostPlugins: HostPlugins = createHostPlugins({
     link,
-    // The window lays these over the host's list, which it reads itself.
-    reportsChanged: (reports) => send('pluginBackground:changed', reports),
+    reportsChanged,
     runTool: runPluginTool,
     onToolsChanged: () => pluginRelay.offer(),
-    background: pluginBackground,
-    ownFolders: () => readPluginFolders(services.store),
-    ownSettings: (plugin) => readPluginSettings(services.store, plugin),
-    copied: () => services.settings.pluginsCopiedToHostAt !== null,
-    markCopied: () => {
-      updateSettings(services, { pluginsCopiedToHostAt: new Date().toISOString() })
+    background: backgroundNeeds.forHost(LOCAL_HOST_KEY),
+    copyOwn: {
+      folders: () => readPluginFolders(services.store),
+      settings: (plugin) => readPluginSettings(services.store, plugin),
+      copied: () => services.settings.pluginsCopiedToHostAt !== null,
+      markCopied: () => {
+        updateSettings(services, { pluginsCopiedToHostAt: new Date().toISOString() })
+      }
     },
+    log
+  })
+  const remotePlugins = createRemotePlugins({
+    runTool: runPluginTool,
+    background: backgroundNeeds,
+    reportsChanged,
     log
   })
   // Kept for the artifact frames main answers from the host's bytes.
@@ -389,6 +410,8 @@ export function createDesktopHost({
     pluginRelay,
     profiles,
     plugins: hostPlugins,
+    remotePlugins,
+    pluginReports,
     workspace,
     files,
     resources,

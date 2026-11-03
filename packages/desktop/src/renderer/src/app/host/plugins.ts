@@ -1,5 +1,5 @@
 import type { SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
-import type { SessionRecord } from '@helm/core/types'
+import { LOCAL_HOST_KEY, type SessionRecord } from '@helm/core/types'
 import type { HostConnection, HostSubscription } from '../../../../shared/host/client'
 import type * as P from '../../../../shared/host/protocol'
 import {
@@ -70,6 +70,8 @@ type Own = Pick<HelmBridge, 'invoke' | 'send' | 'on'>
 
 interface CoreDeps {
   link: HostReach
+  /** The host these plugins are on: `LOCAL_HOST_KEY`, or a remote host's id, whose page URLs move onto its own origins. */
+  host: string
   /** Where the client calls hand what they open: false when there is nothing to hand it to. */
   ui: (request: PluginUiRequest) => boolean
   /** What the hidden window saw of a plugin's background page. */
@@ -123,7 +125,7 @@ function createPluginsCore(deps: CoreDeps): PluginsCore {
   }
 
   const take = (listed: readonly P.PluginInfo[]): PluginInfo[] => {
-    hosted = listed.map(pluginFromHost)
+    hosted = listed.map((plugin) => pluginFromHost(plugin, deps.host))
     retell()
     return shown()
   }
@@ -224,6 +226,8 @@ function createPluginsCore(deps: CoreDeps): PluginsCore {
 
 export interface PluginsAdapterDeps {
   link: HostReach
+  /** The host this window's connection reaches: This PC's (`LOCAL_HOST_KEY`) when absent. */
+  host?: string
   /** The preload's bridge: the folder picker, and what main hears from the hidden window. */
   own: Own
   /** A session the host started for a plugin, kept with the window's sessions so it opens as a tab. */
@@ -234,18 +238,21 @@ export interface PluginsAdapterDeps {
 /** The window's plugins: Settings and the rail, and the plugin pages it frames. */
 export function createPluginsAdapter(deps: PluginsAdapterDeps): HostAdapter {
   const { own } = deps
+  const host = deps.host ?? LOCAL_HOST_KEY
   const log = deps.log ?? (() => undefined)
   const reports = new Map<string, PluginBackgroundReport>()
   /** Secret dialogs the hidden window handed over, whose close goes back to it. */
   const handedOver = new Set<string>()
 
+  /** Main's reports cover every host's background pages: this host's are the ones naming it. */
   const setReports = (next: readonly PluginBackgroundReport[]): void => {
     reports.clear()
-    for (const report of next) reports.set(report.plugin, report)
+    for (const report of next) if ((report.host ?? LOCAL_HOST_KEY) === host) reports.set(report.plugin, report)
   }
 
   const core: PluginsCore = createPluginsCore({
     link: deps.link,
+    host,
     ui: (request) => {
       if (core.events.count('plugins:ui') === 0) return false
       core.events.tell('plugins:ui', request)
@@ -278,7 +285,7 @@ export function createPluginsAdapter(deps: PluginsAdapterDeps): HostAdapter {
     void readReports()
   })
 
-  const host = (): Promise<HostConnection> => core.host()
+  const reach = (): Promise<HostConnection> => core.host()
   const listed = async (answer: Promise<readonly P.PluginInfo[]>): Promise<PluginInfo[]> => {
     const plugins = await answer
     await readReports()
@@ -290,37 +297,37 @@ export function createPluginsAdapter(deps: PluginsAdapterDeps): HostAdapter {
 
   return {
     requests: {
-      'plugins:list': async () => listed((await host()).request('plugins:list', null)),
+      'plugins:list': async () => listed((await reach()).request('plugins:list', null)),
       'plugins:add': async () => {
         const { path } = await own.invoke('path:chooseDirectory', { title: 'Add a plugin folder' })
         if (path === null) {
-          return { path: null, error: null, plugins: await listed((await host()).request('plugins:list', null)) }
+          return { path: null, error: null, plugins: await listed((await reach()).request('plugins:list', null)) }
         }
-        const added = await (await host()).request('plugins:add', { path })
+        const added = await (await reach()).request('plugins:add', { path })
         return { path: added.path, error: added.error, plugins: await listed(Promise.resolve(added.plugins)) }
       },
       'plugins:remove': async ({ path, deleteSecrets }) =>
-        listed((await host()).request('plugins:remove', { path, deleteSecrets: [...deleteSecrets] })),
+        listed((await reach()).request('plugins:remove', { path, deleteSecrets: [...deleteSecrets] })),
       'plugins:setEnabled': async ({ path, enabled }) =>
-        listed((await host()).request('plugins:setEnabled', { path, enabled })),
-      'plugins:setTools': async ({ path, enabled }) => listed((await host()).request('plugins:setTools', { path, enabled })),
-      'plugins:reload': async ({ path }) => listed((await host()).request('plugins:reload', { path })),
+        listed((await reach()).request('plugins:setEnabled', { path, enabled })),
+      'plugins:setTools': async ({ path, enabled }) => listed((await reach()).request('plugins:setTools', { path, enabled })),
+      'plugins:reload': async ({ path }) => listed((await reach()).request('plugins:reload', { path })),
       'plugins:setSetting': async ({ plugin, key, value }) =>
-        listed((await host()).request('plugins:setSetting', { plugin, key, value })),
-      'plugins:log': async ({ path }) => logFromHost(await (await host()).request('plugins:log', { path })),
-      'plugins:metrics': async () => (await host()).request('plugins:metrics', null),
-      'plugins:ownSecrets': async ({ path }) => (await host()).request('plugins:ownSecrets', { path }),
+        listed((await reach()).request('plugins:setSetting', { plugin, key, value })),
+      'plugins:log': async ({ path }) => logFromHost(await (await reach()).request('plugins:log', { path })),
+      'plugins:metrics': async () => (await reach()).request('plugins:metrics', null),
+      'plugins:ownSecrets': async ({ path }) => (await reach()).request('plugins:ownSecrets', { path }),
       'plugins:command': async ({ plugin, id }) => {
-        await (await host()).request('plugins:command', { plugin, id })
+        await (await reach()).request('plugins:command', { plugin, id })
       },
       'plugins:call': (request) => core.call(request),
       'plugins:session': async (answer) => {
-        const row = await (await host()).request('plugins:session', answer)
+        const row = await (await reach()).request('plugins:session', answer)
         return row === null ? null : deps.adopt(row)
       },
-      'secrets:list': async () => (await host()).request('secrets:list', null),
-      'secrets:save': async (input) => (await host()).request('secrets:save', input),
-      'secrets:remove': async ({ key }) => (await host()).request('secrets:remove', { key })
+      'secrets:list': async () => (await reach()).request('secrets:list', null),
+      'secrets:save': async (input) => (await reach()).request('secrets:save', input),
+      'secrets:remove': async ({ key }) => (await reach()).request('secrets:remove', { key })
     },
     sends: {
       'plugins:cancel': ({ callId }) => core.cancel(callId),
@@ -329,7 +336,7 @@ export function createPluginsAdapter(deps: PluginsAdapterDeps): HostAdapter {
           own.send('pluginWindow:answer', { requestId })
           return
         }
-        host()
+        reach()
           .then((connection) => connection.request('plugins:answer', { requestId }))
           .catch((error: unknown) => log(`host: plugins:answer was not taken (${messageOf(error)})`))
       }
@@ -354,6 +361,8 @@ export function createPluginsAdapter(deps: PluginsAdapterDeps): HostAdapter {
 
 export interface BackgroundAdapterDeps {
   link: HostReach
+  /** The host this connection reaches: This PC's (`LOCAL_HOST_KEY`) when absent. */
+  host?: string
   /** The preload's bridge: Helm's own settings, and the hand-off to the window through main. */
   own: Own
   log?: (line: string) => void
@@ -380,6 +389,7 @@ export function createBackgroundAdapter(deps: BackgroundAdapterDeps): Background
 
   const core: PluginsCore = createPluginsCore({
     link: deps.link,
+    host: deps.host ?? LOCAL_HOST_KEY,
     ui: handOver,
     report: (plugin) => reports.get(plugin),
     asked: (request) => {

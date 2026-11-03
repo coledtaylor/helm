@@ -31,6 +31,7 @@ import { appMode, dataDir, dbFile } from './paths'
 import type { PluginHost } from './plugins/host'
 import type { OwnDataCopy } from './host/own-data'
 import type { HostPlugins } from './host/plugins'
+import type { RemotePlugins } from './host/remote-plugins'
 import { activePty, windowsBuildNumber } from './pty'
 import { createClipboardText } from './clipboard'
 import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
@@ -101,6 +102,16 @@ export function helmPageOf(contents: WebContents): HelmPage {
       contents.once('destroyed', listener)
     }
   }
+}
+
+/** Typed `webContents.send` to one page's web contents, such as the hidden plugin window's. */
+export function emitToContents<K extends EventChannel>(
+  contents: WebContents | null | undefined,
+  channel: K,
+  payload: EventPayload<K>
+): void {
+  if (contents === null || contents === undefined || contents.isDestroyed()) return
+  contents.send(channel, payload)
 }
 
 /** Typed `webContents.send`. The only way the main process pushes to a window. */
@@ -217,6 +228,11 @@ interface IpcContextBase {
    * it runs. Absent otherwise, when `plugins` keeps everything.
    */
   hostPlugins?: HostPlugins | undefined
+  /**
+   * Each remote host's plugins (`host/remote-plugins.ts`), whose background
+   * pages the hidden window runs on that host's origin and reports by host.
+   */
+  remotePlugins?: RemotePlugins | undefined
   /** The hidden window plugins' background pages run in, while sessions run in the local host. */
   pluginBackground?: (() => Electron.WebContents | null) | undefined
   /**
@@ -475,7 +491,7 @@ export function registerIpc(ctx: IpcContext): void {
     'windowSessions:lostLayout': () => services.lost.layout,
     'windowSessions:hostSessionCount': () => ctx.localHost?.sessionCount() ?? noLocalHost(),
     'windowSessions:stopHost': () => ctx.localHost?.stop() ?? noLocalHost(),
-    'pluginBackground:states': () => ctx.hostPlugins?.reports() ?? [],
+    'pluginBackground:states': () => [...(ctx.hostPlugins?.reports() ?? []), ...(ctx.remotePlugins?.reports() ?? [])],
 
     'settings:read': () => workspace.settings(),
 
@@ -881,10 +897,13 @@ export function registerIpc(ctx: IpcContext): void {
 
     'plugins:cancel': ({ callId }, event) => ctx.plugins.cancel(callId, event.sender.id),
     'plugins:answer': ({ requestId }) => ctx.plugins.answer(requestId),
-    'plugins:backgroundState': ({ plugin, revision, state, error }) =>
-      ctx.hostPlugins !== undefined
-        ? ctx.hostPlugins.backgroundState(plugin, revision, state, error)
-        : ctx.plugins.backgroundState(plugin, revision, state, error),
+    // A remote host's report goes to that host's plugins only.
+    'plugins:backgroundState': ({ plugin, revision, state, error, host }) =>
+      host !== undefined
+        ? ctx.remotePlugins?.forHost(host)?.backgroundState(plugin, revision, state, error)
+        : ctx.hostPlugins !== undefined
+          ? ctx.hostPlugins.backgroundState(plugin, revision, state, error)
+          : ctx.plugins.backgroundState(plugin, revision, state, error),
     // A background page's ask that only the window can draw, from the hidden
     // window, and the window's word that a secret dialog it asked for closed.
     'pluginWindow:ask': (request, event) => {

@@ -1584,7 +1584,11 @@ export interface IpcRequests {
   'secrets:remove': { request: { key: string }; response: SecretsState }
 }
 
-/** The scheme plugin pages are served on: `helm-plugin://<id>/<path>`, an origin per plugin. */
+/**
+ * The scheme plugin pages are served on: `helm-plugin://<id>/<path>` for This
+ * PC's, `helm-plugin://<id>.<host label>/<path>` for a remote host's, an
+ * origin per host and plugin (`shared/plugins/origin.ts`).
+ */
 export const PLUGIN_SCHEME = 'helm-plugin'
 
 // What the window draws of a plugin, and of the secrets: in core so the ui
@@ -1707,6 +1711,8 @@ export interface PluginToolCall {
   name: string
   args: Record<string, unknown>
   session: ToolSession
+  /** The remote host whose session called, answered only by that host's background page; absent for This PC's. */
+  host?: string
 }
 
 /**
@@ -1728,6 +1734,8 @@ export interface PluginBackgroundReport {
   revision: number
   state: 'running' | 'crashed'
   error: string | null
+  /** The remote host whose plugin's page this is, each run in a frame on that host's origin; absent for This PC's. */
+  host?: string
 }
 
 /** The kind of theme on screen - what `.dark` on `<html>` says. */
@@ -1812,7 +1820,7 @@ export interface IpcSends {
   /** The secret dialog a plugin asked for has closed; main answers the plugin's call. */
   'plugins:answer': { requestId: string }
   /** The background host's word on a background page: it connected, or it crashed. */
-  'plugins:backgroundState': { plugin: string; revision: number; state: 'running' | 'crashed'; error: string | null }
+  'plugins:backgroundState': PluginBackgroundReport
   /** A tool call answered, from the background host. Main takes it from that window only. */
   'plugins:toolResult': PluginToolOutcome
   /**

@@ -3,6 +3,7 @@ import { extname, sep } from 'node:path'
 import { protocol } from 'electron'
 import { RESERVED_PREFIX } from '@coledtaylor/helm-plugin-sdk/manifest'
 import { PLUGIN_SCHEME } from '../../shared/ipc'
+import { parsePluginOrigin } from '../../shared/plugins/origin'
 import { MIME } from '../content'
 import { resolveInside } from './loader'
 
@@ -85,8 +86,22 @@ export interface PluginPageSource {
   file(id: string, path: string): Promise<{ status: number; contentType: string; body: Uint8Array }>
 }
 
-/** A request on the scheme, taken apart: the plugin, and the runtime file or the page path it names. */
-type Parsed = { id: string; runtime: string } | { id: string; parts: string[] } | Response
+/**
+ * Where a host's plugin page files come from, by the label in the origin
+ * (`shared/plugins/origin.ts`): null names This PC's host, a label a host on
+ * another computer. Null back for a host this device has not added, whose
+ * origin is answered 404.
+ */
+export type PluginPageSources = (label: string | null) => PluginPageSource | null
+
+/**
+ * A request on the scheme, taken apart: the plugin, the label of the host it
+ * is on (null for This PC), and the runtime file or the page path it names.
+ */
+type Parsed =
+  | { id: string; label: string | null; runtime: string }
+  | { id: string; label: string | null; parts: string[] }
+  | Response
 
 function parse(requestUrl: string): Parsed {
   let url: URL
@@ -95,11 +110,14 @@ function parse(requestUrl: string): Parsed {
   } catch {
     return new Response('Bad request', { status: 400 })
   }
-  const id = url.hostname
-  if (url.pathname.startsWith(RUNTIME_PATH)) return { id, runtime: url.pathname.slice(RUNTIME_PATH.length) }
+  const origin = parsePluginOrigin(requestUrl)
+  if (origin === null) return new Response('Bad request', { status: 400 })
+  const { plugin: id, label } = origin
+  if (url.pathname.startsWith(RUNTIME_PATH)) return { id, label, runtime: url.pathname.slice(RUNTIME_PATH.length) }
   try {
     return {
       id,
+      label,
       parts: url.pathname
         .split('/')
         .filter((part) => part !== '')
@@ -135,7 +153,8 @@ export function servePluginRequest(
   const parsed = parse(requestUrl)
   if (parsed instanceof Response) return parsed
   const { id } = parsed
-  const plugin = lookup(id)
+  // Helm's own folders are This PC's plugins; another host's origin has nothing here.
+  const plugin = parsed.label === null ? lookup(id) : null
   if (plugin === null) return new Response('Not found', { status: 404 })
   if ('runtime' in parsed) return runtimeAsset(parsed.runtime, runtime)
 
@@ -155,20 +174,27 @@ export function servePluginRequest(
 }
 
 /**
- * Answers one request on the scheme from the local host's files: the same
- * origin, headers, CSP and injected runtime as a folder Helm reads itself.
- * The host resolves the path inside the plugin's folder and refuses one
- * outside it (403) or not there (404); a host that cannot be reached is a 503
- * saying why.
+ * Answers one request on the scheme from a host's files: the same headers,
+ * CSP and injected runtime as a folder Helm reads itself. Each origin is
+ * served from the host it names and from no other: This PC's
+ * (`helm-plugin://<id>/`) from the local host, a remote host's
+ * (`helm-plugin://<id>.<label>/`) from that host, and one naming a host this
+ * device has not added not at all (404). The host resolves the path inside
+ * the plugin's folder and refuses one outside it (403) or not there (404); a
+ * host that cannot be reached is a 503 saying why.
+ *
+ * `source` is the local host's alone, or every host's by label.
  */
 export async function servePluginRequestFrom(
   requestUrl: string,
-  source: PluginPageSource,
+  sources: PluginPageSource | PluginPageSources,
   runtime: PluginRuntime
 ): Promise<Response> {
   const parsed = parse(requestUrl)
   if (parsed instanceof Response) return parsed
-  const { id } = parsed
+  const { id, label } = parsed
+  const source = typeof sources === 'function' ? sources(label) : label === null ? sources : null
+  if (source === null) return new Response('Not found', { status: 404 })
   try {
     if ('runtime' in parsed) {
       return (await source.serves(id)) ? runtimeAsset(parsed.runtime, runtime) : new Response('Not found', { status: 404 })
@@ -240,7 +266,7 @@ export function registerPluginProtocol(lookup: (id: string) => ServedPlugin | nu
   protocol.handle(PLUGIN_SCHEME, (request) => servePluginRequest(request.url, lookup, runtime))
 }
 
-/** The scheme, answered from the local host's files while sessions run there. */
-export function registerHostPluginProtocol(source: PluginPageSource, runtime: PluginRuntime): void {
-  protocol.handle(PLUGIN_SCHEME, (request) => servePluginRequestFrom(request.url, source, runtime))
+/** The scheme, answered from each host's files while sessions run in the local host. */
+export function registerHostPluginProtocol(sources: PluginPageSources, runtime: PluginRuntime): void {
+  protocol.handle(PLUGIN_SCHEME, (request) => servePluginRequestFrom(request.url, sources, runtime))
 }

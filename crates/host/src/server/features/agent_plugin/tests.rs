@@ -12,10 +12,54 @@ use crate::server::events::Publication;
 const DESKTOP: ClientId = ClientId(1);
 const OTHER: ClientId = ClientId(2);
 
+/// A relay on a host that has the notes and tasks plugins on, with their
+/// tools on.
 fn relay() -> (Arc<Events>, Arc<PluginRelay>) {
     let events = Arc::new(Events::new());
     let relay = Arc::new(PluginRelay::new(&events));
+    relay.installed(&[installed("notes", true), installed("tasks", true)]);
     (events, relay)
+}
+
+/// Plugin `id` as this host lists it: on and error-free, with its tools on or
+/// off.
+fn installed(id: &str, tools_on: bool) -> PluginInfo {
+    use floti_protocol::channels::plugins::PluginAgentInfo;
+    PluginInfo {
+        path: format!("/plugins/{id}"),
+        id: Some(id.into()),
+        name: id.into(),
+        version: Some("1.0.0".into()),
+        description: None,
+        enabled: true,
+        error: None,
+        warnings: Vec::new(),
+        revision: 1,
+        icon: None,
+        rail: None,
+        panels: BTreeMap::new(),
+        tabs: BTreeMap::new(),
+        page_strip: false,
+        background: None,
+        commands: Vec::new(),
+        settings: Vec::new(),
+        setting_values: BTreeMap::new(),
+        network: Vec::new(),
+        secrets: Vec::new(),
+        exec: Vec::new(),
+        service: None,
+        runs_programs: false,
+        agent: Some(PluginAgentInfo {
+            enabled: tools_on,
+            server: format!("helm-plugin-{id}"),
+            instructions: None,
+            tools: Vec::new(),
+        }),
+        starts_sessions: false,
+        sees_sessions: false,
+        status: None,
+        badge: None,
+    }
 }
 
 fn tool(name: &str, read_only: bool) -> AgentPluginTool {
@@ -308,4 +352,77 @@ async fn s6_when_the_client_leaves_its_calls_fail_at_once_and_its_servers_are_he
     relay.listening(OTHER, true, false);
     relay.offer(OTHER, offer(vec![server("tasks")])).unwrap();
     assert_eq!(plugins_offered(&relay), [("tasks".to_owned(), true)]);
+}
+
+#[tokio::test]
+async fn s21_a_plugin_this_host_does_not_have_is_neither_offered_nor_called_whatever_a_client_offers()
+ {
+    let (events, relay) = relay();
+    let mut listening = events.listen(DESKTOP);
+    relay.listening(DESKTOP, true, false);
+    // The window offers a plugin only This PC has, beside one this host has.
+    relay
+        .offer(DESKTOP, offer(vec![server("notes"), server("trackr")]))
+        .unwrap();
+    assert_eq!(plugins_offered(&relay), [("notes".to_owned(), true)]);
+
+    // A call to it is answered here, never sent to the client.
+    let outcome = relay.call(3, "trackr", "find", Payload::Null).await;
+    assert!(
+        matches!(outcome, AgentPluginOutcome::Failed { .. }),
+        "{outcome:?}"
+    );
+    let calls = std::iter::from_fn(|| listening.try_recv().ok())
+        .filter(|published| published.channel == AgentPluginCalls::NAME)
+        .count();
+    assert_eq!(
+        calls, 0,
+        "a call to a plugin this host lacks reached the client"
+    );
+}
+
+#[test]
+fn s21_a_host_serves_a_plugins_tools_only_while_it_has_the_plugin_on_with_its_tools_on() {
+    let (_events, relay) = relay();
+    let told = Arc::new(Mutex::new(0));
+    relay.on_change({
+        let told = Arc::clone(&told);
+        move || *told.lock().unwrap() += 1
+    });
+    relay.listening(DESKTOP, true, false);
+    relay
+        .offer(DESKTOP, offer(vec![server("notes"), server("tasks")]))
+        .unwrap();
+    assert_eq!(
+        plugins_offered(&relay),
+        [("notes".to_owned(), true), ("tasks".to_owned(), true)]
+    );
+
+    // Tasks' tools switched off here: gone at once, and whoever follows is told.
+    relay.installed(&[installed("notes", true), installed("tasks", false)]);
+    assert_eq!(plugins_offered(&relay), [("notes".to_owned(), true)]);
+    // Notes switched off, then in error.
+    let mut off = installed("notes", true);
+    off.enabled = false;
+    relay.installed(&[off]);
+    assert!(relay.offered().is_empty());
+    let mut broken = installed("notes", true);
+    broken.error = Some("No manifest.".into());
+    relay.installed(&[broken]);
+    assert!(relay.offered().is_empty());
+
+    // Back on: served again from the offer the window made.
+    relay.installed(&[installed("notes", true)]);
+    assert_eq!(plugins_offered(&relay), [("notes".to_owned(), true)]);
+    // The same list again changes nothing, so nobody is told.
+    let before = *told.lock().unwrap();
+    relay.installed(&[installed("notes", true)]);
+    assert_eq!(*told.lock().unwrap(), before);
+
+    // Held for its sessions after the window left, but only while the
+    // plugin is still on here.
+    relay.listening(DESKTOP, false, true);
+    assert_eq!(plugins_offered(&relay), [("notes".to_owned(), false)]);
+    relay.installed(&[]);
+    assert!(relay.offered().is_empty());
 }

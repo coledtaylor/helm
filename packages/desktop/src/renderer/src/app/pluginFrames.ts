@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { createPluginRelay, type FrameState, type PluginRelay, type RelayHooks, type SurfaceSpec } from '../plugins/relay'
-import { helm } from './bridge'
+import { bridgeFor, helm } from './bridge'
 
 /**
  * The window's plugin frames: one iframe per open panel or tab, owned outside
@@ -20,14 +20,19 @@ import { helm } from './bridge'
  * surface is closed, its plugin is switched off or removed, or the page moves
  * to a new revision - never because a render happened to unmount it.
  *
- * Everything said to or heard from the pages is the relay's (`relay.ts`).
+ * Everything said to or heard from the pages is the relay's (`relay.ts`). A
+ * remote host's page (`SurfaceSpec.host`) is on that host's own origin for the
+ * plugin, its calls go over that host's bridge (`bridgeFor`), and its frame's
+ * key names the host (`hostFrameKey`), so This PC's copy of the same plugin
+ * never shares its frame, storage or calls.
  */
 
 let relay: PluginRelay | null = null
 let holder: HTMLDivElement | null = null
 
 function frames(): PluginRelay {
-  relay ??= createPluginRelay({ win: window, ipc: helm })
+  // A remote host's page calls and hears that host alone, over its bridge.
+  relay ??= createPluginRelay({ win: window, ipc: helm, hostIpc: bridgeFor })
   return relay
 }
 

@@ -30,9 +30,10 @@ import { createWorkspaceAdapter, type WorkspaceAdapter } from './workspace'
  * of this device's own settings (theme, paneLayout, hosts, quitSessions,
  * terminal and browser preferences) and its router carries only that host's
  * half (scan roots, pins, setup stamp). Main's word that is about this PC's
- * host alone (its background pages, the quit question, a notification's
- * click, the lost layout) is not heard on a remote host's adapters
- * (`remoteOwn`).
+ * host alone (the quit question, a notification's click, the lost layout) is
+ * not heard on a remote host's adapters (`remoteOwn`). Main's reports of the
+ * background pages cover every host, and each host's plugins adapter keeps
+ * the ones naming it.
  *
  * Each host's adapters subscribe on its link as soon as it is made, so they
  * hear its first connect: a remote host's bridge is made with its link, and
@@ -83,7 +84,6 @@ export const pickerOnThisPc = (host: string): string =>
  */
 export function remoteOwn(own: HelmBridge, name: () => string): HelmBridge {
   const silentEvents = new Set<string>([
-    'pluginBackground:changed',
     'pluginWindow:asked',
     'pluginWindow:answered',
     'windowSessions:quitConfirm',
@@ -96,8 +96,6 @@ export function remoteOwn(own: HelmBridge, name: () => string): HelmBridge {
     'pluginWindow:answer'
   ])
   const answered: Record<string, () => Promise<unknown>> = {
-    // Main runs this PC's host's background pages; a remote host's are not its.
-    'pluginBackground:states': () => Promise.resolve([]),
     // The lost layout is this PC's host's sessions'.
     'windowSessions:lostLayout': () => Promise.resolve(null),
     'ownSettings:write': () => Promise.reject(new Error(`This device’s own settings are not written for ${name()}.`)),
@@ -157,7 +155,7 @@ export function createHostBridge(
     createFilesAdapter(link, deps.log),
     ...sessions,
     // A session a plugin asked for, started after the user's yes, opens as one of the window's tabs.
-    createPluginsAdapter({ link, own, adopt: (row) => sessions.adopt(row), log: deps.log })
+    createPluginsAdapter({ link, host, own, adopt: (row) => sessions.adopt(row), log: deps.log })
   ]
   const helm = createRouter({
     own: deps.own,

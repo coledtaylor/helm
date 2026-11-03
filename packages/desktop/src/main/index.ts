@@ -25,7 +25,7 @@ import type { PluginSession } from '@coledtaylor/helm-plugin-sdk'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { emit, pushTheme, registerIpc } from './ipc'
+import { emit, emitToContents, pushTheme, registerIpc } from './ipc'
 import { createClipboardText } from './clipboard'
 import { appMode, dataDir, initDataDir, mcpConfigDir, templatesDir, themesDir } from './paths'
 import { createThemeService } from './themes'
@@ -474,18 +474,19 @@ function startApp(options: AppOptions = {}): void {
   plugins.start()
   if (pluginsInHost) {
     // Asked only once a page loads, which is after the desktop host below exists.
-    registerHostPluginProtocol(
-      {
-        // The local host is the one Helm started, on this computer.
-        onHostComputer: true,
-        serves: (id) => (desktopHost === null ? Promise.resolve(false) : desktopHost.plugins.serves(id)),
-        file: (id, path) =>
-          desktopHost === null
-            ? Promise.resolve({ status: 404, contentType: 'text/plain', body: new TextEncoder().encode('Not found') })
-            : desktopHost.plugins.file(id, path)
-      },
-      plugins.runtime
-    )
+    // Each origin from its own host's files: This PC's from the local host,
+    // a remote host's (`helm-plugin://<id>.<label>/`) from that host only.
+    registerHostPluginProtocol((label) => {
+      if (desktopHost === null) return null
+      const hosted = label === null ? desktopHost.plugins : desktopHost.remotePlugins.byLabel(label)
+      if (hosted === null) return null
+      return {
+        // The local host is the one Helm started, on this computer; a remote host's is not.
+        onHostComputer: label === null,
+        serves: (id) => hosted.serves(id),
+        file: (id, path) => hosted.file(id, path)
+      }
+    }, plugins.runtime)
   } else {
     registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
   }
@@ -529,7 +530,10 @@ function startApp(options: AppOptions = {}): void {
       })
     : null
   if (desktopHost !== null) {
-    pluginBackgroundGone = (reason) => desktopHost.plugins.backgroundGone(reason)
+    pluginBackgroundGone = (reason) => {
+      desktopHost.plugins.backgroundGone(reason)
+      desktopHost.remotePlugins.backgroundGone(reason)
+    }
     // An artifact frame keeps the window's scheme, answered from the host's bytes.
     serveArtifactsFrom((url) => desktopHost.files.artifactBytes(url))
     void desktopHost.link.connection().catch((err: unknown) => {
@@ -567,7 +571,12 @@ function startApp(options: AppOptions = {}): void {
       ? createDesktopRemoteHosts({
           isHelmPage,
           nextConnection,
-          changed: (states) => emit(win, 'remoteHosts:changed', states),
+          // The hidden plugin window hears it too: it runs each connected host's background pages.
+          changed: (states) => {
+            emit(win, 'remoteHosts:changed', states)
+            emitToContents(pluginBackground?.contents(), 'remoteHosts:changed', states)
+          },
+          plugins: desktopHost.remotePlugins,
           log: (line) => console.log(line)
         })
       : null
@@ -884,7 +893,9 @@ function startApp(options: AppOptions = {}): void {
     ...(templates !== undefined ? { templates } : {}),
     themes,
     plugins,
-    ...(desktopHost !== null ? { hostPlugins: desktopHost.plugins, ownData: desktopHost.ownData } : {}),
+    ...(desktopHost !== null
+      ? { hostPlugins: desktopHost.plugins, remotePlugins: desktopHost.remotePlugins, ownData: desktopHost.ownData }
+      : {}),
     ...(pluginBackground !== undefined ? { pluginBackground: () => pluginBackground.contents() } : {}),
     sessionsInHost: desktopHost !== null,
     ...(desktopHost !== null
@@ -1093,6 +1104,7 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.pluginRelay.stop()
         desktopHost.profiles.shutdown()
         desktopHost.plugins.shutdown()
+        desktopHost.remotePlugins.shutdown()
         desktopHost.workspace.shutdown()
         desktopHost.files.shutdown()
         desktopHost.resources.stop()

@@ -88,6 +88,9 @@ describe('servePluginRequest', () => {
   })
 
   it('knows nothing of a plugin that is not served', () => {
+    // Another host's origin for a plugin Helm serves itself is not this one's.
+    expect(serve('helm-plugin://sample.build-box/dist/assets/app.js').status).toBe(404)
+    expect(serve('helm-plugin://sample.build-box/__helm/bridge.js').status).toBe(404)
     expect(serve('helm-plugin://other/dist/assets/app.js').status).toBe(404)
     expect(serve('helm-plugin://other/__helm/bridge.js').status).toBe(404)
   })
@@ -230,5 +233,33 @@ describe('servePluginRequestFrom: pages from the local host’s files', () => {
     expect(page.status).toBe(503)
     expect(await page.text()).toBe(sentence)
     expect((await servePluginRequestFrom('helm-plugin://sample/__helm/bridge.js', source, runtime)).status).toBe(503)
+  })
+
+  it('serves no other host’s origin from the local host alone', async () => {
+    const source = host()
+    expect((await servePluginRequestFrom('helm-plugin://sample.build-box/dist/main%20page.html', source, runtime)).status).toBe(404)
+    expect(source.asked).toEqual([])
+  })
+
+  it('s22: serves build-box’s plugin pages from build-box’s files only, This PC’s from This PC’s, and nothing for a host not added', async () => {
+    const ours = host()
+    const theirs = host(false)
+    const sources = (label: string | null): PluginPageSource | null =>
+      label === null ? ours : label === 'build-box' ? theirs : null
+
+    const remote = await servePluginRequestFrom('helm-plugin://sample.build-box/dist/main%20page.html', sources, runtime)
+    expect(remote.status).toBe(200)
+    expect(remote.headers.get('content-security-policy')).toBe(PLUGIN_CSP)
+    // Drawn from build-box's files: not the computer the plugin runs on.
+    expect(bootOf(await remote.text())).toMatchObject({ channels: 'host', onHostComputer: false })
+    expect(theirs.asked).toEqual(['sample:dist/main page.html'])
+    expect(ours.asked).toEqual([])
+
+    await servePluginRequestFrom('helm-plugin://sample/dist/assets/app.js', sources, runtime)
+    expect(ours.asked).toEqual(['sample:dist/assets/app.js'])
+    expect(theirs.asked).toEqual(['sample:dist/main page.html'])
+
+    expect((await servePluginRequestFrom('helm-plugin://sample.lab/dist/main%20page.html', sources, runtime)).status).toBe(404)
+    expect((await servePluginRequestFrom('helm-plugin://sample.lab/__helm/bridge.js', sources, runtime)).status).toBe(404)
   })
 })

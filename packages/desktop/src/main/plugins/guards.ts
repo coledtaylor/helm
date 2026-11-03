@@ -1,5 +1,6 @@
 import { session, type WebContents, type WebFrameMain } from 'electron'
 import { PLUGIN_SCHEME } from '../../shared/ipc'
+import { parsePluginOrigin } from '../../shared/plugins/origin'
 
 /**
  * What a plugin frame may do to the browser around it.
@@ -10,19 +11,18 @@ import { PLUGIN_SCHEME } from '../../shared/ipc'
  * cannot argue with them.
  */
 
-const PREFIX = `${PLUGIN_SCHEME}:`
-
-/** `helm-plugin://<id>`, or null for anything not on the scheme. */
+/**
+ * `helm-plugin://<id>` for This PC's plugin, `helm-plugin://<id>.<label>` for
+ * a remote host's (`shared/plugins/origin.ts`), or null for anything not on
+ * the scheme. Each host and plugin is an origin of its own, so the rules
+ * below keep a frame on its own host's plugin as well as its own plugin.
+ */
 export function pluginOriginOf(url: string | null | undefined): string | null {
-  if (typeof url !== 'string' || !url.startsWith(PREFIX)) return null
-  try {
-    // Node gives a scheme it does not know an opaque origin, so the origin is
-    // spelled out from the host rather than read from `URL.origin`.
-    const host = new URL(url).host
-    return host === '' ? null : `${PLUGIN_SCHEME}://${host}`
-  } catch {
-    return null
-  }
+  // Node gives a scheme it does not know an opaque origin, so the origin is
+  // spelled out from the authority rather than read from `URL.origin`.
+  const parsed = parsePluginOrigin(url)
+  if (parsed === null) return null
+  return `${PLUGIN_SCHEME}://${parsed.plugin}${parsed.label === null ? '' : `.${parsed.label}`}`
 }
 
 export interface FrameNavigation {

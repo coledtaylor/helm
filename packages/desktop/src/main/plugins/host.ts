@@ -1031,7 +1031,14 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
     runTool(request, signal) {
       if (stopped) return Promise.resolve({ ok: false, message: 'Helm is shutting down.' })
       return tools.call(
-        { plugin: request.plugin, name: request.tool, args: request.args, session: request.session },
+        {
+          plugin: request.plugin,
+          name: request.tool,
+          args: request.args,
+          session: request.session,
+          // The hidden window hands it to that host's background page only.
+          ...(request.host !== undefined ? { host: request.host } : {})
+        },
         request.plugin,
         signal
       )

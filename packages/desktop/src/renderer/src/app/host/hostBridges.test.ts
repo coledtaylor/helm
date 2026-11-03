@@ -149,9 +149,9 @@ describe('the preload’s bridge as a remote host’s adapters see it', () => {
     bridge.emit('windowSessions:quitConfirm', { id: 1 } as never)
     bridge.emit('pluginBackground:changed', [])
     bridge.emit('ownSettings:changed', DEFAULT_SETTINGS)
-    expect(heard).toEqual(['settings'])
+    // Main's background reports cover every host; the plugins adapter keeps its own host's.
+    expect(heard).toEqual(['background', 'settings'])
 
-    expect(await own.invoke('pluginBackground:states')).toEqual([])
     expect(await own.invoke('windowSessions:lostLayout')).toBeNull()
     await expect(own.invoke('path:chooseDirectory', { title: 'Add a plugin folder' })).rejects.toThrow(
       pickerOnThisPc('build-box')

@@ -614,3 +614,112 @@ describe('tool calls', () => {
     expect(main.listening('plugins:toolCancel')).toBe(0)
   })
 })
+
+describe('the same plugin on two hosts', () => {
+  const BUILD_BOX = 'build-box'
+  const BUILD_ORIGIN = 'helm-plugin://sample.build-box'
+  const SESSION = { id: 'm1', name: 'alpha', cwd: '/home/me/alpha' }
+  let buildBox: ReturnType<typeof fakeMain>
+  let hosted: PluginRelay
+
+  beforeEach(() => {
+    buildBox = fakeMain()
+    hosted = createPluginRelay({
+      win: window,
+      ipc: main.ipc,
+      hostIpc: (host) => (host === BUILD_BOX ? buildBox.ipc : main.ipc)
+    })
+  })
+
+  afterEach(() => {
+    hosted.destroy()
+  })
+
+  const openOn = (overrides: Partial<SurfaceSpec>): HTMLIFrameElement => {
+    const element = hosted.open(spec(overrides))
+    document.body.appendChild(element)
+    return element
+  }
+
+  const remote = (overrides: Partial<SurfaceSpec> = {}): Partial<SurfaceSpec> => ({
+    key: 'host:build-box/panel:sample/main',
+    host: BUILD_BOX,
+    url: `${BUILD_ORIGIN}/dist/panels/main.html`,
+    ...overrides
+  })
+
+  it('s22: a page of build-box’s plugin calls build-box only, and This PC’s calls This PC only', async () => {
+    const theirs = connect(openOn(remote()), BUILD_ORIGIN).port
+    const ours = connect(openOn({}), 'helm-plugin://sample').port
+    for (const method of ['fetch', 'exec', 'settings.get', 'secrets.get', 'sessions.list', 'channel.post']) {
+      theirs.postMessage({ t: 'call', id: 1 + buildBox.calls.length, method, args: [] })
+    }
+    ours.postMessage({ t: 'call', id: 1, method: 'fetch', args: ['https://example.com'] })
+    expect(buildBox.calls.map((call) => call.method)).toEqual([
+      'fetch',
+      'exec',
+      'settings.get',
+      'secrets.get',
+      'sessions.list',
+      'channel.post'
+    ])
+    expect(main.calls.map((call) => call.method)).toEqual(['fetch'])
+    buildBox.settle(buildBox.calls[0]!.callId, { ok: true, value: 'from build-box' })
+    await flush()
+    expect(got(theirs)).toContainEqual({ t: 'result', id: 1, ok: true, value: 'from build-box' })
+    // A cancel goes to the host the call went to.
+    theirs.postMessage({ t: 'cancel', id: 2 })
+    expect(buildBox.send).toHaveBeenCalledWith('plugins:cancel', { callId: buildBox.calls[1]!.callId })
+    expect(main.send).not.toHaveBeenCalledWith('plugins:cancel', expect.anything())
+  })
+
+  it('s22: a delivery from build-box reaches build-box’s pages of the plugin, and This PC’s from This PC only', () => {
+    const theirs = connect(openOn(remote()), BUILD_ORIGIN).port
+    const ours = connect(openOn({}), 'helm-plugin://sample').port
+    const delivery = (data: string): PluginDelivery => ({ plugin: 'sample', event: 'channel', data, to: 'all' })
+    buildBox.emit('plugins:deliver', delivery('build-box says'))
+    main.emit('plugins:deliver', delivery('This PC says'))
+    expect(got(theirs).filter((message) => message.t === 'event')).toEqual([
+      { t: 'event', name: 'channel', data: 'build-box says' }
+    ])
+    expect(got(ours).filter((message) => message.t === 'event')).toEqual([
+      { t: 'event', name: 'channel', data: 'This PC says' }
+    ])
+  })
+
+  it('s19: answers a HELLO only from the origin of its own host’s plugin', () => {
+    const element = openOn(remote())
+    const win = element.contentWindow!
+    const post = vi.spyOn(win, 'postMessage').mockImplementation(() => undefined)
+    // This PC's origin for the plugin, or another host's, is not this frame's page.
+    window.dispatchEvent(windowMessage({ data: { type: HELLO }, origin: 'helm-plugin://sample', source: win }))
+    window.dispatchEvent(windowMessage({ data: { type: HELLO }, origin: 'helm-plugin://sample.lab', source: win }))
+    expect(post).not.toHaveBeenCalled()
+    window.dispatchEvent(windowMessage({ data: { type: HELLO }, origin: BUILD_ORIGIN, source: win }))
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
+  it('s20: a build-box session’s tool call is handed to build-box’s background page, and This PC’s to This PC’s', () => {
+    const background = { surface: 'background' as const, name: 'background' }
+    const theirs = connect(
+      openOn({ ...background, ...remote({ key: 'host:build-box/background:sample', url: `${BUILD_ORIGIN}/bg.html` }) }),
+      BUILD_ORIGIN
+    ).port
+    const ours = connect(
+      openOn({ ...background, key: 'background:sample', url: 'helm-plugin://sample/bg.html' }),
+      'helm-plugin://sample'
+    ).port
+    const call = (id: string, host?: string): PluginToolCall => ({
+      id,
+      plugin: 'sample',
+      name: 'find',
+      args: {},
+      session: SESSION,
+      ...(host !== undefined ? { host } : {})
+    })
+    main.emit('plugins:tool', call('remote', BUILD_BOX))
+    main.emit('plugins:tool', call('local'))
+    expect(got(theirs).filter((message) => message.t === 'tool').map((message) => (message as { id: string }).id)).toEqual(['remote'])
+    expect(got(ours).filter((message) => message.t === 'tool').map((message) => (message as { id: string }).id)).toEqual(['local'])
+  })
+})

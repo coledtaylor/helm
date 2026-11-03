@@ -32,6 +32,11 @@ export interface ToolCallRequest {
   tool: string
   args: Record<string, unknown>
   session: ToolSession
+  /**
+   * The remote host the calling session runs on, whose background page for
+   * the plugin answers it; absent for This PC's sessions.
+   */
+  host?: string
 }
 
 /** What the session reads: the page's text, or why there is none. */

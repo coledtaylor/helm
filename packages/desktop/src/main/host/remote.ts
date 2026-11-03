@@ -88,6 +88,12 @@ export interface RemoteHostLinksDeps {
   appVersion: string
   /** The one counter every host's page connections are numbered from. */
   nextConnection: () => number
+  /**
+   * What hangs on each host's main link beside the link itself (its plugins'
+   * page files and tool relay, `remote-plugins.ts`), started with the link
+   * and stopped when the link is let go of or Helm quits.
+   */
+  linked?: (host: RemoteHost, link: HostLink) => { stop(): void }
   log: (line: string) => void
   setTimeout: (run: () => void, ms: number) => unknown
   clearTimeout: (timer: unknown) => void
@@ -100,6 +106,8 @@ interface Entry {
   /** The running sessions this device started there, as the host last said. */
   own: readonly P.DeviceSession[]
   subscriptions: HostSubscription[]
+  /** What `linked` started on this link. */
+  attached: { stop(): void } | null
 }
 
 /** Two hosts reached the same way: the same transport, running the same floti there. */
@@ -135,7 +143,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
 
   const open = (host: RemoteHost): Entry => {
     // Filled in below: the link's callbacks reach the entry they belong to.
-    const entry = { host, own: [], subscriptions: [] } as unknown as Entry
+    const entry = { host, own: [], subscriptions: [], attached: null } as unknown as Entry
     entry.link = createHostLink({
       start: () =>
         deps.start(entry.host, (code, approvalFailed) =>
@@ -179,6 +187,8 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       atSignIn.delete(entry.host.id)
       setState(entry, { state: 'connected', ...(role !== undefined ? { role } : {}) })
     })
+    // Before the first connect, so what hangs on the link hears it.
+    entry.attached = deps.linked?.(host, entry.link) ?? null
     entry.link.keepConnected()
     return entry
   }
@@ -187,6 +197,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
     entries.delete(entry.host.id)
     states.delete(entry.host.id)
     for (const subscription of entry.subscriptions) subscription.unsubscribe()
+    entry.attached?.stop()
     void (async () => {
       await entry.pages.stop()
       await entry.link.release()
@@ -252,6 +263,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       await Promise.all(
         [...entries.values()].map(async (entry) => {
           for (const subscription of entry.subscriptions) subscription.unsubscribe()
+          entry.attached?.stop()
           await entry.pages.stop()
           await entry.link.quit({ end: endsOn(entry.host.id) })
         })

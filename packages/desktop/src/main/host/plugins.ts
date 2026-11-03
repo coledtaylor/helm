@@ -1,4 +1,5 @@
 import type { PluginFolder } from '@helm/core'
+import { LOCAL_HOST_KEY } from '@helm/core/types'
 import type { SettingValue } from '@coledtaylor/helm-plugin-sdk'
 import type { PluginBackgroundReport, PluginInfo } from '../../shared/ipc'
 import type { ToolAnswer, ToolCallRequest, ToolServer } from '../plugins/tools'
@@ -54,15 +55,27 @@ export interface HostPluginsDeps {
   onToolsChanged: () => void
   /** Opens the hidden window while a background page needs it, and closes it when none does. */
   background: { sync(needed: boolean): void }
+  /**
+   * The host these are: `LOCAL_HOST_KEY` (the default) for This PC's, or a
+   * remote host's id, whose page and background URLs are moved onto that
+   * host's own origin for each plugin and whose reports name it.
+   */
+  host?: string
+  /** Helm's own plugins, copied into This PC's host on its first connect; never into a remote host. */
+  copyOwn?: OwnPluginsCopy
+  log: (line: string) => void
+}
+
+/** What copying Helm's own plugins into This PC's host reads and records. */
+export interface OwnPluginsCopy {
   /** Helm's own plugin folders, in the order they were added: what the first connect copies. */
-  ownFolders: () => PluginFolder[]
+  folders: () => PluginFolder[]
   /** Helm's own setting values for a plugin, by its id. */
-  ownSettings: (plugin: string) => Record<string, SettingValue>
+  settings: (plugin: string) => Record<string, SettingValue>
   /** Whether Helm's plugins have been copied into a host before. */
   copied: () => boolean
   /** Records that they have, so no later start copies them again. */
   markCopied: () => void
-  log: (line: string) => void
 }
 
 export interface HostPlugins {
@@ -99,6 +112,10 @@ export const NOT_OFFERING =
 
 export function createHostPlugins(deps: HostPluginsDeps): HostPlugins {
   const { link } = deps
+  const hostKey = deps.host ?? LOCAL_HOST_KEY
+  /** A report as the window is told it: naming its host when that is not This PC. */
+  const tagged = (report: PluginBackgroundReport): PluginBackgroundReport =>
+    hostKey === LOCAL_HOST_KEY ? report : { ...report, host: hostKey }
   /** The host's last list, as it sent it; null until the first one. */
   let hosted: PluginInfo[] | null = null
   /** The reports as the window was last told them, to tell whether one moved them. */
@@ -160,7 +177,7 @@ export function createHostPlugins(deps: HostPluginsDeps): HostPlugins {
   }
 
   /** What the hidden window reported, for the plugins the host has on now. */
-  const currentReports = (): PluginBackgroundReport[] => [...reports.values()]
+  const currentReports = (): PluginBackgroundReport[] => [...reports.values()].map(tagged)
 
   /** Tells the window what moved, wakes the tool calls waiting on a page, and opens or closes the hidden window. */
   const publish = (): void => {
@@ -183,7 +200,7 @@ export function createHostPlugins(deps: HostPluginsDeps): HostPlugins {
 
   /** The host's list, now the one Helm has: a plugin's cached files go once the host has read it again. */
   const take = (listed: readonly P.PluginInfo[]): void => {
-    hosted = listed.map(pluginFromHost)
+    hosted = listed.map((plugin) => pluginFromHost(plugin, hostKey))
     offered = [...listed]
     for (const [id, cached] of cache) {
       const now = live(id)
@@ -247,10 +264,10 @@ export function createHostPlugins(deps: HostPluginsDeps): HostPlugins {
   }
 
   /** Helm's own plugins into a host that has never been given them. */
-  const copyOwnPlugins = async (connection: HostConnection): Promise<void> => {
-    if (deps.copied()) return
+  const copyOwnPlugins = async (connection: HostConnection, own: OwnPluginsCopy): Promise<void> => {
+    if (own.copied()) return
     const registered = new Set((await connection.request('plugins:list', null)).map((plugin) => plugin.path))
-    for (const folder of deps.ownFolders()) {
+    for (const folder of own.folders()) {
       if (registered.has(folder.path)) continue
       const added = await connection.request('plugins:add', { path: folder.path })
       if (added.error !== null) {
@@ -262,7 +279,7 @@ export function createHostPlugins(deps: HostPluginsDeps): HostPlugins {
       // Values first, while it is on: they are the host's to check against
       // the manifest, and one it refuses is said and left out.
       if (id !== null) {
-        for (const [key, value] of Object.entries(deps.ownSettings(id))) {
+        for (const [key, value] of Object.entries(own.settings(id))) {
           await refusedIsLogged(
             () => connection.request('plugins:setSetting', { plugin: id, key, value }),
             `host: the setting “${key}” of ${folder.path} was not copied into the local host`
@@ -272,7 +289,7 @@ export function createHostPlugins(deps: HostPluginsDeps): HostPlugins {
       if (!folder.toolsEnabled) await connection.request('plugins:setTools', { path: folder.path, enabled: false })
       if (!folder.enabled) await connection.request('plugins:setEnabled', { path: folder.path, enabled: false })
     }
-    deps.markCopied()
+    own.markCopied()
   }
 
   /** A request the host refused is logged and the copy goes on; one that never reached it ends the copy. */
@@ -297,8 +314,10 @@ export function createHostPlugins(deps: HostPluginsDeps): HostPlugins {
         error: (error) => deps.log(`host: plugins:changed ended (${error.message})`)
       })
     ]
+    // Only This PC's host is given Helm's own plugins: a remote host keeps its own.
+    if (deps.copyOwn === undefined) return
     try {
-      await copyOwnPlugins(connection)
+      await copyOwnPlugins(connection, deps.copyOwn)
     } catch (error) {
       // Not recorded as done, so the next start tries again; a folder copied
       // this time is skipped then.

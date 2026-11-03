@@ -107,12 +107,14 @@ function world(options: Options = {}) {
       toolsChanged += 1
     },
     background: { sync: (needed) => synced.push(needed) },
-    ownFolders: () => options.own ?? [],
-    ownSettings: (id) => options.ownSettings?.[id] ?? {},
-    copied: () => copied,
-    markCopied: () => {
-      copied = true
-      marks.push(marks.length + 1)
+    copyOwn: {
+      folders: () => options.own ?? [],
+      settings: (id) => options.ownSettings?.[id] ?? {},
+      copied: () => copied,
+      markCopied: () => {
+        copied = true
+        marks.push(marks.length + 1)
+      }
     },
     log: (line) => logged.push(line)
   })
@@ -140,10 +142,6 @@ function quietDeps(link: HostPluginsDeps['link']): HostPluginsDeps {
     runTool: () => Promise.resolve({ ok: true, text: 'Done.' }),
     onToolsChanged: () => undefined,
     background: { sync: () => undefined },
-    ownFolders: () => [],
-    ownSettings: () => ({}),
-    copied: () => true,
-    markCopied: () => undefined,
     log: () => undefined
   }
 }

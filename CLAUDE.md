@@ -380,6 +380,14 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   or the session ends; with its client gone, a call fails at once saying
   Helm's window is not connected. With no session holding a token and
   nothing a launch could be given, the host holds no port.
+- A host serves an offered server only for a plugin it has itself, on,
+  error-free and with its tools on (`PluginRelay::installed`), whatever a
+  client offers: a plugin only another host has is given to no launch here,
+  and its route answers 404. Main runs one tool relay per host on that host's
+  own link (`main/host/remote-plugins.ts` for each remote host), offering it
+  only that host's plugins, and each call it relays names its host to the
+  end, so a remote host's session is answered by that host's background page
+  and never by This PC's.
 
 ## Plugins
 
@@ -394,7 +402,11 @@ folder: run through npx, that folder is a cache.
 
 - A plugin page is served on `helm-plugin://<id>/`, one origin per plugin,
   framed out of process, with no preload and no Node. The bridge and the
-  primitives stylesheet are injected into every page it serves.
+  primitives stylesheet are injected into every page it serves. The same
+  plugin on a remote host has an origin of its own,
+  `helm-plugin://<id>.<label>/` (`shared/plugins/origin.ts`), served from that
+  host's files only, so no storage or navigation is shared between hosts;
+  This PC's stays `helm-plugin://<id>/`.
 - Its CSP has `connect-src 'none'`: `helm.fetch` (`net.ts`) is its only way
   out, to origins the manifest lists, checked again on every redirect hop.
 - `guards.ts`: `will-frame-navigate` keeps a plugin frame on its own origin,
@@ -407,7 +419,10 @@ folder: run through npx, that folder is a cache.
   the theme. What a background page asks that only the window can draw goes
   between the two windows through main (`pluginWindow:*`). Main keeps the
   `helm-plugin://` scheme, the hidden window and the tool relay
-  (`main/host/plugins.ts`).
+  (`main/host/plugins.ts`). A remote host's pages call that host only, over
+  its own connection (`bridgeFor(host)` in the window, a page link per host
+  in the hidden window, whose background frames are keyed by host and
+  plugin).
 - `helm.exec` runs only programs the manifest names, with an argument array
   and no shell. A service gets a loopback port and a token for the run. Both
   run with the user's rights, which is why Settings names them. Turning a

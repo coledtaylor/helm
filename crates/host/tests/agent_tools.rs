@@ -33,6 +33,7 @@ use floti_protocol::channels::agent_plugin::{
 };
 use floti_protocol::channels::common::SessionRecord;
 use floti_protocol::channels::host::HostStopReason;
+use floti_protocol::channels::plugins::{PluginAddRequest, PluginsAdd};
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, SessionClose, SessionList, SessionStart, StartSessionRequest,
 };
@@ -1719,9 +1720,13 @@ const PLUGIN_CANCELS: u64 = 51;
 
 impl World {
     /// A client answering plugin tool calls that offers `servers`: Helm's
-    /// window with plugins on, as far as the host can tell.
+    /// window with plugins on, as far as the host can tell. The host has
+    /// each plugin offered, on with its tools on: it serves no other.
     async fn plugin_client(&self, servers: Vec<AgentPluginServer>) -> TestClient {
         let mut client = TestClient::connect(&self.endpoint, TERMINAL).await;
+        for server in &servers {
+            self.install_plugin(&mut client, &server.plugin).await;
+        }
         client
             .subscribe_quietly(PLUGIN_CALLS, AgentPluginCalls::NAME)
             .await;
@@ -1730,6 +1735,36 @@ impl World {
             .await;
         offer_plugins(&mut client, servers).await;
         client
+    }
+}
+
+impl World {
+    /// Adds plugin `id` to the host, on, with a background page and the
+    /// tools the notes server lists (`find` and `write`), on.
+    async fn install_plugin(&self, client: &mut TestClient, id: &str) {
+        let manifest = json!({
+            "apiVersion": 1,
+            "id": id,
+            "name": id,
+            "version": "1.0.0",
+            "background": "background.html",
+            "agent": { "tools": {
+                "find": { "description": "Finds a note.", "readOnly": true },
+                "write": { "description": "Writes a note." },
+            } },
+        });
+        let folder = self.dirs.plugin_folder(
+            &format!("plugin {id}"),
+            &manifest.to_string(),
+            &[("background.html", "<!doctype html><p>background</p>")],
+        );
+        let added = client
+            .request::<PluginsAdd>(&PluginAddRequest {
+                path: folder.to_string_lossy().into_owned(),
+            })
+            .await
+            .expect("the plugin is added");
+        assert_eq!(added.error, None);
     }
 }
 
@@ -2623,4 +2658,49 @@ async fn s6_a_session_whose_port_is_taken_runs_on_without_tools_and_the_log_says
         (!alive(alpha.pid)).then_some(())
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s21_a_plugin_only_another_host_has_is_offered_to_no_session_here_and_its_route_is_refused()
+{
+    let world = World::new();
+    let host = world.host();
+    // The window offers notes, which this host has, and trackr, which only
+    // This PC has.
+    let mut desktop = world.plugin_client(vec![notes_server()]).await;
+    let mut trackr = notes_server();
+    trackr.name = "helm-plugin-trackr".into();
+    trackr.plugin = "trackr".into();
+    offer_plugins(&mut desktop, vec![notes_server(), trackr]).await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+
+    // Given only the plugin this host has.
+    assert_eq!(alpha.servers(), ["helm-plugin-notes", "helm-sessions"]);
+    let allowed: Vec<&String> = alpha
+        .argv
+        .iter()
+        .skip_while(|arg| *arg != "--allowedTools")
+        .skip(1)
+        .take_while(|arg| !arg.starts_with("--"))
+        .collect();
+    assert_eq!(
+        allowed,
+        ["mcp__helm-plugin-notes__find"],
+        "{:?}",
+        alpha.argv
+    );
+
+    // trackr's route, with a token that holds notes', is refused.
+    let (url, token) = alpha.notes().expect("a helm-plugin-notes entry");
+    let trackr_url = url.replace("/mcp/plugin/notes", "/mcp/plugin/trackr");
+    assert_eq!(
+        status_of(&trackr_url, "POST", Some(&token), None).await,
+        404
+    );
+
+    close(&mut client, &alpha.record).await;
+    host.stop(HostStopReason::Stop).await;
 }

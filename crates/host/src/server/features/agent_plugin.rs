@@ -17,6 +17,13 @@
 //! session already given one keeps its route, where every call fails at once
 //! saying Helm is not connected, until a client offers that plugin again.
 //!
+//! **Only the host's own plugins.** A client's offer is a claim about how a
+//! plugin's tools read, never what this host serves: a server is given to
+//! sessions, listed and called only while this host has that plugin itself,
+//! on, error-free and with its tools on ([`PluginRelay::installed`]). A
+//! plugin only some other host has, or one switched off here, is served by
+//! nobody's offer, and its route answers 404.
+//!
 //! **No timers.** A call ends with its answer, with the client leaving or no
 //! longer listening (it fails at once, saying so), or with the session no
 //! longer waiting, which withdraws it from the client on
@@ -31,6 +38,7 @@ use floti_protocol::channels::agent_plugin::{
     AgentPluginCancels, AgentPluginOffer, AgentPluginOutcome, AgentPluginServer,
     AgentPluginServers, AgentPluginToolAnswer, AgentPluginToolCall,
 };
+use floti_protocol::channels::plugins::PluginInfo;
 use floti_protocol::{ClientChannels, EventChannel, Payload};
 use tokio::sync::oneshot;
 
@@ -90,6 +98,9 @@ struct Relay {
     listening: BTreeSet<ClientId>,
     /// Servers whose client left, by plugin, until a client offers again.
     orphans: BTreeMap<String, Arc<PluginServer>>,
+    /// The plugins this host has on, error-free, with their tools on: the
+    /// only ones served, whatever a client offers.
+    installed: BTreeSet<String>,
     last_call: u64,
     pending: HashMap<u64, Pending>,
 }
@@ -108,8 +119,18 @@ impl Relay {
             .iter()
             .filter(|(client, _)| self.listening.contains(client))
             .flat_map(|(client, servers)| servers.iter().map(move |server| (*client, server)))
-            .find(|(_, server)| server.plugin == plugin)
+            .find(|(_, server)| server.plugin == plugin && self.installed.contains(plugin))
     }
+}
+
+/// The ids of the plugins in `list` whose tools this host serves: each on,
+/// error-free and with its tools on.
+fn serving(list: &[PluginInfo]) -> BTreeSet<String> {
+    list.iter()
+        .filter(|plugin| plugin.enabled && plugin.error.is_none())
+        .filter(|plugin| plugin.agent.as_ref().is_some_and(|agent| agent.enabled))
+        .filter_map(|plugin| plugin.id.clone())
+        .collect()
 }
 
 impl PluginRelay {
@@ -145,6 +166,22 @@ impl PluginRelay {
         }
     }
 
+    /// This host's plugins now, from its list: only those on, error-free and
+    /// with their tools on are served from here on. A plugin leaving the set
+    /// is gone at once for every session given it, as a server left out of
+    /// an offer is.
+    pub fn installed(&self, list: &[PluginInfo]) {
+        let serving = serving(list);
+        {
+            let mut state = self.state();
+            if state.installed == serving {
+                return;
+            }
+            state.installed = serving;
+        }
+        self.tell_changed();
+    }
+
     /// The relay, naming the session each call comes from with `caller`.
     pub fn naming_callers(
         mut self,
@@ -156,17 +193,18 @@ impl PluginRelay {
 
     /// Every server now: each a listening client offers, the first client
     /// to offer a plugin answering it, then each held for its sessions
-    /// after its client left.
+    /// after its client left. Only plugins this host has on with their tools
+    /// on are among them.
     pub fn offered(&self) -> Vec<Offered> {
         let state = self.state();
-        let mut seen = HashSet::new();
+        let mut seen: HashSet<String> = HashSet::new();
         let mut all = Vec::new();
         for (client, servers) in &state.offers {
             if !state.listening.contains(client) {
                 continue;
             }
             for server in servers {
-                if seen.insert(server.plugin.clone()) {
+                if state.installed.contains(&server.plugin) && seen.insert(server.plugin.clone()) {
                     all.push(Offered {
                         server: Arc::clone(server),
                         connected: true,
@@ -175,7 +213,7 @@ impl PluginRelay {
             }
         }
         for (plugin, server) in &state.orphans {
-            if seen.insert(plugin.clone()) {
+            if state.installed.contains(plugin) && seen.insert(plugin.clone()) {
                 all.push(Offered {
                     server: Arc::clone(server),
                     connected: false,

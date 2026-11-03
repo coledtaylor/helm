@@ -34,6 +34,7 @@ describe('pluginOriginOf', () => {
   it.each([
     ['helm-plugin://sample/dist/panel.html', 'helm-plugin://sample'],
     ['helm-plugin://sample/', 'helm-plugin://sample'],
+    ['helm-plugin://sample.build-box/dist/panel.html', 'helm-plugin://sample.build-box'],
     ['https://example.com/', null],
     ['http://localhost:5173/', null],
     ['helm-content://abc/x.html', null],
@@ -89,6 +90,38 @@ describe('pluginNavigationAllowed', () => {
     ['a frame whose origin could not be read', { frameOrigin: null }, false]
   ])('%s', (_name, patch, allowed) => {
     expect(pluginNavigationAllowed({ ...base, ...patch })).toBe(allowed)
+  })
+})
+
+describe('the same plugin on two hosts', () => {
+  const ours = 'helm-plugin://sample'
+  const theirs = 'helm-plugin://sample.build-box'
+
+  it('s19: neither frame can navigate to the other’s origin, and each moves between its own pages', () => {
+    const from = (origin: string, target: string): boolean =>
+      pluginNavigationAllowed({
+        target,
+        frameOrigin: origin,
+        initiatorOrigin: origin,
+        initiatorIsHelm: false,
+        framesPlugins: true
+      })
+    expect(from(ours, `${theirs}/dist/panel.html`)).toBe(false)
+    expect(from(theirs, `${ours}/dist/panel.html`)).toBe(false)
+    expect(from(theirs, 'helm-plugin://sample.lab/dist/panel.html')).toBe(false)
+    expect(from(ours, `${ours}/dist/other.html`)).toBe(true)
+    expect(from(theirs, `${theirs}/dist/other.html`)).toBe(true)
+  })
+
+  it('gives build-box’s plugin page the same one permission as This PC’s', () => {
+    installPluginPermissions()
+    const request = handlers.request!
+    for (const origin of [ours, theirs]) {
+      const answers: boolean[] = []
+      request(null, 'clipboard-sanitized-write', (granted) => answers.push(granted), { requestingUrl: `${origin}/x.html` })
+      request(null, 'notifications', (granted) => answers.push(granted), { requestingUrl: `${origin}/x.html` })
+      expect(answers).toEqual([true, false])
+    }
   })
 })
 
