@@ -22,13 +22,17 @@ use floti_host::server::{HostConfig, HostRun};
 use floti_host::testkit::{
     FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs, floti_exe, pair_test_device,
 };
+use floti_protocol::EventChannel;
 use floti_protocol::Knowable;
 use floti_protocol::channel::to_payload;
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
-use floti_protocol::channels::host::HostStopReason;
+use floti_protocol::channels::host::{
+    DeviceSession, HostDeviceSessions, HostQuit, HostQuitRequest, HostStopReason,
+};
 use floti_protocol::channels::sessions::{
-    PtermClose, PtermCloseRequest, PtermOpen, PtermOpenRequest, PtermStreamOpen, SessionList,
-    SessionResize, SessionResizeRequest, SessionRestorable, SessionStart, StartSessionRequest,
+    PtermClose, PtermCloseRequest, PtermExit, PtermExited, PtermOpen, PtermOpenRequest,
+    PtermStreamOpen, SessionExit, SessionList, SessionResize, SessionResizeRequest,
+    SessionRestorable, SessionStart, StartSessionRequest,
 };
 
 const TERMINAL: &[&str] = &["terminal"];
@@ -106,7 +110,10 @@ fn in_process(dirs: &TestDirs, agent: &FakeAgent, args: &[&str]) -> RunningHost 
         folders: dirs.folders(),
         endpoint: dirs.floti_endpoint(),
         backends: vec![Arc::new(agent.backend(args.iter().copied())) as Arc<dyn AgentBackend>],
-        inherited_env: std::env::vars_os().collect(),
+        // A plain terminal running the fake agent logs its run too.
+        inherited_env: std::env::vars_os()
+            .chain(std::iter::once(agent.log_env()))
+            .collect(),
     })
 }
 
@@ -796,4 +803,104 @@ fn s11_a_host_dropped_without_a_stop_leaves_its_sessions_running_in_the_keeper()
             again.stop(HostStopReason::Stop).await;
             until("the session ended with the stop", || !alive(pid)).await;
         });
+}
+
+// ---------------------------------------------------------------------------
+// S8: after a crash, a device's quit ends what it started, as before it, and
+// leaves what other devices started
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s8_a_reattached_session_ends_with_its_devices_quit_and_another_devices_keeps_running() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.floti_endpoint();
+    let first = in_process(&dirs, &agent, &[]);
+    let theirs = dirs.folder("their project");
+    let mine = dirs.folder("my project");
+    let my_shell = dirs.folder("my shell");
+
+    let mut other = TestClient::connect(&endpoint, TERMINAL).await;
+    let kept = other
+        .request::<SessionStart>(&start_request(&theirs))
+        .await
+        .unwrap();
+    let laptop = TestClient::pair_device(&endpoint, "a laptop", floti_host::devices::Role::Admin);
+    let mut quitting = TestClient::connect_device(&endpoint, &laptop, TERMINAL).await;
+    let ended = quitting
+        .request::<SessionStart>(&start_request(&mine))
+        .await
+        .unwrap();
+    let terminal = fake_terminal(&mut quitting, &agent, &my_shell, 1).await;
+    let kept_pid = run_in(&agent, &theirs).await;
+    let ended_pid = run_in(&agent, &mine).await;
+    let terminal_pid = run_in(&agent, &my_shell).await;
+    drop(other);
+    drop(quitting);
+
+    first.crash().await;
+    for pid in [kept_pid, ended_pid, terminal_pid] {
+        assert!(alive(pid), "{pid} ended with the crashed host");
+    }
+
+    let second = in_process(&dirs, &agent, &[]);
+    let mut other = TestClient::connect(&endpoint, TERMINAL).await;
+    let mut quitting = TestClient::connect_device(&endpoint, &laptop, TERMINAL).await;
+    // Each device is still told only what it started.
+    let ids = |sessions: Vec<DeviceSession>| sessions.iter().map(|s| s.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(quitting.request::<HostDeviceSessions>(&()).await.unwrap()),
+        [ended.id]
+    );
+    assert_eq!(
+        ids(other.request::<HostDeviceSessions>(&()).await.unwrap()),
+        [kept.id]
+    );
+
+    other.subscribe_quietly(1, SessionExit::NAME).await;
+    other.subscribe_quietly(2, PtermExit::NAME).await;
+    // A barrier: the subscriptions are in place once this is answered.
+    other.request::<SessionList>(&()).await.unwrap();
+    quitting
+        .request::<HostQuit>(&HostQuitRequest { end: true })
+        .await
+        .unwrap();
+    let exit = other
+        .event_on::<SessionRecord>(1, "the quitting device's session ending", |_| true)
+        .await;
+    assert_eq!(exit.id, ended.id);
+    other
+        .event_on::<PtermExited>(2, "the quitting device's terminal ending", |exited| {
+            exited.id == terminal
+        })
+        .await;
+    until("the quitting device's session and terminal ended", || {
+        !alive(ended_pid) && !alive(terminal_pid)
+    })
+    .await;
+    assert!(alive(kept_pid), "another device's session ended");
+    let status = |id: u64| {
+        rows(&dirs.data)
+            .into_iter()
+            .find(|row| u64::try_from(row.0).ok() == Some(id))
+            .map(|row| row.1)
+    };
+    assert_eq!(status(ended.id).as_deref(), Some("exited"));
+    assert_eq!(status(kept.id).as_deref(), Some("running"));
+    assert_eq!(
+        other
+            .request::<SessionList>(&())
+            .await
+            .unwrap()
+            .iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>(),
+        [kept.id]
+    );
+
+    second.stop(HostStopReason::Stop).await;
+    until("the other device's session ended with the stop", || {
+        !alive(kept_pid)
+    })
+    .await;
 }

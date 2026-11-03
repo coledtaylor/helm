@@ -50,6 +50,11 @@ pub struct Label {
     pub cwd: PathBuf,
     /// The launch's own folder, which goes when the program ends.
     pub launch_folder: Option<PathBuf>,
+    /// The fingerprint of the paired device that started it, whose
+    /// deliberate quit ends it: a fingerprint names a device and proves
+    /// nothing, so no key crosses here.
+    #[serde(default)]
+    pub opened_by: Option<String>,
 }
 
 /// How a program the keeper held ended.
@@ -232,6 +237,7 @@ mod tests {
                     name: "a shell".to_owned(),
                     cwd: PathBuf::from("a folder with spaces"),
                     launch_folder: None,
+                    opened_by: Some("SHA256:a device".to_owned()),
                 }),
                 9,
                 TermSize::new(80, 24),

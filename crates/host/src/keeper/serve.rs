@@ -131,6 +131,8 @@ impl Keeper {
                     // Recorded nowhere: the host's row says which backend.
                     backend: BackendId::new("keeper"),
                     origin: SessionOrigin::default(),
+                    // The label the host sends next says whose it is.
+                    opened_by: None,
                 },
                 HOST,
             )

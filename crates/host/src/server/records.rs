@@ -17,6 +17,7 @@ use rusqlite::{OptionalExtension, Row, params};
 use tokio::sync::broadcast;
 
 use crate::agent::claude_code::session_title_from;
+use crate::agent_tools::KeptGrant;
 use crate::session::{NewSessionRow, SessionExit, SessionId, SessionLedger};
 use crate::store::Store;
 use crate::{Error, Result};
@@ -425,6 +426,37 @@ pub(crate) fn record_conversation(
         )
         .map_err(sql("record a session's conversation"))?;
     Ok(())
+}
+
+/// Keeps in session `id`'s row what a host after this one needs to serve its
+/// agent tools again: never the token, only its hash.
+pub(crate) fn record_agent_tools(store: &Store, id: SessionId, kept: &KeptGrant) -> Result<()> {
+    let json = serde_json::to_string(kept)
+        .map_err(|err| Error::io("keep a session's agent tools", io::Error::other(err)))?;
+    store
+        .connection()
+        .execute(
+            "UPDATE sessions SET agent_tools = ?2 WHERE id = ?1",
+            params![id.0, json],
+        )
+        .map_err(sql("keep a session's agent tools"))?;
+    Ok(())
+}
+
+/// What session `id`'s row kept of its agent tools: `None` for a launch
+/// given none, or a value this host cannot read.
+pub(crate) fn kept_agent_tools(store: &Store, id: SessionId) -> Result<Option<KeptGrant>> {
+    let json: Option<String> = store
+        .connection()
+        .query_row(
+            "SELECT agent_tools FROM sessions WHERE id = ?1",
+            [id.0],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(Option::flatten)
+        .map_err(sql("read a session's agent tools"))?;
+    Ok(json.and_then(|json| serde_json::from_str(&json).ok()))
 }
 
 /// The conversation session `id` is in now, as far as its row knows.

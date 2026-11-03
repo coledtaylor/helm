@@ -13,11 +13,14 @@ use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
 use floti_host::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
+use floti_host::config_console::sha256_hex;
 use floti_host::fake_agent;
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::Endpoint;
 use floti_host::server::HostConfig;
-use floti_host::testkit::{FakeAgent, GitRepo, PATIENCE, RunningHost, TestClient, TestDirs};
+use floti_host::testkit::{
+    FakeAgent, GitRepo, HostProcess, PATIENCE, RunningHost, TestClient, TestDirs, pair_test_device,
+};
 use floti_protocol::channel::{EventChannel, from_payload, to_payload};
 use floti_protocol::channels::agent_browser::{
     AgentBrowserAnswer, AgentBrowserCalls, AgentBrowserOutcome, AgentBrowserToolAnswer,
@@ -2413,4 +2416,124 @@ async fn s6_a_hang_up_withdraws_the_call_and_a_cancel_from_another_session_or_fo
     close(&mut client, &alpha.record).await;
     close(&mut client, &beta.record).await;
     host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// A session that outlived a crashed host keeps its tools
+// ---------------------------------------------------------------------------
+
+fn alive(pid: u32) -> bool {
+    NativeTree.is_alive(pid) != Knowable::Known(false)
+}
+
+/// What session `id`'s row kept of its agent tools.
+fn kept_tools_of(world: &World, id: u64) -> String {
+    let db = rusqlite::Connection::open(world.dirs.data.join("floti.db")).expect("open floti.db");
+    db.query_row(
+        "SELECT agent_tools FROM sessions WHERE id = ?1",
+        [i64::try_from(id).unwrap()],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .expect("read the row")
+    .expect("the row kept its agent tools")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s6_a_session_that_outlived_a_crashed_host_is_answered_by_the_next_at_its_address_and_token()
+ {
+    let world = World::new();
+    let first = world.host();
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+    let (failed, own) = alpha.detail(json!({})).await;
+    assert!(!failed, "{own}");
+    drop(client);
+
+    // The row keeps the port, the families and the token's hash: never the
+    // token itself.
+    let kept = kept_tools_of(&world, alpha.record.id);
+    assert!(!kept.contains(&alpha.token), "{kept}");
+    assert!(kept.contains(&sha256_hex(alpha.token.as_bytes())), "{kept}");
+
+    first.crash().await;
+    assert!(alive(alpha.pid), "the session ended with the crashed host");
+
+    let second = world.host();
+    // The same address and token reach helm-sessions, which knows the
+    // caller as the session it is.
+    let (failed, again) = alpha.detail(json!({})).await;
+    assert!(!failed, "{again}");
+    assert_eq!(again.lines().next(), own.lines().next(), "{again}");
+    let (failed, listing) = alpha.list().await;
+    assert!(!failed, "{listing}");
+    // A token nobody was given is still refused.
+    let stranger = "0".repeat(64);
+    assert_eq!(
+        rpc(&alpha.url, Some(&stranger), "tools/list", json!({}))
+            .await
+            .status,
+        401
+    );
+
+    second.stop(HostStopReason::Stop).await;
+    eventually("the session ended with the stop", async || {
+        (!alive(alpha.pid)).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s6_a_session_whose_port_is_taken_runs_on_without_tools_and_the_log_says_so_without_its_token()
+ {
+    let world = World::new();
+    let first = world.host();
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+    drop(client);
+    first.crash().await;
+
+    // Something else has the port the session was told.
+    let (address, _) = split_url(&alpha.url);
+    let _squatter = std::net::TcpListener::bind(address).expect("take the session's port");
+
+    // The next host is a `floti host` process, whose standard error is its
+    // log.
+    let endpoint = world.dirs.floti_endpoint();
+    pair_test_device(&endpoint, &world.dirs.data);
+    let mut command = world.dirs.floti_command(env!("CARGO_BIN_EXE_floti"));
+    command.arg("host");
+    let second = HostProcess::spawn(command);
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let listed = client.request::<SessionList>(&()).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|s| s.id).collect::<Vec<_>>(),
+        [alpha.record.id],
+        "the session was taken back"
+    );
+    let said = "1 session(s) that outlived the last host run on without Helm's agent tools";
+    eventually("the log to say the session has no tools", async || {
+        world.dirs.host_log().contains(said).then_some(())
+    })
+    .await;
+    assert!(alive(alpha.pid), "the session runs on");
+
+    let (_, log) = second.stop(client).await;
+    let line = log
+        .lines()
+        .find(|line| line.contains(said))
+        .expect("the line about the tools");
+    assert!(line.contains(&address.port().to_string()), "{line}");
+    assert!(!log.contains(&alpha.token), "the log names the token");
+    assert!(
+        !log.contains(&sha256_hex(alpha.token.as_bytes())),
+        "the log names the token's hash"
+    );
+    eventually("the session ended with the stop", async || {
+        (!alive(alpha.pid)).then_some(())
+    })
+    .await;
 }

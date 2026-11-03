@@ -339,6 +339,8 @@ impl Drop for TestDirs {
 /// saying so.
 pub struct RunningHost {
     stopper: Stopper,
+    /// Sent, the host's runtime goes with nothing stopped ([`Self::crash`]).
+    crash: Option<tokio::sync::oneshot::Sender<()>>,
     /// `None` once the host has been waited for.
     running: Option<HostThread>,
 }
@@ -346,8 +348,8 @@ pub struct RunningHost {
 /// The thread a [`RunningHost`] serves on.
 struct HostThread {
     /// How the host's run ended, sent once its runtime has gone, so nothing
-    /// it ran still holds the store.
-    done: mpsc::Receiver<Result<HostStopReason>>,
+    /// it ran still holds the store: `None` for a crash.
+    done: mpsc::Receiver<Option<Result<HostStopReason>>>,
     thread: std::thread::JoinHandle<()>,
 }
 
@@ -356,13 +358,22 @@ impl HostThread {
     /// the host has stopped and its thread has ended. It uses std's blocking
     /// alone, so it is safe inside a Tokio runtime and during an unwind.
     fn wait(self) -> std::result::Result<HostStopReason, String> {
+        match self.ended()? {
+            Some(reason) => Ok(reason),
+            None => Err("the host crashed rather than stopping".to_owned()),
+        }
+    }
+
+    /// As [`Self::wait`], with `None` for a host that crashed.
+    fn ended(self) -> std::result::Result<Option<HostStopReason>, String> {
         match self.done.recv_timeout(PATIENCE) {
             Ok(ended) => {
                 let joined = self.thread.join();
                 match (ended, joined) {
-                    (Ok(reason), Ok(())) => Ok(reason),
-                    (Err(err), _) => Err(format!("the host did not stop cleanly: {err}")),
-                    (Ok(_), Err(_)) => Err("the host's thread panicked".to_owned()),
+                    (Some(Ok(reason)), Ok(())) => Ok(Some(reason)),
+                    (None, Ok(())) => Ok(None),
+                    (Some(Err(err)), _) => Err(format!("the host did not stop cleanly: {err}")),
+                    (_, Err(_)) => Err("the host's thread panicked".to_owned()),
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -412,6 +423,7 @@ impl RunningHost {
         }
         let (started_tx, started) = mpsc::channel::<Result<(Stopper, T)>>();
         let (done_tx, done) = mpsc::channel();
+        let (crash, crashed) = tokio::sync::oneshot::channel::<()>();
         let thread = std::thread::Builder::new()
             .name("floti test host".to_owned())
             .spawn(move || {
@@ -443,7 +455,21 @@ impl RunningHost {
                 };
                 let looked = look(&host);
                 let _ = started_tx.send(Ok((host.stopper(), looked)));
-                let ended = runtime.block_on(host.run_until_stopped());
+                let ended = runtime.block_on(async move {
+                    // Only a crash sent ends it this way: one let go of is
+                    // no crash.
+                    let crashed = async move {
+                        if crashed.await.is_err() {
+                            std::future::pending::<()>().await;
+                        }
+                    };
+                    tokio::select! {
+                        ended = host.run_until_stopped() => Some(ended),
+                        () = crashed => None,
+                    }
+                });
+                // A crash drops the host and every task it ran here, with
+                // nothing stopped or recorded.
                 runtime.shutdown_timeout(PATIENCE);
                 let _ = done_tx.send(ended);
             })
@@ -452,6 +478,7 @@ impl RunningHost {
             Ok(Ok((stopper, looked))) => (
                 Self {
                     stopper,
+                    crash: Some(crash),
                     running: Some(HostThread { done, thread }),
                 },
                 looked,
@@ -471,6 +498,22 @@ impl RunningHost {
     pub async fn stop(self, reason: HostStopReason) -> HostStopReason {
         self.stopper.stop(reason);
         self.stopped().await
+    }
+
+    /// Ends the host as a crash of its feature code would: its runtime goes,
+    /// and everything it ran in this process with it, with nothing stopped
+    /// or recorded, so what its session keeper holds runs on for the next
+    /// host. Returns once the host has gone.
+    pub async fn crash(mut self) {
+        let running = self.running.take().expect("a host is waited for once");
+        if let Some(crash) = self.crash.take() {
+            let _ = crash.send(());
+        }
+        let ended = tokio::task::spawn_blocking(move || running.ended())
+            .await
+            .expect("wait for the host")
+            .unwrap_or_else(|problem| panic!("{problem}"));
+        assert_eq!(ended, None, "the host stopped before it could crash");
     }
 
     /// Waits for the host to finish stopping, however it was asked, without

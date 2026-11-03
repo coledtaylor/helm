@@ -142,7 +142,8 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   session keeper (`floti keeper`, `crates/host/src/keeper`), a process the
   host starts outside its own tie, which holds nothing else: a host that
   crashes, panics or is killed takes no session with it, and the next host
-  takes them back under the same ids. A keeper that dies ends what it holds,
+  takes them back under the same ids, with their agent tools and the device
+  that started each. A keeper that dies ends what it holds,
   and the host offers those sessions back. Only a deliberate stop ends the
   keeper. Quitting a client ends the sessions it started only where its
   setting for that host says so; a crash ends nothing; stopping the host
@@ -331,6 +332,13 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   its launch was given (404 otherwise). A call made with none attached, or
   waiting on a client that leaves, fails at once saying no browser is
   attached. Nothing there waits on a timer.
+- A session's row keeps what its launch was granted (`agent_tools`: the
+  port, the token's SHA-256 and the families), never the token. A host that
+  takes back sessions from the keeper binds that port again and accepts each
+  token by its hash; when the port cannot be had, those sessions run on
+  without tools and the log says so, naming the port only. The device that
+  started a session or opened a plain terminal goes in its keeper label by
+  fingerprint, so its `host:quit` ends it after a crash as before one.
 - The host has no plugins of its own for agent tools: a client offers its
   plugins' servers (`agentPlugin:offer`, replacing its last offer) and
   answers their calls (`agentPlugin:call`, `agentPlugin:answer`). Each is

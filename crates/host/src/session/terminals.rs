@@ -145,11 +145,13 @@ impl Terminals {
 
     /// Opens a shell in `request.path` for `client`, or reattaches to the
     /// folder's own. A shell that will not start gives way to the others this
-    /// machine has, and the answer says which ran and why.
+    /// machine has, and the answer says which ran and why. A new shell is
+    /// kept as opened by the device whose fingerprint is `opened_by`.
     pub fn open(
         &self,
         client: ClientId,
         request: PtermOpenRequest,
+        opened_by: Option<String>,
     ) -> std::result::Result<PtermOpened, String> {
         let folder = PathBuf::from(&request.path);
         if !folder.is_dir() {
@@ -176,13 +178,13 @@ impl Terminals {
             .filter(|shell| !shell.trim().is_empty())
             .unwrap_or_else(|| self.default_shell());
         let size = TermSize::new(request.cols, request.rows);
-        let (session, shell, requested, problem) = match self.spawn(&wanted, &folder, size, client)
-        {
+        let spawn = |shell: &str| self.spawn(shell, &folder, size, client, opened_by.clone());
+        let (session, shell, requested, problem) = match spawn(&wanted) {
             Ok(session) => (session, wanted, None, None),
             Err(first) => {
                 let mut tried = Err(first.to_string());
                 for other in self.alternatives_to(&wanted) {
-                    if let Ok(session) = self.spawn(&other, &folder, size, client) {
+                    if let Ok(session) = spawn(&other) {
                         tried = Ok((session, other));
                         break;
                     }
@@ -246,6 +248,7 @@ impl Terminals {
         folder: &Path,
         size: TermSize,
         client: ClientId,
+        opened_by: Option<String>,
     ) -> Result<Arc<Session>> {
         let program = PathBuf::from(shell);
         self.host.start(StartSession {
@@ -264,6 +267,7 @@ impl Terminals {
             conversation_id: None,
             backend: BackendId::new("shell"),
             origin: Default::default(),
+            opened_by,
         })
     }
 
@@ -343,6 +347,7 @@ mod tests {
                     shell: None,
                     separate,
                 },
+                None,
             )
             .expect("open a terminal")
     }
@@ -395,6 +400,7 @@ mod tests {
                     shell: Some(missing.to_string_lossy().into_owned()),
                     separate: true,
                 },
+                None,
             )
             .expect("another shell opens");
         assert_eq!(
@@ -423,6 +429,7 @@ mod tests {
                     shell: None,
                     separate: false,
                 },
+                None,
             )
             .unwrap_err();
         assert!(err.ends_with("is not a folder on this host."), "{err}");

@@ -215,6 +215,16 @@ export const sessions = sqliteTable(
      * recorded a conversation id, so a reader takes null as Claude Code.
      */
     backend: text('backend'),
+    /**
+     * The agent tools the Floti host gave this launch, as JSON: the loopback
+     * port it was told, the SHA-256 of its token (never the token) and the
+     * families granted. A host that starts while the session keeper still
+     * runs the session binds that port again and accepts the token by its
+     * hash, so a session that outlived a crashed host keeps its tools.
+     *
+     * Null for a launch given none, and for every row this app writes.
+     */
+    agentTools: text('agent_tools'),
     status: text('status', { enum: ['running', 'exited', 'lost'] })
       .notNull()
       .default('running'),

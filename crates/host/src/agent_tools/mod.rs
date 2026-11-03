@@ -5,13 +5,17 @@
 //!
 //! - **Loopback, always.** It binds `127.0.0.1` on port 0: never `0.0.0.0`,
 //!   never `::`, never a port anybody chose. The port is whatever the OS hands
-//!   out for this run, and it is written nowhere but the per-session tool
-//!   configuration a launch is given.
+//!   out, and it is written nowhere but the per-session tool configuration a
+//!   launch is given and that session's row. A host that takes back sessions
+//!   which outlived the one before it binds the port they were given again
+//!   ([`AgentToolsListener::take_back`]).
 //! - **Token, always.** Every request carries `Authorization: Bearer <token>`
 //!   or it is answered 401 before its body is read, the same on every path, so
 //!   nothing without a token learns which routes exist. A token is 32 random
 //!   bytes, minted per session and revoked when the session ends; a listener
-//!   knows none of the tokens one before it handed out. There is no
+//!   knows none of the tokens one before it handed out, except those of the
+//!   sessions it is told it took back, which it knows by their SHA-256 only
+//!   ([`KeptGrant`]). There is no
 //!   unauthenticated route, not even a health check.
 //! - **The token is the identity.** Which session is calling is which token
 //!   arrived, resolved here; a family is handed that [`Caller`], never the
@@ -61,6 +65,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -150,6 +155,18 @@ pub struct Grant {
     pub servers: Vec<AgentToolServer>,
 }
 
+/// What the host keeps of a launch's grant in its session's row, so that a
+/// host after it can serve the session again: the port it was told, the
+/// SHA-256 of its token as hex, and the families it was given. The token
+/// itself is never kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptGrant {
+    pub port: u16,
+    pub token_sha256: String,
+    pub families: Vec<String>,
+}
+
 /// The listener: its families, the tokens it has minted and, while it is
 /// bound, its socket.
 ///
@@ -233,7 +250,7 @@ impl AgentToolsListener {
         let mut socket = self.socket();
         if !self.router.families_on().is_empty() {
             if socket.is_none() {
-                *socket = Some(self.bind()?);
+                *socket = Some(self.bind(0)?);
             }
         } else if self.router.tokens().is_empty() {
             release(&mut socket);
@@ -276,7 +293,7 @@ impl AgentToolsListener {
             return Ok(None);
         }
         if socket.is_none() {
-            *socket = Some(self.bind()?);
+            *socket = Some(self.bind(0)?);
         }
         let port = socket.as_ref().map_or(0, |bound| bound.address.port());
         let names = on.iter().map(|family| family.name().to_owned()).collect();
@@ -291,6 +308,44 @@ impl AgentToolsListener {
             })
             .collect();
         Ok(Some(Grant { id, servers }))
+    }
+
+    /// What to keep of `grant` for a host after this one, while its token is
+    /// live and the listener bound.
+    pub fn kept(&self, grant: GrantId) -> Option<KeptGrant> {
+        let port = self.address()?.port();
+        self.router.tokens().kept(grant, port)
+    }
+
+    /// Serves again sessions that outlived the host that launched them, each
+    /// with what was kept of its grant: binds `127.0.0.1` on `port`, the one
+    /// they were told, and accepts each one's token for the families it was
+    /// given. The grant each is held under now.
+    ///
+    /// # Errors
+    ///
+    /// When the port cannot be had again, or the listener is bound to
+    /// another: then nothing is accepted and nothing is bound.
+    pub fn take_back(
+        &self,
+        port: u16,
+        sessions: &[(SessionId, KeptGrant)],
+    ) -> Result<Vec<(SessionId, GrantId)>> {
+        let mut socket = self.socket();
+        match socket.as_ref().map(|bound| bound.address.port()) {
+            Some(bound) if bound == port => {}
+            Some(bound) => {
+                return Err(Error::Refused(format!(
+                    "The agent tools listener is on port {bound} already, not {port}."
+                )));
+            }
+            None => *socket = Some(self.bind(port)?),
+        }
+        let mut tokens = self.router.tokens();
+        Ok(sessions
+            .iter()
+            .map(|(session, kept)| (*session, tokens.take_back(kept, *session)))
+            .collect())
     }
 
     /// Ties a grant's token to the session that launched with it.
@@ -333,10 +388,12 @@ impl AgentToolsListener {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// `127.0.0.1`, port 0: the OS picks the port, for this run only.
-    fn bind(&self) -> Result<Bound> {
-        let what = "bind the agent tools listener on 127.0.0.1";
-        let loopback = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+    /// `127.0.0.1` on `port`: 0 for a port the OS picks, or the one sessions
+    /// taken back were told.
+    fn bind(&self, port: u16) -> Result<Bound> {
+        let what = format!("bind the agent tools listener on 127.0.0.1:{port}");
+        let what = what.as_str();
+        let loopback = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
         let listener = std::net::TcpListener::bind(loopback).map_err(|err| Error::io(what, err))?;
         listener
             .set_nonblocking(true)

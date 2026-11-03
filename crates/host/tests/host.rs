@@ -16,6 +16,7 @@ use floti_host::agent::claude_code::ClaudeCodeSettings;
 use floti_host::host_log::{KEPT_LOGS, LOG_FILE};
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use floti_host::platform::node_runtime::NODE_VAR;
+use floti_host::platform::process_table::{self, ProcessTable};
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree, descendants};
 use floti_host::platform::socket::{self, Endpoint, LocalSocket, Native as NativeSocket};
 use floti_host::platform::startup;
@@ -309,6 +310,27 @@ fn started_by(child: &Child) -> Vec<u32> {
         Knowable::Known(pids) => pids,
         Knowable::Unknown => panic!("the OS would not list what the host started"),
     }
+}
+
+/// The host `child`'s own guard on macOS and Linux: a fork of the host, so
+/// a child of it with its command line, which rightly ends with it. A host
+/// on Windows has none.
+fn guards_of(child: &Child) -> Vec<u32> {
+    let table = process_table::Native
+        .processes()
+        .expect("read the process table");
+    let Some(host_line) = table
+        .iter()
+        .find(|row| row.pid == child.id())
+        .and_then(|row| row.command_line.clone())
+    else {
+        return Vec::new();
+    };
+    table
+        .iter()
+        .filter(|row| row.parent_pid == child.id() && row.command_line.as_ref() == Some(&host_line))
+        .map(|row| row.pid)
+        .collect()
 }
 
 /// Kills the host `child` alone, then waits until every process in
@@ -1548,7 +1570,12 @@ async fn a_killed_floti_host_leaves_what_its_sessions_and_terminals_started_to_i
         })
         .await;
 
-    let started = started_by(&host);
+    // The host's own guard goes with it; everything else it started stays.
+    let guards = guards_of(&host);
+    let started: Vec<u32> = started_by(&host)
+        .into_iter()
+        .filter(|pid| !guards.contains(pid))
+        .collect();
     for folder in [&in_session, &in_terminal] {
         let run = run_with_children_in(&agent, folder, 2).expect("the fake agent started both");
         for pid in std::iter::once(run.pid).chain(run.children) {

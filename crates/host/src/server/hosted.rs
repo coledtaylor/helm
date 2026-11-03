@@ -4,9 +4,10 @@
 //! and the stop that ends them all.
 //!
 //! Which paired device started each running session, and opened each plain
-//! terminal, is kept here in memory, from the device each attached client's
-//! connection proved: sessions never outlive the host, so nothing about them
-//! needs to outlive it either. A device's deliberate quit ends what it started
+//! terminal, is known here by its fingerprint, from the device each attached
+//! client's connection proved. Each program's label in the session keeper
+//! carries it too, so a host that takes them back after a crash knows whose
+//! they are. A device's deliberate quit ends what it started
 //! (`host:quit`), and how many sessions, terminals and clients there are is
 //! one watch ([`Occupancy`]) that the host's own exit follows.
 //!
@@ -42,7 +43,7 @@ use crate::agent::claude_code::{parse_instant, sanitize_session_name, unique_ses
 use crate::agent::{
     AgentBackend, Composition, Launch, LaunchFolder, LaunchRequest, LiveRecord, ResumeRequest,
 };
-use crate::agent_tools::Grant;
+use crate::agent_tools::{Grant, KeptGrant};
 use crate::keeper::{HeldKind, Keeper};
 use crate::platform::process_tree;
 use crate::session::{
@@ -113,15 +114,16 @@ impl Occupancy {
     }
 }
 
-/// The devices behind what the host is running, in memory only.
+/// The devices behind what the host is running.
 #[derive(Default)]
 struct Presence {
     /// Each attached client's device: the key its connection proved.
     clients: HashMap<ClientId, PublicKey>,
-    /// The device that started each running session.
-    sessions: HashMap<SessionId, PublicKey>,
-    /// The device that opened each running plain terminal.
-    terminals: HashMap<SessionId, PublicKey>,
+    /// The fingerprint of the device that started each running session.
+    sessions: HashMap<SessionId, String>,
+    /// The fingerprint of the device that opened each running plain
+    /// terminal.
+    terminals: HashMap<SessionId, String>,
 }
 
 impl Hosted {
@@ -157,11 +159,26 @@ impl Hosted {
                 Terminals::new(inherited_env, Arc::new(process_tree::Native)),
             ),
         };
-        let held = match &keeper {
+        let TakenBack {
+            sessions: held,
+            opened,
+        } = match &keeper {
             Some(keeper) => take_back(keeper, &ledger, &sessions, &terminals)?,
-            None => Vec::new(),
+            None => TakenBack::default(),
         };
         let lost = records::reconcile_running(&ledger.store(), &held)?;
+        let mut presence = Presence::default();
+        for (kind, id, device) in opened {
+            match kind {
+                HeldKind::Session if held.contains(&id) => {
+                    presence.sessions.insert(id, device);
+                }
+                HeldKind::Session => {}
+                HeldKind::Terminal => {
+                    presence.terminals.insert(id, device);
+                }
+            }
+        }
         *ledger.offer() = Some(lost);
         Ok(Self {
             sessions,
@@ -172,7 +189,7 @@ impl Hosted {
             keeper,
             stopped: AtomicBool::new(false),
             agent_tools: OnceLock::new(),
-            presence: Mutex::new(Presence::default()),
+            presence: Mutex::new(presence),
             occupancy: watch::Sender::new(Occupancy::default()),
         })
     }
@@ -229,7 +246,7 @@ impl Hosted {
 
     /// The running sessions `device` started, oldest first.
     pub fn started_by(&self, device: &PublicKey) -> Vec<DeviceSession> {
-        let mine = opened_by(&lock(&self.presence).sessions, device);
+        let mine = opened_by(&lock(&self.presence).sessions, &device.fingerprint());
         self.sessions
             .list()
             .iter()
@@ -249,11 +266,12 @@ impl Hosted {
     /// as exited and its whole tree ended, as a plain stop ends them. What
     /// other devices started is left running. The ids of the sessions ended.
     pub fn quit(&self, device: &PublicKey, end: bool) -> Vec<u64> {
+        let device = device.fingerprint();
         let (sessions, terminals) = {
             let presence = lock(&self.presence);
             (
-                opened_by(&presence.sessions, device),
-                opened_by(&presence.terminals, device),
+                opened_by(&presence.sessions, &device),
+                opened_by(&presence.terminals, &device),
             )
         };
         for terminal in terminals.iter().filter_map(|id| self.terminals.find(*id)) {
@@ -289,8 +307,9 @@ impl Hosted {
         client: ClientId,
         request: PtermOpenRequest,
     ) -> std::result::Result<PtermOpened, String> {
-        let opened = self.terminals.open(client, request)?;
-        if let Some(device) = self.device_of(client)
+        let device = self.device_of(client).map(|device| device.fingerprint());
+        let opened = self.terminals.open(client, request, device.clone())?;
+        if let Some(device) = device
             && let Ok(id) = i64::try_from(opened.id)
         {
             lock(&self.presence)
@@ -302,10 +321,32 @@ impl Hosted {
         Ok(opened)
     }
 
-    /// Gives every launch from now on the host's agent tools. Only the first
-    /// given are kept.
+    /// Gives every launch from now on the host's agent tools, and serves
+    /// again the sessions taken back from the keeper, at the address and
+    /// with the token each was launched with. Only the first given are kept.
     pub fn use_agent_tools(&self, tools: Arc<HostAgentTools>) {
-        let _ = self.agent_tools.set(tools);
+        if self.agent_tools.set(Arc::clone(&tools)).is_err() {
+            return;
+        }
+        let kept: Vec<(SessionId, KeptGrant)> = {
+            let store = self.ledger.store();
+            self.sessions
+                .list()
+                .iter()
+                .filter_map(
+                    |session| match records::kept_agent_tools(&store, session.id()) {
+                        Ok(kept) => kept.map(|kept| (session.id(), kept)),
+                        Err(err) => {
+                            log_line!("floti host: {err}");
+                            None
+                        }
+                    },
+                )
+                .collect()
+        };
+        tools.take_back(kept);
+        // A session that ended while its token was being taken back loses it.
+        tools.ended_unless(|session| self.sessions.get(session).is_some());
     }
 
     /// A token and the families on for a launch on `backend`, when it takes
@@ -696,6 +737,14 @@ impl Hosted {
         match (started, grant) {
             (Ok((mut launched, id)), grant) => {
                 if let Some((tools, grant)) = grant {
+                    // Kept with the row for a host after this one, should the
+                    // session outlive this host.
+                    if let Some(kept) = tools.kept(grant)
+                        && let Err(err) =
+                            records::record_agent_tools(&self.ledger.store(), id, &kept)
+                    {
+                        log_line!("floti host: {err}");
+                    }
                     tools.started(grant, id);
                 }
                 if let Some(warning) = tools_warning {
@@ -734,6 +783,7 @@ impl Hosted {
                 not_taken,
             } = launch;
             let conversation_id = spec.conversation_id.clone();
+            let device = self.device_of(client).map(|device| device.fingerprint());
             let session = self.sessions.start(StartSession {
                 spec,
                 name,
@@ -742,8 +792,9 @@ impl Hosted {
                 conversation_id,
                 backend: backend.id().clone(),
                 origin,
+                opened_by: device.clone(),
             })?;
-            if let Some(device) = self.device_of(client) {
+            if let Some(device) = device {
                 lock(&self.presence).sessions.insert(session.id(), device);
             }
             self.settle();
@@ -1096,24 +1147,34 @@ impl Drop for Hosted {
     }
 }
 
+/// What a host took back from the keeper the last one left.
+#[derive(Default)]
+struct TakenBack {
+    /// The sessions taken back.
+    sessions: Vec<SessionId>,
+    /// The device each session and plain terminal taken back was started or
+    /// opened by, as its label in the keeper says, by fingerprint.
+    opened: Vec<(HeldKind, SessionId, String)>,
+}
+
 /// Takes back what the keeper the last host left holds: each session whose
 /// row is still running and each plain terminal, under the id it had. A
 /// program that ended while no host was there has its end recorded, and one
-/// nothing here knows is ended. The ids of the sessions taken back.
+/// nothing here knows is ended.
 fn take_back(
     keeper: &Keeper,
     ledger: &HostLedger,
     sessions: &SessionHost,
     terminals: &Terminals,
-) -> Result<Vec<SessionId>> {
+) -> Result<TakenBack> {
     use crate::session::SessionLedger as _;
     let held = keeper.reattach();
     if held.is_empty() {
-        return Ok(Vec::new());
+        return Ok(TakenBack::default());
     }
     let running = records::running_ids(&ledger.store())?;
     let link = keeper.link()?;
-    let mut taken = Vec::new();
+    let mut taken = TakenBack::default();
     for program in held {
         let handle = program.handle;
         let Some(label) = program.label.clone() else {
@@ -1142,8 +1203,14 @@ fn take_back(
             }
         };
         match adopted {
-            Ok(session) if label.kind == HeldKind::Session => taken.push(session.id()),
-            Ok(_) => {}
+            Ok(session) => {
+                if label.kind == HeldKind::Session {
+                    taken.sessions.push(session.id());
+                }
+                if let Some(device) = label.opened_by.clone() {
+                    taken.opened.push((label.kind, session.id(), device));
+                }
+            }
             Err(err) => {
                 log_line!("floti host: {err}");
                 link.discard(handle);
@@ -1234,10 +1301,11 @@ pub(crate) async fn settle_on_exits(
     }
 }
 
-/// The ids in `map` that `device` started or opened.
-fn opened_by(map: &HashMap<SessionId, PublicKey>, device: &PublicKey) -> Vec<SessionId> {
+/// The ids in `map` that the device whose fingerprint is `device` started
+/// or opened.
+fn opened_by(map: &HashMap<SessionId, String>, device: &str) -> Vec<SessionId> {
     map.iter()
-        .filter(|(_, by)| *by == device)
+        .filter(|(_, by)| by.as_str() == device)
         .map(|(id, _)| *id)
         .collect()
 }

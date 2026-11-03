@@ -129,6 +129,9 @@ pub struct StartSession {
     pub backend: BackendId,
     /// Where the launch came from, recorded in the row.
     pub origin: SessionOrigin,
+    /// The fingerprint of the device that started it, kept with it in the
+    /// keeper so a host that took it back knows whose quit ends it.
+    pub opened_by: Option<String>,
 }
 
 /// The sessions running on this host.
@@ -272,6 +275,7 @@ impl SessionHost {
             conversation_id,
             backend,
             origin,
+            opened_by: _,
         } = request;
         let program = spec.program.to_string_lossy().into_owned();
         let launch_folder = spec.launch_folder.clone();
@@ -389,6 +393,7 @@ impl SessionHost {
             conversation_id,
             backend,
             origin,
+            opened_by,
         } = request;
         let link = keeper.link()?;
         let (handle, pid) = link.start(StartPty {
@@ -414,6 +419,7 @@ impl SessionHost {
                 name: name.clone(),
                 cwd: spec.cwd.clone(),
                 launch_folder: spec.launch_folder.clone(),
+                opened_by,
             },
         );
         let session = Arc::new(Session {

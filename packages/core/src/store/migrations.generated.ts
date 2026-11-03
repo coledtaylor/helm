@@ -138,5 +138,11 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
     "statements": [
       "ALTER TABLE `sessions` ADD `backend` text;"
     ]
+  },
+  {
+    "tag": "0017_good_the_watchers",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `agent_tools` text;"
+    ]
   }
 ]

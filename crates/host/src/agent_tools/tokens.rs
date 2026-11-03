@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use subtle::ConstantTimeEq;
 
-use super::{Caller, GrantId};
+use super::{Caller, GrantId, KeptGrant};
 use crate::agent::{fill_random, hex};
+use crate::config_console::sha256_hex;
 use crate::session::SessionId;
 
 /// Bytes of randomness in a token. Written as hex, so a token is twice as
@@ -14,7 +15,8 @@ use crate::session::SessionId;
 const TOKEN_BYTES: usize = 32;
 
 /// Every live token. A new listener starts with none, so a token from before
-/// a restart is nobody's.
+/// a restart is nobody's, except one whose session the host took back from
+/// its keeper: that one is known again by its hash ([`Tokens::take_back`]).
 #[derive(Default)]
 pub(super) struct Tokens {
     held: Vec<Held>,
@@ -22,10 +24,19 @@ pub(super) struct Tokens {
 }
 
 struct Held {
-    token: String,
+    token: Proof,
     grant: GrantId,
     session: Option<SessionId>,
     families: Arc<[String]>,
+}
+
+/// How a live token is checked.
+enum Proof {
+    /// Minted here: the token itself.
+    Minted(String),
+    /// Taken back after a restart: the SHA-256 of the token, as hex, which
+    /// the host kept in the session's row. The token itself was never kept.
+    Hashed(String),
 }
 
 /// Who a live token is, and the families its launch was given.
@@ -50,12 +61,41 @@ impl Tokens {
         let grant = GrantId(self.next_grant);
         self.next_grant += 1;
         self.held.push(Held {
-            token: token.clone(),
+            token: Proof::Minted(token.clone()),
             grant,
             session: None,
             families: families.into(),
         });
         (grant, token)
+    }
+
+    /// Accepts again, for `session`, the token whose hash and families
+    /// `kept` holds: a session that outlived the host that minted it.
+    pub(super) fn take_back(&mut self, kept: &KeptGrant, session: SessionId) -> GrantId {
+        let grant = GrantId(self.next_grant);
+        self.next_grant += 1;
+        self.held.push(Held {
+            token: Proof::Hashed(kept.token_sha256.to_ascii_lowercase()),
+            grant,
+            session: Some(session),
+            families: kept.families.clone().into(),
+        });
+        grant
+    }
+
+    /// What the host keeps of `grant` so that a host after it can accept its
+    /// token again: the hash of the token and the families, never the token.
+    pub(super) fn kept(&self, grant: GrantId, port: u16) -> Option<KeptGrant> {
+        let held = self.held.iter().find(|held| held.grant == grant)?;
+        let token_sha256 = match &held.token {
+            Proof::Minted(token) => sha256_hex(token.as_bytes()),
+            Proof::Hashed(hash) => hash.clone(),
+        };
+        Some(KeptGrant {
+            port,
+            token_sha256,
+            families: held.families.to_vec(),
+        })
     }
 
     pub(super) fn bind(&mut self, grant: GrantId, session: SessionId) {
@@ -84,9 +124,20 @@ impl Tokens {
     /// guess was right or which token it was.
     pub(super) fn resolve(&self, authorization: &[u8]) -> Option<Holder> {
         let offered = bearer(authorization)?;
+        // Hashed once, and only when a token taken back is held.
+        let offered_hash = self
+            .held
+            .iter()
+            .any(|held| matches!(held.token, Proof::Hashed(_)))
+            .then(|| sha256_hex(offered));
         let mut found = None;
         for held in &self.held {
-            if bool::from(held.token.as_bytes().ct_eq(offered)) {
+            let matched = match (&held.token, &offered_hash) {
+                (Proof::Minted(token), _) => token.as_bytes().ct_eq(offered),
+                (Proof::Hashed(hash), Some(offered)) => hash.as_bytes().ct_eq(offered.as_bytes()),
+                (Proof::Hashed(_), None) => subtle::Choice::from(0),
+            };
+            if bool::from(matched) {
                 found = Some(Holder {
                     caller: Caller {
                         grant: held.grant,

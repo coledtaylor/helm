@@ -9,6 +9,11 @@
 //! route away from running sessions at once, or gives it back. Stopping the
 //! host stops the listener, revoking every token, before the sessions end.
 //!
+//! What each launch was granted is kept in its row (port, the token's
+//! SHA-256 and the families), so a host that takes back sessions which
+//! outlived the one before it serves them again at the same address and with
+//! the same token ([`HostAgentTools::take_back`]).
+//!
 //! Today that is helm-browser ([`BrowserTools`]), on the `browserMcp`
 //! setting and given to a launch only while a client with a browser pane is
 //! attached; helm-sessions ([`SessionTools`]), on the `sessionMcp` setting;
@@ -30,7 +35,7 @@ use super::plugin_tools::PluginFamilies;
 use super::records::ExitNotice;
 use super::session_tools::{SessionTools, SessionsWorld};
 use crate::Result;
-use crate::agent_tools::{AgentToolsListener, FamilySource, Grant, GrantId, ToolFamily};
+use crate::agent_tools::{AgentToolsListener, FamilySource, Grant, GrantId, KeptGrant, ToolFamily};
 use crate::session::SessionId;
 
 pub(crate) struct HostAgentTools {
@@ -130,6 +135,38 @@ impl HostAgentTools {
         }
     }
 
+    /// What to keep of `grant` in its session's row.
+    pub fn kept(&self, grant: GrantId) -> Option<KeptGrant> {
+        self.listener.kept(grant)
+    }
+
+    /// Serves again the sessions taken back from the keeper, each with what
+    /// its row kept of its grant, on the port they were told. Sessions told
+    /// a port that cannot be had again run on without their tools, and the
+    /// log says so, naming the port and never a token.
+    pub fn take_back(&self, sessions: Vec<(SessionId, KeptGrant)>) {
+        if sessions.is_empty() || self.stopped.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut by_port: Vec<(u16, Vec<(SessionId, KeptGrant)>)> = Vec::new();
+        for (session, kept) in sessions {
+            match by_port.iter_mut().find(|(port, _)| *port == kept.port) {
+                Some((_, group)) => group.push((session, kept)),
+                None => by_port.push((kept.port, vec![(session, kept)])),
+            }
+        }
+        let mut held = self.held();
+        for (port, group) in by_port {
+            match self.listener.take_back(port, &group) {
+                Ok(grants) => held.by_session.extend(grants),
+                Err(err) => log_line!(
+                    "floti host: {} session(s) that outlived the last host run on without Helm's agent tools: {err}",
+                    group.len()
+                ),
+            }
+        }
+    }
+
     /// The launch `grant` was for never started: its token goes.
     pub fn failed(&self, grant: GrantId) {
         let mut held = self.held();
@@ -152,7 +189,7 @@ impl HostAgentTools {
 
     /// Revokes the token of every session `running` says has ended: after
     /// exit notices were missed.
-    fn ended_unless(&self, running: impl Fn(SessionId) -> bool) {
+    pub(crate) fn ended_unless(&self, running: impl Fn(SessionId) -> bool) {
         let mut held = self.held();
         let gone: Vec<SessionId> = held
             .by_session

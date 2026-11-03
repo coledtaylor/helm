@@ -89,17 +89,42 @@ impl TestClient {
         role: crate::devices::Role,
         capabilities: &[&str],
     ) -> Self {
+        let device = Self::pair_device(endpoint, name, role);
+        Self::connect_device(endpoint, &device, capabilities).await
+    }
+
+    /// A new device key, paired with the host at `endpoint` as `name` with
+    /// `role`: for a test that connects as the same device more than once.
+    pub fn pair_device(
+        endpoint: &Endpoint,
+        name: &str,
+        role: crate::devices::Role,
+    ) -> floti_protocol::noise::KeyPair {
         let data = super::data_folder_of(endpoint);
-        let host = host_public_key(&data)
-            .expect("read the host's key")
-            .expect("the host has a key");
         let device = floti_protocol::noise::KeyPair::generate().expect("make a device key");
         crate::devices::DeviceRegistry::in_data_folder(&data)
             .pair(device.public(), name, role)
             .unwrap_or_else(|err| panic!("pair {name} with the host: {err}"));
-        let connection = client::connect(endpoint, &device, &host)
+        device
+    }
+
+    /// Connects to the running host at `endpoint` as `device`, which
+    /// [`Self::pair_device`] paired with it, and is welcomed with
+    /// `capabilities`.
+    pub async fn connect_device(
+        endpoint: &Endpoint,
+        device: &floti_protocol::noise::KeyPair,
+        capabilities: &[&str],
+    ) -> Self {
+        let data = super::data_folder_of(endpoint);
+        let host = host_public_key(&data)
+            .expect("read the host's key")
+            .expect("the host has a key");
+        let connection = client::connect(endpoint, device, &host)
             .await
-            .unwrap_or_else(|err| panic!("the host at {endpoint} did not let {name} in: {err}"));
+            .unwrap_or_else(|err| {
+                panic!("the host at {endpoint} did not let the device in: {err}")
+            });
         Self::over(connection, capabilities).await
     }
 
