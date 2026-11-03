@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ElectronApplication, Locator, Page } from '@playwright/test'
 import { openStore, readArchiveStats, readHistorySessions, type AppSettings } from '@helm/core'
@@ -68,7 +68,6 @@ const withSample = test.extend<{ sample: SampleFixture }>({
 })
 
 const clientFolder = (world: World): string => join(world.dataDir, 'host-client')
-const enrolmentFile = (world: World): string => join(world.dataDir, 'host', 'data', 'enrolment.json')
 
 /** The window's routed bridge (`inspect.ts`): host features over the window's own connection. */
 type Bridge = { __helmRouted: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
@@ -78,7 +77,7 @@ const invoke = <T>(window: Page, channel: string): Promise<T> =>
 /** How many times `text` is on a session's screen. */
 const count = (screen: string, text: string): number => screen.split(text).length - 1
 
-test('the first start enrols as the host’s first admin, and the next connects to the key it pinned', async ({
+test('the first start pins the host’s key at its first connection, and the next connects to the key it pinned', async ({
   helm,
   world,
   relaunch
@@ -88,13 +87,13 @@ test('the first start enrols as the host’s first admin, and the next connects 
   await expect.poll(() => terminalText(window, id)).toContain('Claude Code v2.1.999 (fake)')
 
   expect(readdirSync(clientFolder(world)).sort()).toEqual(['device.key', 'host.pub'])
-  expect(existsSync(enrolmentFile(world))).toBe(false)
+  const pinned = readFileSync(join(clientFolder(world), 'host.pub'))
 
   ;({ window } = await relaunch())
   const again = await startSession(window, 'beta')
   await expect.poll(() => terminalText(window, again)).toContain('Claude Code v2.1.999 (fake)')
   expect(readdirSync(clientFolder(world)).sort()).toEqual(['device.key', 'host.pub'])
-  expect(existsSync(enrolmentFile(world))).toBe(false)
+  expect(readFileSync(join(clientFolder(world), 'host.pub')).equals(pinned)).toBe(true)
 })
 
 test('a session in the host takes input, takes the pane’s size, is drawn again after a reload, and closes with confirmation', async ({

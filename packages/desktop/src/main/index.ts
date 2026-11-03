@@ -81,7 +81,6 @@ import {
 } from './sessions'
 import {
   createDesktopHost,
-  createDesktopPresence,
   createDesktopRemoteHosts,
   createDesktopRemoteInstaller,
   createLocalPageLinks,
@@ -904,9 +903,11 @@ function startApp(options: AppOptions = {}): void {
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
     ...(desktopHost !== null ? { hostSettingsChanged: () => desktopHost.link.writeSettings() } : {}),
     ...(remoteHosts !== null
-      ? { remoteHosts, remoteInstall: createDesktopRemoteInstaller((line) => console.log(line)) }
+      ? {
+          remoteHosts,
+          remoteInstall: createDesktopRemoteInstaller((line) => console.log(line))
+        }
       : {}),
-    ...(desktopHost !== null ? { presence: createDesktopPresence(() => win, (line) => console.log(line)) } : {}),
     rendererReady: () => {
       pushTheme({ services, themes, plugins, window: () => win })
       // With sessions in the local host the window reads its settings and

@@ -1,138 +1,145 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { DevicesSettings, type DevicesSettingsProps, type SettingsDevicesHost } from './DevicesSettings'
 
 const ME = {
-  name: 'this laptop',
-  role: 'admin' as const,
-  pairedAt: '2026-11-01T09:00:00Z',
-  revokedAt: null,
-  fingerprint: 'bbbb2222'
+  fingerprint: 'SHA256:me',
+  name: 'my-desktop',
+  away: false,
+  since: '2026-11-03T08:00:00Z'
 }
-const PHONE = {
-  ...ME,
-  name: 'phone',
-  role: 'viewer' as const,
-  fingerprint: 'aaaa1111'
+const LAPTOP = {
+  fingerprint: 'SHA256:laptop',
+  name: 'laptop',
+  away: true,
+  since: '2026-11-03T09:15:00Z'
 }
-const OLD = {
-  ...ME,
-  name: 'old tablet',
-  role: 'operator' as const,
-  fingerprint: 'dddd4444',
-  revokedAt: '2026-11-02T15:30:00Z'
+const BOX_SHELL = {
+  fingerprint: 'SHA256:tui',
+  name: 'build-box',
+  away: false,
+  since: '2026-11-03T07:00:00Z'
 }
 
 const THIS_PC: SettingsDevicesHost = {
   id: 'local',
   name: 'This PC',
+  thisComputer: true,
   thisDevice: ME.fingerprint,
-  paired: [ME, PHONE, OLD],
-  waiting: [{ name: 'tablet', fingerprint: 'cccc3333', secondsLeft: 540 }],
+  attached: [ME, LAPTOP],
   error: null
 }
 const BUILD: SettingsDevicesHost = {
   id: 'h-build',
   name: 'build-box',
-  thisDevice: 'eeee5555',
-  paired: [{ ...ME, fingerprint: 'eeee5555' }],
-  waiting: [],
+  thisComputer: false,
+  thisDevice: 'SHA256:me-there',
+  attached: [BOX_SHELL, { ...ME, fingerprint: 'SHA256:me-there', away: true }],
   error: null
 }
 
 function renderDevices(overrides: Partial<DevicesSettingsProps> = {}) {
   const props: DevicesSettingsProps = {
     hosts: [THIS_PC, BUILD],
-    onApprove: vi.fn(() => Promise.resolve(null)),
-    onRevoke: vi.fn(() => Promise.resolve(null)),
+    onDisconnect: vi.fn(() => Promise.resolve(null)),
     ...overrides
   }
-  render(<DevicesSettings {...props} />)
-  return props
+  const view = render(<DevicesSettings {...props} />)
+  return { props, view }
 }
 
+const hostSection = (id: string): HTMLElement =>
+  document.querySelector<HTMLElement>(`[data-settings-devices-host="${id}"]`) ?? (null as never)
+const row = (host: string, fingerprint: string): HTMLElement | null =>
+  hostSection(host).querySelector<HTMLElement>(`[data-settings-attached="${fingerprint}"]`)
+
 describe('Settings > Devices', () => {
-  it('S7: lists each admin host, This PC first, with its paired devices and waiting requests under its name', () => {
+  it('S12: lists the devices attached to each connected host under its name, This PC first, with name, fingerprint, where and since when', () => {
     renderDevices()
     const hosts = [...document.querySelectorAll<HTMLElement>('[data-settings-devices-host]')]
     expect(hosts.map((host) => host.getAttribute('aria-label'))).toEqual(['This PC', 'build-box'])
-    const pc = within(hosts[0]!)
-    const phone = document.querySelector(`[data-settings-device="${PHONE.fingerprint}"]`) as HTMLElement
-    expect(phone.textContent).toContain('phone')
-    expect(phone.textContent).toContain('Viewer')
-    expect(phone.querySelector('[data-settings-device-paired-at]')?.textContent).toMatch(/^Paired .*2026/)
-    expect(pc.getByText('tablet')).toBeTruthy()
-    expect(pc.getByText('9 min left')).toBeTruthy()
+
+    const laptop = row('local', LAPTOP.fingerprint)!
+    expect(within(laptop).getByText('laptop')).toBeTruthy()
+    const fingerprint = laptop.querySelector('[data-settings-attached-fingerprint]')!
+    expect(fingerprint.textContent).toBe('SHA256:laptop')
+    expect(fingerprint.className).toContain('font-mono')
+    expect(laptop.querySelector('[data-settings-attached-where]')?.textContent).toBe('From another computer')
+    expect(laptop.querySelector('[data-settings-attached-since]')?.textContent).toMatch(/^Since /)
+
+    // On a host on another computer, a device beside it is on the host's computer.
+    expect(row('h-build', BOX_SHELL.fingerprint)?.querySelector('[data-settings-attached-where]')?.textContent).toBe(
+      'On the host’s computer'
+    )
+    expect(row('local', ME.fingerprint)?.querySelector('[data-settings-attached-where]')?.textContent).toBe(
+      'On this computer'
+    )
   })
 
-  it('S7: marks this device, and its own row has no Revoke', () => {
+  it('S12: marks this device’s row on each host and offers it no Disconnect', () => {
     renderDevices()
-    const mine = document.querySelector(`[data-settings-device="${ME.fingerprint}"]`) as HTMLElement
-    expect(mine.textContent).toContain('This device')
-    expect(within(mine).queryByRole('button', { name: 'Revoke' })).toBeNull()
-    const phone = document.querySelector(`[data-settings-device="${PHONE.fingerprint}"]`) as HTMLElement
-    expect(within(phone).getByRole('button', { name: 'Revoke' })).toBeTruthy()
+    for (const [host, mine] of [
+      ['local', ME.fingerprint],
+      ['h-build', 'SHA256:me-there']
+    ] as const) {
+      const own = row(host, mine)!
+      expect(own.getAttribute('data-settings-attached-mine')).toBe('true')
+      expect(within(own).getByText('This device')).toBeTruthy()
+      expect(own.querySelector('[data-settings-attached-disconnect]')).toBeNull()
+    }
+    expect(row('local', LAPTOP.fingerprint)?.querySelector('[data-settings-attached-disconnect]')).not.toBeNull()
   })
 
-  it('S7: approves a code with a role, Operator unless another is picked, and says a code nobody waits under', async () => {
-    const onApprove = vi.fn((_host: string, code: string) =>
-      Promise.resolve(code === 'NOPE' ? 'No device is waiting to pair with that code.' : null)
-    )
-    renderDevices({ onApprove })
-    const form = screen.getByRole('form', {
-      name: 'Approve a device on This PC'
-    })
-    const roles = within(form).getByRole('radiogroup', {
-      name: 'Role on This PC'
-    })
-    expect(within(roles).getByRole('radio', { name: 'Operator' }).getAttribute('aria-checked')).toBe('true')
-    await userEvent.type(within(form).getByRole('textbox'), 'K7Q-2MX')
-    await userEvent.click(within(form).getByRole('button', { name: 'Approve' }))
-    expect(onApprove).toHaveBeenLastCalledWith('local', 'K7Q-2MX', 'operator')
-    expect(within(form).queryByRole('alert')).toBeNull()
-
-    await userEvent.click(within(roles).getByRole('radio', { name: 'Admin' }))
-    await userEvent.type(within(form).getByRole('textbox'), 'NOPE')
-    await userEvent.click(within(form).getByRole('button', { name: 'Approve' }))
-    expect(onApprove).toHaveBeenLastCalledWith('local', 'NOPE', 'admin')
-    expect((await within(form).findByRole('alert')).textContent).toBe('No device is waiting to pair with that code.')
+  it('S12: lists only the hosts it is given, and says so when none is connected', () => {
+    renderDevices({ hosts: [] })
+    expect(document.querySelector('[data-settings-devices-host]')).toBeNull()
+    expect(document.querySelector('[data-settings-devices-none]')?.textContent).toBe('No host is connected now.')
   })
 
-  it('S16: Revoke asks first, naming the device and the host, and lists a revoked device with when', async () => {
-    const props = renderDevices()
-    const phone = document.querySelector(`[data-settings-device="${PHONE.fingerprint}"]`) as HTMLElement
-    await userEvent.click(within(phone).getByRole('button', { name: 'Revoke' }))
-    expect(props.onRevoke).not.toHaveBeenCalled()
-    const ask = within(phone).getByRole('alertdialog', {
-      name: 'Revoke phone'
-    })
-    expect(ask.textContent).toContain('Revoke phone on This PC?')
-    await userEvent.click(within(ask).getByRole('button', { name: 'Revoke' }))
-    expect(props.onRevoke).toHaveBeenCalledWith('local', PHONE)
-
-    const old = document.querySelector(`[data-settings-device="${OLD.fingerprint}"]`) as HTMLElement
-    expect(old.getAttribute('data-settings-device-revoked')).toBe('true')
-    expect(old.querySelector('[data-settings-device-revoked-at]')?.textContent).toMatch(/^Revoked .*2026/)
-    expect(within(old).queryByRole('button', { name: 'Revoke' })).toBeNull()
+  it('S13: a device that attaches or leaves appears or goes as the list it is given changes', () => {
+    const { props, view } = renderDevices()
+    view.rerender(<DevicesSettings {...props} hosts={[{ ...THIS_PC, attached: [ME] }, BUILD]} />)
+    expect(row('local', LAPTOP.fingerprint)).toBeNull()
+    const phone = {
+      fingerprint: 'SHA256:phone',
+      name: 'phone',
+      away: true,
+      since: '2026-11-03T10:00:00Z'
+    }
+    view.rerender(<DevicesSettings {...props} hosts={[{ ...THIS_PC, attached: [ME, phone] }, BUILD]} />)
+    expect(row('local', phone.fingerprint)).not.toBeNull()
   })
 
-  it('S13: says why a revoke did not happen, such as a presence check that was cancelled', async () => {
+  it('S14: Disconnect beside a device asks the host to close its connections there, naming the host and the device', async () => {
+    const { props } = renderDevices()
+    await userEvent.click(row('local', LAPTOP.fingerprint)!.querySelector('[data-settings-attached-disconnect]')!)
+    expect(props.onDisconnect).toHaveBeenCalledWith('local', LAPTOP)
+  })
+
+  it('S14: shows what the host said when a Disconnect did not happen, in the row it is about', async () => {
     renderDevices({
-      onRevoke: () => Promise.resolve('You did not confirm it was you on this computer, so nothing changed.')
+      onDisconnect: () => Promise.resolve('build-box is not connected.')
     })
-    const phone = document.querySelector(`[data-settings-device="${PHONE.fingerprint}"]`) as HTMLElement
-    await userEvent.click(within(phone).getByRole('button', { name: 'Revoke' }))
-    await userEvent.click(
-      within(phone).getByRole('alertdialog').querySelector('[data-settings-device-confirm-revoke]')!
+    await userEvent.click(row('h-build', BOX_SHELL.fingerprint)!.querySelector('[data-settings-attached-disconnect]')!)
+    await waitFor(() =>
+      expect(row('h-build', BOX_SHELL.fingerprint)?.querySelector('[data-settings-attached-error]')?.textContent).toBe(
+        'build-box is not connected.'
+      )
     )
-    expect((await within(phone).findByRole('alert')).textContent).toContain('nothing changed')
   })
 
-  it('says why a host’s devices could not be listed', () => {
+  it('says why a host’s attached devices cannot be shown, and Looking… until it has said', () => {
     renderDevices({
-      hosts: [{ ...BUILD, paired: [], error: 'Only an admin may list devices.' }]
+      hosts: [
+        { ...THIS_PC, attached: null },
+        { ...BUILD, attached: null, error: 'The host closed the connection.' }
+      ]
     })
-    expect(screen.getByText('Only an admin may list devices.')).toBeTruthy()
+    expect(within(hostSection('local')).getByText('Looking…')).toBeTruthy()
+    expect(hostSection('h-build').querySelector('[data-settings-devices-error]')?.textContent).toBe(
+      'The host closed the connection.'
+    )
+    expect(screen.queryByText(/pair|approve|revoke|role/i)).toBeNull()
   })
 })

@@ -14,7 +14,7 @@ import type { PageBridge } from './launcher'
  * - Only Helm's own pages may open one, checked by web-contents id: never a
  *   plugin frame, an artifact frame or a page in the Browser tab.
  * - A page's bridge is opened only after main's own link has connected, so
- *   enrolment and the settings main writes come first.
+ *   the host key it pinned and the settings main writes come first.
  * - A page has one connection at a time: opening again ends the last one, and
  *   a page that navigates, reloads or closes has its bridge ended.
  * - At quit every bridge is ended before main's link stops the host.
@@ -37,6 +37,8 @@ export interface PageLinksDeps {
   inHost: boolean
   /** Helm's version, for the page's `hello`. */
   appVersion: string
+  /** The computer's name, for the page's `hello`, as main's gives it. */
+  deviceName?: string
   /** Whether a web contents is one of Helm's own pages. */
   isHelmPage: (id: number) => boolean
   /** Settles once main's own link has connected; rejects with the sentence saying why it could not. */
@@ -130,7 +132,12 @@ export function createPageLinks(deps: PageLinksDeps): PageLinks {
         if (why !== null) deps.log('host: a page’s connection to the local host ended')
         page.send('hostLink:ended', { connection, why, ...deps.howEnded() })
       })
-      return { inHost: true, connection, appVersion: deps.appVersion }
+      return {
+        inHost: true,
+        connection,
+        appVersion: deps.appVersion,
+        ...(deps.deviceName !== undefined ? { deviceName: deps.deviceName } : {})
+      }
     },
 
     send(pageId, connection, bytes) {

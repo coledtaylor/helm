@@ -91,7 +91,7 @@ describe('the window’s view of hosts on other computers', () => {
       'h-build': { state: 'connected' },
       'h-far': { state: 'retrying' },
       'h-lab': { state: 'connected' },
-      'h-new': { state: 'pairing', code: '7Q2K-9XZD' }
+      'h-new': { state: 'keyChanged' }
     })
     await settle()
 
@@ -103,8 +103,11 @@ describe('the window’s view of hosts on other computers', () => {
     expect(view['h-lab']?.sessions).toEqual([
       { key: 'h-lab:4', name: 'notebook', cwd: '/home/me/lab', state: 'running' }
     ])
-    expect(view['h-far']).toEqual({ connection: { state: 'retrying' }, sessions: [] })
-    expect(view['h-new']?.connection).toEqual({ state: 'pairing', code: '7Q2K-9XZD' })
+    expect(view['h-far']).toEqual({
+      connection: { state: 'retrying' },
+      sessions: []
+    })
+    expect(view['h-new']?.connection).toEqual({ state: 'keyChanged' })
 
     // Activity there changes a row's state; a session ended there leaves the list.
     build.snapshot('session:activity', [{ id: 4, activity: 'waiting' }] as never)

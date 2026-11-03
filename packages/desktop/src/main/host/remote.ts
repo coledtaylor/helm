@@ -5,13 +5,13 @@ import type { LocalHost, PageBridge } from './launcher'
 import { createHostLink, type HostLink } from './link'
 import { createPageLinks, type PageLinks } from './page-link'
 import type * as P from './protocol'
-import { RemoteHostError, type OnPairing } from './remote-launcher'
+import { RemoteHostError } from './remote-launcher'
 
 /**
  * Helm's links to the hosts on other computers this device has added (the
  * `hosts` setting), each over its own connection, beside this PC's own.
  *
- * - One link per host in main, for pairing, the quit and where it stands,
+ * - One link per host in main, for the quit and where it stands,
  *   and one page link per page that asks (`hostLink:open` naming the host).
  *   Each is its own `floti bridge` through the host's own transport.
  * - A link never starts a host. It connects at launch and when a host is
@@ -20,13 +20,18 @@ import { RemoteHostError, type OnPairing } from './remote-launcher'
  * - A link that drops (its ssh or command ended) sends nothing and ends
  *   nothing: the host keeps every session, and the window dims that host's
  *   rows until it is back.
+ * - Adding a host is connecting to it: its first connection pins the key it
+ *   proves, through the user's own login, and nothing is approved there. A
+ *   host that later proves another key is `keyChanged` until it is removed
+ *   and added again.
  * - Removing a host lets go of its link and page links without a word to the
- *   host, so none of its sessions ends, then removes its client folder.
+ *   host, so none of its sessions ends, then removes its client folder, which
+ *   holds the key it pinned: adding the same target again pins whatever key
+ *   the host proves then.
  * - A quit tells each connected host whether the sessions this device started
  *   there end, by that host's own choice (Keep them running unless set).
- * - Where each stands goes to the window on `remoteHosts:changed`; a pairing
- *   code goes there and nowhere else, never into a log. A host whose floti
- *   refused this device's hello is too old or newer, with both versions; one
+ * - Where each stands goes to the window on `remoteHosts:changed`. A host
+ *   whose floti refused this device's hello is too old or newer, with both versions; one
  *   whose login has no floti is missing; one Helm installed floti on while
  *   nobody was signed in there starts at the next sign-in, which is no
  *   failure.
@@ -35,7 +40,8 @@ import { RemoteHostError, type OnPairing } from './remote-launcher'
 /** Where a failed attempt leaves a host: what its line says, read for what the window offers. */
 export function failedState(error: Error, startsAtSignIn: boolean): RemoteHostConnection {
   if (!(error instanceof RemoteHostError)) return { state: 'retrying' }
-  const { refused, lastLine } = error
+  const { refused, lastLine, keyChanged } = error
+  if (keyChanged) return { state: 'keyChanged' }
   if (refused !== null) {
     return { state: refused.update === 'host' ? 'tooOld' : 'newer', host: refused.host, client: refused.client }
   }
@@ -76,8 +82,8 @@ export interface RemoteHostLinks {
 }
 
 export interface RemoteHostLinksDeps {
-  /** Main's connection to `host`, pairing first while nothing is pinned and telling `onPairing` the code. */
-  start: (host: RemoteHost, onPairing: OnPairing) => Promise<LocalHost>
+  /** Main's connection to `host`, pinning its key at the first connection. */
+  start: (host: RemoteHost) => Promise<LocalHost>
   /** A page's own bridge to `host`, whose bytes go to `data`. */
   openBridge: (host: RemoteHost, data: (bytes: Uint8Array) => void) => PageBridge
   /** Removes a forgotten host's client folder. */
@@ -86,6 +92,8 @@ export interface RemoteHostLinksDeps {
   changed: (states: RemoteHostStates) => void
   isHelmPage: (id: number) => boolean
   appVersion: string
+  /** The computer's name, which each page's `hello` gives as this device's name. */
+  deviceName?: string
   /** The one counter every host's page connections are numbered from. */
   nextConnection: () => number
   log: (line: string) => void
@@ -137,10 +145,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
     // Filled in below: the link's callbacks reach the entry they belong to.
     const entry = { host, own: [], subscriptions: [] } as unknown as Entry
     entry.link = createHostLink({
-      start: () =>
-        deps.start(entry.host, (code, approvalFailed) =>
-          setState(entry, { state: 'pairing', code, ...(approvalFailed !== null ? { approvalFailed } : {}) })
-        ),
+      start: () => deps.start(entry.host),
       name: host.name,
       onAttemptFailed: (error) => setState(entry, failedState(error, atSignIn.has(entry.host.id))),
       log: deps.log,
@@ -150,6 +155,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
     entry.pages = createPageLinks({
       inHost: true,
       appVersion: deps.appVersion,
+      ...(deps.deviceName !== undefined ? { deviceName: deps.deviceName } : {}),
       isHelmPage: deps.isHelmPage,
       // A page connects only while main is connected; it never makes main try.
       ready: () =>
@@ -174,10 +180,8 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
         // Dropped, not let go of: nothing there ended, and it is tried again.
         if (!entry.link.endedOnPurpose()) setState(entry, { state: 'retrying' })
       })
-      // What the host says this device is paired as, for Settings > Hosts.
-      const role = connection.welcome.role
       atSignIn.delete(entry.host.id)
-      setState(entry, { state: 'connected', ...(role !== undefined ? { role } : {}) })
+      setState(entry, { state: 'connected' })
     })
     entry.link.keepConnected()
     return entry

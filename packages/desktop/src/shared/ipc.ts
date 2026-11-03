@@ -505,13 +505,6 @@ export interface SessionConfirmRequest {
 /** The answer to the quit question: end the sessions and quit, keep them running and quit, or stay. */
 export type QuitAnswer = 'end' | 'keep' | 'cancel'
 
-/**
- * How this computer answered a check that its user is present: confirmed, the
- * user cancelled it, or this computer has no such check (Linux), or it could
- * not be run.
- */
-export type PresenceAnswer = 'confirmed' | 'declined' | 'unavailable'
-
 // ---------------------------------------------------------------------------
 // The browser pane
 // ---------------------------------------------------------------------------
@@ -672,10 +665,17 @@ export const BROWSER_TABS_MAX = 10
  * sessions do not run in the host this run; or they do and main started a
  * bridge for the page, whose frames travel on `hostLink:*` under this
  * connection number; or they do and the host could not be reached, saying why.
+ * `deviceName` is the computer's name, which the page's `hello` gives as this
+ * device's name, as main's does.
  */
 export type HostLinkOpened =
   | { inHost: false }
-  | { inHost: true; connection: number; appVersion: string }
+  | {
+      inHost: true
+      connection: number
+      appVersion: string
+      deviceName?: string
+    }
   | { inHost: true; unreachable: string }
 
 /**
@@ -754,14 +754,6 @@ export interface IpcRequests {
 
   /** The user cancelled an offer: main forgets it, and nothing is run there. */
   'remoteHosts:cancel': { request: { id: string }; response: void }
-
-  /**
-   * Asks this computer to confirm its user is present (Windows Hello, Touch ID
-   * or the account password), with `reason` shown in the prompt, before the
-   * window tells a host `devices:presence`. Main runs `floti presence`
-   * (`main/presence.ts`); the answer says nothing of who the user is.
-   */
-  'presence:confirm': { request: { reason: string }; response: PresenceAnswer }
 
   'settings:read': { request: void; response: AppSettings }
   'settings:write': { request: Partial<AppSettings>; response: AppSettings }
@@ -1860,8 +1852,8 @@ export interface IpcEvents {
   'ownData:changed': OwnDataCopyState
   /**
    * Where each host on another computer stands with this device, whole,
-   * after each change: connected, retrying, waiting for this device to be
-   * approved there (with the code), or what its transport last said.
+   * after each change: connected, retrying, its key changed since this
+   * device pinned it, or what its transport last said.
    */
   'remoteHosts:changed': RemoteHostStates
   /** With sessions in the local host, a background page's ask for the window, from the hidden window through main. */
@@ -2102,7 +2094,6 @@ export const REQUEST_CHANNELS = Object.keys({
   'remoteHosts:check': true,
   'remoteHosts:install': true,
   'remoteHosts:cancel': true,
-  'presence:confirm': true,
   'settings:read': true,
   'settings:write': true,
   'ownSettings:read': true,

@@ -35,12 +35,6 @@ export interface RemoteHost {
   name: string
   transport: HostTransport
   /**
-   * The role this device is approved with while it pairs, in the same step,
-   * through the host's own transport. Absent for a host added before a role
-   * could be chosen, which is approved on the host by hand.
-   */
-  role?: PairingRole
-  /**
    * The full path of the floti Helm installed there, on that computer, for a
    * login whose non-interactive shell does not have its folder on `PATH`.
    * Every line run there starts with it (`floti bridge --floti`). Absent for
@@ -75,27 +69,19 @@ export function flotiLine(floti: string | undefined, rest: string): string {
   return /[ \t\\]/.test(floti) ? `"${floti}" ${rest}` : `${floti} ${rest}`
 }
 
-/** The roles Settings > Hosts offers when adding a host: Admin by default. */
-export type PairingRole = 'admin' | 'operator'
-
-/** The roles a host pairs a device with. */
-export type DeviceRoleName = 'viewer' | 'operator' | 'admin'
-
-/** The role a new host is added with unless the user picks another. */
-export const DEFAULT_PAIRING_ROLE: PairingRole = 'admin'
-
 /**
  * Where this device stands with a remote host, as its link reports it. Absent
  * while nothing has been heard yet.
  *
- * - `connected`: the handshake held the host to its pinned key; `role` is
- *   what the host says this device is paired as.
+ * - `connected`: the handshake held the host to the key this device pinned
+ *   for it, or, at the first connection, pinned the key the host proved. A
+ *   host reached through the user's own login serves this device in full.
  * - `retrying`: the link ended (the ssh or command process exited) and it is
  *   trying again by itself. Nothing on the host ended.
- * - `pairing`: this device is not paired with the host; `code` is the short
- *   code the host showed this device, approved there with
- *   `floti devices approve <code>`. `approvalFailed` is the last line the
- *   approval run through the host's transport wrote when it failed, unedited.
+ * - `keyChanged`: the host reached at that target proved another key than
+ *   the one this device pinned, so nothing past the first handshake message
+ *   was sent to it. It stays so until the user removes the host and adds it
+ *   again, which pins the key it proves then.
  * - `failed`: the transport could not reach the host; `lastLine` is the last
  *   line ssh or the command wrote, unedited.
  * - `missing`: the login answered, but has no floti to run; `lastLine` is
@@ -107,9 +93,9 @@ export const DEFAULT_PAIRING_ROLE: PairingRole = 'admin'
  *   the host starts at the next sign-in. Not a failure.
  */
 export type RemoteHostConnection =
-  | { state: 'connected'; role?: DeviceRoleName }
+  | { state: 'connected' }
   | { state: 'retrying' }
-  | { state: 'pairing'; code: string; approvalFailed?: string }
+  | { state: 'keyChanged' }
   | { state: 'failed'; lastLine: string }
   | { state: 'missing'; lastLine: string }
   | { state: 'tooOld'; host: string; client: string }
@@ -289,10 +275,6 @@ export function remoteHostsProblem(value: unknown): string | null {
     names.add(key)
     const reached = transportProblem(transport)
     if (reached !== null) return `${reached} for ${JSON.stringify(name)}`
-    const { role } = host as { role?: unknown }
-    if (role !== undefined && role !== 'admin' && role !== 'operator') {
-      return `expected admin or operator as the role for ${JSON.stringify(name)}, got ${describe(role)}`
-    }
     const { floti } = host as { floti?: unknown }
     if (floti !== undefined) {
       const problem = flotiPathProblem(floti)
@@ -314,8 +296,6 @@ export interface RemoteHostDraft {
   target: string
   /** The command line as typed, read when `via` is `command`. */
   command: string
-  /** The role this device is approved with as it pairs. */
-  role: PairingRole
 }
 
 export type RemoteHostFromDraft = { ok: true; host: RemoteHost } | { ok: false; error: string }
@@ -359,7 +339,25 @@ export function remoteHostFromDraft(
   if (id === LOCAL_HOST_KEY || hosts.some((host) => host.id === id)) {
     return { ok: false, error: 'That host id is taken.' }
   }
-  return { ok: true, host: { id, name, transport, role: draft.role } }
+  return { ok: true, host: { id, name, transport } }
+}
+
+/**
+ * A stored host list as this version reads it: each host with only the
+ * fields a host has now: a `role` an earlier version stored beside a host is
+ * dropped, so the list still loads and validates. A value that is not a list
+ * of objects is returned as it is, for `remoteHostsProblem` to name.
+ */
+export function storedRemoteHosts(value: unknown): unknown {
+  if (!Array.isArray(value)) return value
+  return value.map((host: unknown) => {
+    if (typeof host !== 'object' || host === null || Array.isArray(host)) return host
+    const kept: Record<string, unknown> = {
+      ...(host as Record<string, unknown>)
+    }
+    delete kept.role
+    return kept
+  })
 }
 
 /**

@@ -1,68 +1,53 @@
 import { useState, type JSX } from 'react'
-import type { DeviceRoleName } from '@helm/core/types'
-import { cn } from '../lib/cn'
 import { Chip } from './Chip'
-import { ROLE_LABEL, Segmented } from './HostsSettings'
 import { Action, Divider, Group } from './SettingsKit'
 
 /**
- * Settings > Devices: for each host this device is an admin of, This PC
- * first, the devices paired with it and the ones waiting to pair, under the
- * host's name. A device is approved by the code it shows, with a role
- * (Operator unless another is picked), and revoked after a question naming
- * it and the host. This device's own row is marked and has no Revoke.
+ * Settings > Devices: each host this window is connected to now, This PC
+ * first, under its name, with the devices attached to it now: each one's
+ * name, key fingerprint, whether it is on that host's computer or another,
+ * and since when. The list is the host's own, live: a device appears when it
+ * attaches and goes when its last connection there closes, and a device with
+ * several connections is one row.
  *
- * What a host says is drawn as it says it: a refused code or a presence
- * check that did not pass is the sentence `onApprove` or `onRevoke` answers.
+ * Whatever reaches a host's socket through the user's own login and
+ * completes the handshake is served in full: the login is the access.
+ * Disconnect beside a device closes every one of its
+ * connections to that host at once and ends none of its sessions; keeping a
+ * lost device out for good is the user's login's job (its SSH key). This
+ * device's own row is marked and has no Disconnect.
  */
 
-export interface SettingsPairedDevice {
-  name: string
-  role: DeviceRoleName
-  /** RFC 3339 text. */
-  pairedAt: string
-  /** RFC 3339 text; null while it is not revoked. */
-  revokedAt: string | null
+/** A device attached to a host now. */
+export interface SettingsAttachedDevice {
   fingerprint: string
-}
-
-export interface SettingsWaitingDevice {
   name: string
-  fingerprint: string
-  secondsLeft: number
+  /** Whether it is connected from another computer than the host's. */
+  away: boolean
+  /** When its first open connection there was welcomed, as RFC 3339 text. */
+  since: string
 }
 
 /** One host as Settings > Devices draws it. */
 export interface SettingsDevicesHost {
   id: string
   name: string
-  /** This device's fingerprint there; its row is marked. */
+  /** Whether the host runs on this computer: This PC's. */
+  thisComputer: boolean
+  /** This device's fingerprint there, from the host's welcome; its row is marked. */
   thisDevice: string | null
-  paired: readonly SettingsPairedDevice[]
-  waiting: readonly SettingsWaitingDevice[]
-  /** Why its devices could not be listed. */
+  /** Who is attached now; null until the host has said. */
+  attached: readonly SettingsAttachedDevice[] | null
+  /** Why who is attached cannot be shown. */
   error: string | null
 }
 
 export interface DevicesSettingsProps {
-  /** Each admin host, This PC first; null until the first listing lands. */
-  hosts: readonly SettingsDevicesHost[] | null
-  /** Approves the device waiting with `code`; answers the sentence to show when it did not. */
-  onApprove: (host: string, code: string, role: DeviceRoleName) => Promise<string | null>
-  /** Revokes a paired device; answers the sentence to show when it did not. */
-  onRevoke: (host: string, device: SettingsPairedDevice) => Promise<string | null>
+  /** Each host connected now, This PC first. */
+  hosts: readonly SettingsDevicesHost[]
+  /** Closes every connection of `device` to host `host`; answers the sentence to show when it could not. */
+  onDisconnect: (host: string, device: SettingsAttachedDevice) => Promise<string | null>
 }
-
-/** The role a device approved here gets unless another is picked. */
-export const DEFAULT_APPROVE_ROLE: DeviceRoleName = 'operator'
-
-const APPROVE_ROLES: readonly DeviceRoleName[] = ['viewer', 'operator', 'admin']
-
-const FIELD = cn(
-  'h-[30px] w-[140px] rounded-well border border-border bg-surface-sunken px-2.5',
-  'font-mono text-[12px] text-fg placeholder:text-fg-subtle select-text',
-  'focus:border-accent focus:outline-none'
-)
 
 /** A moment as this computer writes dates, to the minute. */
 function when(text: string): string {
@@ -74,18 +59,28 @@ function when(text: string): string {
   }).format(date)
 }
 
-export function DevicesSettings({ hosts, onApprove, onRevoke }: DevicesSettingsProps): JSX.Element {
+/** Where a device is, from the host's side. */
+function whereFrom(away: boolean, host: SettingsDevicesHost): string {
+  if (away) return 'From another computer'
+  return host.thisComputer ? 'On this computer' : 'On the host’s computer'
+}
+
+export function DevicesSettings({ hosts, onDisconnect }: DevicesSettingsProps): JSX.Element {
   return (
     <Group
       name="devices"
       title="Devices"
-      hint="The devices paired with each host you are an admin of, and the ones asking to pair. Approve one by the code it shows."
+      hint="The devices attached to each host you are connected to, as they come and go. Disconnect closes a device’s connections there; its sessions keep running."
     >
-      {hosts === null && <p className="py-1.5 text-[12px] text-fg-muted">Looking…</p>}
-      {hosts?.map((host, index) => (
+      {hosts.length === 0 && (
+        <p data-settings-devices-none className="py-1.5 text-[12px] text-fg-muted">
+          No host is connected now.
+        </p>
+      )}
+      {hosts.map((host, index) => (
         <div key={host.id}>
           {index > 0 && <Divider />}
-          <HostDevices host={host} onApprove={onApprove} onRevoke={onRevoke} />
+          <HostDevices host={host} onDisconnect={onDisconnect} />
         </div>
       ))}
     </Group>
@@ -94,208 +89,85 @@ export function DevicesSettings({ hosts, onApprove, onRevoke }: DevicesSettingsP
 
 function HostDevices({
   host,
-  onApprove,
-  onRevoke
-}: {
-  host: SettingsDevicesHost
-} & Pick<DevicesSettingsProps, 'onApprove' | 'onRevoke'>): JSX.Element {
+  onDisconnect
+}: { host: SettingsDevicesHost } & Pick<DevicesSettingsProps, 'onDisconnect'>): JSX.Element {
   return (
     <section data-settings-devices-host={host.id} aria-label={host.name} className="py-2">
       <h3 className="font-mono text-[12.5px] text-fg">{host.name}</h3>
       {host.error !== null ? (
-        <p data-settings-devices-error className="mt-1 text-[12px] text-danger">
+        <p data-settings-devices-error className="mt-1 text-[12px] text-fg-muted">
           {host.error}
         </p>
+      ) : host.attached === null ? (
+        <p className="mt-1 text-[12px] text-fg-muted">Looking…</p>
       ) : (
-        <>
-          <ul className="mt-1.5 flex flex-col">
-            {host.paired.map((device) => (
-              <PairedRow
-                key={device.fingerprint}
-                host={host}
-                device={device}
-                mine={device.fingerprint === host.thisDevice}
-                onRevoke={onRevoke}
-              />
-            ))}
-          </ul>
-          {host.waiting.length > 0 && (
-            <>
-              <p className="mt-2 text-[11.5px] text-fg-muted">Waiting to pair</p>
-              <ul className="mt-1 flex flex-col">
-                {host.waiting.map((device) => (
-                  <li
-                    key={device.fingerprint}
-                    data-settings-device-waiting={device.fingerprint}
-                    className="flex min-w-0 items-center gap-2.5 py-1"
-                  >
-                    <span className="min-w-0 truncate text-[12.5px] text-fg">{device.name}</span>
-                    <span className="font-mono text-[11px] text-fg-subtle">{device.fingerprint}</span>
-                    <span className="text-[11px] text-fg-subtle">
-                      {Math.max(1, Math.ceil(device.secondsLeft / 60))} min left
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          <ApproveForm host={host} onApprove={onApprove} />
-        </>
+        <ul data-settings-attached-list={host.id} className="mt-1 flex flex-col">
+          {host.attached.map((device) => (
+            <AttachedRow
+              key={device.fingerprint}
+              host={host}
+              device={device}
+              mine={device.fingerprint === host.thisDevice}
+              onDisconnect={onDisconnect}
+            />
+          ))}
+        </ul>
       )}
     </section>
   )
 }
 
-function PairedRow({
+function AttachedRow({
   host,
   device,
   mine,
-  onRevoke
+  onDisconnect
 }: {
   host: SettingsDevicesHost
-  device: SettingsPairedDevice
+  device: SettingsAttachedDevice
   mine: boolean
-  onRevoke: DevicesSettingsProps['onRevoke']
-}): JSX.Element {
-  const [asking, setAsking] = useState(false)
+} & Pick<DevicesSettingsProps, 'onDisconnect'>): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const revoke = async (): Promise<void> => {
+  const disconnect = (): void => {
     setBusy(true)
-    const failed = await onRevoke(host.id, device)
-    setBusy(false)
-    setAsking(false)
-    setError(failed)
+    setError(null)
+    void onDisconnect(host.id, device).then((problem) => {
+      setBusy(false)
+      setError(problem)
+    })
   }
-  const revoked = device.revokedAt !== null
   return (
     <li
-      data-settings-device={device.fingerprint}
-      data-settings-device-revoked={String(revoked)}
-      data-settings-device-mine={mine ? 'true' : undefined}
-      className="py-1"
+      data-settings-attached={device.fingerprint}
+      data-settings-attached-mine={mine ? 'true' : undefined}
+      aria-label={device.name}
+      className="py-1.5"
     >
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className={cn('min-w-0 truncate text-[12.5px]', revoked ? 'text-fg-subtle' : 'text-fg')}>
-          {device.name}
-        </span>
+        <span className="min-w-0 truncate text-[12.5px] text-fg">{device.name}</span>
         {mine && <Chip tone="accent">This device</Chip>}
-        <span className="text-[11.5px] text-fg-muted">{ROLE_LABEL[device.role]}</span>
-        <span className="font-mono text-[11px] text-fg-subtle">{device.fingerprint}</span>
         <span className="flex-1" />
-        <span data-settings-device-paired-at className="text-[11.5px] text-fg-subtle">
-          Paired {when(device.pairedAt)}
+        <span data-settings-attached-since className="text-[11.5px] text-fg-subtle">
+          Since {when(device.since)}
         </span>
-        {revoked ? (
-          <span data-settings-device-revoked-at className="text-[11.5px] text-fg-subtle">
-            Revoked {when(device.revokedAt ?? '')}
-          </span>
-        ) : (
-          !mine &&
-          !asking && (
-            <Action data-settings-device-revoke={device.fingerprint} onClick={() => setAsking(true)}>
-              Revoke
-            </Action>
-          )
+        {!mine && (
+          <Action data-settings-attached-disconnect={device.fingerprint} disabled={busy} onClick={disconnect}>
+            Disconnect
+          </Action>
         )}
       </div>
-      {asking && (
-        <div
-          role="alertdialog"
-          aria-label={`Revoke ${device.name}`}
-          data-settings-device-confirm
-          className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-[12px] text-fg-muted"
-        >
-          <span>
-            Revoke {device.name} on {host.name}? Its connections close now, and it has to pair again to come back.
-          </span>
-          <Action primary data-settings-device-confirm-revoke disabled={busy} onClick={() => void revoke()}>
-            Revoke
-          </Action>
-          <Action onClick={() => setAsking(false)} disabled={busy}>
-            Cancel
-          </Action>
-        </div>
-      )}
+      <p className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 text-[11px] text-fg-subtle">
+        <span data-settings-attached-where>{whereFrom(device.away, host)}</span>
+        <span data-settings-attached-fingerprint className="font-mono select-text">
+          {device.fingerprint}
+        </span>
+      </p>
       {error !== null && (
-        <p role="alert" data-settings-device-error className="mt-1 text-[12px] text-danger">
+        <p role="alert" data-settings-attached-error className="mt-1 text-[12px] text-danger">
           {error}
         </p>
       )}
     </li>
-  )
-}
-
-function ApproveForm({
-  host,
-  onApprove
-}: {
-  host: SettingsDevicesHost
-  onApprove: DevicesSettingsProps['onApprove']
-}): JSX.Element {
-  const [code, setCode] = useState('')
-  const [role, setRole] = useState<DeviceRoleName>(DEFAULT_APPROVE_ROLE)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const submit = async (): Promise<void> => {
-    if (code.trim() === '') {
-      setError('Type the code the device shows.')
-      return
-    }
-    setBusy(true)
-    const failed = await onApprove(host.id, code.trim(), role)
-    setBusy(false)
-    setError(failed)
-    if (failed === null) setCode('')
-  }
-  return (
-    <form
-      data-settings-device-approve={host.id}
-      aria-label={`Approve a device on ${host.name}`}
-      className="mt-2.5 flex flex-col gap-1.5"
-      onSubmit={(event) => {
-        event.preventDefault()
-        void submit()
-      }}
-    >
-      <div className="flex flex-wrap items-center gap-2.5">
-        <input
-          type="text"
-          data-settings-device-code
-          aria-label={`Code to approve on ${host.name}`}
-          placeholder="Code it shows"
-          spellCheck={false}
-          value={code}
-          onChange={(event) => {
-            setCode(event.target.value)
-            setError(null)
-          }}
-          className={FIELD}
-        />
-        <Segmented
-          label={`Role on ${host.name}`}
-          name="settings-device-role"
-          options={APPROVE_ROLES.map((value) => ({
-            value,
-            label: ROLE_LABEL[value]
-          }))}
-          value={role}
-          onChange={setRole}
-        />
-        <button
-          type="submit"
-          data-settings-device-approve-submit
-          disabled={busy}
-          className="rounded-well border border-accent px-3 py-1.5 text-[12px] text-accent-text transition-colors hover:bg-accent-soft disabled:opacity-50"
-        >
-          Approve
-        </button>
-      </div>
-      {error !== null && (
-        <p role="alert" data-settings-device-approve-error className="text-[12px] text-danger">
-          {error}
-        </p>
-      )}
-    </form>
   )
 }

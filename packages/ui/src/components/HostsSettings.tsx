@@ -1,15 +1,12 @@
 import { useEffect, useEffectEvent, useRef, useState, type JSX, type ReactNode } from 'react'
 import {
-  DEFAULT_PAIRING_ROLE,
   describeInstallFailure,
   describeTransport,
   type HostCheck,
   type HostCheckTarget,
   type InstallOffer,
   type InstallOutcome,
-  type DeviceRoleName,
   type HostTransport,
-  type PairingRole,
   type QuitSessions,
   type RemoteHost,
   type RemoteHostConnection,
@@ -27,8 +24,13 @@ import { Action, Divider, Group, Select } from './SettingsKit'
  * Settings > Hosts: the hosts on other computers this device reaches, each
  * with how it is reached, where its link stands, what quitting does to the
  * sessions this device started there, and Remove; and a small form that adds
- * one by an ssh target or a command, and the role this PC is approved with
- * there as it pairs.
+ * one by an ssh target or a command.
+ *
+ * The user's login is the access: adding a host is connecting to it through
+ * that login, and its first connection pins the key it proves. There is no
+ * role, code or approval. A host that later proves another key says so,
+ * naming it, until it is removed and added again; Remove forgets the host and
+ * the key pinned for it.
  *
  * Everything here is kept on this device (`hosts` and `quitSessions`) and
  * written through `settings:write`. Removing a host forgets it here and ends
@@ -80,7 +82,7 @@ export interface HostsSettingsProps {
 const CONNECTION_CHIP: Record<RemoteHostConnection['state'], { tone: ChipTone; label: string }> = {
   connected: { tone: 'success', label: 'Connected' },
   retrying: { tone: 'warn', label: 'Not connected, retrying' },
-  pairing: { tone: 'warn', label: 'Not paired' },
+  keyChanged: { tone: 'danger', label: 'Key changed' },
   failed: { tone: 'danger', label: 'Cannot connect' },
   missing: { tone: 'warn', label: 'floti not found' },
   tooOld: { tone: 'warn', label: 'floti too old' },
@@ -184,14 +186,7 @@ function HostRow({
     >
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="min-w-0 truncate font-mono text-[12.5px] text-fg">{host.name}</span>
-        {chip !== null && (
-          <Chip tone={chip.tone}>{chip.label}</Chip>
-        )}
-        {connection?.state === 'connected' && connection.role !== undefined && (
-          <span data-settings-host-role={connection.role} className="text-[11.5px] text-fg-muted">
-            {ROLE_LABEL[connection.role]}
-          </span>
-        )}
+        {chip !== null && <Chip tone={chip.tone}>{chip.label}</Chip>}
       </div>
       <p
         data-settings-host-reached
@@ -229,23 +224,12 @@ function HostRow({
 
 /** What a link that is not simply connected or retrying needs from the user. */
 function ConnectionDetail({ connection, host }: { connection: RemoteHostConnection; host: RemoteHost }): ReactNode {
-  if (connection.state === 'pairing') {
+  if (connection.state === 'keyChanged') {
     return (
-      <div data-settings-host-pairing className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
-        {connection.approvalFailed !== undefined && (
-          <>
-            <p>Helm could not approve this PC on {host.name} itself. It said:</p>
-            <p
-              data-settings-host-approval-failed
-              className="mt-1 mb-2 font-mono text-[11px] break-all text-fg select-text"
-            >
-              {connection.approvalFailed}
-            </p>
-          </>
-        )}
-        <p>This PC is not paired with {host.name} yet. To approve it, run this in a terminal there:</p>
-        <p className="mt-1 font-mono text-[11.5px] text-fg select-text">floti devices approve {connection.code}</p>
-      </div>
+      <p data-settings-host-key-changed className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
+        {host.name}’s key changed: the host reached there proved another key than the one this PC pinned for it, so Helm
+        connects to nothing there. If floti was reinstalled there on purpose, remove {host.name} and add it again.
+      </p>
     )
   }
   if (connection.state === 'failed') {
@@ -535,14 +519,6 @@ function OfferPanel({
 
 const VIA_LABEL: Record<HostTransport['kind'], string> = { ssh: 'ssh', command: 'Command' }
 
-/** A role, as Settings names it. */
-export const ROLE_LABEL: Record<DeviceRoleName, string> = { admin: 'Admin', operator: 'Operator', viewer: 'Viewer' }
-
-const PAIRING_ROLE_HINT: Record<PairingRole, string> = {
-  admin: 'This PC can do everything there, pairing and revoking devices included.',
-  operator: 'This PC can start, use and end sessions there, but not pair or revoke devices or change its settings.'
-}
-
 /** A small choice of a few words, one picked: the segmented control the add forms use. */
 export function Segmented<T extends string>({
   label,
@@ -611,8 +587,7 @@ function AddHostForm({
     name: '',
     via: 'ssh',
     target: '',
-    command: '',
-    role: DEFAULT_PAIRING_ROLE
+    command: ''
   })
   const [error, setError] = useState<string | null>(null)
   const edit = (patch: Partial<RemoteHostDraft>): void => {
@@ -702,19 +677,6 @@ function AddHostForm({
           />
         )}
         <p className="text-[11px] leading-[1.5] text-fg-subtle">{VIA_HINT[draft.via]}</p>
-      </div>
-      <div className="flex flex-col gap-1">
-        <span className="text-[12px] text-fg-muted">This PC's role there</span>
-        <Segmented
-          label="This PC's role there"
-          name="settings-host-role"
-          options={(['admin', 'operator'] as const).map((role) => ({ value: role, label: ROLE_LABEL[role] }))}
-          value={draft.role}
-          onChange={(role) => edit({ role })}
-        />
-        <p className="text-[11px] leading-[1.5] text-fg-subtle">
-          {PAIRING_ROLE_HINT[draft.role]} Helm approves this PC with it over the same connection as it pairs.
-        </p>
       </div>
       {error !== null && (
         <p role="alert" data-settings-host-error className="text-[12px] text-danger">

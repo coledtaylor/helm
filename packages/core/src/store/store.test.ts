@@ -312,6 +312,21 @@ describe('settings', () => {
     expect(readSettings(store)).toEqual(DEFAULT_SETTINGS)
   })
 
+  it('S5: loads a host an earlier version saved with a role with the role dropped, and takes the next write', () => {
+    const raw = store.raw.prepare('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
+    const host = {
+      id: 'h-build',
+      name: 'build-box',
+      transport: { kind: 'ssh', target: 'build-box' }
+    }
+    raw.run('hosts', JSON.stringify([{ ...host, role: 'operator' }]), '')
+
+    const settings = readSettings(store)
+    expect(settings.hosts).toEqual([host])
+    expect(() => writeSettings(store, { hosts: [...settings.hosts] })).not.toThrow()
+    expect(readSettings(store).hosts).toEqual([host])
+  })
+
   it('reads what an older build wrote for pull requests, and takes the next write', () => {
     const raw = store.raw.prepare('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
     raw.run('railHidden', JSON.stringify(['pulls', 'config']), '')

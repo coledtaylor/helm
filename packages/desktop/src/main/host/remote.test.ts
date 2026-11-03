@@ -6,7 +6,7 @@ import type { LocalHost, PageBridge } from './launcher'
 import type { HelmPage } from './page-link'
 import { createPageLinks, routePageLinks } from './page-link'
 import { createRemoteHostLinks, type RemoteHostLinksDeps } from './remote'
-import { RemoteHostError, type OnPairing } from './remote-launcher'
+import { KEY_CHANGED_LINE, RemoteHostError } from './remote-launcher'
 
 const BUILD: RemoteHost = { id: 'h-build', name: 'build-box', transport: { kind: 'ssh', target: 'me@build-box' } }
 const LAB: RemoteHost = {
@@ -19,7 +19,6 @@ const FAR: RemoteHost = { id: 'h-far', name: 'far-away', transport: { kind: 'ssh
 /** A start the test settles by hand, as a bridge that is still reaching its host. */
 interface PendingStart {
   host: RemoteHost
-  pairing: OnPairing
   resolve: (local: LocalHost) => void
   reject: (error: Error) => void
 }
@@ -43,9 +42,9 @@ function world() {
   let nextTimer = 1
   let nextConnection = 1
   const deps: RemoteHostLinksDeps = {
-    start: (host, pairing) =>
+    start: (host) =>
       new Promise<LocalHost>((resolve, reject) => {
-        starts.push({ host, pairing, resolve, reject })
+        starts.push({ host, resolve, reject })
       }),
     openBridge: (host) => {
       let end: (why: string | null) => void = () => undefined
@@ -201,35 +200,44 @@ describe('the links to hosts on other computers', () => {
     expect(second.payloads('host:quit')).toEqual([])
   })
 
-  it('S10: shows the pairing code while this device waits to be approved there, then connected', async () => {
+  it('S4: a host added is connected at its first connection, with nothing shown or asked meanwhile', async () => {
     const w = world()
     w.links.sync([BUILD])
-    w.startFor(BUILD).pairing('7Q2K-9XZD', null)
-    expect(w.state(BUILD)).toEqual({ state: 'pairing', code: '7Q2K-9XZD' })
-    expect(w.told.at(-1)).toEqual({ 'h-build': { state: 'pairing', code: '7Q2K-9XZD' } })
-
-    // Someone ran `floti devices approve 7Q2K-9XZD` there.
+    // Nothing is heard while the first connection is made: no code, no approval.
+    expect(w.state(BUILD)).toBeUndefined()
+    expect(w.told).toEqual([])
     w.startFor(BUILD).resolve(fakeLocalHost(hostWith(), false))
     await settle()
     expect(w.state(BUILD)).toEqual({ state: 'connected' })
-    // The code went to the window only.
-    expect(w.log.join('\n')).not.toContain('7Q2K-9XZD')
+    expect(w.told.at(-1)).toEqual({ 'h-build': { state: 'connected' } })
   })
 
-  it('S6: shows why the one-step approval failed beside the code, and the role the host says once connected', async () => {
+  it('S7: a host that proves another key than the one pinned is keyChanged, and stays so while it keeps proving it', async () => {
     const w = world()
-    w.links.sync([{ ...BUILD, role: 'admin' }])
-    w.startFor(BUILD).pairing('7Q2K-9XZD', 'floti devices: permission denied')
-    expect(w.state(BUILD)).toEqual({
-      state: 'pairing',
-      code: '7Q2K-9XZD',
-      approvalFailed: 'floti devices: permission denied'
-    })
-    const build = hostWith()
-    Object.assign(build.welcome, { role: 'admin' })
-    w.startFor(BUILD).resolve(fakeLocalHost(build, false))
+    w.links.sync([BUILD])
+    w.startFor(BUILD).reject(new RemoteHostError(KEY_CHANGED_LINE, null, true))
     await settle()
-    expect(w.state(BUILD)).toEqual({ state: 'connected', role: 'admin' })
+    expect(w.state(BUILD)).toEqual({ state: 'keyChanged' })
+    w.fireTimers()
+    w.startFor(BUILD).reject(new RemoteHostError(KEY_CHANGED_LINE, null, true))
+    await settle()
+    expect(w.state(BUILD)).toEqual({ state: 'keyChanged' })
+    expect(w.forgotten).toEqual([])
+  })
+
+  it('S8: removing a host and adding the same target again starts from no pin, and pins what the host proves then', async () => {
+    const w = world()
+    w.links.sync([BUILD])
+    w.startFor(BUILD).reject(new RemoteHostError(KEY_CHANGED_LINE, null, true))
+    await settle()
+    w.links.sync([])
+    // Its client folder, which holds the key it pinned, is removed.
+    await vi.waitFor(() => expect(w.forgotten).toEqual(['h-build']))
+    const again: RemoteHost = { ...BUILD, id: 'h-build-again' }
+    w.links.sync([again])
+    w.startFor(again).resolve(fakeLocalHost(hostWith(), false))
+    await settle()
+    expect(w.state(again)).toEqual({ state: 'connected' })
   })
 
   it('S10: Remove lets go of the host without a word to it, ends its page bridges and removes its client folder', async () => {

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_PAIRING_ROLE,
   describeTransport,
   formatCommandLine,
   LOCAL_HOST_KEY,
@@ -10,6 +9,7 @@ import {
   type RemoteHostDraft,
   splitCommandLine,
   sshTargetProblem,
+  storedRemoteHosts,
   transportFix,
   withoutRemoteHost
 } from './hosts'
@@ -100,7 +100,6 @@ describe('remoteHostFromDraft', () => {
     via: 'ssh',
     target: '',
     command: '',
-    role: 'admin',
     ...patch
   })
   const existing: RemoteHost[] = [{ id: 'a', name: 'build-box', transport: { kind: 'ssh', target: 'build-box' } }]
@@ -108,27 +107,50 @@ describe('remoteHostFromDraft', () => {
   it('takes the ssh target as typed, and as the name when none is given', () => {
     expect(remoteHostFromDraft(draft({ target: '  you@lab  ' }), existing, 'b')).toEqual({
       ok: true,
-      host: { id: 'b', name: 'you@lab', transport: { kind: 'ssh', target: 'you@lab' }, role: 'admin' }
+      host: {
+        id: 'b',
+        name: 'you@lab',
+        transport: { kind: 'ssh', target: 'you@lab' }
+      }
     })
   })
 
   it('splits a command into its program and arguments', () => {
     expect(remoteHostFromDraft(draft({ name: 'wsl', via: 'command', command: 'wsl.exe -d "Ubuntu Dev" --' }), [], 'b')).toEqual({
       ok: true,
-      host: { id: 'b', name: 'wsl', transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu Dev', '--'] }, role: 'admin' }
+      host: {
+        id: 'b',
+        name: 'wsl',
+        transport: {
+          kind: 'command',
+          program: 'wsl.exe',
+          args: ['-d', 'Ubuntu Dev', '--']
+        }
+      }
     })
   })
 
-  it('S6: keeps the role this PC is approved with as it pairs, Admin unless Operator is picked', () => {
-    expect(DEFAULT_PAIRING_ROLE).toBe('admin')
-    expect(remoteHostFromDraft(draft({ target: 'lab', role: 'operator' }), [], 'b')).toEqual({
+  it('S5: adds a host with its name and how it is reached, and no role', () => {
+    const added = remoteHostFromDraft(draft({ target: 'lab' }), [], 'b')
+    expect(added).toEqual({
       ok: true,
-      host: { id: 'b', name: 'lab', transport: { kind: 'ssh', target: 'lab' }, role: 'operator' }
+      host: { id: 'b', name: 'lab', transport: { kind: 'ssh', target: 'lab' } }
     })
-    const host = { id: 'b', name: 'lab', transport: { kind: 'ssh', target: 'lab' } }
-    expect(remoteHostsProblem([{ ...host, role: 'operator' }])).toBeNull()
-    expect(remoteHostsProblem([host])).toBeNull()
-    expect(remoteHostsProblem([{ ...host, role: 'viewer' }])).toContain('expected admin or operator')
+    expect(added.ok && 'role' in added.host).toBe(false)
+  })
+
+  it('S5: a host an earlier version saved with a role loads with the role dropped', () => {
+    const host = {
+      id: 'b',
+      name: 'lab',
+      transport: { kind: 'ssh', target: 'lab' }
+    }
+    const stored = [{ ...host, role: 'operator' }, { ...host, id: 'c', name: 'other', role: 'viewer' }, { ...host, id: 'd', name: 'plain' }]
+    const loaded = storedRemoteHosts(stored)
+    expect(loaded).toEqual([host, { ...host, id: 'c', name: 'other' }, { ...host, id: 'd', name: 'plain' }])
+    expect(remoteHostsProblem(loaded)).toBeNull()
+    // A value that is not a host list is left for the validator to name.
+    expect(storedRemoteHosts('nonsense')).toBe('nonsense')
   })
 
   it('says what to fix rather than adding a host it could not use', () => {

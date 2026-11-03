@@ -140,7 +140,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onHostQuitChange: vi.fn(),
     hostInstall: { check: vi.fn(async () => ({ kind: 'ready' as const, found: { version: '1.2.0', protocol: '1.0' } })), install: vi.fn(), cancel: vi.fn() },
     onHostInstalled: vi.fn(),
-    devices: { hosts: [], onApprove: vi.fn(), onRevoke: vi.fn() },
+    devices: { hosts: [], onDisconnect: vi.fn() },
     ...overrides
   }
   const view = render(<SettingsPane {...props} />)
@@ -680,7 +680,7 @@ describe('SettingsPane', () => {
     expect(added?.id).not.toBe('local')
   })
 
-  it('fills each host’s connection slot: connected, retrying, the pairing line to run there, and the last line ssh wrote with its fix', () => {
+  it('fills each host’s connection slot: connected, retrying, a changed key, and the last line ssh wrote with its fix', () => {
     const host = (id: string, connection: SettingsHost['connection']): SettingsHost => ({
       host: { id, name: id, transport: { kind: 'ssh', target: `you@${id}` } },
       quit: 'keep',
@@ -692,59 +692,102 @@ describe('SettingsPane', () => {
       hosts: [
         host('up', { state: 'connected' }),
         host('down', { state: 'retrying' }),
-        host('new', { state: 'pairing', code: 'K7Q-4MD' }),
-        host('locked', { state: 'failed', lastLine: 'you@locked: Permission denied (publickey,password).' })
+        host('moved', { state: 'keyChanged' }),
+        host('locked', {
+          state: 'failed',
+          lastLine: 'you@locked: Permission denied (publickey,password).'
+        })
       ]
     })
     expect(screen.getByRole('group', { name: 'up' }).textContent).toContain('Connected')
     expect(screen.getByRole('group', { name: 'down' }).textContent).toContain('Not connected, retrying')
-    expect(
-      within(screen.getByRole('group', { name: 'new' })).getByText('floti devices approve K7Q-4MD').className
-    ).toContain('font-mono')
+    expect(screen.getByRole('group', { name: 'moved' }).textContent).toContain('Key changed')
     const locked = screen.getByRole('group', { name: 'locked' })
     expect(within(locked).getByText('you@locked: Permission denied (publickey,password).')).toBeTruthy()
     expect(locked.textContent).toContain('Sign in with ssh you@locked in a terminal, then try again.')
   })
 
-  it('S6: adds a host with the role this PC is approved with there, Admin unless Operator is picked', async () => {
-    const { props } = renderPane({ section: 'hosts', sessionsInHost: true, hosts: [] })
+  it('S4: adds a host by its ssh target alone: no role, code or approval is asked', async () => {
+    const { props } = renderPane({
+      section: 'hosts',
+      sessionsInHost: true,
+      hosts: []
+    })
     await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
     const form = screen.getByRole('form', { name: 'Add a host' })
-    const roles = within(form).getByRole('radiogroup', { name: "This PC's role there" })
-    expect(within(roles).getAllByRole('radio').map((radio) => radio.textContent)).toEqual(['Admin', 'Operator'])
-    expect(within(roles).getByRole('radio', { name: 'Admin' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(form).queryByRole('radiogroup', { name: /role/i })).toBeNull()
+    expect(form.textContent).not.toMatch(/role|approve|pair|code/i)
     await userEvent.type(within(form).getByRole('textbox', { name: 'ssh target' }), 'you@lab')
     await userEvent.click(within(form).getByRole('button', { name: 'Add host' }))
-    expect(props.onAddHost).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'you@lab', role: 'admin' }))
-
-    await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
-    const again = screen.getByRole('form', { name: 'Add a host' })
-    await userEvent.click(within(again).getByRole('radio', { name: 'Operator' }))
-    await userEvent.type(within(again).getByRole('textbox', { name: 'ssh target' }), 'you@build')
-    await userEvent.click(within(again).getByRole('button', { name: 'Add host' }))
-    expect(props.onAddHost).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'you@build', role: 'operator' }))
+    const added = vi.mocked(props.onAddHost).mock.lastCall?.[0]
+    expect(added).toMatchObject({
+      name: 'you@lab',
+      transport: { kind: 'ssh', target: 'you@lab' }
+    })
+    expect(added).not.toHaveProperty('role')
   })
 
-  it('S6: lists a connected host with its role, and a failed one-step approval beside the code', () => {
-    const transport = { kind: 'ssh' as const, target: 'lab' }
+  it('S5: each host shows its name, target, connection state and quit choice, with no role, role picker, pairing code or approve step', () => {
+    const transport = { kind: 'ssh' as const, target: 'you@lab' }
     renderPane({
       section: 'hosts',
       sessionsInHost: true,
       hosts: [
-        { host: { id: 'up', name: 'up', transport }, quit: 'keep', connection: { state: 'connected', role: 'operator' } },
         {
-          host: { id: 'new', name: 'new', transport },
-          quit: 'keep',
-          connection: { state: 'pairing', code: 'K7Q-4MD', approvalFailed: 'floti devices: permission denied' }
+          host: { id: 'up', name: 'lab', transport },
+          quit: 'end',
+          connection: { state: 'connected' }
         }
       ]
     })
-    const up = screen.getByRole('group', { name: 'up' })
+    const up = screen.getByRole('group', { name: 'lab' })
+    expect(up.textContent).toContain('lab')
+    expect(up.querySelector('[data-settings-host-reached]')?.textContent).toBe('ssh you@lab')
     expect(up.textContent).toContain('Connected')
-    expect(up.querySelector('[data-settings-host-role]')?.textContent).toBe('Operator')
-    const pairing = screen.getByRole('group', { name: 'new' })
-    expect(within(pairing).getByText('floti devices: permission denied')).toBeTruthy()
-    expect(within(pairing).getByText('floti devices approve K7Q-4MD')).toBeTruthy()
+    expect(up.querySelector('[data-settings-host-quit]')?.getAttribute('data-settings-host-quit')).toBe('end')
+    expect(up.textContent).not.toMatch(/admin|operator|viewer|role|approve|pairing|code/i)
+  })
+
+  it('S7: says a host’s key changed, naming the host, until it is removed and added again', () => {
+    const transport = { kind: 'ssh' as const, target: 'build-box' }
+    renderPane({
+      section: 'hosts',
+      sessionsInHost: true,
+      hosts: [
+        {
+          host: { id: 'b', name: 'build-box', transport },
+          quit: 'keep',
+          connection: { state: 'keyChanged' }
+        }
+      ]
+    })
+    const box = screen.getByRole('group', { name: 'build-box' })
+    expect(box.getAttribute('data-settings-host-connection')).toBe('keyChanged')
+    expect(box.textContent).toContain('Key changed')
+    const said = box.querySelector('[data-settings-host-key-changed]')?.textContent ?? ''
+    expect(said).toContain('build-box’s key changed')
+    expect(said).toContain('remove build-box and add it again')
+    expect(within(box).getByRole('button', { name: 'Remove' })).toBeTruthy()
+  })
+
+  it('S8: Remove asks to forget the host on this PC and says its sessions keep running there', async () => {
+    const transport = { kind: 'ssh' as const, target: 'build-box' }
+    const { props } = renderPane({
+      section: 'hosts',
+      sessionsInHost: true,
+      hosts: [
+        {
+          host: { id: 'b', name: 'build-box', transport },
+          quit: 'keep',
+          connection: { state: 'connected' }
+        }
+      ]
+    })
+    expect(group('Hosts').textContent).toContain('Its sessions keep running there')
+    await userEvent.click(
+      within(screen.getByRole('group', { name: 'build-box' })).getByRole('button', { name: 'Remove' })
+    )
+    expect(props.onRemoveHost).toHaveBeenCalledWith('b')
   })
 
   it('stops this PC’s host from Settings through the question, and only while there is one', async () => {
