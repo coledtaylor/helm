@@ -10,6 +10,11 @@ export const MAX_FRAME_LEN = 16777216;
 export const DEFAULT_INITIAL_CREDIT = 262144;
 
 /**
+ * What came of an admin action.
+ */
+export type AdminOutcome = "done" | "refusedForRole" | "refusedForPresence";
+
+/**
  * What a browser tool call came to.
  */
 export type AgentBrowserOutcome = { "status": "done", value: unknown, } | { "status": "failed", message: string, };
@@ -309,6 +314,164 @@ export type ArtifactHeader = { name: string, value: string, };
 export type ArtifactLink = { url: string, token: string, };
 
 /**
+ * A device holding at least one open connection to the host.
+ */
+export type AttachedDevice = { 
+/**
+ * Its key's fingerprint.
+ */
+fingerprint: string, 
+/**
+ * The name it was paired under.
+ */
+name: string, 
+/**
+ * The role it holds now.
+ */
+role: DeviceRole, 
+/**
+ * Whether it is connected from another computer, through `floti
+ * connect`, rather than on the host's own.
+ */
+away: boolean, 
+/**
+ * When its first open connection was welcomed, as RFC 3339 text.
+ */
+since: string, 
+/**
+ * How many connections it holds open: its window, its other pages and
+ * its sessions' screens each hold one.
+ */
+connections: number, };
+
+/**
+ * Every device attached to the host now.
+ */
+export type AttachedDevices = { 
+/**
+ * Each attached device once, however many connections it holds, in the
+ * order they attached.
+ */
+devices: Array<AttachedDevice>, };
+
+/**
+ * Who asked for what an audit entry records.
+ */
+export type AuditActor = { "kind": "device", fingerprint: string, name: string, } | { "kind": "hostShell" };
+
+/**
+ * The device an audit entry is about.
+ */
+export type AuditDevice = { 
+/**
+ * Its key's fingerprint.
+ */
+fingerprint: string, 
+/**
+ * The name it gave, or was paired under; absent where none is known.
+ */
+name?: string, 
+/**
+ * Its role then; absent where it has none, such as a device still
+ * asking to pair.
+ */
+role?: DeviceRole, };
+
+/**
+ * One entry of the host's audit log. Entries are only ever added: nothing
+ * the host serves edits or removes one.
+ *
+ * An entry holds only these fields. It never carries a key, a pairing or
+ * enrolment code, a request's contents, a session's input or output, a
+ * prompt, a transcript, file, note or config text, or a plugin secret. A
+ * device's name, as the device gave it, is its one free text.
+ */
+export type AuditEntry = { 
+/**
+ * Its place in the log, counting up from 1 across the host's restarts;
+ * what `devices:audit`'s `before` pages by.
+ */
+number: number, 
+/**
+ * When it happened, as RFC 3339 text.
+ */
+at: string, 
+/**
+ * What happened.
+ */
+event: AuditEvent, };
+
+/**
+ * What an audit entry records. `away` says whether the connection it is
+ * about came from another computer, through `floti connect`.
+ */
+export type AuditEvent = { "kind": "connected", device: AuditDevice, away: boolean, } | { "kind": "disconnected", device: AuditDevice, away: boolean, } | { "kind": "refused", 
+/**
+ * Why, as one of the host's fixed sentences ("An unknown key", "The
+ * handshake ran out of time"); never anything the connection sent.
+ */
+reason: string, 
+/**
+ * The key's fingerprint, where the handshake proved one.
+ */
+fingerprint?: string, away: boolean, } | { "kind": "pairingAsked", device: AuditDevice, away: boolean, } | { "kind": "pairingApproved", device: AuditDevice, by: AuditActor, 
+/**
+ * Whether the approver was connected from another computer.
+ */
+away: boolean, } | { "kind": "pairingEnded", device: AuditDevice, why: PairingEnd, } | { "kind": "enrolled", device: AuditDevice, } | { "kind": "roleChanged", device: AuditDevice, from: DeviceRole, to: DeviceRole, by: AuditActor, 
+/**
+ * Whether the one who changed it was connected from another
+ * computer.
+ */
+away: boolean, } | { "kind": "revoked", device: AuditDevice, by: AuditActor, 
+/**
+ * Whether the one who revoked it was connected from another
+ * computer.
+ */
+away: boolean, } | { "kind": "presenceConfirmed", device: AuditDevice, away: boolean, } | { "kind": "adminAction", 
+/**
+ * The channel it was asked on, such as `plugins:add`.
+ */
+channel: string, 
+/**
+ * What the action does, as the host's fixed sentence ("Changing the
+ * host's settings"); never the request's contents.
+ */
+doing: string, by: AuditActor, 
+/**
+ * Whether the one who asked was connected from another computer.
+ */
+away: boolean, outcome: AdminOutcome, };
+
+/**
+ * A page of the audit log.
+ */
+export type AuditPage = { 
+/**
+ * Newest first.
+ */
+entries: Array<AuditEntry>, 
+/**
+ * Whether older entries remain, below the last one here.
+ */
+more: boolean, };
+
+/**
+ * Which page of the audit log to read.
+ */
+export type AuditQuery = { 
+/**
+ * Read the entries numbered below this one; absent, start from the
+ * newest. A page's last entry's `number` asks for the page after it.
+ */
+before?: number, 
+/**
+ * At most this many entries; absent, 50. The host answers at most 200
+ * whatever is asked.
+ */
+limit?: number, };
+
+/**
  * One backend the host can run, and the features it declares.
  */
 export type BackendDescriptor = { id: BackendId, 
@@ -543,6 +706,17 @@ export type CarryStatus = {
  * ISO 8601 time it finished, or null while it has not.
  */
 finishedAt: string | null, };
+
+export type ChangeDeviceRole = { 
+/**
+ * The device's key's fingerprint, as `devices:list` and `floti
+ * devices` give it.
+ */
+fingerprint: string, 
+/**
+ * The role it is to have.
+ */
+role: DeviceRole, };
 
 /**
  * What a project's `.claude/` folder holds, counted the way Claude Code
@@ -886,6 +1060,27 @@ label: string,
  * The arguments the host would launch it with.
  */
 args: Array<string>, };
+
+/**
+ * A device that has just attached.
+ */
+export type DeviceConnected = { 
+/**
+ * Its key's fingerprint.
+ */
+fingerprint: string, 
+/**
+ * The name it was paired under.
+ */
+name: string, role: DeviceRole, 
+/**
+ * Whether it came from another computer, through `floti connect`.
+ */
+away: boolean, 
+/**
+ * When its connection was welcomed, as RFC 3339 text.
+ */
+at: string, };
 
 export type DeviceListing = { paired: Array<PairedDevice>, waiting: Array<WaitingDevice>, };
 
@@ -1766,6 +1961,11 @@ export type PairingApproved = {
  * The role the device is paired with.
  */
 role: DeviceRole, };
+
+/**
+ * Why a request to pair ended without being approved.
+ */
+export type PairingEnd = "expired" | "withdrawn";
 
 export type PairingWaiting = { 
 /**
@@ -3441,9 +3641,11 @@ export interface RequestChannels {
   "content:wikilink": { request: WikilinkRequest; response: WikilinkTarget; capability: "files" };
   "content:write": { request: WriteConfigRequest; response: WriteConfigResult; capability: "files" };
   "devices:approve": { request: ApproveDevice; response: PairedDevice; capability: null };
+  "devices:audit": { request: AuditQuery; response: AuditPage; capability: null };
   "devices:list": { request: null; response: DeviceListing; capability: null };
   "devices:presence": { request: null; response: null; capability: null };
   "devices:revoke": { request: RevokeDevice; response: PairedDevice; capability: null };
+  "devices:role": { request: ChangeDeviceRole; response: PairedDevice; capability: null };
   "discovery:cached": { request: null; response: Array<CachedProject>; capability: null };
   "discovery:scan": { request: ScanRequest; response: DiscoveryResult; capability: null };
   "editor:highlight": { request: SourceToRender; response: EditorHighlight; capability: null };
@@ -3534,6 +3736,8 @@ export interface EventChannels {
   "agentPlugin:cancel": { event: AgentPluginCallCancel; snapshot: null; capability: null };
   "archive:changed": { event: ArchiveStats; snapshot: ArchiveStats; capability: null };
   "config:externalChange": { event: ConfigExternalChange; snapshot: null; capability: null };
+  "devices:attached": { event: AttachedDevices; snapshot: AttachedDevices; capability: null };
+  "devices:connected": { event: DeviceConnected; snapshot: null; capability: null };
   "discovery:updated": { event: DiscoveryResult; snapshot: DiscoveryResult | null; capability: null };
   "files:changed": { event: FilesChange; snapshot: null; capability: "files" };
   "git:updated": { event: { [key in string]?: GitState | null }; snapshot: { [key in string]?: GitState | null }; capability: null };
@@ -3612,9 +3816,13 @@ export const CHANNELS = [
   { name: "content:wikilink", kind: "request", capability: "files" },
   { name: "content:write", kind: "request", capability: "files" },
   { name: "devices:approve", kind: "request", capability: null },
+  { name: "devices:attached", kind: "event", capability: null },
+  { name: "devices:audit", kind: "request", capability: null },
+  { name: "devices:connected", kind: "event", capability: null },
   { name: "devices:list", kind: "request", capability: null },
   { name: "devices:presence", kind: "request", capability: null },
   { name: "devices:revoke", kind: "request", capability: null },
+  { name: "devices:role", kind: "request", capability: null },
   { name: "discovery:cached", kind: "request", capability: null },
   { name: "discovery:scan", kind: "request", capability: null },
   { name: "discovery:updated", kind: "event", capability: null },

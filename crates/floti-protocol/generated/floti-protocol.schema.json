@@ -1,5 +1,26 @@
 {
   "$defs": {
+    "AdminOutcome": {
+      "description": "What came of an admin action.",
+      "oneOf": [
+        {
+          "enum": [
+            "done"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "refusedForRole",
+          "description": "Refused: the device's role does not allow it.",
+          "type": "string"
+        },
+        {
+          "const": "refusedForPresence",
+          "description": "Refused: the device is connected from another computer and has not\nconfirmed its presence in the last five minutes.",
+          "type": "string"
+        }
+      ]
+    },
     "AgentBrowserOutcome": {
       "description": "What a browser tool call came to.",
       "oneOf": [
@@ -661,6 +682,480 @@
       ],
       "type": "object"
     },
+    "AttachedDevice": {
+      "description": "A device holding at least one open connection to the host.",
+      "properties": {
+        "away": {
+          "description": "Whether it is connected from another computer, through `floti\nconnect`, rather than on the host's own.",
+          "type": "boolean"
+        },
+        "connections": {
+          "description": "How many connections it holds open: its window, its other pages and\nits sessions' screens each hold one.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fingerprint": {
+          "description": "Its key's fingerprint.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name it was paired under.",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/DeviceRole",
+          "description": "The role it holds now."
+        },
+        "since": {
+          "description": "When its first open connection was welcomed, as RFC 3339 text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fingerprint",
+        "name",
+        "role",
+        "away",
+        "since",
+        "connections"
+      ],
+      "type": "object"
+    },
+    "AttachedDevices": {
+      "description": "Every device attached to the host now.",
+      "properties": {
+        "devices": {
+          "description": "Each attached device once, however many connections it holds, in the\norder they attached.",
+          "items": {
+            "$ref": "#/$defs/AttachedDevice"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "devices"
+      ],
+      "type": "object"
+    },
+    "AuditActor": {
+      "description": "Who asked for what an audit entry records.",
+      "oneOf": [
+        {
+          "description": "A paired device.",
+          "properties": {
+            "fingerprint": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "device",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fingerprint",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`floti devices`, run in a shell on the host's computer as the host's\nown OS user.",
+          "properties": {
+            "kind": {
+              "const": "hostShell",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuditDevice": {
+      "description": "The device an audit entry is about.",
+      "properties": {
+        "fingerprint": {
+          "description": "Its key's fingerprint.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name it gave, or was paired under; absent where none is known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeviceRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its role then; absent where it has none, such as a device still\nasking to pair."
+        }
+      },
+      "required": [
+        "fingerprint"
+      ],
+      "type": "object"
+    },
+    "AuditEntry": {
+      "description": "One entry of the host's audit log. Entries are only ever added: nothing\nthe host serves edits or removes one.\n\nAn entry holds only these fields. It never carries a key, a pairing or\nenrolment code, a request's contents, a session's input or output, a\nprompt, a transcript, file, note or config text, or a plugin secret. A\ndevice's name, as the device gave it, is its one free text.",
+      "properties": {
+        "at": {
+          "description": "When it happened, as RFC 3339 text.",
+          "type": "string"
+        },
+        "event": {
+          "$ref": "#/$defs/AuditEvent",
+          "description": "What happened."
+        },
+        "number": {
+          "description": "Its place in the log, counting up from 1 across the host's restarts;\nwhat `devices:audit`'s `before` pages by.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "number",
+        "at",
+        "event"
+      ],
+      "type": "object"
+    },
+    "AuditEvent": {
+      "description": "What an audit entry records. `away` says whether the connection it is\nabout came from another computer, through `floti connect`.",
+      "oneOf": [
+        {
+          "description": "A device attached: its first connection was welcomed. Its further\nconnections while attached add no entry.",
+          "properties": {
+            "away": {
+              "type": "boolean"
+            },
+            "device": {
+              "$ref": "#/$defs/AuditDevice"
+            },
+            "kind": {
+              "const": "connected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "away"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A device detached: its last open connection closed.",
+          "properties": {
+            "away": {
+              "type": "boolean"
+            },
+            "device": {
+              "$ref": "#/$defs/AuditDevice"
+            },
+            "kind": {
+              "const": "disconnected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "away"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A connection was refused and closed without a byte. A connection that\nclosed before sending anything is not recorded.",
+          "properties": {
+            "away": {
+              "type": "boolean"
+            },
+            "fingerprint": {
+              "description": "The key's fingerprint, where the handshake proved one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "refused",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why, as one of the host's fixed sentences (\"An unknown key\", \"The\nhandshake ran out of time\"); never anything the connection sent.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason",
+            "away"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A device the host does not know asked to pair. The code it was shown\nis never recorded.",
+          "properties": {
+            "away": {
+              "type": "boolean"
+            },
+            "device": {
+              "$ref": "#/$defs/AuditDevice"
+            },
+            "kind": {
+              "const": "pairingAsked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "away"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A request to pair was approved: `device` holds the role it was paired\nwith and `by` who approved it.",
+          "properties": {
+            "away": {
+              "description": "Whether the approver was connected from another computer.",
+              "type": "boolean"
+            },
+            "by": {
+              "$ref": "#/$defs/AuditActor"
+            },
+            "device": {
+              "$ref": "#/$defs/AuditDevice"
+            },
+            "kind": {
+              "const": "pairingApproved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "by",
+            "away"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A request to pair ended without being approved.",
+          "properties": {
+            "device": {
+              "$ref": "#/$defs/AuditDevice"
+            },
+            "kind": {
+              "const": "pairingEnded",
+              "type": "string"
+            },
+            "why": {
+              "$ref": "#/$defs/PairingEnd"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "why"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A device on the host's computer enrolled as the host's first admin.\nThe enrolment code is never recorded.",
+          "properties": {
+            "device": {
+              "$ref": "#/$defs/AuditDevice"
+            },
+            "kind": {
+              "const": "enrolled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "device"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A paired device's role was changed from `from` to `to`.",
+          "properties": {
+            "away": {
+              "description": "Whether the one who changed it was connected from another\ncomputer.",
+              "type": "boolean"
+            },
+            "by": {
+              "$ref": "#/$defs/AuditActor"
+            },
+            "device": {
+              "$ref": "#/$defs/AuditDevice"
+            },
+            "from": {
+              "$ref": "#/$defs/DeviceRole"
+            },
+            "kind": {
+              "const": "roleChanged",
+              "type": "string"
+            },
+            "to": {
+              "$ref": "#/$defs/DeviceRole"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "from",
+            "to",
+            "by",
+            "away"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A device was revoked, by an admin or by itself.",
+          "properties": {
+            "away": {
+              "description": "Whether the one who revoked it was connected from another\ncomputer.",
+              "type": "boolean"
+            },
+            "by": {
+              "$ref": "#/$defs/AuditActor"
+            },
+            "device": {
+              "$ref": "#/$defs/AuditDevice"
+            },
+            "kind": {
+              "const": "revoked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "by",
+            "away"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A device said the person at it had just confirmed it is them.",
+          "properties": {
+            "away": {
+              "type": "boolean"
+            },
+            "device": {
+              "$ref": "#/$defs/AuditDevice"
+            },
+            "kind": {
+              "const": "presenceConfirmed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "away"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An admin action was asked for, and done or refused. Listing devices\nand reading the audit log are not recorded.",
+          "properties": {
+            "away": {
+              "description": "Whether the one who asked was connected from another computer.",
+              "type": "boolean"
+            },
+            "by": {
+              "$ref": "#/$defs/AuditActor"
+            },
+            "channel": {
+              "description": "The channel it was asked on, such as `plugins:add`.",
+              "type": "string"
+            },
+            "doing": {
+              "description": "What the action does, as the host's fixed sentence (\"Changing the\nhost's settings\"); never the request's contents.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "adminAction",
+              "type": "string"
+            },
+            "outcome": {
+              "$ref": "#/$defs/AdminOutcome"
+            }
+          },
+          "required": [
+            "kind",
+            "channel",
+            "doing",
+            "by",
+            "away",
+            "outcome"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuditPage": {
+      "description": "A page of the audit log.",
+      "properties": {
+        "entries": {
+          "description": "Newest first.",
+          "items": {
+            "$ref": "#/$defs/AuditEntry"
+          },
+          "type": "array"
+        },
+        "more": {
+          "description": "Whether older entries remain, below the last one here.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "entries",
+        "more"
+      ],
+      "type": "object"
+    },
+    "AuditQuery": {
+      "description": "Which page of the audit log to read.",
+      "properties": {
+        "before": {
+          "description": "Read the entries numbered below this one; absent, start from the\nnewest. A page's last entry's `number` asks for the page after it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "At most this many entries; absent, 50. The host answers at most 200\nwhatever is asked.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "BackendDescriptor": {
       "description": "One backend the host can run, and the features it declares.",
       "properties": {
@@ -1268,6 +1763,23 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ChangeDeviceRole": {
+      "properties": {
+        "fingerprint": {
+          "description": "The device's key's fingerprint, as `devices:list` and `floti\ndevices` give it.",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/DeviceRole",
+          "description": "The role it is to have."
+        }
+      },
+      "required": [
+        "fingerprint",
+        "role"
+      ],
       "type": "object"
     },
     "ClaudeInventory": {
@@ -2515,6 +3027,38 @@
         "name",
         "label",
         "args"
+      ],
+      "type": "object"
+    },
+    "DeviceConnected": {
+      "description": "A device that has just attached.",
+      "properties": {
+        "at": {
+          "description": "When its connection was welcomed, as RFC 3339 text.",
+          "type": "string"
+        },
+        "away": {
+          "description": "Whether it came from another computer, through `floti connect`.",
+          "type": "boolean"
+        },
+        "fingerprint": {
+          "description": "Its key's fingerprint.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name it was paired under.",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/DeviceRole"
+        }
+      },
+      "required": [
+        "fingerprint",
+        "name",
+        "role",
+        "away",
+        "at"
       ],
       "type": "object"
     },
@@ -5316,6 +5860,21 @@
         "role"
       ],
       "type": "object"
+    },
+    "PairingEnd": {
+      "description": "Why a request to pair ended without being approved.",
+      "oneOf": [
+        {
+          "const": "expired",
+          "description": "It waited past its time.",
+          "type": "string"
+        },
+        {
+          "const": "withdrawn",
+          "description": "The device closed its connection, or asked again with a new request.",
+          "type": "string"
+        }
+      ]
     },
     "PairingWaiting": {
       "properties": {
@@ -10696,6 +11255,37 @@
     },
     {
       "capability": null,
+      "event": {
+        "$ref": "#/$defs/AttachedDevices"
+      },
+      "kind": "event",
+      "name": "devices:attached",
+      "snapshot": {
+        "$ref": "#/$defs/AttachedDevices"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "devices:audit",
+      "request": {
+        "$ref": "#/$defs/AuditQuery"
+      },
+      "response": {
+        "$ref": "#/$defs/AuditPage"
+      }
+    },
+    {
+      "capability": null,
+      "event": {
+        "$ref": "#/$defs/DeviceConnected"
+      },
+      "kind": "event",
+      "name": "devices:connected",
+      "snapshot": null
+    },
+    {
+      "capability": null,
       "kind": "request",
       "name": "devices:list",
       "request": {
@@ -10722,6 +11312,17 @@
       "name": "devices:revoke",
       "request": {
         "$ref": "#/$defs/RevokeDevice"
+      },
+      "response": {
+        "$ref": "#/$defs/PairedDevice"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "devices:role",
+      "request": {
+        "$ref": "#/$defs/ChangeDeviceRole"
       },
       "response": {
         "$ref": "#/$defs/PairedDevice"
