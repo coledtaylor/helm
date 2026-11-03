@@ -1,7 +1,12 @@
-import { useState, type JSX, type ReactNode } from 'react'
+import { useEffect, useEffectEvent, useRef, useState, type JSX, type ReactNode } from 'react'
 import {
   DEFAULT_PAIRING_ROLE,
+  describeInstallFailure,
   describeTransport,
+  type HostCheck,
+  type HostCheckTarget,
+  type InstallOffer,
+  type InstallOutcome,
   type DeviceRoleName,
   type HostTransport,
   type PairingRole,
@@ -29,7 +34,22 @@ import { Action, Divider, Group, Select } from './SettingsKit'
  * written through `settings:write`. Removing a host forgets it here and ends
  * nothing on it. Where each link stands is the desktop's to say
  * (`connection`); null while it has said nothing.
+ *
+ * Adding a host checks its computer first, through the same login and in
+ * batch mode, and adds it only once floti there can talk to this Helm. When
+ * floti is missing or too old there, the form says what installing or
+ * updating it would do and where, and does it only after the user's yes; a
+ * host already added whose floti is too old or missing offers the same.
+ * Every failure shows the last line written there, unedited, with the fix.
  */
+
+/** What Settings > Hosts asks the desktop to check, install and cancel on a host's computer. */
+export interface HostInstallActions {
+  check: (target: HostCheckTarget) => Promise<HostCheck>
+  /** Does what the check with `id` offered, for the host whose id is `host`. */
+  install: (id: string, host: string) => Promise<InstallOutcome>
+  cancel: (id: string) => void
+}
 
 /** One remote host as Settings > Hosts draws it. */
 export interface SettingsHost {
@@ -50,13 +70,22 @@ export interface HostsSettingsProps {
   /** Whether the add form is open; the page's Add a host… button opens it. */
   adding: boolean
   onAddingChange: (adding: boolean) => void
+  install: HostInstallActions
+  /** Floti was installed or updated on host `id`, at `floti` there. */
+  onInstalled: (id: string, floti: string) => void
+  /** Starts updating that host's floti, as its Update floti button does: from the sidebar. */
+  updateRequest?: { id: string; nonce: number } | null | undefined
 }
 
 const CONNECTION_CHIP: Record<RemoteHostConnection['state'], { tone: ChipTone; label: string }> = {
   connected: { tone: 'success', label: 'Connected' },
   retrying: { tone: 'warn', label: 'Not connected, retrying' },
   pairing: { tone: 'warn', label: 'Not paired' },
-  failed: { tone: 'danger', label: 'Cannot connect' }
+  failed: { tone: 'danger', label: 'Cannot connect' },
+  missing: { tone: 'warn', label: 'floti not found' },
+  tooOld: { tone: 'warn', label: 'floti too old' },
+  newer: { tone: 'warn', label: 'Newer floti' },
+  startsAtSignIn: { tone: 'neutral', label: 'Starts at next sign-in' }
 }
 
 export function HostsSettings({
@@ -65,7 +94,10 @@ export function HostsSettings({
   onRemove,
   onQuitChange,
   adding,
-  onAddingChange
+  onAddingChange,
+  install,
+  onInstalled,
+  updateRequest = null
 }: HostsSettingsProps): JSX.Element {
   return (
     <Group
@@ -77,6 +109,7 @@ export function HostsSettings({
         <>
           <AddHostForm
             hosts={hosts.map((entry) => entry.host)}
+            install={install}
             onAdd={(host) => {
               onAdd(host)
               onAddingChange(false)
@@ -94,7 +127,14 @@ export function HostsSettings({
       {hosts.map((entry, index) => (
         <div key={entry.host.id}>
           {index > 0 && <Divider />}
-          <HostRow entry={entry} onRemove={onRemove} onQuitChange={onQuitChange} />
+          <HostRow
+            entry={entry}
+            onRemove={onRemove}
+            onQuitChange={onQuitChange}
+            install={install}
+            onInstalled={onInstalled}
+            updateRequest={updateRequest?.id === entry.host.id ? updateRequest.nonce : null}
+          />
         </div>
       ))}
       {hosts.length > 0 && (
@@ -109,14 +149,31 @@ export function HostsSettings({
 function HostRow({
   entry,
   onRemove,
-  onQuitChange
+  onQuitChange,
+  install,
+  onInstalled,
+  updateRequest
 }: {
   entry: SettingsHost
   onRemove: (id: string) => void
   onQuitChange: (id: string, choice: QuitSessions) => void
+  install: HostInstallActions
+  onInstalled: (id: string, floti: string) => void
+  /** Changes each time the sidebar asks to update this host's floti. */
+  updateRequest: number | null
 }): JSX.Element {
   const { host, quit, connection } = entry
   const chip = connection === null ? null : CONNECTION_CHIP[connection.state]
+  const flow = useInstallFlow(install)
+  const startUpdate = (): void =>
+    flow.start({ host: host.id }, host, ({ floti }) => {
+      if (floti !== undefined) onInstalled(host.id, floti)
+    })
+  const requested = useEffectEvent(startUpdate)
+  useEffect(() => {
+    if (updateRequest !== null) requested()
+  }, [updateRequest])
+  const offersUpdate = connection?.state === 'tooOld' || connection?.state === 'missing'
   return (
     <div
       data-settings-host={host.id}
@@ -144,6 +201,7 @@ function HostRow({
         {describeTransport(host.transport)}
       </p>
       {connection !== null && <ConnectionDetail connection={connection} host={host} />}
+      {flow.panel !== null && <div className="mt-2">{flow.panel}</div>}
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
         <span className="text-[12px] text-fg-muted">When you quit</span>
         <Select
@@ -156,6 +214,11 @@ function HostRow({
           <option value="keep">Keep them running</option>
         </Select>
         <span className="flex-1" />
+        {offersUpdate && flow.panel === null && (
+          <Action primary data-settings-host-update={host.id} onClick={startUpdate}>
+            {connection?.state === 'missing' ? 'Install floti' : 'Update floti'}
+          </Action>
+        )}
         <Action data-settings-host-remove={host.id} onClick={() => onRemove(host.id)}>
           Remove
         </Action>
@@ -193,7 +256,281 @@ function ConnectionDetail({ connection, host }: { connection: RemoteHostConnecti
       </div>
     )
   }
+  if (connection.state === 'missing') {
+    return (
+      <div data-settings-host-missing className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
+        <p className="font-mono text-[11px] break-all text-fg select-text">{connection.lastLine}</p>
+        <p className="mt-1">
+          {host.name}’s login has no floti to run. Install floti there, over the same login, with no admin rights.
+        </p>
+      </div>
+    )
+  }
+  if (connection.state === 'tooOld') {
+    return (
+      <p data-settings-host-too-old className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
+        {host.name}’s floti is too old for this Helm: it speaks protocol{' '}
+        <span className="font-mono text-fg">{connection.host}</span>, and this Helm speaks{' '}
+        <span className="font-mono text-fg">{connection.client}</span>. Update floti there.
+      </p>
+    )
+  }
+  if (connection.state === 'newer') {
+    return (
+      <p data-settings-host-newer className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
+        {host.name} runs a newer floti than this Helm: it speaks protocol{' '}
+        <span className="font-mono text-fg">{connection.host}</span>, and this Helm speaks{' '}
+        <span className="font-mono text-fg">{connection.client}</span>. Update Helm on this PC, then it connects.
+      </p>
+    )
+  }
+  if (connection.state === 'startsAtSignIn') {
+    return (
+      <p data-settings-host-starts-at-sign-in className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
+        floti is installed on {host.name}. Nobody is signed in there, so its host starts at the next sign-in, and Helm
+        connects then.
+      </p>
+    )
+  }
   return null
+}
+
+// ---------------------------------------------------------------------------
+// Checking a host's computer, and installing or updating floti there
+// ---------------------------------------------------------------------------
+
+type FlowStage =
+  | { step: 'checking'; transport: HostTransport | null }
+  | { step: 'offer'; id: string; host: string; offer: InstallOffer }
+  | { step: 'working'; offer: InstallOffer }
+  | { step: 'problem'; title: string; line: string | null; fix: string }
+
+interface InstallFlow {
+  /** What to draw for where the flow stands, or null when it is not running. */
+  panel: ReactNode
+  /**
+   * Checks `target`'s computer. With floti ready there it calls `done` with
+   * nothing installed; otherwise it shows the offer and, on a yes, installs
+   * for host `id` and calls `done` with the path it installed at.
+   */
+  start: (target: HostCheckTarget, host: RemoteHost, done: (outcome: { floti: string | undefined }) => void) => void
+}
+
+/**
+ * The check, the offer and the install, as one small state machine shared by
+ * the add form and a host's row: nothing is copied to or run on that computer
+ * until the offer's button is pressed, and Cancel forgets the offer.
+ */
+function useInstallFlow(actions: HostInstallActions): InstallFlow {
+  const [stage, setStage] = useState<FlowStage | null>(null)
+  // The host the flow runs for, set as it starts.
+  const [who, setWho] = useState<RemoteHost | null>(null)
+  const name = who?.name ?? ''
+  const live = useRef(true)
+  useEffect(() => {
+    live.current = true
+    return () => {
+      live.current = false
+    }
+  }, [])
+  const done = useRef<(outcome: { floti: string | undefined }) => void>(() => undefined)
+  const show = (next: FlowStage | null): void => {
+    if (live.current) setStage(next)
+  }
+
+  const checked = (check: HostCheck, host: RemoteHost): void => {
+    const { name, id, transport } = host
+    if (check.kind === 'ready') {
+      show(null)
+      done.current({ floti: undefined })
+    } else if (check.kind === 'offer') {
+      show({ step: 'offer', id: check.id, host: id, offer: check.offer })
+    } else if (check.kind === 'newer') {
+      show({
+        step: 'problem',
+        title: `${name}’s floti is newer than this Helm`,
+        line: `${name} runs floti ${check.found.version}, which speaks protocol ${check.found.protocol ?? 'unknown'}; this Helm speaks ${check.ours}.`,
+        fix: 'Update Helm on this PC, then try again. Nothing was added.'
+      })
+    } else if (check.kind === 'noBuild') {
+      show({
+        step: 'problem',
+        title: `There is no floti Helm can install on ${name}`,
+        line: check.reason,
+        fix: `Nothing was installed or added: that computer (${check.system.label}) can’t be a host yet.`
+      })
+    } else {
+      show({
+        step: 'problem',
+        title: `Helm could not check ${name}`,
+        line: check.lastLine,
+        fix: transportFix(transport)
+      })
+    }
+  }
+
+  const start: InstallFlow['start'] = (target, host, then) => {
+    done.current = then
+    setWho(host)
+    show({ step: 'checking', transport: host.transport })
+    actions.check(target).then(
+      (check) => checked(check, host),
+      (error: unknown) =>
+        show({
+          step: 'problem',
+          title: `Helm could not check ${host.name}`,
+          line: (error as Error).message,
+          fix: 'Try again.'
+        })
+    )
+  }
+
+  const cancel = (): void => {
+    if (stage?.step === 'offer') actions.cancel(stage.id)
+    show(null)
+  }
+
+  const confirm = (): void => {
+    if (stage?.step !== 'offer') return
+    const { id, host, offer } = stage
+    show({ step: 'working', offer })
+    actions.install(id, host).then(
+      (outcome) => {
+        if (outcome.ok) {
+          show(null)
+          done.current({ floti: outcome.floti })
+          return
+        }
+        const words = describeInstallFailure(outcome.step, name, offer.folder)
+        show({ step: 'problem', title: words.title, line: outcome.lastLine, fix: words.fix })
+      },
+      (error: unknown) =>
+        show({
+          step: 'problem',
+          title: `Installing floti on ${name} failed`,
+          line: (error as Error).message,
+          fix: 'Try again.'
+        })
+    )
+  }
+
+  let panel: ReactNode = null
+  if (stage?.step === 'checking') {
+    panel = (
+      <p data-settings-host-checking className="text-[11.5px] leading-[1.5] text-fg-muted">
+        Checking {name}: asking it through{' '}
+        <span className="font-mono">{stage.transport === null ? 'its login' : describeTransport(stage.transport)}</span>,
+        in batch mode, whether floti is there and which version. Nothing is changed there.
+      </p>
+    )
+  } else if (stage?.step === 'offer') {
+    panel = <OfferPanel name={name} offer={stage.offer} onCancel={cancel} onConfirm={confirm} />
+  } else if (stage?.step === 'working') {
+    panel = (
+      <p data-settings-host-working className="text-[11.5px] leading-[1.5] text-fg-muted">
+        {stage.offer.action === 'install' ? 'Installing' : 'Updating'} floti {stage.offer.version} on {name}…
+      </p>
+    )
+  } else if (stage?.step === 'problem') {
+    panel = (
+      <div
+        role="alert"
+        data-settings-host-problem
+        className="flex flex-col gap-1 rounded-well border border-border bg-surface-sunken p-3"
+      >
+        <p className="text-[12.5px] text-danger">{stage.title}</p>
+        {stage.line !== null && stage.line !== '' && (
+          <p data-settings-host-problem-line className="font-mono text-[11px] break-all text-fg select-text">
+            {stage.line}
+          </p>
+        )}
+        {stage.fix !== '' && <p className="text-[11.5px] leading-[1.5] text-fg-muted">{stage.fix}</p>}
+        <div className="mt-1 flex gap-2">
+          <Action data-settings-host-problem-back onClick={() => show(null)}>
+            Back
+          </Action>
+        </div>
+      </div>
+    )
+  }
+  return { panel, start }
+}
+
+const sessionsWord = (n: number): string => `${String(n)} ${n === 1 ? 'session' : 'sessions'}`
+
+/** What installing or updating floti on a host's computer would do, and where, before anything is done. */
+function OfferPanel({
+  name,
+  offer,
+  onCancel,
+  onConfirm
+}: {
+  name: string
+  offer: InstallOffer
+  onCancel: () => void
+  onConfirm: () => void
+}): JSX.Element {
+  const { system, found, action, how, version, folder, sessions } = offer
+  const update = action === 'update'
+  const button = update
+    ? sessions !== null && sessions > 0
+      ? `Update floti on ${name}, ending ${sessionsWord(sessions)}`
+      : `Update floti on ${name}`
+    : `Install on ${name}`
+  return (
+    <div
+      data-settings-host-offer={action}
+      className="flex flex-col gap-2 rounded-well border border-border bg-surface-sunken p-3"
+    >
+      <p className="text-[12.5px] text-fg">{update ? `Update floti on ${name}?` : `Install floti on ${name}?`}</p>
+      <p className="text-[11.5px] leading-[1.5] text-fg-muted">
+        {update
+          ? `${name} has floti ${found?.version ?? ''}, too old for this Helm to talk to. Helm can update it to ${version} now, as you, with no admin rights.`
+          : `${name} answers, but floti is not installed there. Helm can install it now, as you, with no admin rights.`}
+      </p>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-fg-muted">
+        <span className="text-fg">{name}</span>
+        <span data-settings-host-offer-system>{system.label}</span>
+        <span data-settings-host-offer-found>
+          {found === null
+            ? 'floti not found'
+            : `floti ${found.version}${found.protocol !== null ? ` · protocol ${found.protocol}` : ''}`}
+        </span>
+      </div>
+      <p className="text-[11.5px] text-fg-muted">What it does on {name}</p>
+      <ul data-settings-host-offer-steps className="list-disc pl-4 text-[11.5px] leading-[1.5] text-fg">
+        {update && (
+          <li>
+            {sessions === 0
+              ? 'Stops the floti host there for the update; no session is running there'
+              : `Stops the floti host there for the update, ending ${sessions === null ? 'the sessions it runs' : sessionsWord(sessions)}; they are offered back with claude --resume when it starts again`}
+          </li>
+        )}
+        <li>
+          {how === 'copy'
+            ? `Copies this PC’s floti ${version} over the same login and checks its SHA-256 there`
+            : `Downloads floti ${version} for ${system.label} from its release and checks the SHA-256`}
+        </li>
+        <li>
+          Puts it in <span className="font-mono">{folder}</span>
+        </li>
+        <li>Runs floti setup: the host starts now, and again at each sign-in</li>
+      </ul>
+      {how === 'download' && (
+        <p className="text-[11px] leading-[1.5] text-fg-subtle">
+          This PC has no floti for {system.label}, so {name} fetches its own. This PC sends only to {name}.
+        </p>
+      )}
+      <div className="mt-1 flex gap-2">
+        <Action data-settings-host-offer-cancel onClick={onCancel}>
+          Cancel
+        </Action>
+        <Action primary data-settings-host-install onClick={onConfirm}>
+          {button}
+        </Action>
+      </div>
+    </div>
+  )
 }
 
 const VIA_LABEL: Record<HostTransport['kind'], string> = { ssh: 'ssh', command: 'Command' }
@@ -261,10 +598,12 @@ const FIELD = cn(
 /** Name, and an ssh target or a command line. Checked as typed is submitted; nothing is written until it passes. */
 function AddHostForm({
   hosts,
+  install,
   onAdd,
   onCancel
 }: {
   hosts: readonly RemoteHost[]
+  install: HostInstallActions
   onAdd: (host: RemoteHost) => void
   onCancel: () => void
 }): JSX.Element {
@@ -280,10 +619,27 @@ function AddHostForm({
     setDraft((current) => ({ ...current, ...patch }))
     setError(null)
   }
+  const flow = useInstallFlow(install)
   const submit = (): void => {
     const result = remoteHostFromDraft(draft, hosts, globalThis.crypto.randomUUID())
-    if (result.ok) onAdd(result.host)
-    else setError(result.error)
+    if (!result.ok) {
+      setError(result.error)
+      return
+    }
+    const { host } = result
+    // Added only once floti there can talk to this Helm, with the path Helm
+    // installed it at when it did.
+    flow.start({ transport: host.transport }, host, ({ floti }) =>
+      onAdd(floti === undefined ? host : { ...host, floti })
+    )
+  }
+
+  if (flow.panel !== null) {
+    return (
+      <div data-settings-host-form aria-label="Add a host" role="form" className="flex flex-col gap-3 py-2">
+        {flow.panel}
+      </div>
+    )
   }
 
   return (

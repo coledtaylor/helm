@@ -1,7 +1,7 @@
 import type { HostTransport } from '@helm/core/types'
 import { describe, expect, it } from 'vitest'
 import { FakeChild, connects, type Program } from '../../../test/fake-child'
-import { FrameDecoder } from './frame'
+import { FrameDecoder, encodeFrame } from './frame'
 import { BRIDGE_EXIT, type HostPlaces } from './launcher'
 import {
   RemoteHostError,
@@ -310,5 +310,67 @@ describe('reaching a host on another computer', () => {
   it('reads the code from the pairing line and nothing else', () => {
     expect(pairingCodeOf(PAIRING_LINE)).toBe('7Q2K-9XZD')
     expect(pairingCodeOf('me@build-box: Permission denied (publickey).')).toBeNull()
+  })
+})
+
+describe('the floti a host keeps, and a host that refuses this Helm', () => {
+  it('S16: gives the bridge the full path of the floti Helm installed there, before the transport', async () => {
+    const w = world([connects])
+    const host = await startRemoteHost(PLACES, w.deps, {
+      folder: FOLDER,
+      transport: SSH,
+      floti: '/home/me/.local/bin/floti',
+      deviceName: 'my laptop',
+      approve: null,
+      onPairing: () => undefined
+    })
+    expect(w.spawned[0]?.args).toEqual([
+      'bridge',
+      FOLDER,
+      '--pair',
+      'my laptop',
+      '--floti',
+      '/home/me/.local/bin/floti',
+      '--',
+      'ssh',
+      '-o',
+      'BatchMode=yes',
+      'me@build-box'
+    ])
+    await host.close()
+  })
+
+  it('S18: a host that refuses the hello hands on both protocol versions and the side to update', async () => {
+    const refuses: Program = (child) => {
+      const decoder = new FrameDecoder()
+      child.stdin.on('data', (chunk: Uint8Array) => {
+        decoder.push(chunk)
+        for (let next = decoder.next(); next !== null; next = decoder.next()) {
+          if ('message' in next && next.message.type === 'hello') {
+            child.stdout.write(
+              encodeFrame({
+                type: 'refused',
+                host: { major: 0, minor: 9 },
+                client: { major: 1, minor: 0 },
+                update: 'host',
+                message: 'This host speaks protocol 0.9 and Helm speaks 1.0: update floti there.'
+              })
+            )
+          }
+        }
+      })
+      child.stdin.once('end', () => child.exit(BRIDGE_EXIT.closed))
+    }
+    const w = world([refuses])
+    const error = await remoteError(
+      startRemoteHost(PLACES, w.deps, {
+        folder: FOLDER,
+        transport: SSH,
+        deviceName: 'my laptop',
+        approve: null,
+        onPairing: () => undefined
+      })
+    )
+    expect(error.refused).toEqual({ host: '0.9', client: '1.0', update: 'host' })
   })
 })

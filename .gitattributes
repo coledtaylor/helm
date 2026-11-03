@@ -6,3 +6,6 @@ crates/floti-protocol/generated/** text eol=lf
 # schema they make with today's app's byte for byte, so a Windows checkout
 # that turned them CRLF would make a different database.
 packages/core/drizzle/** text eol=lf
+
+# The install script runs under sh on the host's computer, so it stays LF.
+scripts/install/*.sh text eol=lf

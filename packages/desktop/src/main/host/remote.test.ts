@@ -1,4 +1,4 @@
-import type { RemoteHost } from '@helm/core/types'
+import { NO_HOST_LINE, type RemoteHost } from '@helm/core/types'
 import { describe, expect, it, vi } from 'vitest'
 import { FakeConnection, fakeLocalHost } from '../../../test/host-connection'
 import type { RemoteHostStates } from '../../shared/ipc'
@@ -262,6 +262,43 @@ describe('the links to hosts on other computers', () => {
     await settle()
     expect(w.state(BUILD)).toEqual({ state: 'failed', lastLine: 'me@build-box: Permission denied (publickey,password).' })
     expect(w.waitingTimers()).toBe(1)
+  })
+
+  it('S18: a host whose floti is too old, or newer, says so with both protocol versions; one with no floti is missing', async () => {
+    const w = world()
+    w.links.sync([BUILD, LAB, FAR])
+    w.startFor(BUILD).reject(
+      new RemoteHostError('update floti there', { host: '0.9', client: '1.0', update: 'host' })
+    )
+    w.startFor(LAB).reject(new RemoteHostError('update Helm here', { host: '2.0', client: '1.0', update: 'client' }))
+    w.startFor(FAR).reject(new RemoteHostError('bash: line 1: floti: command not found'))
+    await settle()
+    expect(w.links.states()).toEqual({
+      'h-build': { state: 'tooOld', host: '0.9', client: '1.0' },
+      'h-lab': { state: 'newer', host: '2.0', client: '1.0' },
+      'h-far': { state: 'missing', lastLine: 'bash: line 1: floti: command not found' }
+    })
+  })
+
+  it('S17: a host installed while nobody is signed in there starts at the next sign-in, not failed; once reached it is connected', async () => {
+    const w = world()
+    const placed = { ...BUILD, floti: '/home/me/.local/bin/floti' }
+    w.links.sync([placed])
+    w.startFor(placed).reject(new RemoteHostError(NO_HOST_LINE))
+    await settle()
+    expect(w.state(placed)).toEqual({ state: 'failed', lastLine: NO_HOST_LINE })
+
+    // Installing at the path the host keeps links it again at once.
+    w.links.installed(placed.id, placed.floti, true)
+    expect(w.starts.length).toBe(2)
+    w.startFor(placed).reject(new RemoteHostError(NO_HOST_LINE))
+    await settle()
+    expect(w.state(placed)).toEqual({ state: 'startsAtSignIn' })
+
+    w.fireTimers()
+    w.startFor(placed).resolve(fakeLocalHost(hostWith(), false))
+    await settle()
+    expect(w.state(placed)).toEqual({ state: 'connected' })
   })
 
   it('S13: names only what a quit would end per host, and tells each host its own choice; one not connected is told nothing', async () => {

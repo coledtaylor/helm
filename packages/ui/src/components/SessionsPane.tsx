@@ -110,6 +110,14 @@ export interface SessionsPaneHost {
    */
   connected: boolean
   sessions: readonly SessionsPaneRemoteSession[]
+  /**
+   * Its floti refused this device's hello (P6): too old, which Update floti
+   * fixes there, or newer, which updating Helm on this PC fixes. `host` is the
+   * protocol its floti speaks and `client` this Helm's.
+   */
+  floti?: { verdict: 'tooOld' | 'newer'; host: string; client: string } | null | undefined
+  /** Starts the yes-first update of its floti, in Settings > Hosts. */
+  onUpdateFloti?: (() => void) | undefined
 }
 
 /** One running session on a host on another computer. */
@@ -303,7 +311,15 @@ export function SessionsPane({
                     )}
                   </HostSection>
                   {remoteHosts.map((host) => (
-                    <HostSection key={host.id} id={host.id} name={host.name} connected={host.connected} remote>
+                    <HostSection
+                      key={host.id}
+                      id={host.id}
+                      name={host.name}
+                      connected={host.connected}
+                      floti={host.floti ?? null}
+                      onUpdateFloti={host.onUpdateFloti}
+                      remote
+                    >
                       {host.sessions.map((session) => (
                         <RemoteRow key={session.key} session={session} />
                       ))}
@@ -368,12 +384,16 @@ function HostSection({
   id,
   name,
   connected,
+  floti = null,
+  onUpdateFloti,
   remote = false,
   children
 }: {
   id: string
   name: string
   connected: boolean
+  floti?: SessionsPaneHost['floti']
+  onUpdateFloti?: (() => void) | undefined
   remote?: boolean
   children: ReactNode
 }): JSX.Element {
@@ -387,8 +407,31 @@ function HostSection({
       <div className="flex min-w-0 items-center gap-2 px-2.5 pt-1.5 pb-1">
         <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', connected ? 'bg-success' : 'bg-warn')} />
         <span className={cn('min-w-0 truncate text-[12px] font-medium text-fg', remote && 'font-mono')}>{name}</span>
-        {!connected && <span className="shrink-0 text-[11px] text-warn">not connected, retrying</span>}
+        {!connected && (
+          <span data-sessions-host-floti={floti?.verdict} className="shrink-0 text-[11px] text-warn">
+            {floti === null ? 'not connected, retrying' : floti.verdict === 'tooOld' ? 'floti too old' : 'newer floti'}
+          </span>
+        )}
       </div>
+      {!connected && floti !== null && (
+        <div className="flex min-w-0 items-center gap-2 px-2.5 pb-1.5 pl-[22px]">
+          <span className="min-w-0 flex-1 text-[11px] leading-[1.4] text-fg-muted">
+            {floti.verdict === 'tooOld'
+              ? `Its floti speaks protocol ${floti.host}; this Helm speaks ${floti.client}.`
+              : `It speaks protocol ${floti.host}; this Helm speaks ${floti.client}. Update Helm on this PC.`}
+          </span>
+          {floti.verdict === 'tooOld' && onUpdateFloti !== undefined && (
+            <button
+              type="button"
+              data-sessions-host-update={id}
+              onClick={onUpdateFloti}
+              className="shrink-0 rounded-well border border-accent px-2 py-0.5 text-[11px] text-accent-text transition-colors hover:bg-accent-soft"
+            >
+              Update floti
+            </button>
+          )}
+        </div>
+      )}
       <div className={cn(!connected && 'opacity-50')}>{children}</div>
     </section>
   )

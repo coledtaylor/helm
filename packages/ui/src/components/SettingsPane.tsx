@@ -52,7 +52,7 @@ import {
 } from './SettingsKit'
 import { CheckIcon, CloseIcon, PlusIcon, RefreshIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
-import { HostsSettings, type SettingsHost } from './HostsSettings'
+import { HostsSettings, type HostInstallActions, type SettingsHost } from './HostsSettings'
 import { DevicesSettings, type DevicesSettingsProps } from './DevicesSettings'
 
 /**
@@ -259,6 +259,12 @@ export interface SettingsPaneProps {
   onRemoveHost: (id: string) => void
   /** One host's own quit choice; every other host's is left as it is. */
   onHostQuitChange: (id: string, choice: QuitSessions) => void
+  /** Checks a host's computer, and installs or updates floti there after a yes. */
+  hostInstall: HostInstallActions
+  /** Floti was installed or updated on host `id`, at `floti` there. */
+  onHostInstalled: (id: string, floti: string) => void
+  /** Starts updating a host's floti from outside Settings, such as its sidebar row. */
+  hostUpdateRequest?: { id: string; nonce: number } | null | undefined
   /** Settings > Devices: each admin host's devices, approving and revoking them. */
   devices: DevicesSettingsProps
 }
@@ -378,6 +384,9 @@ export function SettingsPane({
   onAddHost,
   onRemoveHost,
   onHostQuitChange,
+  hostInstall,
+  onHostInstalled,
+  hostUpdateRequest = null,
   devices
 }: SettingsPaneProps): JSX.Element {
   const [addingHost, setAddingHost] = useState(false)
@@ -688,6 +697,9 @@ export function SettingsPane({
               onQuitChange={onHostQuitChange}
               adding={addingHost}
               onAddingChange={setAddingHost}
+              install={hostInstall}
+              onInstalled={onHostInstalled}
+              updateRequest={hostUpdateRequest}
             />
           )}
 

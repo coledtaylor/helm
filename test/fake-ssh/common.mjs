@@ -10,9 +10,33 @@
 
 import { spawn } from 'node:child_process'
 import { appendFileSync } from 'node:fs'
+import { machine, type } from 'node:os'
 import { dirname } from 'node:path'
 
 import { watchOwner } from '../fake-agents/common.mjs'
+
+/** The desktop's line for a computer's OS and CPU (`SYSTEM_LINE` in packages/core/src/hostInstall.ts). */
+export const SYSTEM_LINE = 'uname -sm || echo %OS% %PROCESSOR_ARCHITECTURE%'
+
+/** What `SYSTEM_LINE` answers on this computer: `Windows_NT AMD64` from `cmd`, `uname -sm` elsewhere. */
+function ownSystem() {
+  if (process.platform === 'win32') return `Windows_NT ${process.arch === 'arm64' ? 'ARM64' : 'AMD64'}`
+  return `${type()} ${machine()}`
+}
+
+/** Plays `floti setup` as it ends: its line and status (crates/host/src/setup.rs). */
+function playSetup(outcome) {
+  if (outcome === 'next-sign-in') {
+    process.stdout.write('The Floti host starts at the next sign-in.\n')
+    process.exit(10)
+  }
+  if (outcome.startsWith('fail:')) {
+    process.stderr.write(`${outcome.slice('fail:'.length)}\n`)
+    process.exit(1)
+  }
+  process.stdout.write('The Floti host is running, and starts at each sign-in.\n')
+  process.exit(0)
+}
 
 /**
  * Appends `entry` to the JSON-lines file FAKE_SSH_LOG names, one line per
@@ -68,6 +92,17 @@ export function splitWords(line) {
 export function runLine(line) {
   const [program, ...args] = splitWords(line)
   if (program === undefined) process.exit(0)
+  // The line the desktop's check runs to name the computer's OS and CPU:
+  // answered as `uname -sm` or Windows' `cmd` would answer it, with
+  // FAKE_SSH_SYSTEM when set (`Linux x86_64`), or this computer's own.
+  if (line === SYSTEM_LINE) {
+    process.stdout.write(`${process.env.FAKE_SSH_SYSTEM || ownSystem()}\n`)
+    process.exit(0)
+  }
+  // `<floti> setup` is played, never run: a real one registers the host to
+  // start at sign-in with this computer's own scheduler. FAKE_SSH_SETUP picks
+  // what it says: `running` (the default), `next-sign-in`, or `fail:<line>`.
+  if (args.length === 1 && args[0] === 'setup') playSetup(process.env.FAKE_SSH_SETUP || 'running')
   // FAKE_SSH_MISSING_LINE plays a computer that cannot run one line: a line
   // starting with it fails as `sh` says a program it cannot find, with 127.
   const missing = process.env.FAKE_SSH_MISSING_LINE

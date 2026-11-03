@@ -73,6 +73,26 @@ platform's or whose SHA-256 the list does not give, and stages the list as
 `Contents/Resources/floti-SHA256SUMS` on macOS. The floti inside the app is
 therefore byte for byte the one the release lists.
 
+### Installing floti on a host's computer
+
+Settings > Hosts installs or updates floti on another computer over the
+transport the user gave it, and only after the user says yes to an offer that
+names the computer's OS and CPU, the floti found there, and what will be done
+where. The app carries `scripts/install/install.sh` and `install.ps1` as
+`resources/install` (top-level `extraResources`). Each is one function, called
+on its last line, and is sent as the line itself: `sh -c '<script>' ...`, or
+`powershell -EncodedCommand` with its comments left out to stay inside cmd's
+line limit. Each writes floti into the user's own folder (`~/.local/bin`, or
+`%LOCALAPPDATA%\Programs\Floti\bin`) under a temporary name, checks its
+SHA-256, and only then moves it into place, so a floti that was there keeps
+working when anything fails. When the computer's OS and CPU are this PC's,
+the app sends its own floti on the script's standard input, with that file's
+SHA-256. Otherwise the computer downloads the release's file for itself from
+`releases/download/v<version>/`, checked against the SHA-256
+`floti-SHA256SUMS` gives; with no list (a local build) or no file for that
+computer, nothing is offered. Then the app runs `<path> setup` there and keeps
+the installed path, which the host's bridge is given with `--floti`.
+
 Beside `floti` goes the Node runtime the local host runs plugin services on.
 `scripts/node-runtime.json` pins its version (a Node 24 LTS release) and, for
 win32-x64, darwin-arm64 and linux-x64, the archive from nodejs.org and its

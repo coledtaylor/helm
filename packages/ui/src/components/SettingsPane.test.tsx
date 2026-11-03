@@ -138,6 +138,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onAddHost: vi.fn(),
     onRemoveHost: vi.fn(),
     onHostQuitChange: vi.fn(),
+    hostInstall: { check: vi.fn(async () => ({ kind: 'ready' as const, found: { version: '1.2.0', protocol: '1.0' } })), install: vi.fn(), cancel: vi.fn() },
+    onHostInstalled: vi.fn(),
     devices: { hosts: [], onApprove: vi.fn(), onRevoke: vi.fn() },
     ...overrides
   }

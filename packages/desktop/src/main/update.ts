@@ -33,6 +33,12 @@ import type { UpdateCheck } from '../shared/ipc'
  * project's own address, the same identity `appId` carries. */
 export const RELEASES_API = 'https://api.github.com/repos/coledtaylor/helm/releases/latest'
 export const RELEASES_PAGE = 'https://github.com/coledtaylor/helm/releases/latest'
+/**
+ * Where each release's files are, under `v<version>`. This PC never fetches
+ * from it: a host's computer Helm installs floti on downloads its own build
+ * from there, after the user's yes (`host/remote-install.ts`).
+ */
+export const RELEASES_DOWNLOAD = 'https://github.com/coledtaylor/helm/releases/download'
 
 const TIMEOUT_MS = 6000
 

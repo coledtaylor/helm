@@ -119,7 +119,12 @@ export {
   type SettingsSectionId,
   type SettingsSectionsProps
 } from './components/SettingsSections'
-export { HostsSettings, type HostsSettingsProps, type SettingsHost } from './components/HostsSettings'
+export {
+  HostsSettings,
+  type HostInstallActions,
+  type HostsSettingsProps,
+  type SettingsHost
+} from './components/HostsSettings'
 export {
   DEFAULT_APPROVE_ROLE,
   DevicesSettings,

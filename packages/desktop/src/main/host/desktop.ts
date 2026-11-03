@@ -1,10 +1,12 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFile, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { createReadStream, existsSync } from 'node:fs'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { listProfiles, readPluginFolders, readPluginSettings } from '@helm/core'
+import { parseSums, type FlotiOs } from '@helm/core/types'
 import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
 import { emit } from '../ipc'
 import { appMode, dataDir, templatesDir } from '../paths'
@@ -31,6 +33,9 @@ import { createOwnDataCopy, type OwnDataCopy } from './own-data'
 import { createPageLinks, type PageLinks } from './page-link'
 import { createRemoteHostLinks, type RemoteHostLinks } from './remote'
 import { openRemotePageBridge, remoteClientFolder, startRemoteHost } from './remote-launcher'
+import { createRemoteInstaller, spawnTransportRun, type RemoteInstaller } from './remote-install'
+import { PROTOCOL_VERSION } from './protocol'
+import { RELEASES_DOWNLOAD } from '../update'
 import type { RemoteHostStates } from '../../shared/ipc'
 import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
 import { createHostPlugins, type HostPlugins } from './plugins'
@@ -171,10 +176,22 @@ export function createDesktopRemoteHosts(options: {
       startRemoteHost(
         places(),
         { ...programs, appVersion: app.getVersion(), log: options.log },
-        { folder: folderOf(host.id), transport: host.transport, deviceName: hostname(), approve: host.role ?? null, onPairing }
+        {
+          folder: folderOf(host.id),
+          transport: host.transport,
+          floti: host.floti,
+          deviceName: hostname(),
+          approve: host.role ?? null,
+          onPairing
+        }
       ),
     openBridge: (host, data) =>
-      openRemotePageBridge(places(), programs, { folder: folderOf(host.id), transport: host.transport }, data),
+      openRemotePageBridge(
+        places(),
+        programs,
+        { folder: folderOf(host.id), transport: host.transport, floti: host.floti },
+        data
+      ),
     // Its device key and the host key it pinned: nothing else is kept there.
     forget: (host) => rm(folderOf(host.id), { recursive: true, force: true }),
     changed: options.changed,
@@ -184,6 +201,52 @@ export function createDesktopRemoteHosts(options: {
     log: options.log,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
+  })
+}
+
+/** A file's SHA-256, read as a stream. */
+function sha256OfFile(path: string): Promise<string> {
+  return new Promise((done, fail) => {
+    const hash = createHash('sha256')
+    createReadStream(path)
+      .once('error', fail)
+      .on('data', (chunk) => hash.update(chunk))
+      .once('end', () => done(hash.digest('hex')))
+  })
+}
+
+/**
+ * Installing and updating floti on the hosts this device adds, through each
+ * one's own transport (`remote-install.ts`): this build's own floti, the
+ * release's SHA-256 list a release build carries beside it
+ * (`floti-SHA256SUMS`, absent from a development build), and the install
+ * scripts it carries (`install/`, or the checkout's `scripts/install`).
+ */
+export function createDesktopRemoteInstaller(log: (line: string) => void): RemoteInstaller {
+  const at = places()
+  const join = (...parts: string[]): string => resolve(...parts)
+  const scripts = at.packaged ? join(at.resourcesPath, 'install') : join(at.repoRoot, 'scripts', 'install')
+  return createRemoteInstaller({
+    run: spawnTransportRun(spawn, process.env),
+    platform: process.platform,
+    arch: process.arch,
+    version: app.getVersion(),
+    protocol: PROTOCOL_VERSION,
+    ownBuild: async () => {
+      const path = flotiBinary(at, programs)
+      return existsSync(path) ? { path, sha256: await sha256OfFile(path) } : null
+    },
+    sums: async () => {
+      if (!at.packaged) return null
+      try {
+        return parseSums(await readFile(join(at.resourcesPath, 'floti-SHA256SUMS'), 'utf8'))
+      } catch {
+        return null
+      }
+    },
+    script: (os: FlotiOs) => readFile(join(scripts, os === 'windows' ? 'install.ps1' : 'install.sh'), 'utf8'),
+    releaseBase: (version) => `${RELEASES_DOWNLOAD}/v${version}`,
+    log
   })
 }
 

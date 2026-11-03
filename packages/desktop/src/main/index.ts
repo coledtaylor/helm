@@ -83,6 +83,7 @@ import {
   createDesktopHost,
   createDesktopPresence,
   createDesktopRemoteHosts,
+  createDesktopRemoteInstaller,
   createLocalPageLinks,
   type DesktopHost
 } from './host/desktop'
@@ -902,7 +903,9 @@ function startApp(options: AppOptions = {}): void {
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
     ...(desktopHost !== null ? { hostSettingsChanged: () => desktopHost.link.writeSettings() } : {}),
-    ...(remoteHosts !== null ? { remoteHosts } : {}),
+    ...(remoteHosts !== null
+      ? { remoteHosts, remoteInstall: createDesktopRemoteInstaller((line) => console.log(line)) }
+      : {}),
     ...(desktopHost !== null ? { presence: createDesktopPresence(() => win, (line) => console.log(line)) } : {}),
     rendererReady: () => {
       pushTheme({ services, themes, plugins, window: () => win })

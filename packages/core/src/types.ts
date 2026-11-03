@@ -86,6 +86,9 @@ export * from './files/shape'
  */
 export * from './hosts'
 
+/** Installing floti on a host's computer: what the check found and what is offered, said in the window. */
+export * from './hostInstall'
+
 export {
   frontmatterField,
   parseFrontmatter,

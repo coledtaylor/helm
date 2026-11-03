@@ -42,6 +42,10 @@ extraResources:
     to: icon.ico
   - from: build/icon.png
     to: icon.png
+  # The scripts Settings > Hosts sends a host's computer to install floti
+  # there (`main/host/desktop.ts` reads them from `resources/install`).
+  - from: ../../scripts/install
+    to: install
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
   # On macOS this also unpacks node-pty's `spawn-helper`, an executable every

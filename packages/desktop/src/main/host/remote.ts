@@ -1,4 +1,4 @@
-import type { RemoteHost, RemoteHostConnection } from '@helm/core/types'
+import { NO_HOST_LINE, saysNotFound, type RemoteHost, type RemoteHostConnection } from '@helm/core/types'
 import type { RemoteHostStates } from '../../shared/ipc'
 import type { HostConnection, HostSubscription } from './client'
 import type { LocalHost, PageBridge } from './launcher'
@@ -25,8 +25,24 @@ import { RemoteHostError, type OnPairing } from './remote-launcher'
  * - A quit tells each connected host whether the sessions this device started
  *   there end, by that host's own choice (Keep them running unless set).
  * - Where each stands goes to the window on `remoteHosts:changed`; a pairing
- *   code goes there and nowhere else, never into a log.
+ *   code goes there and nowhere else, never into a log. A host whose floti
+ *   refused this device's hello is too old or newer, with both versions; one
+ *   whose login has no floti is missing; one Helm installed floti on while
+ *   nobody was signed in there starts at the next sign-in, which is no
+ *   failure.
  */
+
+/** Where a failed attempt leaves a host: what its line says, read for what the window offers. */
+export function failedState(error: Error, startsAtSignIn: boolean): RemoteHostConnection {
+  if (!(error instanceof RemoteHostError)) return { state: 'retrying' }
+  const { refused, lastLine } = error
+  if (refused !== null) {
+    return { state: refused.update === 'host' ? 'tooOld' : 'newer', host: refused.host, client: refused.client }
+  }
+  if (startsAtSignIn && lastLine === NO_HOST_LINE) return { state: 'startsAtSignIn' }
+  if (saysNotFound(null, lastLine)) return { state: 'missing', lastLine }
+  return { state: 'failed', lastLine }
+}
 
 /** The running sessions this device started on one host, which a quit would end there. */
 export interface HostQuitPart {
@@ -51,6 +67,12 @@ export interface RemoteHostLinks {
    * connected is told nothing. Nothing links after it.
    */
   quit(endsOn: (id: string) => boolean): Promise<void>
+  /**
+   * Helm installed or updated floti on host `id`, at `floti`: its link tries
+   * again now, and with `startsAtNextSignIn` a host that is not running there
+   * yet starts at the next sign-in rather than having failed.
+   */
+  installed(id: string, floti: string, startsAtNextSignIn: boolean): void
 }
 
 export interface RemoteHostLinksDeps {
@@ -80,13 +102,15 @@ interface Entry {
   subscriptions: HostSubscription[]
 }
 
-/** Two transports that reach a host the same way. */
-const sameTransport = (a: RemoteHost['transport'], b: RemoteHost['transport']): boolean =>
-  JSON.stringify(a) === JSON.stringify(b)
+/** Two hosts reached the same way: the same transport, running the same floti there. */
+const reachedAlike = (a: RemoteHost, b: RemoteHost): boolean =>
+  JSON.stringify(a.transport) === JSON.stringify(b.transport) && a.floti === b.floti
 
 export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLinks {
   const entries = new Map<string, Entry>()
   const states = new Map<string, RemoteHostConnection>()
+  /** The hosts Helm installed floti on while nobody was signed in there. */
+  const atSignIn = new Set<string>()
   let quitting = false
 
   const tell = (): void => deps.changed(Object.fromEntries(states))
@@ -118,8 +142,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
           setState(entry, { state: 'pairing', code, ...(approvalFailed !== null ? { approvalFailed } : {}) })
         ),
       name: host.name,
-      onAttemptFailed: (error) =>
-        setState(entry, error instanceof RemoteHostError ? { state: 'failed', lastLine: error.lastLine } : { state: 'retrying' }),
+      onAttemptFailed: (error) => setState(entry, failedState(error, atSignIn.has(entry.host.id))),
       log: deps.log,
       setTimeout: deps.setTimeout,
       clearTimeout: deps.clearTimeout
@@ -153,6 +176,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       })
       // What the host says this device is paired as, for Settings > Hosts.
       const role = connection.welcome.role
+      atSignIn.delete(entry.host.id)
       setState(entry, { state: 'connected', ...(role !== undefined ? { role } : {}) })
     })
     entry.link.keepConnected()
@@ -185,7 +209,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       }
       for (const host of hosts) {
         const entry = entries.get(host.id)
-        if (entry !== undefined && sameTransport(entry.host.transport, host.transport)) {
+        if (entry !== undefined && reachedAlike(entry.host, host)) {
           entry.host = host
           continue
         }
@@ -209,6 +233,18 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       return [...entries.values()]
         .filter((entry) => entry.link.current() !== null && endsOn(entry.host.id) && entry.own.length > 0)
         .map((entry) => ({ id: entry.host.id, name: entry.host.name, sessions: entry.own }))
+    },
+
+    installed(id, floti, startsAtNextSignIn) {
+      if (startsAtNextSignIn) atSignIn.add(id)
+      else atSignIn.delete(id)
+      const entry = entries.get(id)
+      // A host whose floti path changed is linked again by the settings
+      // write that keeps the new path; one at the same path, here.
+      if (quitting || entry === undefined || entry.host.floti !== floti) return
+      forget(entry, false)
+      entries.set(id, open(entry.host))
+      tell()
     },
 
     async quit(endsOn) {

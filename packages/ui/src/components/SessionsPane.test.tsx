@@ -289,6 +289,26 @@ describe('SessionsPane: every host under its name', () => {
     expect(build.querySelector('[data-remote-session]')?.parentElement?.className).not.toContain('opacity-50')
   })
 
+  it('S18, S19: says a host’s floti is too old with Update floti, or newer with Update Helm on this PC, naming both protocols', async () => {
+    const onUpdateFloti = vi.fn()
+    renderPane({
+      remoteHosts: [
+        { ...LAB, floti: { verdict: 'tooOld', host: '0.9', client: '1.0' }, onUpdateFloti },
+        { ...BUILD, id: 'h-far', name: 'far', connected: false, floti: { verdict: 'newer', host: '2.0', client: '1.0' } }
+      ]
+    })
+    const lab = screen.getByRole('region', { name: 'lab' })
+    expect(lab.querySelector('[data-sessions-host-floti]')?.textContent).toBe('floti too old')
+    expect(lab.textContent).toContain('Its floti speaks protocol 0.9; this Helm speaks 1.0.')
+    await userEvent.click(within(lab).getByRole('button', { name: 'Update floti' }))
+    expect(onUpdateFloti).toHaveBeenCalledTimes(1)
+
+    const far = screen.getByRole('region', { name: 'far' })
+    expect(far.querySelector('[data-sessions-host-floti]')?.textContent).toBe('newer floti')
+    expect(far.textContent).toContain('It speaks protocol 2.0; this Helm speaks 1.0. Update Helm on this PC.')
+    expect(within(far).queryByRole('button', { name: 'Update floti' })).toBeNull()
+  })
+
   it('draws the list as it was while this PC is the only host', () => {
     renderPane({ remoteHosts: [] })
     expect(document.querySelectorAll('[data-sessions-host]')).toHaveLength(0)

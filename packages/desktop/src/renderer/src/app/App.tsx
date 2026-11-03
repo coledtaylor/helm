@@ -184,7 +184,8 @@ import {
   type TabIndicator,
   type MenuEntry,
   type TreeReveal,
-  type TreeSession
+  type TreeSession,
+  type HostInstallActions
 } from '@helm/ui'
 import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
@@ -257,6 +258,13 @@ const KIND_ICON = {
  */
 const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
   helm.invoke('shell:openExternal', { url })
+
+/** Settings > Hosts' check, install and cancel on a host's computer: main runs them, through that host's own transport. */
+const hostInstall: HostInstallActions = {
+  check: (target) => helm.invoke('remoteHosts:check', target),
+  install: (id, host) => helm.invoke('remoteHosts:install', { id, host }),
+  cancel: (id) => void helm.invoke('remoteHosts:cancel', { id })
+}
 
 /** A stable empty list, so a view with no console entries does not hand
  * `BrowserPane` a fresh array to re-render against on every render. */
@@ -450,6 +458,8 @@ export function App(): JSX.Element {
   const [fileReveals, setFileReveals] = useState<ReadonlyMap<string, QuickOpenAt>>(new Map())
   /** The section of Settings in the pane; the sidebar lists the rest. */
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>('general')
+  /** A host whose floti the sidebar asked to update, which Settings > Hosts starts on. */
+  const [hostUpdateRequest, setHostUpdateRequest] = useState<{ id: string; nonce: number } | null>(null)
   /** Where each file tab's caret is, so VS Code opens at the same line. */
   const fileCarets = useRef(new Map<string, number>())
   const [sidebarView, setSidebarView] = useState<SidebarView>('sessions')
@@ -2664,12 +2674,25 @@ export function App(): JSX.Element {
         ]
       : []
   /** The sessions pane's group for each remote host, in the order they were added; none with no remote host. */
-  const sessionsPaneHosts = remoteHosts.map((host) => ({
-    id: host.id,
-    name: host.name,
-    connected: remoteView[host.id]?.connection?.state === 'connected',
-    sessions: remoteView[host.id]?.sessions ?? []
-  }))
+  const sessionsPaneHosts = remoteHosts.map((host) => {
+    const connection = remoteView[host.id]?.connection ?? null
+    return {
+      id: host.id,
+      name: host.name,
+      connected: connection?.state === 'connected',
+      sessions: remoteView[host.id]?.sessions ?? [],
+      // A floti too old or newer than this Helm, with both versions; too old
+      // offers the same yes-first update Settings > Hosts does.
+      floti:
+        connection?.state === 'tooOld' || connection?.state === 'newer'
+          ? { verdict: connection.state, host: connection.host, client: connection.client }
+          : null,
+      onUpdateFloti: () => {
+        openSettings('hosts')
+        setHostUpdateRequest((last) => ({ id: host.id, nonce: (last?.nonce ?? 0) + 1 }))
+      }
+    }
+  })
 
   /** Settings > Plugins, Secrets and each plugin's page; every other section is `SettingsPane`'s. */
   const renderSettings = (): JSX.Element => {
@@ -2829,6 +2852,17 @@ export function App(): JSX.Element {
       onHostQuitChange={(id, choice) =>
         writeSettings({ quitSessions: { ...currentSettings.quitSessions, [id]: choice } })
       }
+      // Main checks, installs and updates floti there, after the yes the
+      // window asks for; the window never says what to run.
+      hostInstall={hostInstall}
+      // The path Helm installed floti at there, which every line run there
+      // starts with from now on.
+      onHostInstalled={(id, floti) =>
+        writeSettings({
+          hosts: currentSettings.hosts.map((host) => (host.id === id ? { ...host, floti } : host))
+        })
+      }
+      hostUpdateRequest={hostUpdateRequest}
       devices={devicesSettings}
       filesWrap={filesWrap}
       onFilesWrapChange={setFilesWrap}

@@ -8,7 +8,9 @@ import {
   type EventChannels,
   type Message,
   type RequestChannels,
+  type ProtocolVersion,
   type StreamChannels,
+  type UpdateSide,
   type Welcome
 } from './protocol'
 
@@ -74,6 +76,14 @@ export interface ConnectOptions {
 /** The host refused the `hello`: a sentence naming both versions and which side to update. */
 export class HostRefusedError extends Error {
   override name = 'HostRefusedError'
+
+  /** The versions the host named, and the side it said to update (P6). */
+  constructor(
+    message: string,
+    readonly refused: { host: ProtocolVersion; client: ProtocolVersion; update: UpdateSide } | null = null
+  ) {
+    super(message)
+  }
 }
 
 /** A request or subscription the host answered with an error reply. */
@@ -365,7 +375,9 @@ class Connection implements HostConnection {
       if (message.type === 'welcome') {
         greeting.resolve(message)
       } else if (message.type === 'refused') {
-        greeting.reject(new HostRefusedError(message.message))
+        greeting.reject(
+          new HostRefusedError(message.message, { host: message.host, client: message.client, update: message.update })
+        )
         this.end(message.message)
       } else {
         const why = `The local host answered Helm's hello with ${message.type} rather than a welcome.`

@@ -77,7 +77,7 @@ import type {
   SecretInput,
   SecretsState
 } from '@helm/core'
-import type { RemoteHostConnection } from '@helm/core/types'
+import type { HostCheck, HostCheckTarget, InstallOutcome, RemoteHostConnection } from '@helm/core/types'
 import type { BrowserCommand } from './browserKeys'
 import type { ProbeOp, TermCreateOptions } from './protocol'
 
@@ -735,6 +735,25 @@ export interface IpcRequests {
 
   /** Where each host on another computer stands with this device; changes arrive on `remoteHosts:changed`. */
   'remoteHosts:read': { request: void; response: RemoteHostStates }
+
+  /**
+   * What is on a host's computer, through its own transport in batch mode:
+   * `floti version` there and, only when floti is missing, one line naming its
+   * OS and CPU. Changes nothing on either computer. For a host being added,
+   * how it is reached; for one added already, its id. When floti is missing or
+   * too old there, the offer, whose id main keeps with what it would run.
+   */
+  'remoteHosts:check': { request: HostCheckTarget; response: HostCheck }
+
+  /**
+   * The user said yes to an offer: main does what that check offered, and only
+   * that, through the same transport. `host` is the id the host has, or will
+   * have once the window adds it. The window never says what to run.
+   */
+  'remoteHosts:install': { request: { id: string; host: string }; response: InstallOutcome }
+
+  /** The user cancelled an offer: main forgets it, and nothing is run there. */
+  'remoteHosts:cancel': { request: { id: string }; response: void }
 
   /**
    * Asks this computer to confirm its user is present (Windows Hello, Touch ID
@@ -2080,6 +2099,9 @@ export const REQUEST_CHANNELS = Object.keys({
   'app:info': true,
   'hostLink:open': true,
   'remoteHosts:read': true,
+  'remoteHosts:check': true,
+  'remoteHosts:install': true,
+  'remoteHosts:cancel': true,
   'presence:confirm': true,
   'settings:read': true,
   'settings:write': true,

@@ -577,6 +577,17 @@ real ones. They share `common.mjs`:
 - **`carry.mjs`** is any custom command that carries bytes: `[<argument>...]
   <line>`, the line to run as its last argument and every other argument only
   recorded.
+- **They play a computer floti is installed on.** `FAKE_SSH_MISSING_LINE`
+  plays one with no floti: a line starting with it fails as `sh` says a
+  program it cannot find, with 127. The desktop's line for the OS and CPU
+  (`SYSTEM_LINE` in `packages/core/src/hostInstall.ts`) answers
+  `FAKE_SSH_SYSTEM` (`Linux aarch64`), or this computer's own as `uname -sm`
+  or Windows' cmd says it. A line `<floti> setup` is always played, never run,
+  because a real one registers the host to start at sign-in with this
+  computer's scheduler: `FAKE_SSH_SETUP` is `running` (the default, status 0),
+  `next-sign-in` (status 10) or `fail:<line>` (status 1). The install scripts
+  themselves run for real, with `HOME` and `LOCALAPPDATA` set to the test's
+  own folder (`remote-install.scripts.test.ts`).
 
 The host's tests (`crates/host/tests/remote.rs`) drive both through
 `floti bridge`; the desktop's run the same files through its own bridge.

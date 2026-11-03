@@ -40,6 +40,39 @@ export interface RemoteHost {
    * could be chosen, which is approved on the host by hand.
    */
   role?: PairingRole
+  /**
+   * The full path of the floti Helm installed there, on that computer, for a
+   * login whose non-interactive shell does not have its folder on `PATH`.
+   * Every line run there starts with it (`floti bridge --floti`). Absent for
+   * a floti found on that login's `PATH`.
+   */
+  floti?: string
+}
+
+/**
+ * Why `path` cannot name floti in a line run on the host's computer, or null:
+ * it must be absolute there (`/...`, `C:\...` or `C:/...`) and hold nothing a
+ * shell would read as more than a word in double quotes. The same rule as
+ * `remote_floti_problem` in crates/host/src/bridge.rs, which refuses it again.
+ */
+export function flotiPathProblem(path: unknown): string | null {
+  if (typeof path !== 'string' || path === '') return 'expected the full path of floti there'
+  const absolute = path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
+  if (!absolute) return `the floti to run there, ${JSON.stringify(path)}, is not a full path`
+  if (/[\p{Cc}"$`%]/u.test(path)) {
+    return `the floti to run there, ${JSON.stringify(path)}, holds a character a shell would not read as part of a path`
+  }
+  return null
+}
+
+/**
+ * The line that runs floti with `rest` on the host's computer: `floti <rest>`,
+ * or `<path> <rest>` with the path in double quotes when it holds a blank or a
+ * backslash, as `Transport::line` in crates/host/src/bridge.rs writes it.
+ */
+export function flotiLine(floti: string | undefined, rest: string): string {
+  if (floti === undefined) return `floti ${rest}`
+  return /[ \t\\]/.test(floti) ? `"${floti}" ${rest}` : `${floti} ${rest}`
 }
 
 /** The roles Settings > Hosts offers when adding a host: Admin by default. */
@@ -65,12 +98,23 @@ export const DEFAULT_PAIRING_ROLE: PairingRole = 'admin'
  *   approval run through the host's transport wrote when it failed, unedited.
  * - `failed`: the transport could not reach the host; `lastLine` is the last
  *   line ssh or the command wrote, unedited.
+ * - `missing`: the login answered, but has no floti to run; `lastLine` is
+ *   what its shell said.
+ * - `tooOld` and `newer`: the host refused this device's hello (P6). `host`
+ *   is the protocol version its floti speaks and `client` this Helm's. Too
+ *   old is updated there; newer means updating Helm on this PC.
+ * - `startsAtSignIn`: Helm installed floti there, nobody is signed in, and
+ *   the host starts at the next sign-in. Not a failure.
  */
 export type RemoteHostConnection =
   | { state: 'connected'; role?: DeviceRoleName }
   | { state: 'retrying' }
   | { state: 'pairing'; code: string; approvalFailed?: string }
   | { state: 'failed'; lastLine: string }
+  | { state: 'missing'; lastLine: string }
+  | { state: 'tooOld'; host: string; client: string }
+  | { state: 'newer'; host: string; client: string }
+  | { state: 'startsAtSignIn' }
 
 /** More hosts than anybody adds, and a ceiling on a value rewritten whole. */
 export const REMOTE_HOSTS_MAX = 32
@@ -248,6 +292,11 @@ export function remoteHostsProblem(value: unknown): string | null {
     const { role } = host as { role?: unknown }
     if (role !== undefined && role !== 'admin' && role !== 'operator') {
       return `expected admin or operator as the role for ${JSON.stringify(name)}, got ${describe(role)}`
+    }
+    const { floti } = host as { floti?: unknown }
+    if (floti !== undefined) {
+      const problem = flotiPathProblem(floti)
+      if (problem !== null) return `expected the floti path for ${JSON.stringify(name)}: ${problem}`
     }
   }
   return null

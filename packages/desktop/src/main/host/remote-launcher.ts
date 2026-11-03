@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { HostTransport, PairingRole } from '@helm/core/types'
+import { formatProtocol, type HostTransport, type PairingRole } from '@helm/core/types'
 import { HostRefusedError, connectHost, type HostConnection } from './client'
 import {
   BRIDGE_EXIT,
@@ -50,11 +50,18 @@ import {
 /** The start of the line the bridge writes while it waits for approval (`PAIRING_LINE_PREFIX` in bridge.rs). */
 export const PAIRING_LINE_PREFIX = 'floti bridge: pairing code '
 
-/** A remote host could not be reached; `lastLine` is what the bridge, ssh or the command said, unedited. */
+/**
+ * A remote host could not be reached; `lastLine` is what the bridge, ssh or
+ * the command said, unedited. `refused` holds the versions when the host
+ * refused this device's hello (P6), and which side to update.
+ */
 export class RemoteHostError extends Error {
   override name = 'RemoteHostError'
 
-  constructor(readonly lastLine: string) {
+  constructor(
+    readonly lastLine: string,
+    readonly refused: { host: string; client: string; update: 'host' | 'client' } | null = null
+  ) {
     super(lastLine)
   }
 }
@@ -90,16 +97,20 @@ export function transportArgv(transport: HostTransport): string[] {
 /**
  * `floti bridge`'s arguments for a remote host. `pairAs` asks to pair under
  * that name while nothing is pinned, and `approve` approves it with that role
- * in the same step, through the same transport.
+ * in the same step, through the same transport. `floti` is the full path of
+ * the floti Helm installed there, which every line run there starts with, for
+ * a login whose `PATH` does not have it.
  */
 export function remoteBridgeArgs(
   folder: string,
   transport: HostTransport,
   pairAs: string | null,
-  approve: PairingRole | null = null
+  approve: PairingRole | null = null,
+  floti?: string
 ): string[] {
   const pairing = pairAs === null ? [] : ['--pair', pairAs, ...(approve === null ? [] : ['--approve', approve])]
-  return ['bridge', folder, ...pairing, '--', ...transportArgv(transport)]
+  const path = floti === undefined ? [] : ['--floti', floti]
+  return ['bridge', folder, ...pairing, ...path, '--', ...transportArgv(transport)]
 }
 
 /** Told each code to approve there; `approvalFailed` is the line the failed approval wrote, when one did. */
@@ -112,6 +123,8 @@ export interface RemoteTarget {
   /** The host's own client folder on this device (`remoteClientFolder`). */
   folder: string
   transport: HostTransport
+  /** The full path of floti there, when Helm installed it (`RemoteHost.floti`). */
+  floti?: string | undefined
 }
 
 interface StandardError {
@@ -194,7 +207,8 @@ function spawnBridge(
   if (!deps.exists(binary)) return { binary, missing: true }
   // The user's own environment, as it is: their ssh finds their config, keys
   // and agent the way it does in their terminal.
-  const child = deps.spawn(binary, remoteBridgeArgs(target.folder, target.transport, pairAs, approve), {
+  const args = remoteBridgeArgs(target.folder, target.transport, pairAs, approve, target.floti)
+  const child = deps.spawn(binary, args, {
     env: deps.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
@@ -236,7 +250,13 @@ export async function startRemoteHost(
     if (error instanceof HostRefusedError) {
       closeInput(child)
       await exited
-      throw new RemoteHostError(`${clause(error.message)}.`)
+      const { refused } = error
+      throw new RemoteHostError(
+        `${clause(error.message)}.`,
+        refused === null
+          ? null
+          : { host: formatProtocol(refused.host), client: formatProtocol(refused.client), update: refused.update }
+      )
     }
     return failed()
   }

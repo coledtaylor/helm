@@ -1,11 +1,13 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type WebContents } from 'electron'
 import { FOREIGN_PAGE, type HelmPage, type HostPageLinks } from './host/page-link'
 import type { RemoteHostLinks } from './host/remote'
+import type { RemoteInstaller } from './host/remote-install'
 import type { PresenceCheck } from './presence'
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename } from 'node:path'
 import { pluginThemeOf, type AppSettings } from '@helm/core'
+import { remoteHostsProblem } from '@helm/core/types'
 import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
@@ -150,6 +152,8 @@ interface IpcContextBase {
    * changes `hosts` starts or ends them.
    */
   remoteHosts?: RemoteHostLinks | undefined
+  /** Installs and updates floti on those hosts' computers, after a yes; see `host/remote-install.ts`. */
+  remoteInstall?: RemoteInstaller | undefined
   /** Asks this computer to confirm its user is present; see `presence.ts`. Unavailable when absent. */
   presence?: PresenceCheck | undefined
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
@@ -275,6 +279,9 @@ export interface LocalHostControl {
 
 /** Refuses a host control asked for while sessions run in Helm itself. */
 const noLocalHost = (): Promise<never> => Promise.reject(new Error('Sessions do not run in the local host.'))
+
+/** Why there is nothing to install on: other hosts are reached only with sessions in the local host. */
+const NO_REMOTE_HOSTS = 'Hosts on other computers are reached only with sessions in the local host.'
 
 /**
  * A service main does not run while sessions run in the local host: every
@@ -433,6 +440,27 @@ export function registerIpc(ctx: IpcContext): void {
     },
 
     'remoteHosts:read': () => ctx.remoteHosts?.states() ?? {},
+    'remoteHosts:check': (target) => {
+      if (ctx.remoteInstall === undefined) return Promise.reject(new Error(NO_REMOTE_HOSTS))
+      if ('host' in target) {
+        const host = ctx.services.settings.hosts.find((each) => each.id === target.host)
+        if (host === undefined) return Promise.reject(new Error('This PC has no such host.'))
+        return ctx.remoteInstall.check({ transport: host.transport, floti: host.floti })
+      }
+      // A host being added is checked as the settings would keep it.
+      const problem = remoteHostsProblem([{ id: 'checked', name: 'checked', transport: target.transport, ...(target.floti !== undefined ? { floti: target.floti } : {}) }])
+      if (problem !== null) return Promise.reject(new Error(problem))
+      return ctx.remoteInstall.check(target)
+    },
+    'remoteHosts:install': async ({ id, host }) => {
+      if (ctx.remoteInstall === undefined) throw new Error(NO_REMOTE_HOSTS)
+      const outcome = await ctx.remoteInstall.install(id)
+      if (outcome.ok) ctx.remoteHosts?.installed(host, outcome.floti, outcome.startsAtNextSignIn)
+      return outcome
+    },
+    'remoteHosts:cancel': ({ id }) => {
+      ctx.remoteInstall?.cancel(id)
+    },
     'presence:confirm': ({ reason }) => ctx.presence?.confirm(reason) ?? 'unavailable',
 
     // Sessions in Helm itself: no host, so no host log file.
