@@ -1,0 +1,189 @@
+name: floti builds
+
+# floti in release for every OS and CPU a release carries it for, each on its
+# own native runner: Windows x64 and arm64, macOS Apple Silicon, and Linux x64
+# and arm64, statically linked. Each file is run and checked to be for its own
+# OS and CPU (packages/desktop/scripts/floti-release.mjs), then all five are
+# listed with their SHA-256s in `floti-<version>-SHA256SUMS`. The files go up
+# as workflow artifacts only: this workflow tags, releases and publishes
+# nothing. release.yml calls it and publishes what it made.
+#
+# The Linux files are the gnu targets built with `+crt-static`, set in RUSTFLAGS
+# here and nowhere a local build reads: V8 (deno_core) ships no musl build. An
+# explicit --target keeps the flag off build scripts and proc macros, which
+# must stay dynamic to load.
+on:
+  # `main` is absent for the reason it is in ci.yml: Release calls this on
+  # every push to main, so main is built once per push, not twice. The two path
+  # lists are the same; keep them so.
+  push:
+    branches-ignore: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      # The store embeds today's migrations at compile time.
+      - "packages/core/drizzle/**"
+      # floti's version is the desktop's (crates/host/build.rs).
+      - "packages/desktop/package.json"
+      - "packages/desktop/scripts/floti-release.mjs"
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "packages/core/drizzle/**"
+      - "packages/desktop/package.json"
+      - "packages/desktop/scripts/floti-release.mjs"
+      - ".github/workflows/**"
+  workflow_call:
+
+concurrency:
+  # Called from Release, github.workflow is the caller's, and a release that
+  # has started is never cancelled for the next push.
+  group: floti-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.workflow != 'Release' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: floti (${{ matrix.name }})
+    strategy:
+      # Each target reports on its own.
+      fail-fast: false
+      matrix:
+        # The names, OSes, CPUs and Rust targets are RELEASE_TARGETS in
+        # floti-release.mjs, which the check step refuses a mismatch against.
+        # The repository is public, so the arm runners are free.
+        include:
+          - name: windows-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: .exe
+          - name: windows-arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            suffix: .exe
+          - name: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - name: linux-x64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            rustflags: -C target-feature=+crt-static
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            rustflags: -C target-feature=+crt-static
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # The Rust version lives in rust-toolchain.toml; the target is added to
+      # exactly that toolchain.
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build
+        shell: bash
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --locked -p floti-host --bin floti --target ${{ matrix.target }}
+
+      # The header names this OS and CPU (and, on Linux, no interpreter and no
+      # shared library), and the file says this version, OS and CPU when run.
+      - name: Check it is floti for ${{ matrix.name }}
+        shell: bash
+        run: node packages/desktop/scripts/floti-release.mjs check "target/${{ matrix.target }}/release/floti${{ matrix.suffix }}" ${{ matrix.name }}
+
+      # The same, as the system's own tools say it.
+      - name: Check it is statically linked
+        if: startsWith(matrix.name, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=target/${{ matrix.target }}/release/floti
+          said=$(file -b "$file")
+          echo "file: $said"
+          if grep -qiE 'dynamically linked|interpreter' <<<"$said"; then
+            echo "::error::floti for ${{ matrix.name }} is dynamically linked: $said"
+            exit 1
+          fi
+          ldd_said=$(ldd "$file" 2>&1 || true)
+          echo "ldd: $ldd_said"
+          if ! grep -qE 'not a dynamic executable|statically linked' <<<"$ldd_said"; then
+            echo "::error::ldd lists libraries floti for ${{ matrix.name }} loads: $ldd_said"
+            exit 1
+          fi
+
+      - name: Name it for the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./packages/desktop/package.json').version")
+          mkdir -p "$RUNNER_TEMP/floti"
+          cp "target/${{ matrix.target }}/release/floti${{ matrix.suffix }}" "$RUNNER_TEMP/floti/floti-$version-${{ matrix.name }}${{ matrix.suffix }}"
+          ls -l "$RUNNER_TEMP/floti"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: floti-${{ matrix.name }}
+          path: ${{ runner.temp }}/floti/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The five files and their SHA-256 list, as one artifact: what release.yml
+  # attaches to the release and hands the desktop's jobs.
+  files:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: floti-*-*
+          path: ${{ runner.temp }}/floti-release
+          merge-multiple: true
+
+      # Refuses a folder that is not exactly the five builds of this version.
+      - name: List their SHA-256s
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./packages/desktop/package.json').version")
+          node packages/desktop/scripts/floti-release.mjs sums "$RUNNER_TEMP/floti-release" "$version"
+          cd "$RUNNER_TEMP/floti-release"
+          sha256sum --check --strict "floti-$version-SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: floti-release
+          path: ${{ runner.temp }}/floti-release/
+          if-no-files-found: error
+          retention-days: 7

@@ -28,7 +28,50 @@ sessions in the local host" is on: both commands first run
 `scripts/stage-floti.mjs`, which builds it in release with the Rust toolchain
 `rust-toolchain.toml` names and copies it to `packages/desktop/dist-host/`.
 electron-builder carries it beside the app, at `resources\floti.exe` on Windows
-and `Contents/Resources/floti` on macOS, where the app looks for it.
+and `Contents/Resources/floti` on macOS, where the app looks for it. A release
+build carries the release's own floti instead of building it again (see
+[floti for every host](#floti-for-every-host)), with the release's SHA-256 list
+beside it as `floti-SHA256SUMS`; a local build carries no list.
+
+### floti for every host
+
+Every release also carries `floti` on its own, for each computer a host can run
+on, so the desktop can put this version on a host whose OS or CPU differs from
+its own:
+
+| File | What it is |
+|---|---|
+| `floti-<version>-windows-x64.exe` | Windows on x64. |
+| `floti-<version>-windows-arm64.exe` | Windows on arm64. |
+| `floti-<version>-macos-arm64` | macOS on Apple Silicon. |
+| `floti-<version>-linux-x64` | Linux on x64, statically linked: it needs no C library of the computer's own. |
+| `floti-<version>-linux-arm64` | Linux on arm64, statically linked. |
+| `floti-<version>-SHA256SUMS` | The SHA-256 of each of the five, in `sha256sum` format; `sha256sum --check` reads it. |
+
+`.github/workflows/floti.yml` builds them, each on its own native runner
+(`windows-latest`, `windows-11-arm`, `macos-latest`, `ubuntu-latest`,
+`ubuntu-24.04-arm`), on every branch push that touches the host, its build or
+the workflows. `scripts/floti-release.mjs check` runs and checks each file: its
+header names its own OS and CPU, a Linux file names no program interpreter and
+needs no shared library (and `file` and `ldd` agree), and `floti --version` and
+`floti version` name this version, OS and CPU. Then `floti-release.mjs sums`
+refuses anything but exactly the five and writes their list. The files go up
+as workflow artifacts only; a branch push tags, releases and publishes nothing.
+
+The Linux files are the gnu targets built with `-C target-feature=+crt-static`
+and an explicit `--target`, set in that workflow's `RUSTFLAGS` and in no cargo
+config a local build reads. V8, which `deno_core` brings, ships no musl build,
+so musl would mean building V8 from source. The explicit target keeps the flag
+off build scripts and proc macros, which must stay dynamic.
+
+`release.yml` calls the same workflow, and its desktop jobs hand
+`stage-floti.mjs` the release's file for their own platform (`FLOTI_PREBUILT`)
+and the list (`FLOTI_SHA256SUMS`). It refuses a file whose header is another
+platform's or whose SHA-256 the list does not give, and stages the list as
+`dist-host/floti-SHA256SUMS`, which electron-builder carries as
+`resources\floti-SHA256SUMS` on Windows and
+`Contents/Resources/floti-SHA256SUMS` on macOS. The floti inside the app is
+therefore byte for byte the one the release lists.
 
 Beside `floti` goes the Node runtime the local host runs plugin services on.
 `scripts/node-runtime.json` pins its version (a Node 24 LTS release) and, for
@@ -173,10 +216,17 @@ hand, no button to press, no artefact built on a developer's machine.
 
 `.github/workflows/release.yml` reads the version out of
 `packages/desktop/package.json` and, if `v<version>` is not already a tag on the
-remote, runs the checks, builds the Windows artefacts on a clean
-`windows-latest` runner and the macOS ones on `macos-latest`, and publishes one
-GitHub release with all four attached. A merge that does not bump the version
-runs the checks, skips both build jobs and finishes green.
+remote, runs the checks, builds floti for its five targets, builds the Windows
+artefacts on a clean `windows-latest` runner and the macOS ones on
+`macos-latest`, and publishes one GitHub release with all ten attached: the
+four desktop files, the five floti files and their SHA-256 list. A merge that
+does not bump the version runs the checks and the floti builds, skips both
+desktop build jobs and finishes green.
+
+- **floti is built once, by `floti.yml`.** `release` and `release-mac` need it,
+  so a failed floti build on any target skips the release. Before publishing,
+  `release` checks its folder holds exactly the six floti files and that
+  `sha256sum --check` passes over them.
 
 - **The Mac build is its own job and publishes nothing.** `release-mac` has the
   same gate as `release`, builds with `pnpm dist:mac`, runs
@@ -198,7 +248,7 @@ runs the checks, skips both build jobs and finishes green.
   the SDK publish: no tag, no release, no artefacts.
 - **The release is created as a draft and published in the same job**, which is
   not an approval gate. `/releases/latest` ignores drafts, and publishing the
-  draft is what creates the tag, so the ref and all four assets appear
+  draft is what creates the tag, so the ref and all ten assets appear
   together rather than leaving a window where the app announces a version whose
   download page is empty. A run cancelled mid-upload leaves an unpublished
   draft; the next run deletes it and starts over.
@@ -232,10 +282,11 @@ runs the checks, skips both build jobs and finishes green.
   electron-builder's scratch directory rather than the file a person downloads.
   It runs on any exe: `pnpm verify:artifact -- path/to/Helm-x.y.z-setup.exe`.
   The Mac artefacts get `verify-mac-artifact.mjs`, described above.
-- **The confirmation expects all four files.** After publishing, the job asks
+- **The confirmation expects all ten files.** After publishing, the job asks
   `/releases/latest` - the endpoint the in-app check asks - and fails unless it
   names this tag, is not a draft, and lists exactly the setup exe, the portable
-  exe, the dmg and the zip.
+  exe, the dmg, the zip, the five floti files and `floti-<version>-SHA256SUMS`.
+  A preview is checked for the same ten.
 
 ## Looking at the Mac build
 

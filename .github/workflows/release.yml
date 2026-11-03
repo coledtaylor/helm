@@ -99,12 +99,22 @@ jobs:
   check:
     uses: ./.github/workflows/ci.yml
 
+  # floti for Windows x64 and arm64, macOS Apple Silicon and static Linux x64
+  # and arm64, each checked on its own runner, and their SHA-256 list, as the
+  # `floti-release` artifact. Like `check`, it runs on every push to main, and
+  # a failure skips the release: a version is never published without all
+  # five. The desktop's jobs carry the file for their own platform rather than
+  # building floti again, so the floti in the app is the one the release lists.
+  floti:
+    uses: ./.github/workflows/floti.yml
+
   # The macOS artefacts, built where electron-builder can make a dmg. Same gate
   # as the Windows job, and it publishes nothing: it hands the dmg and the zip
-  # to `release`, which attaches all four files to one release. A failure here
+  # to `release`, which attaches them with the Windows files and floti's to
+  # one release. A failure here
   # skips `release` too, so a version is never published without its Mac build.
   release-mac:
-    needs: [version, check]
+    needs: [version, check, floti]
     if: needs.version.outputs.release == 'true'
     runs-on: macos-latest
     permissions:
@@ -125,15 +135,29 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # The artefacts carry the `floti` host, built from rust-toolchain.toml's
-      # toolchain by scripts/stage-floti.mjs.
-      - name: Rust toolchain
-        run: rustup toolchain install
+      - name: Fetch the release's floti files
+        uses: actions/download-artifact@v4
+        with:
+          name: floti-release
+          path: ${{ runner.temp }}/floti-release
 
       # Ad-hoc signed (`identity: '-'` in electron-builder.yml): there is no
-      # Developer ID, and no certificate or secret is involved.
+      # Developer ID, and no certificate or secret is involved. The app carries
+      # the release's floti for macOS arm64 and the release's SHA-256 list,
+      # staged by scripts/stage-floti.mjs, which checks the one against the
+      # other.
       - name: Build artefacts
+        env:
+          FLOTI_PREBUILT: ${{ runner.temp }}/floti-release/floti-${{ env.VERSION }}-macos-arm64
+          FLOTI_SHA256SUMS: ${{ runner.temp }}/floti-release/floti-${{ env.VERSION }}-SHA256SUMS
         run: pnpm dist:mac
+
+      - name: Verify the app carries the release's floti and its SHA-256 list
+        run: |
+          set -euo pipefail
+          resources=packages/desktop/dist-app/mac-arm64/Helm.app/Contents/Resources
+          cmp "$RUNNER_TEMP/floti-release/floti-$VERSION-macos-arm64" "$resources/floti"
+          cmp "$RUNNER_TEMP/floti-release/floti-$VERSION-SHA256SUMS" "$resources/floti-SHA256SUMS"
 
       - name: Verify the artefacts are arm64, ad-hoc signed, with Helm's icon and their native modules
         run: |
@@ -153,7 +177,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: [version, check, release-mac]
+    needs: [version, check, floti, release-mac]
     # No always()/!cancelled() here, deliberately: a failed `check` or
     # `release-mac` must skip this job, and the default `needs` behaviour is
     # what does that. A main that fails the gate, the Windows check or the Mac
@@ -199,13 +223,28 @@ jobs:
           where.exe pnpm || echo '(no pnpm on PATH - dist-win.mjs will say so)'
           pnpm --version
 
-      # The artefacts carry the `floti` host, built from rust-toolchain.toml's
-      # toolchain by scripts/stage-floti.mjs.
-      - name: Rust toolchain
-        run: rustup toolchain install
+      - name: Fetch the release's floti files
+        uses: actions/download-artifact@v4
+        with:
+          name: floti-release
+          path: ${{ runner.temp }}/floti-release
 
+      # The artefacts carry the release's floti for Windows x64 and the
+      # release's SHA-256 list, staged by scripts/stage-floti.mjs, which checks
+      # the one against the other.
       - name: Build artefacts
+        env:
+          FLOTI_PREBUILT: ${{ runner.temp }}/floti-release/floti-${{ env.VERSION }}-windows-x64.exe
+          FLOTI_SHA256SUMS: ${{ runner.temp }}/floti-release/floti-${{ env.VERSION }}-SHA256SUMS
         run: pnpm dist:win
+
+      - name: Verify the app carries the release's floti and its SHA-256 list
+        shell: bash
+        run: |
+          set -euo pipefail
+          resources=packages/desktop/dist-app/win-unpacked/resources
+          cmp "$RUNNER_TEMP/floti-release/floti-$VERSION-windows-x64.exe" "$resources/floti.exe"
+          cmp "$RUNNER_TEMP/floti-release/floti-$VERSION-SHA256SUMS" "$resources/floti-SHA256SUMS"
 
       - name: Verify the artefacts carry their unpacked native modules
         shell: bash
@@ -305,6 +344,18 @@ jobs:
           fi
           echo "$count commit(s) since ${previous:-the beginning}."
 
+      # The five floti files and their list, exactly, each matching its
+      # SHA-256: a release is never published missing one.
+      - name: Confirm the floti files and their SHA-256s
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/floti-release"
+          have=$(ls | LC_ALL=C sort | paste -sd ' ' -)
+          expected="floti-$VERSION-SHA256SUMS floti-$VERSION-linux-arm64 floti-$VERSION-linux-x64 floti-$VERSION-macos-arm64 floti-$VERSION-windows-arm64.exe floti-$VERSION-windows-x64.exe"
+          [[ $have == "$expected" ]] || { echo "::error::the floti files are [$have], expected [$expected]"; exit 1; }
+          sha256sum --check --strict "floti-$VERSION-SHA256SUMS"
+
       - name: Publish
         shell: bash
         run: |
@@ -325,8 +376,8 @@ jobs:
           # approval gate. /releases/latest ignores drafts, so a release that
           # waits for someone to press publish is a release the in-app check
           # cannot see. The draft here lives for as long as the upload takes:
-          # publishing it is what creates the tag, so the ref and all four
-          # assets become visible in the same instant. `gh release create` with
+          # publishing it is what creates the tag, so the ref and every
+          # asset become visible in the same instant. `gh release create` with
           # assets does it the other way round - tag first, upload after - which
           # leaves a window where the app announces an update whose download
           # page is empty.
@@ -338,7 +389,13 @@ jobs:
             "packages/desktop/dist-app/Helm-$VERSION-portable.exe" \
             "packages/desktop/dist-app/Helm-$VERSION-setup.exe" \
             "packages/desktop/dist-app/Helm-$VERSION-arm64.dmg" \
-            "packages/desktop/dist-app/Helm-$VERSION-arm64-mac.zip"
+            "packages/desktop/dist-app/Helm-$VERSION-arm64-mac.zip" \
+            "$RUNNER_TEMP/floti-release/floti-$VERSION-windows-x64.exe" \
+            "$RUNNER_TEMP/floti-release/floti-$VERSION-windows-arm64.exe" \
+            "$RUNNER_TEMP/floti-release/floti-$VERSION-macos-arm64" \
+            "$RUNNER_TEMP/floti-release/floti-$VERSION-linux-x64" \
+            "$RUNNER_TEMP/floti-release/floti-$VERSION-linux-arm64" \
+            "$RUNNER_TEMP/floti-release/floti-$VERSION-SHA256SUMS"
 
           if [[ $PREVIEW == true ]]; then
             # A preview stays a draft. Its tag is made here, once every asset
@@ -359,7 +416,7 @@ jobs:
 
           release=$(gh release view "$TAG" --json isDraft,isPrerelease,assets)
           assets=$(jq -r '[.assets[].name] | sort | join(", ")' <<<"$release")
-          expected="Helm-$VERSION-arm64-mac.zip, Helm-$VERSION-arm64.dmg, Helm-$VERSION-portable.exe, Helm-$VERSION-setup.exe"
+          expected="Helm-$VERSION-arm64-mac.zip, Helm-$VERSION-arm64.dmg, Helm-$VERSION-portable.exe, Helm-$VERSION-setup.exe, floti-$VERSION-SHA256SUMS, floti-$VERSION-linux-arm64, floti-$VERSION-linux-x64, floti-$VERSION-macos-arm64, floti-$VERSION-windows-arm64.exe, floti-$VERSION-windows-x64.exe"
           latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
 
           [[ $(jq -r .isDraft <<<"$release") == true ]]      || { echo "::error::$TAG is not a draft"; exit 1; }
@@ -395,8 +452,9 @@ jobs:
           tag=$(jq -r .tag_name <<<"$latest")
           draft=$(jq -r .draft <<<"$latest")
           assets=$(jq -r '[.assets[].name] | sort | join(", ")' <<<"$latest")
-          # Sorted as jq sorts them: the Mac zip, the dmg, then the two exes.
-          expected="Helm-$VERSION-arm64-mac.zip, Helm-$VERSION-arm64.dmg, Helm-$VERSION-portable.exe, Helm-$VERSION-setup.exe"
+          # Sorted as jq sorts them: the Mac zip, the dmg, the two exes, then
+          # the floti files (upper case sorts before lower).
+          expected="Helm-$VERSION-arm64-mac.zip, Helm-$VERSION-arm64.dmg, Helm-$VERSION-portable.exe, Helm-$VERSION-setup.exe, floti-$VERSION-SHA256SUMS, floti-$VERSION-linux-arm64, floti-$VERSION-linux-x64, floti-$VERSION-macos-arm64, floti-$VERSION-windows-arm64.exe, floti-$VERSION-windows-x64.exe"
 
           [[ $tag == "$TAG" ]]        || { echo "::error::/releases/latest says $tag, expected $TAG"; exit 1; }
           [[ $draft == false ]]       || { echo "::error::$TAG is still a draft"; exit 1; }
