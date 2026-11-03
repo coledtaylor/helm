@@ -142,6 +142,7 @@ describe('useProfiles', () => {
     box.answer('profile:save', ({ draft }) => ({ profile: { ...draft, id: 6, ...stamp }, problems: [] }))
     box.answer('profile:launch', () => ({
       session: { ...SESSION, cwd: remote.root },
+      profile: remote,
       overlays: [],
       composedInstructions: false,
       warnings: []

@@ -32,7 +32,13 @@ beforeEach(() => {
   const box = remoteBridge('h1')
   box.reset()
   box.answer('profile:list', () => [INFRA])
-  box.answer('profile:launch', () => ({ session: STARTED, overlays: [], composedInstructions: false, warnings: [] }))
+  box.answer('profile:launch', () => ({
+    session: STARTED,
+    profile: INFRA,
+    overlays: [],
+    composedInstructions: false,
+    warnings: []
+  }))
 })
 
 describe('HostProfiles', () => {

@@ -23,8 +23,13 @@ beforeEach(() => {
     dir: '/home/you/.config/helm/templates',
     problems: []
   }))
-  box.answer('template:preview', ({ template }) => ({ template, entries: ['harness.yaml'], note: null, problems: [] }))
-  box.answer('harness:create', ({ dir, name }) => ({ path: `${dir}/${name ?? ''}`, problems: [] }))
+  box.answer('template:preview', ({ template }) => ({ template, entries: ['harness.yaml'], note: '', problems: [] }))
+  box.answer('harness:create', ({ dir, name }) => ({
+    path: `${dir}/${name ?? ''}`,
+    created: ['harness.yaml'],
+    problems: [],
+    roots: [`${dir}/${name ?? ''}`]
+  }))
 })
 
 describe('useSetup on a host on another computer', () => {
