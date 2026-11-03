@@ -35,8 +35,15 @@ of memory. `cargo check -p <crate>` finds compile errors without linking
 anything. A test that passed is run again only once the code it covers has
 changed. A full suite is a regression check, and CI is where it runs: push the
 branch and read the results on all three OSes, rather than running it locally.
-Locally, a full suite runs only for what CI does not run, `pnpm test:e2e` for a
-change to a user workflow.
+
+**Unit and integration tests validate a change while it is built; end-to-end
+tests validate the happy paths and catch product regressions.** An end-to-end
+run builds the app and drives it, which costs minutes and a great deal of
+memory, so it happens once, at the very end of a task that changed a user
+workflow: after the task's unit and integration tests and its CI have passed,
+and only that workflow's spec (see [End-to-end tests](#end-to-end-tests)). It is
+never part of building a change or checking a fix. The whole `pnpm test:e2e`
+runs only when the owner asks for it.
 
 The protocol crate generates JSON Schema and TypeScript into
 `crates/floti-protocol/generated/`. A test fails when those files are out of
@@ -402,7 +409,8 @@ automatically. A targeted `vitest run` measures nothing, so it never trips them.
 ## End-to-end tests
 
 `packages/desktop/e2e/`. One test per user workflow, on its happy path; detail
-belongs in the tier above, so keep this one small. A refusal or an edge case is
+belongs in the tier above, so keep this one small. They run once at the end of a
+task, the changed workflow's spec only, never while it is built. A refusal or an edge case is
 tested here only when nothing but the real app can show it: a native view drawn
 over the window, or Electron's own guards on a page.
 
