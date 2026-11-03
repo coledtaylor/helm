@@ -20,6 +20,12 @@
 //! that message. Those rows are Claude Code's, so only Claude Code is given
 //! them, and a kept usage that cannot be read leaves its spend out rather
 //! than reading smaller.
+//!
+//! Kept usage changes only when the store does, so the reader keeps the rows
+//! it last read and reads the store again only when told it changed
+//! ([`UsageReader::kept_changed`]), or after a read that failed. A reading
+//! taken for the agent's own figures, which change on their own schedule,
+//! reuses the rows it has.
 
 mod day;
 
@@ -91,6 +97,10 @@ pub struct UsageReader {
     backends: Vec<Arc<dyn AgentBackend>>,
     day: Box<dyn LocalDay>,
     kept: Option<KeptSource>,
+    /// The kept rows as last read, oldest first. `None` before the first
+    /// read, once the store said they changed, and while the last read
+    /// failed: the next reading reads them again.
+    kept_rows: Mutex<Option<Arc<Vec<KeptUsage>>>>,
     latest: Mutex<Vec<UsageSnapshot>>,
 }
 
@@ -105,6 +115,7 @@ impl UsageReader {
                 .collect(),
             day,
             kept: None,
+            kept_rows: Mutex::new(None),
             latest: Mutex::new(Vec::new()),
         }
     }
@@ -124,26 +135,53 @@ impl UsageReader {
             .clone()
     }
 
+    /// The usage the store keeps changed: the next reading reads it again.
+    pub fn kept_changed(&self) {
+        *self
+            .kept_rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// The kept rows, read from the store only when there are none as last
+    /// read; `None` when they cannot be read.
+    fn kept_rows(&self, since_ms: u64) -> Option<Arc<Vec<KeptUsage>>> {
+        let Some(source) = &self.kept else {
+            return Some(Arc::new(Vec::new()));
+        };
+        // Held across the read, so a change told meanwhile waits for it and
+        // is not overwritten by rows read before it.
+        let mut rows = self
+            .kept_rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if rows.is_none() {
+            *rows = source(since_ms).ok().map(|mut read| {
+                read.sort_unstable_by_key(|row| row.at);
+                Arc::new(read)
+            });
+        }
+        rows.clone()
+    }
+
     /// Takes a reading of each backend now and keeps it as the latest. Says
     /// whether it reads differently from the set before.
     pub fn read(&self) -> (Vec<UsageSnapshot>, bool) {
         let now = now_ms();
         let today = self.day.today_start_ms(now);
-        let kept = match &self.kept {
-            Some(read) => read(now.saturating_sub(KEPT_SINCE_MS)).ok(),
-            None => Some(Vec::new()),
-        };
+        let since = now.saturating_sub(KEPT_SINCE_MS);
+        let kept_rows = self.kept_rows(since);
+        // The rows still inside the longest window, without copying them.
+        let kept = kept_rows
+            .as_deref()
+            .map(|rows| &rows[rows.partition_point(|row| row.at < since)..]);
         let claude_code = BackendId::claude_code();
         let readings: Vec<UsageSnapshot> = self
             .backends
             .iter()
             .filter_map(|backend| {
                 let keeps = backend.id() == &claude_code;
-                let rows = if keeps {
-                    kept.as_deref()
-                } else {
-                    Some(&[][..])
-                };
+                let rows = if keeps { kept } else { Some(&[][..]) };
                 match backend.read_usage_keeping(
                     now,
                     today.unwrap_or(now),

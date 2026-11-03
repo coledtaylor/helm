@@ -18,7 +18,8 @@ use floti_host::history::archive::{self, ArchiveInput};
 use floti_host::platform::process_tree::Native as NativeTree;
 use floti_host::server::HostConfig;
 use floti_host::store::Store;
-use floti_host::testkit::{RunningHost, TestClient, TestDirs};
+use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
+use floti_protocol::channel::from_payload;
 use floti_protocol::channels::carry::{
     CarriedConfigVersion, CarriedConfigVersions, CarriedConversation, CarriedConversationPart,
     CarriedConversations, CarriedSessionName, CarriedSessionNames, CarriedUsageRow,
@@ -29,11 +30,12 @@ use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
     ArchiveConversation, ArchiveMessage, ArchiveRole, ArchiveSessionState, HistoryQuery,
     HistoryRefresh, HistorySession, HistorySessionRef, HistorySessions, ReadArchiveStats,
-    ReadUsage,
+    ReadUsage, UsageChanged, UsageSnapshot,
 };
 use floti_protocol::channels::workspace::{
     ListConfigSnapshots, ReadConfigSnapshot, ScopedFile, SnapshotRef,
 };
+use floti_protocol::{EventChannel, Message};
 use serde_json::json;
 
 const ONE: &str = "11111111-1111-4111-8111-111111111111";
@@ -567,5 +569,80 @@ async fn a_device_that_is_not_an_admin_cannot_copy_into_the_host() {
         .await
         .unwrap_err();
     assert!(refused.message.contains("admin"), "{}", refused.message);
+    host.stop(HostStopReason::Stop).await;
+}
+
+/// The readings a `usage:changed` subscription starts with.
+fn usage_snapshot(message: Message) -> Vec<UsageSnapshot> {
+    match message {
+        Message::Snapshot(snapshot) => from_payload(&snapshot.state).unwrap(),
+        other => panic!("expected a snapshot, got {other:?}"),
+    }
+}
+
+/// The next `usage:changed` event on `subscription`.
+async fn next_usage(client: &mut TestClient, subscription: u64) -> Vec<UsageSnapshot> {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match client.next(left).await {
+            Some(Message::Event(event)) if event.subscription == subscription => {
+                return from_payload(&event.payload).unwrap();
+            }
+            Some(_) => {}
+            None => panic!("no usage reading within {PATIENCE:?}"),
+        }
+    }
+}
+
+fn week_messages(readings: &[UsageSnapshot]) -> u32 {
+    readings
+        .iter()
+        .find_map(|reading| reading.spend.as_ref())
+        .expect("a spend over the week")
+        .week
+        .messages
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn usage_copied_from_helm_is_counted_in_the_next_reading_every_subscriber_receives() {
+    let world = World::new();
+    let config = world.config();
+    let endpoint = config.endpoint.clone();
+    let host = RunningHost::start(config);
+    let mut copier = TestClient::connect(&endpoint, &[]).await;
+    let mut watcher = TestClient::connect(&endpoint, &[]).await;
+
+    // The host's own kept row is counted from the start.
+    let first = usage_snapshot(copier.subscribe_on(7, UsageChanged::NAME).await);
+    assert_eq!(week_messages(&first), 1);
+    let watched = usage_snapshot(watcher.subscribe_on(8, UsageChanged::NAME).await);
+    assert_eq!(week_messages(&watched), 1);
+
+    let row = |uuid: &str, at: u64| CarriedUsageRow {
+        uuid: uuid.to_owned(),
+        at,
+        model: "claude-opus-5".to_owned(),
+        input: 1000,
+        output: 100,
+        cache_write5m: 0,
+        cache_write1h: 0,
+        cache_read: 0,
+    };
+    let merged = copier
+        .request::<CarryUsage>(&CarriedUsageRows {
+            rows: vec![
+                row("copied-1", world.now - DAY_MS),
+                row("copied-2", world.now - 3 * DAY_MS),
+            ],
+        })
+        .await
+        .unwrap();
+    assert_eq!(merged, CarryMerged { added: 2, kept: 0 });
+
+    assert_eq!(week_messages(&next_usage(&mut copier, 7).await), 3);
+    assert_eq!(week_messages(&next_usage(&mut watcher, 8).await), 3);
+    let read = copier.request::<ReadUsage>(&()).await.unwrap();
+    assert_eq!(week_messages(&read), 3);
     host.stop(HostStopReason::Stop).await;
 }

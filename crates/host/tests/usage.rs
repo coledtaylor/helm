@@ -8,14 +8,16 @@
 //! Claude Code writes it.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use floti_host::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings, usage_view};
 use floti_host::agent::{AgentBackend, BackendAnswers};
 use floti_host::platform::process_tree::Native as NativeTree;
 use floti_host::server::{HostConfig, shell_backend};
 use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
-use floti_host::usage::{LocalDay, UsageReader, ZonedDay, same_readings};
+use floti_host::usage::{KeptSource, KeptUsage, LocalDay, UsageReader, ZonedDay, same_readings};
 use floti_protocol::channel::from_payload;
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
@@ -663,6 +665,135 @@ fn a_host_with_no_backend_that_declares_usage_reads_none() {
     let shell: Vec<Arc<dyn AgentBackend>> = vec![Arc::new(shell_backend(&world.dirs.user_env()))];
     let reader = UsageReader::new(&shell, Box::new(FixedDay(0)));
     assert_eq!(reader.read(), (Vec::new(), false));
+}
+
+/// Usage the store keeps, as a reader is given it, counting how often it is
+/// read. A store that cannot be read errs until it is mended.
+#[derive(Clone, Default)]
+struct KeptStore {
+    rows: Arc<Mutex<Vec<KeptUsage>>>,
+    reads: Arc<AtomicUsize>,
+    broken: Arc<AtomicBool>,
+}
+
+impl KeptStore {
+    fn source(&self) -> KeptSource {
+        let store = self.clone();
+        Box::new(move |since| {
+            store.reads.fetch_add(1, Ordering::SeqCst);
+            if store.broken.load(Ordering::SeqCst) {
+                return Err(floti_host::Error::Refused(
+                    "the store could not be read".into(),
+                ));
+            }
+            Ok(store
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|row| row.at >= since)
+                .cloned()
+                .collect())
+        })
+    }
+
+    fn keep(&self, uuid: &str, at: u64) {
+        self.rows.lock().unwrap().push(KeptUsage {
+            uuid: uuid.to_owned(),
+            at,
+            model: "claude-opus-5".to_owned(),
+            input: 1000,
+            output: 100,
+            cache_write_5m: 0,
+            cache_write_1h: 0,
+            cache_read: 0,
+        });
+    }
+
+    fn reads(&self) -> usize {
+        self.reads.load(Ordering::SeqCst)
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+fn week_messages(readings: &[UsageSnapshot]) -> Option<u32> {
+    readings[0].spend.as_ref().map(|spend| spend.week.messages)
+}
+
+const DAY_MS: u64 = 24 * HOUR;
+
+#[test]
+fn kept_usage_is_read_from_the_store_once_however_many_readings_follow_the_agents_figures() {
+    let world = Claude::new();
+    let now = now_ms();
+    let store = KeptStore::default();
+    store.keep("kept-1", now - DAY_MS);
+    // Older than the longest window: never counted.
+    store.keep("kept-old", now - 9 * DAY_MS);
+    let reader = UsageReader::new(&backends(&world), Box::new(FixedDay(0))).keeping(store.source());
+
+    for step in 0..50 {
+        world.write(&claude_json(json!(FETCHED + step), limits()));
+        let (readings, changed) = reader.read();
+        assert!(changed, "reading {step} follows the agent's figures");
+        assert_eq!(readings[0].fetched_at_ms, Some(FETCHED + step));
+        assert_eq!(week_messages(&readings), Some(1));
+    }
+    assert_eq!(store.reads(), 1);
+}
+
+#[test]
+fn kept_usage_the_store_gains_is_read_once_more_and_counted() {
+    let world = Claude::new();
+    world.write(&usual());
+    let now = now_ms();
+    let store = KeptStore::default();
+    store.keep("kept-1", now - DAY_MS);
+    let reader = UsageReader::new(&backends(&world), Box::new(FixedDay(0))).keeping(store.source());
+    assert_eq!(week_messages(&reader.read().0), Some(1));
+
+    // Rows land in the store; until it is said, the reading is the one before.
+    store.keep("copied-1", now - 2 * DAY_MS);
+    store.keep("copied-2", now - 3 * DAY_MS);
+    assert!(!reader.read().1);
+    assert_eq!(store.reads(), 1);
+
+    reader.kept_changed();
+    let (readings, changed) = reader.read();
+    assert!(changed);
+    assert_eq!(week_messages(&readings), Some(3));
+    assert_eq!(store.reads(), 2);
+    reader.read();
+    assert_eq!(store.reads(), 2);
+}
+
+#[test]
+fn kept_usage_that_cannot_be_read_leaves_the_spend_unknown_and_is_tried_again_until_it_reads() {
+    let world = Claude::new();
+    world.write(&usual());
+    let store = KeptStore::default();
+    store.keep("kept-1", now_ms() - DAY_MS);
+    store.broken.store(true, Ordering::SeqCst);
+    let reader = UsageReader::new(&backends(&world), Box::new(FixedDay(0))).keeping(store.source());
+
+    for tries in 1..=3 {
+        let (readings, _) = reader.read();
+        assert_eq!(readings[0].spend, None, "unknown, never zero");
+        assert_eq!(readings[0].limits.len(), 3);
+        assert_eq!(store.reads(), tries);
+    }
+
+    store.broken.store(false, Ordering::SeqCst);
+    assert_eq!(week_messages(&reader.read().0), Some(1));
+    assert_eq!(store.reads(), 4);
+    reader.read();
+    assert_eq!(store.reads(), 4);
 }
 
 // ---------------------------------------------------------------------------
