@@ -16,7 +16,6 @@ import { createTerminalStreams } from '../../../../shared/host/streams'
 import type { HelmBridge, SessionConfirmRequest, StartSessionRequest } from '../../../../shared/ipc'
 import { createLocalEvents } from './events'
 import type { HostReach } from './history'
-import type { PageLink } from './link'
 import type { HostAdapter } from './router'
 import { createTerminalsAdapter, type ShellShelf } from './terminals'
 
@@ -47,12 +46,16 @@ import { createTerminalsAdapter, type ShellShelf } from './terminals'
  * window has reached the host waits for the host's answer, and when the host
  * cannot be reached it rejects with the link's sentence, never an empty list.
  *
- * When the host goes without a stop or a quit (it crashed or was killed),
- * every session still running here is lost with it: each becomes `lost`, its
- * terminal is let go, and the window hears it on `session:exit`, so the tab
- * keeps its last screen with input off. Once the link has reconnected, the
- * new host's list is the word on each, and only those still running are
- * carried again.
+ * When the host goes without a stop or a quit (it crashed or was killed), its
+ * sessions keep running in its session keeper. Each stream ends with the
+ * connection, so a tab keeps its last screen and its keys reach nothing, under
+ * the host-stopped notice. Once the link has reconnected, the new host's list
+ * is the word on each: one still running is carried again on a new stream,
+ * which starts with the host's redraw of its screen as it is now; one that
+ * exited meanwhile, or went with its keeper, is told on `session:exit` as the
+ * host lists it. Nothing is resumed here: the host offers back only what it
+ * lost, and the window asks for that offer after each reconnect and each
+ * session lost at runtime.
  */
 
 /** Whether the window is in front, and word when that changes. */
@@ -62,7 +65,7 @@ export interface WindowFront {
 }
 
 export interface SessionsAdapterDeps {
-  link: HostReach & Pick<PageLink, 'onEnded'>
+  link: HostReach
   /** The preload's bridge, for what main keeps: the quit question, notifications, the last run's layout. */
   own: Pick<HelmBridge, 'invoke' | 'send' | 'on'>
   front: WindowFront
@@ -106,9 +109,13 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
   const events = createLocalEvents(() => {
     void host().catch(() => undefined)
   })
+  let shellStreamClosed: (id: number, reason: string | null, connectionEnded: boolean) => void = () => undefined
   const streams = createTerminalStreams({
     connection: () => current,
     deliver: (channel, id, data) => events.tell(channel, { id, data }),
+    closed: (channel, id, reason, connectionEnded) => {
+      if (channel === 'pterm:data') shellStreamClosed(id, reason, connectionEnded)
+    },
     log
   })
   const resources = createHostResources({
@@ -141,13 +148,36 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
     return record
   }
 
-  const adoptAll = (rows: readonly P.SessionRecord[]): void => {
+  /** A session that was running here has ended: the window hears it as it would the host's `session:exit`. */
+  const ended = (record: SessionRecord): void => {
+    records.set(record.id, record)
+    streams.close('session:data', record.id)
+    events.tell('session:exit', record)
+  }
+
+  /**
+   * Adopts what the host lists. A session running here that the host lists
+   * ended (it exited while the window had no host, or went with its keeper) is
+   * told as ended. With `whole`, the list is a new host's word on every
+   * session, so one running here that it does not list at all is lost.
+   */
+  const adoptAll = (rows: readonly P.SessionRecord[], whole: boolean): void => {
+    const listed = new Set<number>()
     for (const row of rows) {
       const record = sessionFromHost(row)
+      listed.add(record.id)
       const known = records.get(record.id)
+      if (known !== undefined && isRunning(known) && !isRunning(record)) {
+        ended(record)
+        continue
+      }
       // A rename answered here at once keeps its label until the host's row follows.
       if (known === undefined || known.status !== record.status) records.set(record.id, record)
       carry(records.get(record.id)!)
+    }
+    if (!whole) return
+    for (const record of [...records.values()]) {
+      if (isRunning(record) && !listed.has(record.id)) ended({ ...record, status: 'lost', exitCode: null })
     }
   }
 
@@ -194,7 +224,7 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         relistAgain = false
         const connection = current
         if (connection === null) return
-        adoptAll(await connection.request('session:list', null))
+        adoptAll(await connection.request('session:list', null), false)
       } while (relistAgain)
     } catch (error) {
       log(`host: session:list failed (${(error as Error).message})`)
@@ -202,18 +232,6 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
       relisting = false
     }
   }
-
-  link.onEnded((end) => {
-    // A stop or a quit ended each session on purpose, and the host said so.
-    if (end.planned) return
-    for (const record of records.values()) {
-      if (!isRunning(record)) continue
-      const lost: SessionRecord = { ...record, status: 'lost', exitCode: null }
-      records.set(record.id, lost)
-      streams.close('session:data', record.id)
-      events.tell('session:exit', lost)
-    }
-  })
 
   const onExit = (row: P.SessionRecord): void => {
     const record = sessionFromHost(row)
@@ -276,7 +294,7 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
     ]
     listed = connection.request('session:list', null).then(
       (rows) => {
-        adoptAll(rows)
+        adoptAll(rows, true)
         sendFocus()
       },
       (error: unknown) => log(`host: session:list failed (${(error as Error).message})`)
@@ -484,6 +502,7 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
     shelf: deps.shelf,
     log
   })
+  shellStreamClosed = terminals.streamClosed
 
   return Object.assign([sessions, terminals], {
     adopt: (row: P.SessionRecord) => adopt(sessionFromHost(row)),

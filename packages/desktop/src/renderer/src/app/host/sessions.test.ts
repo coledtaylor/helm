@@ -348,49 +348,94 @@ describe('sessions over the window’s own connection', () => {
       return { first, link, adapters, exits, streams }
     }
 
-    it('marks every session the window shows running lost, closes its terminal and tells the window, when the host went without a stop', async () => {
+    it('keeps every session running with its keys going nowhere while the host is gone, and tells the window nothing yet', async () => {
       const w = await shownWorld()
 
       w.link.lose({ planned: false, restarts: true })
       await settle()
 
-      expect(w.exits.map((record) => [record.id, record.status, record.exitCode])).toEqual([
-        [7, 'lost', null],
-        [9, 'lost', null]
-      ])
-      expect(w.streams.every((stream) => stream.closed)).toBe(true)
-      const listed = await ask(w.adapters, 'session:list')
-      expect(listed.map((record) => [record.id, record.status])).toEqual([
-        [7, 'lost'],
+      // They may be running on in the session keeper: the next host says.
+      expect(w.exits).toEqual([])
+      const listed = await ask(w.adapters, 'session:list').catch(() => null)
+      expect(listed?.map((record) => [record.id, record.status]) ?? null).toEqual([
+        [7, 'running'],
         [8, 'exited'],
-        [9, 'lost']
+        [9, 'running']
       ])
       // Keys pressed meanwhile reach no session.
       send(w.adapters, 'session:input', { id: 7, data: 'yes\r' })
       expect(w.streams[0]!.text()).toBe('')
     })
 
-    it('takes the new host’s word for its sessions once reconnected, carrying only those that run', async () => {
+    it('takes back each session the new host lists running, on a new stream that starts with its screen and takes keys, and resumes nothing, when the killed host’s sessions survived', async () => {
       const w = await shownWorld()
       w.link.lose({ planned: false, restarts: true })
       await settle()
 
-      // The new host reconciled what the dead one left running to lost.
+      // The new host took the keeper's sessions back with the same ids, and offers none of them.
+      const second = new FakeConnection()
+        .answer('session:list', () => [
+          row({ id: 7 }),
+          row({ id: 8, status: 'exited', exitCode: 0 }),
+          row({ id: 9, cwd: '/work dir/api' })
+        ])
+        .answer('session:restorable', () => null)
+      const data = hear(w.adapters, 'session:data')
+      await w.link.reconnect(second)
+      await settle()
+
+      expect(w.exits).toEqual([])
+      const listed = await ask(w.adapters, 'session:list')
+      expect(listed.map((record) => [record.id, record.status])).toEqual([
+        [7, 'running'],
+        [8, 'exited'],
+        [9, 'running']
+      ])
+      const seven = second.streamsFor('session:data', 7)
+      expect(seven).toHaveLength(1)
+      expect(second.streamsFor('session:data', 9)).toHaveLength(1)
+      expect(second.streamsFor('session:data', 8)).toEqual([])
+      // The host's redraw draws the screen as it is now, written while no host ran included.
+      seven[0]!.send('\x1bcYou said: sketch\r\ntick 12')
+      expect(data).toEqual([{ id: 7, data: '\x1bcYou said: sketch\r\ntick 12' }])
+      send(w.adapters, 'session:input', { id: 7, data: 'carry on\r' })
+      expect(seven[0]!.text()).toBe('carry on\r')
+      // Nothing was resumed: the host offers nothing back, so the window has nothing to restore.
+      await expect(ask(w.adapters, 'session:restorable')).resolves.toBeNull()
+      expect(second.payloads('session:restore')).toEqual([])
+      expect(second.payloads('session:launch')).toEqual([])
+      expect(second.payloads('history:resume')).toEqual([])
+    })
+
+    it('tells the window each session the new host lists ended, and one it does not list at all as lost', async () => {
+      const w = await shownWorld()
+      w.link.lose({ planned: false, restarts: true })
+      await settle()
+
+      // 7 exited while no host ran; 9 went with a keeper the new host could not use.
       const second = new FakeConnection().answer('session:list', () => [
-        row({ id: 7, status: 'lost' }),
-        row({ id: 8, status: 'exited', exitCode: 0 }),
-        row({ id: 9, status: 'lost' })
+        row({ id: 7, status: 'exited', exitCode: 5, endedAt: '2026-10-29T10:06:00.000Z', durationMs: 360_000 }),
+        row({ id: 8, status: 'exited', exitCode: 0 })
       ])
       await w.link.reconnect(second)
       await settle()
 
-      const listed = await ask(w.adapters, 'session:list')
-      expect(listed.map((record) => [record.id, record.status])).toEqual([
-        [7, 'lost'],
-        [8, 'exited'],
-        [9, 'lost']
+      expect(w.exits.map((record) => [record.id, record.status, record.exitCode])).toEqual([
+        [7, 'exited', 5],
+        [9, 'lost', null]
       ])
       expect(second.streams).toEqual([])
+    })
+
+    it('shows a session lost when the host says so while it stays connected, its keeper gone', async () => {
+      const w = await shownWorld()
+
+      w.first.push('session:exit', row({ id: 9, cwd: '/work dir/api', status: 'lost' }))
+
+      expect(w.exits.map((record) => [record.id, record.status, record.cwd])).toEqual([[9, 'lost', '/work dir/api']])
+      expect(w.streams[1]!.closed).toBe(true)
+      const listed = await ask(w.adapters, 'session:list')
+      expect(listed.find((record) => record.id === 9)?.status).toBe('lost')
     })
 
     it('marks nothing lost when the host was stopped on purpose', async () => {
@@ -485,22 +530,45 @@ describe('plain terminals over the window’s own connection', () => {
       return { first, link, adapters, exits, streams, shelf }
     }
 
-    it('ends every shell the window shows as lost, closes its terminal and keeps none for a reload, when the host went without a stop', async () => {
+    it('keeps every shell, and the terminal tab’s for a reload, with keys going nowhere while the host is gone', async () => {
       const w = await shellWorld()
 
       w.link.lose({ planned: false, restarts: true })
       await settle()
 
-      expect(w.exits).toEqual([
-        { id: 3, exitCode: null, lost: true },
-        { id: 4, exitCode: null, lost: true }
-      ])
-      expect(w.streams.every((stream) => stream.closed)).toBe(true)
-      // The shells went with the host: a reload asks the new host for new ones.
-      expect(JSON.parse(w.shelf.text ?? '{}')).toEqual({ version: 1, shells: [] })
-      // Keys pressed meanwhile reach no shell.
+      expect(w.exits).toEqual([])
+      expect(JSON.parse(w.shelf.text ?? '{}')).toEqual({
+        version: 1,
+        shells: [{ id: 4, path: '/work dir/app', shell: 'pwsh' }]
+      })
       send(w.adapters, 'pterm:input', { id: 3, data: 'ls\r' })
       expect(w.streams[0]!.text()).toBe('')
+    })
+
+    it('reattaches each shell the new host still has, typed into and closed there, and says lost only of one it does not have', async () => {
+      const w = await shellWorld()
+      w.link.lose({ planned: false, restarts: true })
+      await settle()
+
+      const second = new FakeConnection().answer('session:list', () => [])
+      await w.link.reconnect(second)
+      await settle()
+
+      const three = second.streamsFor('pterm:data', 3)
+      const four = second.streamsFor('pterm:data', 4)
+      expect([three.length, four.length]).toEqual([1, 1])
+      // 3 is still running in the keeper: its redraw comes, then it takes keys.
+      three[0]!.send('\x1bcPS> ')
+      send(w.adapters, 'pterm:input', { id: 3, data: 'ls\r' })
+      expect(three[0]!.text()).toBe('ls\r')
+      // 4 is not on the new host: it refuses the stream, and the shell is lost.
+      four[0]!.end('Terminal 4 is not open on this Floti host.')
+      expect(w.exits).toEqual([{ id: 4, exitCode: null, lost: true }])
+      expect(JSON.parse(w.shelf.text ?? '{}')).toEqual({ version: 1, shells: [] })
+
+      await ask(w.adapters, 'pterm:close', { id: 3 })
+      expect(second.payloads('pterm:close')).toEqual([{ id: 3 }])
+      expect(second.payloads('pterm:open')).toEqual([])
     })
 
     it('ends no shell when the host was stopped on purpose', async () => {

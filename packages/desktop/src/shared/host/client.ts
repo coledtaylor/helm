@@ -109,10 +109,12 @@ export interface StreamHandlers {
   /** Bytes from the host, in order and unread. */
   data: (bytes: Uint8Array) => void
   /**
-   * The host closed the stream (with its reason when it did not end normally),
-   * or the connection ended. Not called for a close this side asked for.
+   * The host closed the stream (with its reason when it did not end normally,
+   * such as refusing to open it), or the connection ended (`connectionEnded`,
+   * with the sentence that says why). Not called for a close this side asked
+   * for.
    */
-  close?: (reason: string | null) => void
+  close?: (reason: string | null, connectionEnded: boolean) => void
   /**
    * When true, the host's credit comes back only as the caller says the bytes
    * were consumed (`consumed`), so a slow consumer slows the host's sending.
@@ -297,7 +299,7 @@ class Connection implements HostConnection {
     }
     if (this.endedWith !== null) {
       const why = this.endedWith
-      queueMicrotask(() => handlers.close?.(why))
+      queueMicrotask(() => handlers.close?.(why, true))
     } else {
       this.streams.set(id, open)
       this.send({ type: 'streamOpen', stream: id, channel, params })
@@ -426,7 +428,7 @@ class Connection implements HostConnection {
         const open = this.streams.get(message.stream)
         if (open === undefined) return
         this.streams.delete(message.stream)
-        open.handlers.close?.(message.reason)
+        open.handlers.close?.(message.reason, false)
         return
       }
       case 'streamOpen':
@@ -460,7 +462,7 @@ class Connection implements HostConnection {
       const reason = `The local host sent ${data.length} bytes on stream ${id} with ${open.receive} bytes of credit.`
       this.streams.delete(id)
       this.send({ type: 'streamClose', stream: id, reason })
-      open.handlers.close?.(reason)
+      open.handlers.close?.(reason, false)
       return
     }
     open.receive -= data.length
@@ -523,7 +525,7 @@ class Connection implements HostConnection {
     for (const subscription of subscriptions) subscription.handlers.error?.(new HostConnectionEnded(why))
     const streams = [...this.streams.values()]
     this.streams.clear()
-    for (const open of streams) open.handlers.close?.(why)
+    for (const open of streams) open.handlers.close?.(why, true)
     this.settleEnded(why)
   }
 }

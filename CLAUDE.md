@@ -155,10 +155,13 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   (after saying how many sessions it ends) sends `host:stop`, and a host Helm
   started (`floti host --desktop`) exits by itself once it runs nothing and
   no client is attached. When the connection ends without a stop or a quit,
-  the window marks its sessions and shells lost, and Helm starts a new host
-  if a desktop started the one that died, then reconnects. A lost session
-  comes back through the new host's restore offer; a lost shell, as a new
-  shell in its folder.
+  the window keeps each tab's screen, dimmed with input off, and Helm starts
+  a new host if a desktop started the one that died, then reconnects. The
+  new host's list decides each: a session or shell it still runs is carried
+  again from its redraw, and nothing is resumed. One it lists lost, or that
+  is lost while it stays (its keeper died), comes back through the host's
+  restore offer, which the window asks for again then; a lost shell, as a
+  new shell in its folder.
 - With "Run sessions in the local host" on, every client sees every session
   in the host, and tabs, panes and splits are kept per device: `paneLayout`
   stays in `helm.db` and never reaches the host. A window gives a tab only to

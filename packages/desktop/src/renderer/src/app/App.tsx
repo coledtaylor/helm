@@ -3249,6 +3249,7 @@ export function App(): JSX.Element {
                 active={isFront}
                 windowsBuild={info?.windowsBuild ?? null}
                 onClose={closeSession}
+                hostGone={hostRunning === true && hostLink.lost !== null}
                 {...(session.status === 'lost' && hostRunning === true
                   ? {
                       lost: {

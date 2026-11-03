@@ -2,7 +2,6 @@ import type { HostConnection, HostSubscription } from '../../../../shared/host/c
 import type { TerminalStreams } from '../../../../shared/host/streams'
 import type { LocalEvents } from './events'
 import type { HostReach } from './history'
-import type { PageLink } from './link'
 import type { HostAdapter } from './router'
 
 /**
@@ -25,7 +24,7 @@ export interface ShellShelf {
 }
 
 export interface TerminalsAdapterDeps {
-  link: HostReach & Pick<PageLink, 'onEnded'>
+  link: HostReach
   /** The connection now, or null between connections. */
   current: () => HostConnection | null
   streams: TerminalStreams
@@ -63,7 +62,12 @@ function readShelf(shelf: ShellShelf | null): Shell[] {
 
 const samePath = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
 
-export function createTerminalsAdapter(deps: TerminalsAdapterDeps): HostAdapter {
+/** The terminals adapter, and the word on a shell's stream the host closed. */
+export type TerminalsAdapter = HostAdapter & {
+  streamClosed(id: number, reason: string | null, connectionEnded: boolean): void
+}
+
+export function createTerminalsAdapter(deps: TerminalsAdapterDeps): TerminalsAdapter {
   const { link, streams } = deps
   /** The shells this page shows, by id; `separate` ones are terminal tabs'. */
   const open = new Map<number, Shell & { separate: boolean }>()
@@ -106,22 +110,30 @@ export function createTerminalsAdapter(deps: TerminalsAdapterDeps): HostAdapter 
     })
   })
 
-  link.onEnded((end) => {
-    // A stop or a quit ended each shell on purpose, and the host said so.
-    if (end.planned) return
-    // Every shell went with the host that ran it, the ones kept for a reload
-    // included: a reload asks the next host for new ones.
-    const lost = [...open.keys()]
-    waiting = []
-    for (const id of lost) drop(id)
-    keep()
-    for (const id of lost) deps.events.tell('pterm:exit', { id, exitCode: null, lost: true })
-  })
+  // A host that went without a stop or a quit leaves its shells running in its
+  // session keeper: each keeps its screen, takes no input while there is no
+  // stream, and is carried again from the next host's redraw once the window
+  // reconnects (above). One the next host does not have is lost (`streamClosed`).
+
+  /**
+   * The host closed a shell's stream. With a reason, it would not carry it: the
+   * shell is not there (it went with its keeper), so the window is told it is
+   * lost. An ordinary end is `pterm:exit`'s, and a close with the connection
+   * waits for the next one.
+   */
+  const streamClosed = (id: number, reason: string | null, connectionEnded: boolean): void => {
+    if (connectionEnded || reason === null || !open.has(id)) return
+    const separate = open.get(id)?.separate === true
+    drop(id)
+    if (separate) keep()
+    deps.events.tell('pterm:exit', { id, exitCode: null, lost: true })
+  }
 
   const failed = (channel: string) => (error: unknown) =>
     deps.log(`host: ${channel} was not taken (${(error as Error).message})`)
 
   return {
+    streamClosed,
     requests: {
       'pterm:open': async (request) => {
         const separate = request.separate === true

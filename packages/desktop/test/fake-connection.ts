@@ -53,10 +53,18 @@ export class FakeStream implements HostStream {
     this.handlers.data(typeof bytes === 'string' ? new TextEncoder().encode(bytes) : bytes)
   }
 
-  /** The host closes it. */
+  /** The host closes it: with a reason when it did not end normally, such as a refused open. */
   end(reason: string | null = null): void {
+    if (this.closed) return
     this.closed = true
-    this.handlers.close?.(reason)
+    this.handlers.close?.(reason, false)
+  }
+
+  /** The connection it was on ended. */
+  endWithConnection(why: string): void {
+    if (this.closed) return
+    this.closed = true
+    this.handlers.close?.(why, true)
   }
 }
 
@@ -137,9 +145,13 @@ export class FakeConnection {
     return this.streams.filter((stream) => stream.channel === channel && (stream.params as { id: number }).id === id)
   }
 
+  /** The connection ends: every stream still open closes with it, as the real client's do. */
   close(): void {
+    if (this.closed) return
     this.closed = true
-    this.endWith('The connection to the local host was closed.')
+    const why = 'The connection to the local host was closed.'
+    for (const stream of this.streams) stream.endWithConnection(why)
+    this.endWith(why)
   }
 
   asConnection(): HostConnection {

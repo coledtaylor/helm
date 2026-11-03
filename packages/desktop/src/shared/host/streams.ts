@@ -25,8 +25,12 @@ export interface TerminalStreamsDeps {
   connection: () => HostConnection | null
   /** Output for the window, as the string its channel carries. */
   deliver: (channel: TerminalChannel, id: number, data: string) => void
-  /** The host closed a stream: its session or terminal has ended. */
-  closed?: (channel: TerminalChannel, id: number, reason: string | null) => void
+  /**
+   * A stream closed by the host (its session or terminal has ended, or with a
+   * reason when the host would not carry it, such as one it does not have), or
+   * with its connection (`connectionEnded`).
+   */
+  closed?: (channel: TerminalChannel, id: number, reason: string | null, connectionEnded: boolean) => void
   log: (line: string) => void
 }
 
@@ -73,7 +77,7 @@ export function createTerminalStreams(deps: TerminalStreamsDeps): TerminalStream
           const text = decoder.decode(bytes, { stream: true })
           if (text !== '') deps.deliver(entry.channel, entry.id, text)
         },
-        close: (reason) => {
+        close: (reason, connectionEnded) => {
           if (entry.stream !== stream) return
           entry.stream = null
           // Its terminal has ended: there is nothing to open again on a reload.
@@ -81,7 +85,7 @@ export function createTerminalStreams(deps: TerminalStreamsDeps): TerminalStream
           const rest = decoder.decode()
           if (rest !== '') deps.deliver(entry.channel, entry.id, rest)
           if (reason !== null) deps.log(`host: ${entry.channel} ${String(entry.id)} closed: ${reason}`)
-          deps.closed?.(entry.channel, entry.id, reason)
+          deps.closed?.(entry.channel, entry.id, reason, connectionEnded)
         }
       }
     )

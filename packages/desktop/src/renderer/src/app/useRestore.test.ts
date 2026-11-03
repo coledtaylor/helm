@@ -73,6 +73,24 @@ describe('useRestore', () => {
     expect(bridge.invoked('session:restorable')).toHaveLength(2)
   })
 
+  it('asks again for what the host offers when a session is lost while the host stays, its keeper gone', async () => {
+    bridge.answer('session:restorable', () => null)
+    const { result: hook } = renderHook(() => useRestore(0))
+    await waitFor(() => expect(bridge.invoked('session:restorable')).toHaveLength(1))
+    const lost: RestoreOffer = {
+      ...OFFER,
+      sessions: [{ ...OFFER.sessions[0]!, id: 9, name: 'lost with its keeper' }]
+    }
+    bridge.answer('session:restorable', () => lost)
+
+    // An ordinary end asks nothing; a lost one does.
+    act(() => bridge.emit('session:exit', { id: 8, status: 'exited', exitCode: 0 } as SessionRecord))
+    act(() => bridge.emit('session:exit', { id: 9, status: 'lost', exitCode: null } as SessionRecord))
+
+    await waitFor(() => expect(hook.current.offer).toEqual(lost))
+    expect(bridge.invoked('session:restorable')).toHaveLength(2)
+  })
+
   it('answers not now with nothing', async () => {
     bridge.answer('session:restore', () => ({ restored: [], failed: [] }))
     const { result: hook } = renderHook(() => useRestore())

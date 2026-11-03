@@ -2,7 +2,7 @@ import type { JSX } from 'react'
 import { cn } from '../lib/cn'
 import { CloseIcon, HistoryIcon } from './icons'
 
-/** A session that went with the host it ran in, and the way back to it. */
+/** A session lost on the host it ran in (its session keeper went), and the way back to it. */
 export interface SessionLost {
   /** The host it ran in, as the window names it: "this PC’s host". */
   hostName: string
@@ -34,7 +34,7 @@ const barButton = cn(
  * that ends the moment something goes wrong is exactly the one worth reading.
  * So this reports the outcome and offers the close rather than performing it.
  *
- * A session lost with its host says so, and offers Restore beside the close:
+ * A session lost on its host says so, and offers Restore beside the close:
  * it resumes the conversation through the restore offer the host makes once
  * it is back, so Restore waits until that offer holds this session.
  */
@@ -63,7 +63,7 @@ export function SessionEndedBar({ exitCode, durationMs, onClose, lost }: Session
       />
       <span className="font-medium">
         {lost !== undefined
-          ? `Session lost: ${lost.hostName} stopped`
+          ? `Session lost on ${lost.hostName}`
           : exitCode === null
             ? 'Session ended'
             : failed

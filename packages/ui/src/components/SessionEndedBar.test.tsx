@@ -38,7 +38,7 @@ describe('SessionEndedBar', () => {
       />
     )
     const bar = screen.getByRole('status')
-    expect(bar.textContent).toBe('Session lost: this PC’s host stoppedRestoreClose tab')
+    expect(bar.textContent).toBe('Session lost on this PC’s hostRestoreClose tab')
     // Not yet offered: the host has not come back.
     expect(screen.getByRole('button', { name: 'Restore' })).toHaveProperty('disabled', true)
 

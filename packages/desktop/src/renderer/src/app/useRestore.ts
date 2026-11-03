@@ -6,9 +6,11 @@ import { readable } from './errors'
 
 /**
  * The window's half of restoring after a crash: the offer main holds, read
- * when the window mounts and again each time the window gets its host back
+ * when the window mounts, again each time the window gets its host back
  * after losing it (`reconnects`), since the new host offers what the old one
- * lost; and the one call that answers it.
+ * lost, and again each time a session is told lost while the host stays
+ * (its session keeper went), which the host then offers back; and the one
+ * call that answers it.
  *
  * Where the reopened sessions go is the caller's - it owns the panes. This
  * owns what is said about it afterwards.
@@ -79,6 +81,16 @@ export function useRestore(reconnects = 0): RestoreState {
   const [offer, setOffer] = useState<RestoreOffer | null>(null)
   const [busy, setBusy] = useState(false)
   const [report, setReport] = useState<{ text: string; failed: boolean } | null>(null)
+  /** Sessions lost while the window had its host (their keeper went): each makes the host offer them back. */
+  const [losses, setLosses] = useState(0)
+
+  useEffect(
+    () =>
+      helm.on('session:exit', (record) => {
+        if (record.status === 'lost') setLosses((count) => count + 1)
+      }),
+    []
+  )
 
   useEffect(() => {
     let live = true
@@ -93,7 +105,7 @@ export function useRestore(reconnects = 0): RestoreState {
     return () => {
       live = false
     }
-  }, [reconnects])
+  }, [reconnects, losses])
 
   const restore = useCallback(
     async (

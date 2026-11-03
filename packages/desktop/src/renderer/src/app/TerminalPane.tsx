@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import type { SessionRecord } from '@helm/core'
 import { SessionEndedBar, type SessionLost } from '@helm/ui'
 import { getTerminal, mountTerminal } from './terminals'
+import { terminalPrefs } from './termprefs'
 
 export interface TerminalPaneProps {
   session: SessionRecord
@@ -10,8 +11,14 @@ export interface TerminalPaneProps {
   active: boolean
   windowsBuild: number | null
   onClose: (id: number) => void
-  /** Set when the session was lost with its host: the bar says so and offers Restore. */
+  /** Set when the session was lost: the bar says so and offers Restore. */
   lost?: SessionLost
+  /**
+   * The host this session runs in went without a stop and the window has not
+   * got one back yet. The session may still be running in its keeper, so the
+   * tab keeps its screen, dimmed with input off, until the next host says.
+   */
+  hostGone?: boolean
 }
 
 /**
@@ -22,7 +29,14 @@ export interface TerminalPaneProps {
  * pane is, whether it is the visible one, and whether it still has a process
  * behind it.
  */
-export function TerminalPane({ session, active, windowsBuild, onClose, lost }: TerminalPaneProps): JSX.Element {
+export function TerminalPane({
+  session,
+  active,
+  windowsBuild,
+  onClose,
+  lost,
+  hostGone = false
+}: TerminalPaneProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -30,6 +44,25 @@ export function TerminalPane({ session, active, windowsBuild, onClose, lost }: T
   }, [session.id, windowsBuild])
 
   const ended = session.status !== 'running'
+  const waiting = !ended && hostGone
+  const dimmed = waiting || (lost !== undefined && session.status === 'lost')
+
+  // A running session whose host is gone takes no keys until the next host
+  // carries it again; then its input and cursor come back.
+  useEffect(() => {
+    if (ended) return
+    const host = getTerminal(session.id)
+    if (!host) return
+    if (waiting) {
+      host.term.options.cursorBlink = false
+      host.term.options.disableStdin = true
+      host.term.blur()
+      return
+    }
+    if (host.term.options.disableStdin !== true) return
+    host.term.options.disableStdin = false
+    host.term.options.cursorBlink = terminalPrefs().cursorBlink
+  }, [waiting, ended, session.id])
 
   // Becoming visible is the one moment a pane has to re-measure: while it was
   // hidden its box was 0x0, so every resize the window went through in the
@@ -39,8 +72,8 @@ export function TerminalPane({ session, active, windowsBuild, onClose, lost }: T
     const host = getTerminal(session.id)
     if (!host) return
     host.refit()
-    if (!ended) host.term.focus()
-  }, [active, ended, session.id])
+    if (!ended && !waiting) host.term.focus()
+  }, [active, ended, waiting, session.id])
 
   // A terminal with no process behind it should not look like one that has.
   // The buffer stays readable and selectable; the blinking cursor and the
@@ -70,12 +103,12 @@ export function TerminalPane({ session, active, windowsBuild, onClose, lost }: T
       {/* The gutter is a wrapper rather than padding on the terminal's own
           container: xterm sizes the grid from that container's box, so the
           element it measures has to be exactly the area it is allowed to fill.
-          A session lost with its host keeps its last screen, dimmed. */}
+          A lost session, and one whose host is gone, keeps its last screen,
+          dimmed. */}
       <div
         data-terminal-lost={lost !== undefined && session.status === 'lost' ? true : undefined}
-        className={
-          lost !== undefined && session.status === 'lost' ? 'min-h-0 flex-1 p-2.5 opacity-60' : 'min-h-0 flex-1 p-2.5'
-        }
+        data-terminal-waiting={waiting ? true : undefined}
+        className={dimmed ? 'min-h-0 flex-1 p-2.5 opacity-60' : 'min-h-0 flex-1 p-2.5'}
       >
         <div ref={boxRef} className="h-full w-full" />
       </div>

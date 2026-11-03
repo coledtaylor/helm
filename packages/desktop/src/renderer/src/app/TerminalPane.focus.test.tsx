@@ -92,10 +92,31 @@ describe('TerminalPane', () => {
       disableStdin: true
     })
     expect(terminal.term.focus).not.toHaveBeenCalled()
-    expect(screen.getByRole('status').textContent).toContain('Session lost: this PC’s host stopped')
+    expect(screen.getByRole('status').textContent).toContain('Session lost on this PC’s host')
     expect(container.querySelector('[data-terminal-lost]')?.className).toContain('opacity-60')
 
     await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
     expect(onRestore).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a running session’s screen dimmed with input off while its host is gone, and turns input back on when the next host takes it back', () => {
+    const onClose = vi.fn()
+    const { container, rerender } = render(
+      <TerminalPane session={SESSION} active windowsBuild={null} onClose={onClose} hostGone />
+    )
+
+    expect(terminal.term.options).toMatchObject({ cursorBlink: false, disableStdin: true })
+    expect(terminal.term.blur).toHaveBeenCalled()
+    expect(terminal.term.focus).not.toHaveBeenCalled()
+    // Still running: no ended bar, only the host-stopped notice the window shows.
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(container.querySelector('[data-terminal-waiting]')?.className).toContain('opacity-60')
+
+    rerender(<TerminalPane session={SESSION} active windowsBuild={null} onClose={onClose} hostGone={false} />)
+
+    expect(terminal.term.options).toMatchObject({ cursorBlink: true, disableStdin: false })
+    expect(terminal.term.focus).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-terminal-waiting]')).toBeNull()
+    expect(container.querySelector('.opacity-60')).toBeNull()
   })
 })
