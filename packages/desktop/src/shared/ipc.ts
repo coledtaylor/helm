@@ -755,6 +755,13 @@ export interface IpcRequests {
   /** The user cancelled an offer: main forgets it, and nothing is run there. */
   'remoteHosts:cancel': { request: { id: string }; response: void }
 
+  /**
+   * The user's Reconnect now: main's link to host `id` drops the wait it is
+   * in and tries at once. Nothing else is sent to the host, and nothing from
+   * before the drop is sent again.
+   */
+  'remoteHosts:reconnect': { request: { id: string }; response: void }
+
   'settings:read': { request: void; response: AppSettings }
   'settings:write': { request: Partial<AppSettings>; response: AppSettings }
 
@@ -2104,6 +2111,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'remoteHosts:check': true,
   'remoteHosts:install': true,
   'remoteHosts:cancel': true,
+  'remoteHosts:reconnect': true,
   'settings:read': true,
   'settings:write': true,
   'ownSettings:read': true,

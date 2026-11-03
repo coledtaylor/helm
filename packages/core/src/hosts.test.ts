@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   describeTransport,
   formatCommandLine,
+  lineToTryByHand,
   LOCAL_HOST_KEY,
   remoteHostFromDraft,
   remoteHostsProblem,
@@ -77,6 +78,16 @@ describe('how a host is reached, said', () => {
     expect(transportFix({ kind: 'ssh', target: 'build-box' })).toBe(
       'Sign in with ssh build-box in a terminal, then try again.'
     )
+  })
+
+  it('S5: the line to try by hand is the transport as typed followed by floti connect, or the path floti was installed at', () => {
+    expect(lineToTryByHand({ transport: { kind: 'ssh', target: 'build-box' } })).toBe('ssh build-box floti connect')
+    expect(lineToTryByHand({ transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu Dev', '--'] } })).toBe(
+      'wsl.exe -d "Ubuntu Dev" -- floti connect'
+    )
+    expect(
+      lineToTryByHand({ transport: { kind: 'ssh', target: 'you@build-box' }, floti: '/home/you/.local/bin/floti' })
+    ).toBe('ssh you@build-box /home/you/.local/bin/floti connect')
   })
 })
 

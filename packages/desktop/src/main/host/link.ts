@@ -76,6 +76,14 @@ export interface HostLink {
    */
   keepConnected(): void
   /**
+   * The user's Reconnect now: while the link is waiting to try again, the
+   * wait is dropped and it tries at once, and the next wait starts from the
+   * first again. A link that is connected, already trying, quit or released
+   * does nothing. It asks for nothing but the connection: no request from
+   * before the drop is sent again.
+   */
+  reconnectNow(): void
+  /**
    * The user asked, and agreed to the count: stops the host (`host:stop`
    * with the plain-stop reason), so every session in it ends and is recorded
    * as ended, then lets go of the connection and its bridge. Resolves once
@@ -281,6 +289,16 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
           scheduleRetry()
         }
       )
+    },
+
+    reconnectNow() {
+      if (stopping !== null || local !== null || attempt !== null) return
+      if (retryTimer !== null) {
+        deps.clearTimeout(retryTimer)
+        retryTimer = null
+      }
+      retryWait = RECONNECT_FIRST_MS
+      link.keepConnected()
     }
   }
 

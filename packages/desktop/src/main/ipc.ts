@@ -474,6 +474,9 @@ export function registerIpc(ctx: IpcContext): void {
     'remoteHosts:cancel': ({ id }) => {
       ctx.remoteInstall?.cancel(id)
     },
+    'remoteHosts:reconnect': ({ id }) => {
+      ctx.remoteHosts?.reconnect(id)
+    },
 
     // Sessions in Helm itself: no host, so no host log file.
     'app:info': async () => ({

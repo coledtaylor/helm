@@ -79,6 +79,12 @@ export interface RemoteHostLinks {
    * yet starts at the next sign-in rather than having failed.
    */
   installed(id: string, floti: string, startsAtNextSignIn: boolean): void
+  /**
+   * The user's Reconnect now for host `id`: its link drops the wait it is in
+   * and tries at once, the next wait starting short again. Every other host
+   * keeps its own wait. Nothing is asked of the host but the connection.
+   */
+  reconnect(id: string): void
 }
 
 export interface RemoteHostLinksDeps {
@@ -260,6 +266,11 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       forget(entry, false)
       entries.set(id, open(entry.host))
       tell()
+    },
+
+    reconnect(id) {
+      if (quitting) return
+      entries.get(id)?.link.reconnectNow()
     },
 
     async quit(endsOn) {

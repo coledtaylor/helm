@@ -13,6 +13,7 @@ import {
   remoteHostFromDraft,
   type RemoteHostDraft,
   REMOTE_CONNECT_LINE,
+  lineToTryByHand,
   transportFix
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
@@ -77,6 +78,8 @@ export interface HostsSettingsProps {
   onInstalled: (id: string, floti: string) => void
   /** Starts updating that host's floti, as its Update floti button does: from the sidebar. */
   updateRequest?: { id: string; nonce: number } | null | undefined
+  /** Reconnect now on a host that is not connected: its link tries at once rather than after the wait. */
+  onReconnect?: ((id: string) => void) | undefined
 }
 
 const CONNECTION_CHIP: Record<RemoteHostConnection['state'], { tone: ChipTone; label: string }> = {
@@ -99,7 +102,8 @@ export function HostsSettings({
   onAddingChange,
   install,
   onInstalled,
-  updateRequest = null
+  updateRequest = null,
+  onReconnect
 }: HostsSettingsProps): JSX.Element {
   return (
     <Group
@@ -136,6 +140,7 @@ export function HostsSettings({
             install={install}
             onInstalled={onInstalled}
             updateRequest={updateRequest?.id === entry.host.id ? updateRequest.nonce : null}
+            onReconnect={onReconnect}
           />
         </div>
       ))}
@@ -154,7 +159,8 @@ function HostRow({
   onQuitChange,
   install,
   onInstalled,
-  updateRequest
+  updateRequest,
+  onReconnect
 }: {
   entry: SettingsHost
   onRemove: (id: string) => void
@@ -163,6 +169,7 @@ function HostRow({
   onInstalled: (id: string, floti: string) => void
   /** Changes each time the sidebar asks to update this host's floti. */
   updateRequest: number | null
+  onReconnect: ((id: string) => void) | undefined
 }): JSX.Element {
   const { host, quit, connection } = entry
   const chip = connection === null ? null : CONNECTION_CHIP[connection.state]
@@ -176,6 +183,11 @@ function HostRow({
     if (updateRequest !== null) requested()
   }, [updateRequest])
   const offersUpdate = connection?.state === 'tooOld' || connection?.state === 'missing'
+  // A link that dropped or could not get in is waiting to try again: the user
+  // may have just fixed what it needed, so it can try at once.
+  const offersReconnect =
+    onReconnect !== undefined &&
+    (connection?.state === 'retrying' || connection?.state === 'failed' || connection?.state === 'missing')
   return (
     <div
       data-settings-host={host.id}
@@ -214,6 +226,11 @@ function HostRow({
             {connection?.state === 'missing' ? 'Install floti' : 'Update floti'}
           </Action>
         )}
+        {offersReconnect && (
+          <Action data-settings-host-reconnect={host.id} onClick={() => onReconnect(host.id)}>
+            Reconnect now
+          </Action>
+        )}
         <Action data-settings-host-remove={host.id} onClick={() => onRemove(host.id)}>
           Remove
         </Action>
@@ -235,18 +252,23 @@ function ConnectionDetail({ connection, host }: { connection: RemoteHostConnecti
   if (connection.state === 'failed') {
     return (
       <div data-settings-host-failed className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
-        <p className="font-mono text-[11px] break-all text-fg select-text">{connection.lastLine}</p>
-        <p className="mt-1">{transportFix(host.transport)}</p>
+        <p data-settings-host-last-line className="font-mono text-[11px] break-all text-fg select-text">
+          {connection.lastLine}
+        </p>
+        <TryByHand host={host} />
       </div>
     )
   }
   if (connection.state === 'missing') {
     return (
       <div data-settings-host-missing className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
-        <p className="font-mono text-[11px] break-all text-fg select-text">{connection.lastLine}</p>
+        <p data-settings-host-last-line className="font-mono text-[11px] break-all text-fg select-text">
+          {connection.lastLine}
+        </p>
         <p className="mt-1">
           {host.name}’s login has no floti to run. Install floti there, over the same login, with no admin rights.
         </p>
+        <TryByHand host={host} />
       </div>
     )
   }
@@ -277,6 +299,21 @@ function ConnectionDetail({ connection, host }: { connection: RemoteHostConnecti
     )
   }
   return null
+}
+
+/**
+ * The line to try by hand in a terminal, where ssh or the command can ask for
+ * what it needs: Helm never answers it, and changes nothing of ssh's setup.
+ */
+function TryByHand({ host }: { host: RemoteHost }): JSX.Element {
+  return (
+    <p className="mt-1">
+      Try it by hand in a terminal:{' '}
+      <span data-settings-host-try className="font-mono text-[11px] text-fg select-text">
+        {lineToTryByHand(host)}
+      </span>
+    </p>
+  )
 }
 
 // ---------------------------------------------------------------------------

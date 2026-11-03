@@ -62,6 +62,12 @@ export interface StatusHostItem {
   quitEnds: boolean
   /** The link to the host ended and is trying again by itself. Nothing there ended. */
   retrying?: boolean | undefined
+  /**
+   * The host's ssh or command could not reach it: the last line it wrote,
+   * unedited, and the line to try by hand in a terminal. The item says the
+   * host is not reachable, and its hover text holds both lines.
+   */
+  unreachable?: { lastLine: string; tryLine: string } | null | undefined
   /** Opens the setting where what quitting does there is set. */
   onOpen: () => void
 }
@@ -211,30 +217,51 @@ export function StatusBar({
       {/* Where the sessions live and what a quit does to them, said before
           anybody quits: a quit should never do what you did not expect. One
           item per host, this PC first, each behind a rule of its own. */}
-      {hosts.map((host) => (
-        <Fragment key={host.id}>
-          <Divider />
-          <button
-          type="button"
-          data-status-host={host.retrying === true ? 'retrying' : host.quitEnds ? 'ends' : 'keeps'}
-          data-status-host-id={host.id}
-          onClick={host.onOpen}
-          title={
-            (host.retrying === true
-              ? `Helm lost its connection to ${host.name} and is trying again. Nothing running there ended. `
-              : `Sessions run in the host on ${host.name}. `) +
-            `Quitting Helm ${host.quitEnds ? 'ends' : 'keeps running'} the ones it started there. Opens Settings.`
-          }
-          className={cn(
-            '-mx-1 flex shrink-0 items-center gap-1.5 rounded px-1 transition-colors hover:bg-hover hover:text-fg',
-            host.retrying === true && 'text-warn'
-          )}
-        >
-          {host.retrying === true && <span aria-hidden className="size-1.5 rounded-full bg-warn" />}
-          {host.name} · {host.retrying === true ? 'not connected, retrying' : `quit ${host.quitEnds ? 'ends' : 'keeps'} sessions`}
-          </button>
-        </Fragment>
-      ))}
+      {hosts.map((host) => {
+        const unreachable = host.unreachable ?? null
+        const away = host.retrying === true || unreachable !== null
+        return (
+          <Fragment key={host.id}>
+            <Divider />
+            <button
+              type="button"
+              data-status-host={
+                unreachable !== null ? 'unreachable' : away ? 'retrying' : host.quitEnds ? 'ends' : 'keeps'
+              }
+              data-status-host-id={host.id}
+              onClick={host.onOpen}
+              title={
+                unreachable !== null
+                  ? `Helm cannot reach ${host.name}. It said:
+${unreachable.lastLine}
+
+` +
+                    `Try it by hand in a terminal:
+${unreachable.tryLine}
+
+` +
+                    'Nothing running there ended, and Helm keeps trying. Opens Settings.'
+                  : (away
+                      ? `Helm lost its connection to ${host.name} and is trying again. Nothing running there ended. `
+                      : `Sessions run in the host on ${host.name}. `) +
+                    `Quitting Helm ${host.quitEnds ? 'ends' : 'keeps running'} the ones it started there. Opens Settings.`
+              }
+              className={cn(
+                '-mx-1 flex shrink-0 items-center gap-1.5 rounded px-1 transition-colors hover:bg-hover hover:text-fg',
+                away && 'text-warn'
+              )}
+            >
+              {away && <span aria-hidden className="size-1.5 rounded-full border-[1.5px] border-warn" />}
+              {host.name} ·{' '}
+              {unreachable !== null
+                ? 'not reachable'
+                : away
+                  ? 'not connected, retrying'
+                  : `quit ${host.quitEnds ? 'ends' : 'keeps'} sessions`}
+            </button>
+          </Fragment>
+        )
+      })}
 
       <span className="flex-1" />
 

@@ -319,6 +319,74 @@ describe('sessions over the window’s own connection', () => {
     expect(second.streamsFor('session:data', 7)).toHaveLength(1)
   })
 
+  it('S9: a remote host’s link that drops while typing, starting a session and answering a prompt sends none of it again once it is back, and acts on nothing by itself', async () => {
+    const first = new FakeConnection()
+      .answer('session:list', () => [row({ id: 7 })])
+      // A start the host has not answered when the link drops.
+      .answer('session:start', () => new Promise<P.SessionRecord>(() => undefined) as unknown as P.SessionRecord)
+    const link = reconnectingReach(first)
+    const { own } = ownBridge()
+    const adapters = createSessionsAdapters({
+      link,
+      own,
+      front: { focused: () => true, onChange: () => undefined },
+      shelf: null,
+      hostName: () => 'build-box'
+    })
+    const questions = hear(adapters, 'session:confirm')
+    await ask(adapters, 'session:list')
+    adapters.show([7])
+    const [before] = first.streamsFor('session:data', 7)
+    send(adapters, 'session:input', { id: 7, data: 'ls' })
+    void ask(adapters, 'session:start', { cwd: '/work dir/app', projectPath: '/work dir/app', cols: 100, rows: 30 }).catch(
+      () => undefined
+    )
+    // The host asks; the user has not answered when the link drops.
+    first.push('session:confirm', {
+      id: 31,
+      kind: 'close-session',
+      message: '“app” is still running on build-box.',
+      detail: 'Ending it stops the Claude Code session in /work dir/app.',
+      confirmLabel: 'End session',
+      sessionNames: ['app']
+    })
+    expect(questions).toHaveLength(1)
+
+    link.lose({ planned: false, restarts: false })
+    await settle()
+    // Typed while the link is down: it reaches nothing and is not kept.
+    send(adapters, 'session:input', { id: 7, data: 'rm -rf build\r' })
+    expect(before!.text()).toBe('ls')
+
+    const second = new FakeConnection().answer('session:list', () => [row({ id: 7 })])
+    await link.reconnect(second)
+    await settle()
+    const [after] = second.streamsFor('session:data', 7)
+    expect(after).toBeDefined()
+    expect(after!.text()).toBe('')
+
+    // The question asked over the dropped link is answered late: nothing reaches the host there now.
+    send(adapters, 'session:confirmed', { id: questions[0]!.id, agreed: true })
+    await settle()
+    const acting = [
+      'session:start',
+      'session:launch',
+      'profile:launch',
+      'history:resume',
+      'session:restore',
+      'session:close',
+      'session:confirmed',
+      'host:stop',
+      'host:quit'
+    ]
+    expect(second.sent.filter((request) => acting.includes(request.channel))).toEqual([])
+    // Only what the window reads to show the host again went out.
+    expect([...new Set(second.sent.map((request) => request.channel))].sort()).toEqual(['session:focus', 'session:list'])
+
+    send(adapters, 'session:input', { id: 7, data: 'y' })
+    expect(after!.text()).toBe('y')
+  })
+
   describe('when the host connection ends', () => {
     /** The window shows 7 and 9 running and 8 that ended, over a link the test ends. */
     async function shownWorld() {

@@ -6,6 +6,7 @@ import type { LocalHost, PageBridge } from './launcher'
 import type { HelmPage } from './page-link'
 import { createPageLinks, routePageLinks } from './page-link'
 import { createRemoteHostLinks, type RemoteHostLinksDeps } from './remote'
+import { RECONNECT_FIRST_MS, RECONNECT_MOST_MS } from '../../shared/host/reconnect'
 import { KEY_CHANGED_LINE, RemoteHostError } from './remote-launcher'
 
 const BUILD: RemoteHost = { id: 'h-build', name: 'build-box', transport: { kind: 'ssh', target: 'me@build-box' } }
@@ -39,6 +40,7 @@ function world() {
   const told: RemoteHostStates[] = []
   const log: string[] = []
   const timers = new Map<number, () => void>()
+  const waits = new Map<number, number>()
   let nextTimer = 1
   let nextConnection = 1
   const deps: RemoteHostLinksDeps = {
@@ -72,13 +74,15 @@ function world() {
     appVersion: '2.4.0',
     nextConnection: () => nextConnection++,
     log: (line) => log.push(line),
-    setTimeout: (run) => {
+    setTimeout: (run, ms) => {
       const id = nextTimer++
       timers.set(id, run)
+      waits.set(id, ms)
       return id
     },
     clearTimeout: (timer) => {
       timers.delete(timer as number)
+      waits.delete(timer as number)
     }
   }
   const links = createRemoteHostLinks(deps)
@@ -99,9 +103,12 @@ function world() {
     fireTimers() {
       const due = [...timers.values()]
       timers.clear()
+      waits.clear()
       for (const run of due) run()
     },
     waitingTimers: () => timers.size,
+    /** How long each timer waiting now waits, oldest first. */
+    waitsNow: () => [...waits.values()],
     /** Where `host` stands now. */
     state: (host: RemoteHost) => links.states()[host.id]
   }
@@ -198,6 +205,87 @@ describe('the links to hosts on other computers', () => {
     expect(w.starts).toHaveLength(2)
     expect(w.state(BUILD)).toEqual({ state: 'connected' })
     expect(second.payloads('host:quit')).toEqual([])
+  })
+
+  it('S8: a host that cannot be reached is tried again after waits that start short and double up to two minutes, never longer, while another host keeps working', async () => {
+    const w = world()
+    w.links.sync([BUILD, LAB])
+    const lab = hostWith()
+    w.startFor(LAB).resolve(fakeLocalHost(lab, false))
+    const unreachable = 'ssh: connect to host build-box port 22: Connection timed out'
+    w.startFor(BUILD).reject(new RemoteHostError(unreachable))
+    await settle()
+
+    const waits: number[] = []
+    for (let tries = 0; tries < 12; tries += 1) {
+      expect(w.waitsNow()).toHaveLength(1)
+      waits.push(w.waitsNow()[0]!)
+      w.fireTimers()
+      w.startFor(BUILD).reject(new RemoteHostError(unreachable))
+      await settle()
+    }
+    expect(waits).toEqual([
+      RECONNECT_FIRST_MS,
+      RECONNECT_FIRST_MS * 2,
+      RECONNECT_FIRST_MS * 4,
+      RECONNECT_FIRST_MS * 8,
+      RECONNECT_FIRST_MS * 16,
+      RECONNECT_FIRST_MS * 32,
+      RECONNECT_FIRST_MS * 64,
+      RECONNECT_FIRST_MS * 128,
+      RECONNECT_FIRST_MS * 256,
+      RECONNECT_MOST_MS,
+      RECONNECT_MOST_MS,
+      RECONNECT_MOST_MS
+    ])
+    expect(Math.max(...waits)).toBe(120_000)
+    // lab was connected the whole time, tried once and never again, and answers.
+    expect(w.state(LAB)).toEqual({ state: 'connected' })
+    expect(w.starts.filter((start) => start.host.id === LAB.id)).toHaveLength(1)
+    expect(w.state(BUILD)).toEqual({ state: 'failed', lastLine: unreachable })
+  })
+
+  it('S8: Reconnect now drops the wait and tries at once, the next wait starting short again; a connected host is not tried again', async () => {
+    const w = world()
+    w.links.sync([BUILD, LAB])
+    const lab = hostWith()
+    w.startFor(LAB).resolve(fakeLocalHost(lab, false))
+    const denied = 'me@build-box: Permission denied (publickey,password).'
+    w.startFor(BUILD).reject(new RemoteHostError(denied))
+    await settle()
+    // Some tries in, the wait has grown.
+    for (let tries = 0; tries < 4; tries += 1) {
+      w.fireTimers()
+      w.startFor(BUILD).reject(new RemoteHostError(denied))
+      await settle()
+    }
+    expect(w.waitsNow()).toEqual([RECONNECT_FIRST_MS * 16])
+    const startsBefore = w.starts.length
+
+    w.links.reconnect(BUILD.id)
+    // Tried at once, and no wait is left running beside the try.
+    expect(w.starts).toHaveLength(startsBefore + 1)
+    expect(w.startFor(BUILD).host.id).toBe(BUILD.id)
+    expect(w.waitsNow()).toEqual([])
+    w.startFor(BUILD).reject(new RemoteHostError(denied))
+    await settle()
+    expect(w.waitsNow()).toEqual([RECONNECT_FIRST_MS])
+
+    // Pressed again while a try is in flight: one try, not two.
+    w.links.reconnect(BUILD.id)
+    w.links.reconnect(BUILD.id)
+    expect(w.starts).toHaveLength(startsBefore + 2)
+    const build = hostWith()
+    w.startFor(BUILD).resolve(fakeLocalHost(build, false))
+    await settle()
+    expect(w.state(BUILD)).toEqual({ state: 'connected' })
+
+    // A connected host has nothing to reconnect: nothing is started or sent.
+    w.links.reconnect(LAB.id)
+    w.links.reconnect(BUILD.id)
+    expect(w.starts).toHaveLength(startsBefore + 2)
+    expect(build.sent.map((request) => request.channel)).toEqual(['app:info', 'host:deviceSessions'])
+    expect(lab.sent.map((request) => request.channel)).toEqual(['app:info', 'host:deviceSessions'])
   })
 
   it('S4: a host added is connected at its first connection, with nothing shown or asked meanwhile', async () => {

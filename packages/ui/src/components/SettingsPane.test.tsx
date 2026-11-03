@@ -140,6 +140,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onHostQuitChange: vi.fn(),
     hostInstall: { check: vi.fn(async () => ({ kind: 'ready' as const, found: { version: '1.2.0', protocol: '1.0' } })), install: vi.fn(), cancel: vi.fn() },
     onHostInstalled: vi.fn(),
+    onReconnectHost: vi.fn(),
     devices: { hosts: [], onDisconnect: vi.fn() },
     ...overrides
   }
@@ -704,7 +705,60 @@ describe('SettingsPane', () => {
     expect(screen.getByRole('group', { name: 'moved' }).textContent).toContain('Key changed')
     const locked = screen.getByRole('group', { name: 'locked' })
     expect(within(locked).getByText('you@locked: Permission denied (publickey,password).')).toBeTruthy()
-    expect(locked.textContent).toContain('Sign in with ssh you@locked in a terminal, then try again.')
+    expect(locked.textContent).toContain('Try it by hand in a terminal: ssh you@locked floti connect')
+  })
+
+  it('S5: a host whose ssh fails shows on its row the last line unedited, the line to try by hand, and Reconnect now; nothing asks for a password', async () => {
+    const lines = [
+      'you@build-box: Permission denied (publickey,password).',
+      'ssh: Could not resolve hostname build-box: Name or service not known',
+      'ssh: connect to host build-box port 22: Connection timed out'
+    ]
+    for (const lastLine of lines) {
+      const { props, rerender } = renderPane({
+        section: 'hosts',
+        sessionsInHost: true,
+        hosts: [
+          {
+            host: { id: 'h-build', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } },
+            quit: 'keep',
+            connection: { state: 'failed', lastLine }
+          }
+        ]
+      })
+      const row = screen.getByRole('group', { name: 'build-box' })
+      expect(row.querySelector('[data-settings-host-last-line]')?.textContent).toBe(lastLine)
+      expect(row.querySelector('[data-settings-host-try]')?.textContent).toBe('ssh you@build-box floti connect')
+      // No field to type a password or code into.
+      expect(row.querySelector('input')).toBeNull()
+      await userEvent.click(within(row).getByRole('button', { name: 'Reconnect now' }))
+      expect(props.onReconnectHost).toHaveBeenCalledWith('h-build')
+      rerender({ section: 'hosts', sessionsInHost: true, hosts: [] })
+    }
+  })
+
+  it('S5: a command host with no floti there shows what its shell said and the command followed by floti connect', () => {
+    renderPane({
+      section: 'hosts',
+      sessionsInHost: true,
+      hosts: [
+        {
+          host: { id: 'h-lab', name: 'lab', transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu', '--'] } },
+          quit: 'keep',
+          connection: { state: 'missing', lastLine: 'bash: line 1: floti: command not found' }
+        },
+        {
+          host: { id: 'h-up', name: 'up', transport: { kind: 'ssh', target: 'up' } },
+          quit: 'keep',
+          connection: { state: 'connected' }
+        }
+      ]
+    })
+    const lab = screen.getByRole('group', { name: 'lab' })
+    expect(lab.querySelector('[data-settings-host-last-line]')?.textContent).toBe('bash: line 1: floti: command not found')
+    expect(lab.querySelector('[data-settings-host-try]')?.textContent).toBe('wsl.exe -d Ubuntu -- floti connect')
+    // A connected host has nothing to reconnect.
+    expect(within(screen.getByRole('group', { name: 'up' })).queryByRole('button', { name: 'Reconnect now' })).toBeNull()
   })
 
   it('S4: adds a host by its ssh target alone: no role, code or approval is asked', async () => {

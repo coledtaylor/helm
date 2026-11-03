@@ -119,4 +119,52 @@ describe('TerminalPane', () => {
     expect(container.querySelector('[data-terminal-waiting]')).toBeNull()
     expect(container.querySelector('.opacity-60')).toBeNull()
   })
+
+  it('S7: a remote session whose host link dropped keeps its last screen dimmed with input off under the lost-connection banner, and takes input again once the link is back', async () => {
+    const onReconnect = vi.fn()
+    const deploy: SessionRecord = { ...SESSION, name: 'deploy', cwd: '/home/you/work/infra' }
+    const lost = { hostName: 'build-box', lastLine: null, tryLine: 'ssh build-box floti connect', onReconnect }
+    const { container, rerender } = render(
+      <TerminalPane session={deploy} host="h-build" active windowsBuild={null} onClose={vi.fn()} hostLost={lost} />
+    )
+
+    // Keys go nowhere: the terminal takes none, and nothing it shows blinks.
+    expect(terminal.term.options).toMatchObject({ cursorBlink: false, disableStdin: true })
+    expect(terminal.term.blur).toHaveBeenCalled()
+    expect(terminal.term.focus).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-terminal-waiting]')?.className).toContain('opacity-60')
+    expect(screen.getByRole('status').textContent).toContain('Lost the connection to build-box. deploy keeps running there.')
+    await userEvent.click(screen.getByRole('button', { name: 'Reconnect now' }))
+    expect(onReconnect).toHaveBeenCalledTimes(1)
+
+    // The link is back: the banner goes by itself and the session takes keys again.
+    rerender(<TerminalPane session={deploy} host="h-build" active windowsBuild={null} onClose={vi.fn()} />)
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(container.querySelector('[data-terminal-waiting]')).toBeNull()
+    expect(terminal.term.options).toMatchObject({ cursorBlink: true, disableStdin: false })
+    expect(terminal.term.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('S5: a remote session whose host cannot be reached shows the last line ssh wrote and the line to try by hand on its tab', () => {
+    render(
+      <TerminalPane
+        session={SESSION}
+        host="h-build"
+        active
+        windowsBuild={null}
+        onClose={vi.fn()}
+        hostLost={{
+          hostName: 'build-box',
+          lastLine: 'ssh: connect to host build-box port 22: Connection timed out',
+          tryLine: 'ssh build-box floti connect',
+          onReconnect: vi.fn()
+        }}
+      />
+    )
+    const banner = screen.getByRole('status')
+    expect(banner.querySelector('[data-host-lost-line]')?.textContent).toBe(
+      'ssh: connect to host build-box port 22: Connection timed out'
+    )
+    expect(banner.querySelector('[data-host-lost-try]')?.textContent).toBe('ssh build-box floti connect')
+  })
 })

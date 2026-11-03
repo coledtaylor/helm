@@ -219,7 +219,8 @@ const NO_REMOTE_HOSTS = {}
 export const remoteHosts: RemoteHostsStore = {
   get: () => NO_REMOTE_HOSTS,
   subscribe: () => () => undefined,
-  connection: () => Promise.reject(new Error('No host on another computer in this test.'))
+  connection: () => Promise.reject(new Error('No host on another computer in this test.')),
+  reconnect: () => undefined
 }
 
 /** No devices anywhere, unless a test says otherwise (Settings > Devices). */

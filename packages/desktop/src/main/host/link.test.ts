@@ -80,6 +80,41 @@ describe('the link to the local host', () => {
     expect(attempts).toBe(2)
   })
 
+  it('S8: Reconnect now tries at once from a wait, resets the wait, and does nothing once the link has quit', async () => {
+    const timers = steppedTimers()
+    let attempts = 0
+    const link = createHostLink({
+      start: () => {
+        attempts += 1
+        return Promise.reject(new LocalHostError('ssh: connect to host build-box port 22: Connection timed out'))
+      },
+      name: 'build-box',
+      log: () => undefined,
+      ...timers
+    })
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+    }
+    link.keepConnected()
+    await settle()
+    timers.fireAll()
+    await settle()
+    timers.fireAll()
+    await settle()
+    expect(attempts).toBe(3)
+    expect(timers.pending()).toEqual([HOST_RETRY_MS * 4])
+
+    link.reconnectNow()
+    expect(attempts).toBe(4)
+    expect(timers.pending()).toEqual([])
+    await settle()
+    expect(timers.pending()).toEqual([HOST_RETRY_MS])
+
+    await link.quit({ end: false })
+    link.reconnectNow()
+    expect(attempts).toBe(4)
+  })
+
   it('tells the host a deliberate quit ends what this device started, never stops it, lets go and connects no more', async () => {
     const connection = new FakeConnection()
     const local = fakeLocalHost(connection, true)

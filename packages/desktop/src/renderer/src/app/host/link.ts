@@ -56,6 +56,15 @@ export interface PageLink {
   onConnected(listener: (connection: HostConnection) => void): void
   /** Called each time the host's side ends the connection, saying how. */
   onEnded(listener: (end: HostEnd) => void): void
+  /**
+   * The user's Reconnect now: a link waiting to connect again drops the wait
+   * and connects at once, and the next wait starts from the first again. A
+   * link that is connected or connecting does nothing, and one that does not
+   * connect by itself (`retries: false`, a remote host's) has no wait to
+   * drop: it is told when to connect, once main's own link is back. Nothing
+   * from before the drop is sent again.
+   */
+  reconnectNow(): void
 }
 
 export interface PageLinkDeps {
@@ -65,6 +74,7 @@ export interface PageLinkDeps {
   log?: (line: string) => void
   /** The clock the waits before connecting again run on; the page's own by default. */
   setTimeout?: (run: () => void, ms: number) => unknown
+  clearTimeout?: (timer: unknown) => void
   /** A host on another computer, by its id; this PC's host when absent. */
   host?: string
   /**
@@ -124,6 +134,7 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
   const listeners: Array<(connection: HostConnection) => void> = []
   const endListeners: Array<(end: HostEnd) => void> = []
   const setTimer = deps.setTimeout ?? ((run: () => void, ms: number): unknown => setTimeout(run, ms))
+  const clearTimer = deps.clearTimeout ?? ((timer: unknown): void => clearTimeout(timer as ReturnType<typeof setTimeout>))
   let placement: Promise<boolean> | null = null
   /** The first open, which answered the placement, until a connect takes it. */
   let untaken: Promise<HostLinkOpened> | null = null
@@ -234,6 +245,17 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
 
     onEnded(listener) {
       endListeners.push(listener)
+    },
+
+    reconnectNow() {
+      if (attempt !== null || retryTimer === null) return
+      clearTimer(retryTimer)
+      retryTimer = null
+      retryWait = RECONNECT_FIRST_MS
+      link.connection().then(
+        () => undefined,
+        () => scheduleRetry()
+      )
     }
   }
   return link

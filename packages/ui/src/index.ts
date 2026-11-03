@@ -134,6 +134,7 @@ export {
 } from './components/DevicesSettings'
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { OwnDataBanner, type OwnDataBannerProps } from './components/OwnDataBanner'
+export { HostLostBanner, type HostLostBannerProps } from './components/HostLostBanner'
 export { HostStoppedBanner, type HostStoppedBannerProps } from './components/HostStoppedBanner'
 export { HostSwitch, type HostChoice, type HostSwitchProps } from './components/HostSwitch'
 export { ShellLostBar, type ShellLostBarProps } from './components/ShellLostBar'

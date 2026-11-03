@@ -39,4 +39,22 @@ describe('TabBar host', () => {
     expect(local.querySelector('[data-tab-host]')).toBeNull()
     expect(screen.getAllByRole('tab')).toHaveLength(2)
   })
+
+  it('S7: a session tab whose host link dropped has a warning ring for its dot and says the connection was lost', () => {
+    const { container } = renderBar([
+      { id: 'session:3', title: 'my-work', indicator: 'idle' },
+      { id: 'host:h1/session:4', title: 'deploy', host: 'build-box', indicator: 'busy', away: true }
+    ])
+
+    const remote = container.querySelector('[data-tab="host:h1/session:4"]')!
+    const dot = remote.querySelector('[data-tab-away]')!
+    expect(dot.className).toContain('border-warn')
+    expect(dot.className).not.toContain('bg-accent')
+    expect(remote.getAttribute('aria-label')).toBe('deploy, connection lost')
+
+    // A tab whose host is connected keeps its own state's dot.
+    const local = container.querySelector('[data-tab="session:3"]')!
+    expect(local.querySelector('[data-tab-away]')).toBeNull()
+    expect(local.getAttribute('aria-label')).toBe('my-work, ready')
+  })
 })

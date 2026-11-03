@@ -149,6 +149,32 @@ describe('StatusBar: the hosts sessions run in', () => {
     expect(item.className).toContain('text-warn')
   })
 
+  it('S5: a host whose ssh cannot reach it says not reachable, with the last line unedited and the line to try by hand in its hover text, and opens Settings', () => {
+    const onOpen = vi.fn()
+    const lastLine = 'ssh: Could not resolve hostname build-box: Name or service not known'
+    renderBar({
+      hosts: [
+        { id: 'local', name: 'This PC', quitEnds: true, onOpen: vi.fn() },
+        {
+          id: 'h-build',
+          name: 'build-box',
+          quitEnds: false,
+          retrying: true,
+          unreachable: { lastLine, tryLine: 'ssh build-box floti connect' },
+          onOpen
+        }
+      ]
+    })
+    const item = screen.getByRole('button', { name: 'build-box · not reachable' })
+    expect(item.getAttribute('data-status-host')).toBe('unreachable')
+    const title = item.getAttribute('title') ?? ''
+    expect(title.split('\n')).toContain(lastLine)
+    expect(title.split('\n')).toContain('ssh build-box floti connect')
+    expect(title).not.toMatch(/password/i)
+    item.click()
+    expect(onOpen).toHaveBeenCalledTimes(1)
+  })
+
   it('shows no host item while sessions run in Helm itself', () => {
     renderBar({ hosts: [] })
     expect(document.querySelectorAll('[data-status-host]')).toHaveLength(0)

@@ -2,7 +2,7 @@ import type { JSX } from 'react'
 import { useEffect, useRef } from 'react'
 import type { SessionRecord } from '@helm/core'
 import { LOCAL_HOST_KEY } from '@helm/core/types'
-import { SessionEndedBar, type SessionLost } from '@helm/ui'
+import { HostLostBanner, SessionEndedBar, type SessionLost } from '@helm/ui'
 import { getTerminal, mountTerminal } from './terminals'
 import { terminalPrefs } from './termprefs'
 
@@ -22,6 +22,24 @@ export interface TerminalPaneProps {
   hostGone?: boolean
   /** The host it runs in; its terminal is that host's (`terminals.ts` keeps them by host and id). This PC's when absent. */
   host?: string
+  /**
+   * The link to the host on another computer this session runs on dropped,
+   * or cannot get in. The session keeps running there, so the tab keeps its
+   * last screen, dimmed with input off, under a banner saying so with
+   * Reconnect now, until the link is back.
+   */
+  hostLost?: HostLost | undefined
+}
+
+/** What a remote session's tab says while its host's link is down. */
+export interface HostLost {
+  /** The host, as every surface names it. */
+  hostName: string
+  /** The last line ssh or the command wrote, unedited, when it could not get in; null while only trying again. */
+  lastLine: string | null
+  /** The line to try by hand in a terminal. */
+  tryLine: string
+  onReconnect: () => void
 }
 
 /**
@@ -39,7 +57,8 @@ export function TerminalPane({
   onClose,
   lost,
   hostGone = false,
-  host: on = LOCAL_HOST_KEY
+  host: on = LOCAL_HOST_KEY,
+  hostLost
 }: TerminalPaneProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -48,11 +67,13 @@ export function TerminalPane({
   }, [session.id, windowsBuild, on])
 
   const ended = session.status !== 'running'
-  const waiting = !ended && hostGone
+  const away = !ended && hostLost !== undefined
+  const waiting = !ended && (hostGone || away)
   const dimmed = waiting || (lost !== undefined && session.status === 'lost')
 
-  // A running session whose host is gone takes no keys until the next host
-  // carries it again; then its input and cursor come back.
+  // A running session whose host is gone, or whose host's link dropped, takes
+  // no keys until a host carries it again: what is typed meanwhile reaches
+  // nothing and is not kept. Then its input and cursor come back.
   useEffect(() => {
     if (ended) return
     const host = getTerminal(session.id, on)
@@ -96,6 +117,15 @@ export function TerminalPane({
     // (DESIGN.md "foreign-ground islands"). The pane is the island - its edge,
     // corners and tab strip - so this draws no chrome of its own.
     <div className="flex h-full w-full flex-col overflow-hidden bg-terminal">
+      {away && hostLost !== undefined && (
+        <HostLostBanner
+          hostName={hostLost.hostName}
+          sessionName={session.label ?? session.name}
+          lastLine={hostLost.lastLine}
+          tryLine={hostLost.tryLine}
+          onReconnect={hostLost.onReconnect}
+        />
+      )}
       {ended && (
         <SessionEndedBar
           exitCode={session.exitCode}

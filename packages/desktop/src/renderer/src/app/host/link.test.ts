@@ -17,6 +17,10 @@ class FakeMain {
   readonly opens: HostLinkOpened[] = []
   readonly hellos: Message[] = []
   readonly closed: number[] = []
+  /** Every request the host was sent, with the connection it came on. */
+  readonly requests: Array<{ connection: number; channel: string }> = []
+  /** Whether the host answers requests; when false they wait, as on a link that is about to drop. */
+  answers = true
   private next = 1
   private readonly listeners = new Map<string, Set<(payload: never) => void>>()
   private readonly decoders = new Map<number, FrameDecoder>()
@@ -70,7 +74,9 @@ class FakeMain {
       }
       return
     }
-    if (message.type === 'request') this.reply(connection, { type: 'response', id: message.id, payload: 'answered' })
+    if (message.type !== 'request') return
+    this.requests.push({ connection, channel: message.channel })
+    if (this.answers) this.reply(connection, { type: 'response', id: message.id, payload: 'answered' })
   }
 
   private reply(connection: number, message: Message): void {
@@ -228,6 +234,59 @@ describe('a Helm page’s own connection to the local host', () => {
     expect(await (await w.link.connection()).request('history:summary', null)).toBe('answered')
     // One open per try: the first, three that failed, and the one that connected.
     expect(w.main.opens).toHaveLength(5)
+  })
+
+  it('S8: Reconnect now drops the wait and connects at once, and the next wait starts short again', async () => {
+    const w = world()
+    let connects = 0
+    w.link.onConnected(() => (connects += 1))
+    await w.link.connection()
+    w.main.end(1, 'Connection to build-box closed by remote host.', { planned: false, restarts: false })
+    await settle()
+    w.main.answer = () => ({ inHost: true, unreachable: 'build-box is not connected.' })
+    for (let tries = 0; tries < 3; tries++) {
+      w.timers.fireAll()
+      await settle()
+    }
+    expect(w.timers.pending()).toEqual([RECONNECT_FIRST_MS * 8])
+
+    // Still not reachable: tried at once, and the wait after starts from the first.
+    w.link.reconnectNow()
+    await settle()
+    expect(w.main.opens).toHaveLength(5)
+    expect(w.timers.pending()).toEqual([RECONNECT_FIRST_MS])
+
+    w.main.answer = () => ({ inHost: true, connection: 20, appVersion: '2.9.0' })
+    w.link.reconnectNow()
+    await settle()
+    expect(connects).toBe(2)
+    expect(w.timers.pending()).toEqual([])
+    // Connected: there is nothing to reconnect.
+    w.link.reconnectNow()
+    await settle()
+    expect(w.main.opens).toHaveLength(6)
+  })
+
+  it('S9: a request made before the link dropped fails and is never sent again on the next connection', async () => {
+    const w = world()
+    const first = await w.link.connection()
+    w.main.answers = false
+    const asked = first.request('session:close', { id: 7, force: true })
+    await settle()
+    expect(w.main.requests).toEqual([{ connection: 1, channel: 'session:close' }])
+
+    w.main.end(1, 'Connection to build-box closed by remote host.', { planned: false, restarts: false })
+    await expect(asked).rejects.toThrow()
+    w.main.answers = true
+    w.timers.fireAll()
+    await settle()
+    const second = await w.link.connection()
+    expect(second).not.toBe(first)
+    await second.request('history:summary', null)
+    // On the new connection: only what was asked on it.
+    expect(w.main.requests.filter((request) => request.connection !== 1)).toEqual([
+      { connection: 2, channel: 'history:summary' }
+    ])
   })
 
   it('does not connect by itself after main stopped the host on purpose, and says it was on purpose', async () => {

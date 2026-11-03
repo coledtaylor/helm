@@ -147,4 +147,39 @@ describe('the window’s view of hosts on other computers', () => {
       expect(connection.sent.map((request) => request.channel)).toEqual(['session:list'])
     }
   })
+
+  it('S8: Reconnect now asks main to try that host at once and the window’s own link to drop its wait, and asks the host nothing', async () => {
+    const invoked: Array<{ channel: string; payload: unknown }> = []
+    const build = hostListing([record(4, 'deploy', '/srv/app')])
+    let changed: (states: RemoteHostStates) => void = () => undefined
+    const reconnects: string[] = []
+    const store = createRemoteHosts({
+      bridge: {
+        invoke: ((channel: string, payload: unknown) => {
+          invoked.push({ channel, payload })
+          return Promise.resolve(channel === 'remoteHosts:read' ? {} : undefined)
+        }) as unknown as RemoteHostsDeps['bridge']['invoke'],
+        send: () => undefined,
+        on: ((channel: string, listener: (states: RemoteHostStates) => void) => {
+          if (channel === 'remoteHosts:changed') changed = listener
+          return () => undefined
+        }) as RemoteHostsDeps['bridge']['on']
+      },
+      log: () => undefined,
+      pageLink: (id) => ({ ...reconnectingReach(build), reconnectNow: () => reconnects.push(id) })
+    })
+    store.subscribe(() => undefined)
+    changed({ 'h-build': { state: 'connected' } })
+    await settle()
+    const sentBefore = build.sent.length
+    changed({ 'h-build': { state: 'failed', lastLine: 'ssh: connect to host build-box port 22: Connection timed out' } })
+
+    store.reconnect('h-build')
+    await settle()
+    expect(invoked.filter((call) => call.channel === 'remoteHosts:reconnect')).toEqual([
+      { channel: 'remoteHosts:reconnect', payload: { id: 'h-build' } }
+    ])
+    expect(reconnects).toEqual(['h-build'])
+    expect(build.sent.length).toBe(sentBefore)
+  })
 })

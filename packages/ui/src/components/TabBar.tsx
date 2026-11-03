@@ -39,6 +39,12 @@ export interface Tab {
   host?: string | undefined
   closable?: boolean | undefined
   indicator?: TabIndicator | undefined
+  /**
+   * The link to the host the tab's session runs on dropped: its dot is a
+   * warning ring, whatever the session was last doing, until the link is back.
+   * The session itself keeps running there.
+   */
+  away?: boolean | undefined
   /** Hover text. A session tab puts its working directory here. */
   hint?: string | undefined
   /** Tabs are only reorderable among tabs that agree they are. */
@@ -421,7 +427,9 @@ export function TabBar({
                     aria-label={
                       tab.indicator === undefined
                         ? undefined
-                        : `${tab.title}, ${SESSION_STATE_LABEL[tab.indicator]}`
+                        : tab.away === true
+                          ? `${tab.title}, connection lost`
+                          : `${tab.title}, ${SESSION_STATE_LABEL[tab.indicator]}`
                     }
                     title={tab.hint}
                     onClick={() => onActivate(tab.id)}
@@ -546,7 +554,13 @@ function Mark({ tab, active }: { tab: Tab; active: boolean }): JSX.Element | nul
     return (
       <span
         aria-hidden
-        className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[tab.indicator])}
+        data-tab-away={tab.away === true ? 'true' : undefined}
+        className={cn(
+          'size-1.5 shrink-0 rounded-full',
+          // A ring, as the sidebar's retrying host is drawn: not a state of the
+          // session's own, which is unknown while its host cannot be reached.
+          tab.away === true ? 'border-[1.5px] border-warn' : SESSION_STATE_DOT[tab.indicator]
+        )}
       />
     )
   }

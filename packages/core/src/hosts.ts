@@ -102,6 +102,15 @@ export type RemoteHostConnection =
   | { state: 'newer'; host: string; client: string }
   | { state: 'startsAtSignIn' }
 
+/**
+ * The last line ssh or the command wrote when it could not reach the host,
+ * unedited, or null when the link did not fail that way: what every surface
+ * shows beside the line to try by hand.
+ */
+export function failedLastLine(connection: RemoteHostConnection | null): string | null {
+  return connection?.state === 'failed' || connection?.state === 'missing' ? connection.lastLine : null
+}
+
 /** More hosts than anybody adds, and a ceiling on a value rewritten whole. */
 export const REMOTE_HOSTS_MAX = 32
 export const REMOTE_HOST_NAME_MAX = 64
@@ -191,6 +200,17 @@ export function transportFix(transport: HostTransport): string {
   return transport.kind === 'ssh'
     ? `Sign in with ssh ${transport.target} in a terminal, then try again.`
     : `Run ${formatCommandLine([transport.program, ...transport.args])} in a terminal to see what it needs, then try again.`
+}
+
+/**
+ * The line to try by hand in a terminal when a host cannot be reached: the
+ * transport as typed, then the line it runs there (`ssh build-box floti
+ * connect`, `wsl.exe -d Ubuntu -- floti connect`, or the path Helm installed
+ * floti at in place of `floti`). Running it shows what ssh or the command
+ * needs, in the user's own terminal, where it can ask; Helm never answers it.
+ */
+export function lineToTryByHand(host: Pick<RemoteHost, 'transport' | 'floti'>): string {
+  return `${describeTransport(host.transport)} ${flotiLine(host.floti, 'connect')}`
 }
 
 // ---------------------------------------------------------------------------

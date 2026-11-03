@@ -58,6 +58,8 @@ import {
   RAIL_DESTINATIONS,
   LOCAL_HOST_KEY,
   LOCAL_HOST_LABEL,
+  failedLastLine,
+  lineToTryByHand,
   quitChoice,
   quitEndsSessions,
   withoutRemoteHost,
@@ -215,7 +217,7 @@ import { ProjectColumn } from './ProjectColumn'
 import { disposeShell, terminalShellKey } from './pterms'
 import { disposeTerminal, estimateGrid } from './terminals'
 import { readable } from './errors'
-import { TerminalPane } from './TerminalPane'
+import { TerminalPane, type HostLost } from './TerminalPane'
 import { TerminalTabPane } from './TerminalTabPane'
 import { terminalFontStack } from '../terminal'
 import { crumbStatus, indicatorOf, sessionNote, useNow } from './sessionView'
@@ -605,6 +607,28 @@ export function App(): JSX.Element {
     (host: string): string =>
       host === LOCAL_HOST_KEY ? LOCAL_HOST_LABEL : (listedHosts.find((each) => each.id === host)?.name ?? host),
     [listedHosts]
+  )
+  /**
+   * What the window shows while main's link to a host on another computer is
+   * down: the host's name, the last line its ssh or command wrote when it
+   * could not get in (null while it is only trying again), and the line to
+   * try by hand. Null for This PC, for a host connected, and for one nothing
+   * has been heard from yet.
+   */
+  const hostAway = useCallback(
+    (host: string): HostLost | null => {
+      if (host === LOCAL_HOST_KEY) return null
+      const listed = listedHosts.find((each) => each.id === host)
+      const connection = remoteView[host]?.connection ?? null
+      if (listed === undefined || connection === null || connection.state === 'connected') return null
+      return {
+        hostName: listed.name,
+        lastLine: failedLastLine(connection),
+        tryLine: lineToTryByHand(listed),
+        onReconnect: () => remoteHostLinks.reconnect(host)
+      }
+    },
+    [listedHosts, remoteView]
   )
   // Asked again each time the window gets its host back: the new host offers what the old one lost.
   const restoreState = useRestore(hostLink.reconnects)
@@ -2671,6 +2695,8 @@ export function App(): JSX.Element {
               host: on,
               hint: waitingFor === null ? `${label} · ${on} · ${there.record.cwd}` : `${label} · ${on} · ${there.record.cwd}\nWaiting: ${waitingFor}`,
               indicator: there.indicator,
+              // Its host's link is down: a warning ring until it is back.
+              away: there.record.status === 'running' && hostAway(hostOf(ref)) !== null,
               renamable: true
             }
           ]
@@ -3230,13 +3256,18 @@ export function App(): JSX.Element {
             quitEnds: quitEndsSessions(currentSettings),
             onOpen: () => openSettings('sessions')
           },
-          ...remoteHosts.map((host) => ({
-            id: host.id,
-            name: host.name,
-            quitEnds: quitEndsSessions(currentSettings, host.id),
-            retrying: remoteView[host.id]?.connection?.state !== 'connected',
-            onOpen: () => openSettings('hosts')
-          }))
+          ...remoteHosts.map((host) => {
+            const lastLine = failedLastLine(remoteView[host.id]?.connection ?? null)
+            return {
+              id: host.id,
+              name: host.name,
+              quitEnds: quitEndsSessions(currentSettings, host.id),
+              retrying: remoteView[host.id]?.connection?.state !== 'connected',
+              // Its ssh or command could not get in: what it said, and the line to try by hand.
+              unreachable: lastLine === null ? null : { lastLine, tryLine: lineToTryByHand(host) },
+              onOpen: () => openSettings('hosts')
+            }
+          })
         ]
       : []
   /** The sessions pane's group for each remote host, in the order they were added; none with no remote host. */
@@ -3436,6 +3467,7 @@ export function App(): JSX.Element {
         })
       }
       hostUpdateRequest={hostUpdateRequest}
+      onReconnectHost={(id) => remoteHostLinks.reconnect(id)}
       devices={devicesSettings}
       filesWrap={filesWrap}
       onFilesWrapChange={setFilesWrap}
@@ -3979,8 +4011,9 @@ export function App(): JSX.Element {
             const there = remoteSessionOf(hostOf(ref), ref.id)
             if (!there) return null
             const remoteFront = groupFrontId === paneId(ref)
-            // A host that dropped keeps its tab's last screen; the session is
-            // still running there, and the terminal reattaches once it is back.
+            // A host that dropped keeps its tab's last screen, dimmed with input
+            // off under a banner; the session is still running there, and the
+            // terminal reattaches once it is back.
             return (
               <div
                 key={paneId(ref)}
@@ -3993,6 +4026,7 @@ export function App(): JSX.Element {
                   active={remoteFront}
                   windowsBuild={info?.windowsBuild ?? null}
                   onClose={(id) => closeRemoteSession(hostOf(ref), id)}
+                  hostLost={hostAway(hostOf(ref)) ?? undefined}
                 />
               </div>
             )

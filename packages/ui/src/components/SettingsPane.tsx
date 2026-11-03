@@ -265,6 +265,8 @@ export interface SettingsPaneProps {
   onHostInstalled: (id: string, floti: string) => void
   /** Starts updating a host's floti from outside Settings, such as its sidebar row. */
   hostUpdateRequest?: { id: string; nonce: number } | null | undefined
+  /** A host's Reconnect now: its link tries at once rather than after the wait. */
+  onReconnectHost?: ((id: string) => void) | undefined
   /** Settings > Devices: the devices attached to each connected host, and Disconnect. */
   devices: DevicesSettingsProps
 }
@@ -387,6 +389,7 @@ export function SettingsPane({
   hostInstall,
   onHostInstalled,
   hostUpdateRequest = null,
+  onReconnectHost,
   devices
 }: SettingsPaneProps): JSX.Element {
   const [addingHost, setAddingHost] = useState(false)
@@ -700,6 +703,7 @@ export function SettingsPane({
               install={hostInstall}
               onInstalled={onHostInstalled}
               updateRequest={hostUpdateRequest}
+              onReconnect={onReconnectHost}
             />
           )}
 

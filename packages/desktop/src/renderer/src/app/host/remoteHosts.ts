@@ -44,6 +44,13 @@ export interface RemoteHostsStore {
   subscribe(listener: () => void): () => void
   /** The window's own connection to one host, connecting first when there is none (Settings > Devices). */
   connection(id: string): Promise<HostConnection>
+  /**
+   * The user's Reconnect now for one host: main's link to it tries at once
+   * (`remoteHosts:reconnect`), and so does the window's own link if it is
+   * waiting. Asks the host nothing else, and sends nothing typed or asked
+   * before the drop.
+   */
+  reconnect(id: string): void
 }
 
 export interface RemoteHostsDeps {
@@ -55,11 +62,13 @@ export interface RemoteHostsDeps {
    * holds (`hostBridges.ts`), so its sessions are listed over the link every
    * other call to it takes, never a second.
    */
-  pageLink: (host: string) => Pick<PageLink, 'connection' | 'onConnected' | 'onEnded'>
+  pageLink: (host: string) => RemoteLink
 }
 
+type RemoteLink = Pick<PageLink, 'connection' | 'onConnected' | 'onEnded'> & Partial<Pick<PageLink, 'reconnectNow'>>
+
 interface Host {
-  link: Pick<PageLink, 'connection' | 'onConnected' | 'onEnded'>
+  link: RemoteLink
   /** Whether the window's connection is up or on its way. */
   live: boolean
   subscriptions: HostSubscription[]
@@ -168,6 +177,12 @@ export function createRemoteHosts(deps: RemoteHostsDeps): RemoteHostsStore {
   return {
     get: () => view,
     connection: (id) => hostFor(id).link.connection(),
+    reconnect(id) {
+      deps.bridge.invoke('remoteHosts:reconnect', { id }).catch((error: unknown) => {
+        deps.log(`host: asking to reconnect to a remote host failed (${(error as Error).message})`)
+      })
+      hosts.get(id)?.link.reconnectNow?.()
+    },
     subscribe(listener) {
       listeners.add(listener)
       start()
