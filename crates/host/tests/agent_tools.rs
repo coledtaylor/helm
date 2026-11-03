@@ -2485,6 +2485,93 @@ async fn s6_a_session_that_outlived_a_crashed_host_is_answered_by_the_next_at_it
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn s6_a_session_that_outlived_a_crashed_host_has_its_browser_and_plugin_tools_answered_by_the_next_at_its_address_and_token()
+ {
+    let world = World::new();
+    let first = world.host();
+    let browser = world.browser_client().await;
+    let plugins = world.plugin_client(vec![notes_server()]).await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+    assert_eq!(
+        alpha.servers(),
+        ["helm-browser", "helm-plugin-notes", "helm-sessions"]
+    );
+    let (browser_url, browser_token) = alpha.browser();
+    let (notes_url, notes_token) = alpha.notes().expect("a helm-plugin-notes entry");
+    assert_eq!(browser_token, alpha.token);
+    assert_eq!(notes_token, alpha.token);
+    drop((browser, plugins, client));
+
+    // The row keeps every family the launch was given, under the token's
+    // hash, never the token.
+    let kept = kept_tools_of(&world, alpha.record.id);
+    assert!(!kept.contains(&alpha.token), "{kept}");
+    for family in ["helm-browser", "helm-plugin-notes", "helm-sessions"] {
+        assert!(kept.contains(family), "{family} is not kept: {kept}");
+    }
+
+    first.crash().await;
+    assert!(alive(alpha.pid), "the session ended with the crashed host");
+
+    // The next host, with Helm's window attached to it again: it declares the
+    // browser and offers the notes plugin, as it does on every connect.
+    let second = world.host();
+    let mut browser = world.browser_client().await;
+    let mut plugins = world.plugin_client(vec![notes_server()]).await;
+
+    // helm-browser at the address and with the token the session was
+    // launched with, answered by the window that is attached now.
+    let calling = alpha.call_browser("browser_tabs", json!({}));
+    let call = next_call(&mut browser).await;
+    assert_eq!(call.session, alpha.record.id);
+    assert_eq!(call.tool, "browser_tabs");
+    let tabs = json!({
+        "content": [{ "type": "text", "text": "Tab 1, https://example.com/." }],
+        "isError": false,
+    });
+    answer(&mut browser, call.call_id, done(&tabs))
+        .await
+        .expect("the window's answer is taken");
+    assert_eq!(calling.await.unwrap(), tabs);
+
+    // The notes plugin's tools likewise.
+    let calling = alpha.call_notes("find", json!({ "query": "release" }));
+    let call: AgentPluginToolCall = next_on(&mut plugins, PLUGIN_CALLS).await;
+    assert_eq!(call.session, alpha.record.id);
+    assert_eq!(
+        (call.plugin.as_str(), call.tool.as_str()),
+        ("notes", "find")
+    );
+    let found = json!({
+        "content": [{ "type": "text", "text": "Found 2 notes." }],
+        "isError": false,
+    });
+    answer_plugin(&mut plugins, &call, done_with(&found)).await;
+    assert_eq!(calling.await.unwrap().result(), found);
+
+    // A token nobody was given is refused on both routes.
+    let stranger = "0".repeat(64);
+    for url in [browser_url, notes_url.as_str()] {
+        assert_eq!(
+            rpc(url, Some(&stranger), "tools/list", json!({}))
+                .await
+                .status,
+            401,
+            "{url}"
+        );
+    }
+
+    second.stop(HostStopReason::Stop).await;
+    eventually("the session ended with the stop", async || {
+        (!alive(alpha.pid)).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn s6_a_session_whose_port_is_taken_runs_on_without_tools_and_the_log_says_so_without_its_token()
  {
     let world = World::new();
