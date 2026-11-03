@@ -17,6 +17,8 @@ export type SettingsSectionId =
   | 'sessions'
   /** The hosts on other computers. Listed only while sessions run in the local host. */
   | 'hosts'
+  /** The devices paired with each admin host. Listed only while sessions run in the local host. */
+  | 'devices'
   | 'workspace'
   | 'files'
   | 'browser'
@@ -45,6 +47,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'terminal', label: 'Terminal' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'hosts', label: 'Hosts' },
+  { id: 'devices', label: 'Devices' },
   { id: 'workspace', label: 'Workspace', hint: 'The folders Helm scans, and what a new harness is written from.' },
   { id: 'files', label: 'Files' },
   { id: 'browser', label: 'Browser' },
@@ -67,11 +70,15 @@ export interface SettingsSectionsProps {
   onSelect: (id: SettingsSectionId) => void
   plugins?: readonly SettingsPluginLink[] | undefined
   /**
-   * Whether Hosts is listed: only while "Run sessions in the local host" is
-   * on, since a host on another computer is reached only beside this PC's.
+   * Whether Hosts and Devices are listed: only while "Run sessions in the
+   * local host" is on, since a host on another computer is reached only
+   * beside this PC's.
    */
   showHosts?: boolean | undefined
 }
+
+/** The sections listed only while sessions run in the local host. */
+const HOST_SECTIONS: ReadonlySet<SettingsSectionId> = new Set(['hosts', 'devices'])
 
 export const pluginSection = (path: string): SettingsSectionId => `plugin:${path}`
 
@@ -84,7 +91,7 @@ export function SettingsSections({
 }: SettingsSectionsProps): JSX.Element {
   return (
     <nav aria-label="Settings sections" className="flex flex-col gap-px px-1.5 pb-1.5">
-      {SETTINGS_SECTIONS.filter((section) => showHosts || section.id !== 'hosts').map((section) => {
+      {SETTINGS_SECTIONS.filter((section) => showHosts || !HOST_SECTIONS.has(section.id)).map((section) => {
         const selected = section.id === current
         const link = (
           <button

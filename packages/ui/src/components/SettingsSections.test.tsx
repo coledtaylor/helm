@@ -2,8 +2,10 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { SETTINGS_SECTIONS, SettingsSections, pluginSection } from './SettingsSections'
 
-/** Every section but Hosts, which is listed only while sessions run in the local host. */
-const WITHOUT_HOSTS = SETTINGS_SECTIONS.filter((section) => section.id !== 'hosts').map((section) => section.label)
+/** Every section but Hosts and Devices, which are listed only while sessions run in the local host. */
+const WITHOUT_HOSTS = SETTINGS_SECTIONS.filter((section) => section.id !== 'hosts' && section.id !== 'devices').map(
+  (section) => section.label
+)
 
 describe('SettingsSections', () => {
   it('lists every section in order, marks the one on screen, and picks another', () => {
@@ -19,7 +21,7 @@ describe('SettingsSections', () => {
     expect(onSelect).toHaveBeenCalledWith('browser')
   })
 
-  it('lists Hosts after Sessions only while sessions run in the local host', () => {
+  it('S7: lists Hosts after Sessions, then Devices, only while sessions run in the local host', () => {
     const onSelect = vi.fn()
     render(<SettingsSections current="general" onSelect={onSelect} showHosts />)
     const rows = [...screen.getByRole('navigation', { name: 'Settings sections' }).querySelectorAll('button')].map(
@@ -27,6 +29,7 @@ describe('SettingsSections', () => {
     )
     expect(rows).toEqual(SETTINGS_SECTIONS.map((section) => section.label))
     expect(rows[rows.indexOf('Sessions') + 1]).toBe('Hosts')
+    expect(rows[rows.indexOf('Hosts') + 1]).toBe('Devices')
     fireEvent.click(screen.getByRole('button', { name: 'Hosts' }))
     expect(onSelect).toHaveBeenCalledWith('hosts')
   })

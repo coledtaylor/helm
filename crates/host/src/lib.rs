@@ -84,6 +84,7 @@ pub mod keeper;
 pub mod keys;
 pub mod platform;
 pub mod plugins;
+pub mod presence;
 pub mod resources;
 pub mod server;
 pub mod session;

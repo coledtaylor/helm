@@ -194,6 +194,7 @@ impl TestClient {
                 backends: Vec::new(),
                 role: None,
                 away: false,
+                device: None,
             },
         };
         client

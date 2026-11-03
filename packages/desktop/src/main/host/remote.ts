@@ -5,7 +5,7 @@ import type { LocalHost, PageBridge } from './launcher'
 import { createHostLink, type HostLink } from './link'
 import { createPageLinks, type PageLinks } from './page-link'
 import type * as P from './protocol'
-import { RemoteHostError } from './remote-launcher'
+import { RemoteHostError, type OnPairing } from './remote-launcher'
 
 /**
  * Helm's links to the hosts on other computers this device has added (the
@@ -55,7 +55,7 @@ export interface RemoteHostLinks {
 
 export interface RemoteHostLinksDeps {
   /** Main's connection to `host`, pairing first while nothing is pinned and telling `onPairing` the code. */
-  start: (host: RemoteHost, onPairing: (code: string) => void) => Promise<LocalHost>
+  start: (host: RemoteHost, onPairing: OnPairing) => Promise<LocalHost>
   /** A page's own bridge to `host`, whose bytes go to `data`. */
   openBridge: (host: RemoteHost, data: (bytes: Uint8Array) => void) => PageBridge
   /** Removes a forgotten host's client folder. */
@@ -113,7 +113,10 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
     // Filled in below: the link's callbacks reach the entry they belong to.
     const entry = { host, own: [], subscriptions: [] } as unknown as Entry
     entry.link = createHostLink({
-      start: () => deps.start(entry.host, (code) => setState(entry, { state: 'pairing', code })),
+      start: () =>
+        deps.start(entry.host, (code, approvalFailed) =>
+          setState(entry, { state: 'pairing', code, ...(approvalFailed !== null ? { approvalFailed } : {}) })
+        ),
       name: host.name,
       onAttemptFailed: (error) =>
         setState(entry, error instanceof RemoteHostError ? { state: 'failed', lastLine: error.lastLine } : { state: 'retrying' }),
@@ -148,7 +151,9 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
         // Dropped, not let go of: nothing there ended, and it is tried again.
         if (!entry.link.endedOnPurpose()) setState(entry, { state: 'retrying' })
       })
-      setState(entry, { state: 'connected' })
+      // What the host says this device is paired as, for Settings > Hosts.
+      const role = connection.welcome.role
+      setState(entry, { state: 'connected', ...(role !== undefined ? { role } : {}) })
     })
     entry.link.keepConnected()
     return entry

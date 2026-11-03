@@ -3337,7 +3337,13 @@ role?: DeviceRole,
  * through `floti connect`: an admin action on it needs presence
  * (`devices:presence`) within the last five minutes.
  */
-away?: boolean, };
+away?: boolean, 
+/**
+ * The fingerprint of the device this connection proved, as `devices:list`
+ * names it, so a client can tell its own row; absent for the host's own
+ * shell.
+ */
+device?: string, };
 
 export type WikilinkRequest = { scopePath: string, target: string, 
 /**
@@ -3741,6 +3747,7 @@ export const CLIENT_ONLY: readonly OutsideEntry[] = [
   { channels: "content:artifactConsole", reason: "a line from an HTML artifact's frame, which the client renders" },
   { channels: "hostLink:*", reason: "a Helm page's own connection to the host, whose protocol frames the desktop's main process pipes to a bridge and never reads" },
   { channels: "remoteHosts:*", reason: "where each host on another computer stands with this device: connected, retrying, the pairing code it was shown or its transport's last line, which the client's main process learns from its own links to those hosts and tells only its own window" },
+  { channels: "presence:*", reason: "asks the client's own computer to confirm its user (Windows Hello, Touch ID or the account password) before the client tells a host devices:presence; only the client's computer can check who is at it" },
   { channels: "ownSettings:*", reason: "the settings the client keeps for itself: its window, theme, terminal and browser preferences, the programs it picked, which its main process tells the host, and its tabs, panes and splits, which are kept per device and never reach the host" },
   { channels: "ownApp:info", reason: "the client's own build, data folder and runtime versions" },
   { channels: "ownData:*", reason: "where the copy of the client's own database into the host stands: only the client's main process reads that database, and it sends the rows over carry:*" },

@@ -22,6 +22,9 @@
 //! `floti bridge ... --pair <device name> --approve <role>` pairs in one
 //! step: it runs `floti devices approve - --role <role>` through the same
 //! transport, with its own code on that command's standard input.
+//! `floti presence [--window <handle>] <reason>` asks this computer to
+//! confirm its user is present, for the desktop to tell a host on another
+//! computer before an admin action there.
 //! `floti keeper <data folder> <runtime folder>` is the session keeper a
 //! host starts for itself, which holds its sessions so they outlive it; it
 //! is not run by hand.
@@ -35,10 +38,11 @@ use std::process::ExitCode;
 
 use floti_host::bridge::{BridgeExit, Pair, Transport, run_bridge, run_bridge_through};
 use floti_host::connect::{ConnectStep, run_connect};
+use floti_host::presence;
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
 use floti_protocol::channels::devices::DeviceRole;
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--pair <device name> [--approve viewer|operator|admin]] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code>|- [--role viewer|operator|admin]\n       floti devices revoke <fingerprint>";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--pair <device name> [--approve viewer|operator|admin]] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti update-stop <client folder> --ask | --stop\n       floti devices\n       floti devices approve <code>|- [--role viewer|operator|admin]\n       floti devices revoke <fingerprint>\n       floti presence [--window <handle>] <reason>";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -81,6 +85,10 @@ fn main() -> ExitCode {
         ["connect", "--host-key"] => ExitCode::from(run_connect(ConnectStep::HostKey).code()),
         ["update-stop", ..] => match update_stop::parse(&args[1..]) {
             Some((folder, step)) => ExitCode::from(update_stop::run(&folder, step)),
+            None => usage(),
+        },
+        ["presence", ..] => match presence::parse(&args[1..]) {
+            Some(ask) => ExitCode::from(presence::run(&ask).code()),
             None => usage(),
         },
         ["devices", ..] => match devices_shell::parse(&args[1..]) {

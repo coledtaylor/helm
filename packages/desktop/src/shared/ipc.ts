@@ -505,6 +505,13 @@ export interface SessionConfirmRequest {
 /** The answer to the quit question: end the sessions and quit, keep them running and quit, or stay. */
 export type QuitAnswer = 'end' | 'keep' | 'cancel'
 
+/**
+ * How this computer answered a check that its user is present: confirmed, the
+ * user cancelled it, or this computer has no such check (Linux), or it could
+ * not be run.
+ */
+export type PresenceAnswer = 'confirmed' | 'declined' | 'unavailable'
+
 // ---------------------------------------------------------------------------
 // The browser pane
 // ---------------------------------------------------------------------------
@@ -728,6 +735,14 @@ export interface IpcRequests {
 
   /** Where each host on another computer stands with this device; changes arrive on `remoteHosts:changed`. */
   'remoteHosts:read': { request: void; response: RemoteHostStates }
+
+  /**
+   * Asks this computer to confirm its user is present (Windows Hello, Touch ID
+   * or the account password), with `reason` shown in the prompt, before the
+   * window tells a host `devices:presence`. Main runs `floti presence`
+   * (`main/presence.ts`); the answer says nothing of who the user is.
+   */
+  'presence:confirm': { request: { reason: string }; response: PresenceAnswer }
 
   'settings:read': { request: void; response: AppSettings }
   'settings:write': { request: Partial<AppSettings>; response: AppSettings }
@@ -2065,6 +2080,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'app:info': true,
   'hostLink:open': true,
   'remoteHosts:read': true,
+  'presence:confirm': true,
   'settings:read': true,
   'settings:write': true,
   'ownSettings:read': true,

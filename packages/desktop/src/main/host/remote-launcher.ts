@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { HostTransport } from '@helm/core/types'
+import type { HostTransport, PairingRole } from '@helm/core/types'
 import { HostRefusedError, connectHost, type HostConnection } from './client'
 import {
   BRIDGE_EXIT,
@@ -40,6 +40,11 @@ import {
  * - While this device is not paired, the bridge asks to pair and writes one
  *   line with the code to approve there (`PAIRING_LINE_PREFIX`). The code
  *   goes to the window, on this device, and nowhere else: it is never logged.
+ * - Given the role chosen when the host was added (`--approve`), the bridge
+ *   approves this device itself, through the same transport, with the code
+ *   on that command's standard input. When that fails it writes the
+ *   command's last line, unedited, then the code line again, and waits for
+ *   someone to approve by hand: the window shows both.
  */
 
 /** The start of the line the bridge writes while it waits for approval (`PAIRING_LINE_PREFIX` in bridge.rs). */
@@ -82,10 +87,23 @@ export function transportArgv(transport: HostTransport): string[] {
     : [transport.program, ...transport.args]
 }
 
-/** `floti bridge`'s arguments for a remote host; `pairAs` asks to pair under that name while nothing is pinned. */
-export function remoteBridgeArgs(folder: string, transport: HostTransport, pairAs: string | null): string[] {
-  return ['bridge', folder, ...(pairAs === null ? [] : ['--pair', pairAs]), '--', ...transportArgv(transport)]
+/**
+ * `floti bridge`'s arguments for a remote host. `pairAs` asks to pair under
+ * that name while nothing is pinned, and `approve` approves it with that role
+ * in the same step, through the same transport.
+ */
+export function remoteBridgeArgs(
+  folder: string,
+  transport: HostTransport,
+  pairAs: string | null,
+  approve: PairingRole | null = null
+): string[] {
+  const pairing = pairAs === null ? [] : ['--pair', pairAs, ...(approve === null ? [] : ['--approve', approve])]
+  return ['bridge', folder, ...pairing, '--', ...transportArgv(transport)]
 }
+
+/** Told each code to approve there; `approvalFailed` is the line the failed approval wrote, when one did. */
+export type OnPairing = (code: string, approvalFailed: string | null) => void
 
 /** What a remote host's bridge needs from the launcher's world. */
 export type RemoteLauncherDeps = Pick<LauncherDeps, 'platform' | 'env' | 'exists' | 'spawn' | 'appVersion' | 'log'>
@@ -103,18 +121,30 @@ interface StandardError {
   readonly ended: Promise<void>
 }
 
-/** Reads the bridge's standard error line by line: a pairing line goes to `onPairing` only, never kept or logged. */
-function readStandardError(child: HostChild, onPairing: (code: string) => void): StandardError {
+/**
+ * Reads the bridge's standard error line by line: a pairing line goes to
+ * `onPairing` only, never kept or logged. A line between two pairing lines is
+ * the one-step approval's failure, which comes with the second.
+ */
+function readStandardError(child: HostChild, onPairing: OnPairing): StandardError {
   const stderr = child.stderr
   let last: string | null = null
   if (stderr === null) return { last: () => null, ended: Promise.resolve() }
   let pending = ''
+  let shown = false
+  let sinceCode: string | null = null
   const take = (raw: string): void => {
     const line = raw.replace(/\r$/, '')
     if (line.trim() === '') return
     const code = pairingCodeOf(line)
-    if (code !== null) onPairing(code)
-    else last = line
+    if (code === null) {
+      last = line
+      sinceCode = line
+      return
+    }
+    onPairing(code, shown ? sinceCode : null)
+    shown = true
+    sinceCode = null
   }
   stderr.on('data', (chunk: Buffer | string) => {
     pending += chunk.toString()
@@ -157,13 +187,14 @@ function spawnBridge(
   places: HostPlaces,
   deps: Omit<RemoteLauncherDeps, 'appVersion' | 'log'>,
   target: RemoteTarget,
-  pairAs: string | null
+  pairAs: string | null,
+  approve: PairingRole | null = null
 ): { binary: string; child: HostChild } | { binary: string; missing: true } {
   const binary = flotiBinary(places, deps)
   if (!deps.exists(binary)) return { binary, missing: true }
   // The user's own environment, as it is: their ssh finds their config, keys
   // and agent the way it does in their terminal.
-  const child = deps.spawn(binary, remoteBridgeArgs(target.folder, target.transport, pairAs), {
+  const child = deps.spawn(binary, remoteBridgeArgs(target.folder, target.transport, pairAs, approve), {
     env: deps.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
@@ -173,15 +204,16 @@ function spawnBridge(
 
 /**
  * Main's own connection to a remote host. Pairs under `deviceName` while
- * nothing is pinned, telling `onPairing` each code to approve there. Rejects
- * with a `RemoteHostError` whose line is the one to show.
+ * nothing is pinned, approving itself with `approve` when one is given, and
+ * telling `onPairing` each code to approve there. Rejects with a
+ * `RemoteHostError` whose line is the one to show.
  */
 export async function startRemoteHost(
   places: HostPlaces,
   deps: RemoteLauncherDeps,
-  target: RemoteTarget & { deviceName: string; onPairing: (code: string) => void }
+  target: RemoteTarget & { deviceName: string; approve: PairingRole | null; onPairing: OnPairing }
 ): Promise<LocalHost> {
-  const spawned = spawnBridge(places, deps, target, target.deviceName)
+  const spawned = spawnBridge(places, deps, target, target.deviceName, target.approve)
   if ('missing' in spawned) throw new RemoteHostError(`Helm could not find floti at ${spawned.binary}.`)
   const { binary, child } = spawned
   const exited = exitOf(child)

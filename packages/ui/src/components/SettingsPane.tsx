@@ -53,6 +53,7 @@ import {
 import { CheckIcon, CloseIcon, PlusIcon, RefreshIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
 import { HostsSettings, type SettingsHost } from './HostsSettings'
+import { DevicesSettings, type DevicesSettingsProps } from './DevicesSettings'
 
 /**
  * Helm's own settings.
@@ -258,6 +259,8 @@ export interface SettingsPaneProps {
   onRemoveHost: (id: string) => void
   /** One host's own quit choice; every other host's is left as it is. */
   onHostQuitChange: (id: string, choice: QuitSessions) => void
+  /** Settings > Devices: each admin host's devices, approving and revoking them. */
+  devices: DevicesSettingsProps
 }
 
 /**
@@ -374,7 +377,8 @@ export function SettingsPane({
   hosts,
   onAddHost,
   onRemoveHost,
-  onHostQuitChange
+  onHostQuitChange,
+  devices
 }: SettingsPaneProps): JSX.Element {
   const [addingHost, setAddingHost] = useState(false)
   const found = status !== null && status.path !== null && status.version !== null
@@ -686,6 +690,8 @@ export function SettingsPane({
               onAddingChange={setAddingHost}
             />
           )}
+
+          {section === 'devices' && <DevicesSettings {...devices} />}
 
           {section === 'files' && (
             <FilesGroup wrap={filesWrap} onWrapChange={onFilesWrapChange} />

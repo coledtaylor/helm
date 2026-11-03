@@ -105,6 +105,12 @@ pub struct Welcome {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(optional, as = "Option<bool>")]
     pub away: bool,
+    /// The fingerprint of the device this connection proved, as `devices:list`
+    /// names it, so a client can tell its own row; absent for the host's own
+    /// shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub device: Option<String>,
 }
 
 impl Welcome {

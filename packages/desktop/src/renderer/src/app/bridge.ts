@@ -1,6 +1,7 @@
 import { isClientOnly, isHostInternal } from '../../../shared/host/protocol'
 import type { HelmBridge } from '../../../shared/ipc'
 import { createConfigAdapter } from './host/config'
+import { createDevices, type Devices } from './host/devices'
 import { createFilesAdapter } from './host/files'
 import { createHistoryAdapter } from './host/history'
 import { createHostState, type HostStateStore } from './host/hostState'
@@ -61,6 +62,19 @@ export const hostState: HostStateStore = createHostState(link)
  * (`host/remoteHosts.ts`). Empty with sessions in Helm.
  */
 export const remoteHosts: RemoteHostsStore = createRemoteHosts({ bridge: window.helm, log })
+
+/**
+ * Settings > Devices: each admin host's devices, over the window's own
+ * connection to it, asking this computer for presence through main when a
+ * host on another computer wants it (`host/devices.ts`).
+ */
+export const devices: Devices = createDevices({
+  confirmPresence: (reason) => window.helm.invoke('presence:confirm', { reason }),
+  log
+})
+
+/** The window's own connection to this PC's host, for Settings > Devices. */
+export const localHostConnection = (): ReturnType<typeof link.connection> => link.connection()
 
 /** Whether sessions run in the local host this run: main says once, when the window first asks. */
 export const sessionsInHost = (): Promise<boolean> => link.inHost()

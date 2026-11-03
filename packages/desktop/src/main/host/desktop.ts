@@ -1,5 +1,5 @@
 import { app, type BrowserWindow } from 'electron'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
@@ -16,7 +16,16 @@ import { nativeProfileDialogs } from '../profiles'
 import { updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { createHostFiles, type HostFiles } from './files'
-import { openPageBridge, startLocalHost, type HostChild, type HostPlaces, type LocalHost, type SpawnOptions } from './launcher'
+import { createPresenceCheck, type PresenceCheck } from '../presence'
+import {
+  flotiBinary,
+  openPageBridge,
+  startLocalHost,
+  type HostChild,
+  type HostPlaces,
+  type LocalHost,
+  type SpawnOptions
+} from './launcher'
 import { createHostLink, type HostLink } from './link'
 import { createOwnDataCopy, type OwnDataCopy } from './own-data'
 import { createPageLinks, type PageLinks } from './page-link'
@@ -162,7 +171,7 @@ export function createDesktopRemoteHosts(options: {
       startRemoteHost(
         places(),
         { ...programs, appVersion: app.getVersion(), log: options.log },
-        { folder: folderOf(host.id), transport: host.transport, deviceName: hostname(), onPairing }
+        { folder: folderOf(host.id), transport: host.transport, deviceName: hostname(), approve: host.role ?? null, onPairing }
       ),
     openBridge: (host, data) =>
       openRemotePageBridge(places(), programs, { folder: folderOf(host.id), transport: host.transport }, data),
@@ -175,6 +184,29 @@ export function createDesktopRemoteHosts(options: {
     log: options.log,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
+  })
+}
+
+/**
+ * The check that this computer's user is present, run by this build's
+ * `floti presence` over the window, for a host that asks before an admin
+ * action (`devices:presence`).
+ */
+export function createDesktopPresence(window: () => BrowserWindow | null, log: (line: string) => void): PresenceCheck {
+  return createPresenceCheck({
+    platform: process.platform,
+    binary: () => flotiBinary(places(), programs),
+    windowHandle: () => {
+      const win = window()
+      return win === null || win.isDestroyed() ? null : win.getNativeWindowHandle()
+    },
+    run: (binary, args) =>
+      new Promise((done, fail) => {
+        const child = execFile(binary, [...args], { windowsHide: true }, () => undefined)
+        child.once('error', fail)
+        child.once('exit', (code) => done({ code }))
+      }),
+    log
   })
 }
 

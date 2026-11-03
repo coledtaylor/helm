@@ -6,7 +6,7 @@ import type { LocalHost, PageBridge } from './launcher'
 import type { HelmPage } from './page-link'
 import { createPageLinks, routePageLinks } from './page-link'
 import { createRemoteHostLinks, type RemoteHostLinksDeps } from './remote'
-import { RemoteHostError } from './remote-launcher'
+import { RemoteHostError, type OnPairing } from './remote-launcher'
 
 const BUILD: RemoteHost = { id: 'h-build', name: 'build-box', transport: { kind: 'ssh', target: 'me@build-box' } }
 const LAB: RemoteHost = {
@@ -19,7 +19,7 @@ const FAR: RemoteHost = { id: 'h-far', name: 'far-away', transport: { kind: 'ssh
 /** A start the test settles by hand, as a bridge that is still reaching its host. */
 interface PendingStart {
   host: RemoteHost
-  pairing: (code: string) => void
+  pairing: OnPairing
   resolve: (local: LocalHost) => void
   reject: (error: Error) => void
 }
@@ -204,7 +204,7 @@ describe('the links to hosts on other computers', () => {
   it('S10: shows the pairing code while this device waits to be approved there, then connected', async () => {
     const w = world()
     w.links.sync([BUILD])
-    w.startFor(BUILD).pairing('7Q2K-9XZD')
+    w.startFor(BUILD).pairing('7Q2K-9XZD', null)
     expect(w.state(BUILD)).toEqual({ state: 'pairing', code: '7Q2K-9XZD' })
     expect(w.told.at(-1)).toEqual({ 'h-build': { state: 'pairing', code: '7Q2K-9XZD' } })
 
@@ -214,6 +214,22 @@ describe('the links to hosts on other computers', () => {
     expect(w.state(BUILD)).toEqual({ state: 'connected' })
     // The code went to the window only.
     expect(w.log.join('\n')).not.toContain('7Q2K-9XZD')
+  })
+
+  it('S6: shows why the one-step approval failed beside the code, and the role the host says once connected', async () => {
+    const w = world()
+    w.links.sync([{ ...BUILD, role: 'admin' }])
+    w.startFor(BUILD).pairing('7Q2K-9XZD', 'floti devices: permission denied')
+    expect(w.state(BUILD)).toEqual({
+      state: 'pairing',
+      code: '7Q2K-9XZD',
+      approvalFailed: 'floti devices: permission denied'
+    })
+    const build = hostWith()
+    Object.assign(build.welcome, { role: 'admin' })
+    w.startFor(BUILD).resolve(fakeLocalHost(build, false))
+    await settle()
+    expect(w.state(BUILD)).toEqual({ state: 'connected', role: 'admin' })
   })
 
   it('S10: Remove lets go of the host without a word to it, ends its page bridges and removes its client folder', async () => {

@@ -58,6 +58,7 @@ import {
   quitChoice,
   quitEndsSessions,
   withoutRemoteHost,
+  type RemoteHost,
   type PluginParams,
   type PluginPagesRef,
   type EditorHighlight,
@@ -189,7 +190,16 @@ import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
-import { helm, hostSessionTabs, hostState, remoteHosts as remoteHostLinks, sessionsInHost } from './bridge'
+import {
+  devices,
+  helm,
+  hostSessionTabs,
+  hostState,
+  localHostConnection,
+  remoteHosts as remoteHostLinks,
+  sessionsInHost
+} from './bridge'
+import { useDevicesSettings } from './useDevicesSettings'
 import { LOCAL_HOST_NAME } from './host/sessions'
 import { ProjectColumn } from './ProjectColumn'
 import { disposeShell, terminalShellKey } from './pterms'
@@ -368,6 +378,16 @@ const KEEP_RUNNING = 'keep-running'
 /** The last segment of a path, for a session in no project the scan found. */
 const folderName = (path: string): string =>
   path.split(/[\\/]+/).filter((part) => part !== '').at(-1) ?? path
+
+/** Settings > Devices' reach: the devices store and the window's own connection to each host. */
+const DEVICES_DEPS = {
+  devices,
+  localConnection: localHostConnection,
+  remoteConnection: (id: string) => remoteHostLinks.connection(id)
+}
+
+/** No remote hosts, as one value so a hook's input does not change every render. */
+const NO_HOSTS: readonly RemoteHost[] = []
 
 export function App(): JSX.Element {
   const launcher = useLauncher()
@@ -741,6 +761,13 @@ export function App(): JSX.Element {
     : null
   const settingsOnScreen = visible.some((ref) => ref.kind === 'settings')
   const pluginSettings = usePluginSettings(settingsOnScreen && settingsPlugin !== null ? settingsPlugin.path : null)
+  /** Settings > Devices, read only while it is on screen with sessions in the local host. */
+  const devicesSettings = useDevicesSettings(
+    DEVICES_DEPS,
+    settingsOnScreen && settingsSection === 'devices' && settings?.sessionsInHost === true,
+    settings?.sessionsInHost === true ? settings.hosts : NO_HOSTS,
+    remoteView
+  )
 
   /**
    * Brings a tab forward from outside its pane - the tree, a notification, the
@@ -2611,10 +2638,12 @@ export function App(): JSX.Element {
    */
   const currentSettings = settings ?? DEFAULT_SETTINGS
   const remoteHosts = currentSettings.sessionsInHost ? currentSettings.hosts : []
-  // Hosts is listed only with that setting on; a page left open on it when
-  // the setting goes off shows Sessions, where the setting is.
+  // Hosts and Devices are listed only with that setting on; a page left open
+  // on one when the setting goes off shows Sessions, where the setting is.
   const shownSettingsSection: SettingsSectionId =
-    settingsSection === 'hosts' && !currentSettings.sessionsInHost ? 'sessions' : settingsSection
+    (settingsSection === 'hosts' || settingsSection === 'devices') && !currentSettings.sessionsInHost
+      ? 'sessions'
+      : settingsSection
   /** What the status bar says about each host, this PC first: what quitting does there, and the setting that decides. */
   const statusHosts =
     hostRunning === true
@@ -2800,6 +2829,7 @@ export function App(): JSX.Element {
       onHostQuitChange={(id, choice) =>
         writeSettings({ quitSessions: { ...currentSettings.quitSessions, [id]: choice } })
       }
+      devices={devicesSettings}
       filesWrap={filesWrap}
       onFilesWrapChange={setFilesWrap}
       onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>

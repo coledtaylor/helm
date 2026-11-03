@@ -1,4 +1,5 @@
 import type { HostState, HostStateStore } from './host/hostState'
+import type { Devices } from './host/devices'
 import type { RemoteHostsStore } from './host/remoteHosts'
 import type {
   EventChannel,
@@ -165,5 +166,17 @@ const NO_REMOTE_HOSTS = {}
 /** No host on another computer has said anything, unless a test says otherwise. */
 export const remoteHosts: RemoteHostsStore = {
   get: () => NO_REMOTE_HOSTS,
-  subscribe: () => () => undefined
+  subscribe: () => () => undefined,
+  connection: () => Promise.reject(new Error('No host on another computer in this test.'))
 }
+
+/** No devices anywhere, unless a test says otherwise (Settings > Devices). */
+export const devices: Devices = {
+  list: (hosts) =>
+    Promise.resolve(hosts.map((host) => ({ ...host, thisDevice: null, paired: [], waiting: [], error: null }))),
+  approve: () => Promise.resolve({ ok: true }),
+  revoke: () => Promise.resolve({ ok: true })
+}
+
+/** The window's own connection to this PC's host: none in these tests. */
+export const localHostConnection = (): Promise<never> => Promise.reject(new Error('No host in this test.'))

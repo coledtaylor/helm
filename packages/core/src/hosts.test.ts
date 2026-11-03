@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_PAIRING_ROLE,
   describeTransport,
   formatCommandLine,
   LOCAL_HOST_KEY,
   remoteHostFromDraft,
+  remoteHostsProblem,
   type RemoteHost,
   type RemoteHostDraft,
   splitCommandLine,
@@ -98,6 +100,7 @@ describe('remoteHostFromDraft', () => {
     via: 'ssh',
     target: '',
     command: '',
+    role: 'admin',
     ...patch
   })
   const existing: RemoteHost[] = [{ id: 'a', name: 'build-box', transport: { kind: 'ssh', target: 'build-box' } }]
@@ -105,15 +108,27 @@ describe('remoteHostFromDraft', () => {
   it('takes the ssh target as typed, and as the name when none is given', () => {
     expect(remoteHostFromDraft(draft({ target: '  you@lab  ' }), existing, 'b')).toEqual({
       ok: true,
-      host: { id: 'b', name: 'you@lab', transport: { kind: 'ssh', target: 'you@lab' } }
+      host: { id: 'b', name: 'you@lab', transport: { kind: 'ssh', target: 'you@lab' }, role: 'admin' }
     })
   })
 
   it('splits a command into its program and arguments', () => {
     expect(remoteHostFromDraft(draft({ name: 'wsl', via: 'command', command: 'wsl.exe -d "Ubuntu Dev" --' }), [], 'b')).toEqual({
       ok: true,
-      host: { id: 'b', name: 'wsl', transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu Dev', '--'] } }
+      host: { id: 'b', name: 'wsl', transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu Dev', '--'] }, role: 'admin' }
     })
+  })
+
+  it('S6: keeps the role this PC is approved with as it pairs, Admin unless Operator is picked', () => {
+    expect(DEFAULT_PAIRING_ROLE).toBe('admin')
+    expect(remoteHostFromDraft(draft({ target: 'lab', role: 'operator' }), [], 'b')).toEqual({
+      ok: true,
+      host: { id: 'b', name: 'lab', transport: { kind: 'ssh', target: 'lab' }, role: 'operator' }
+    })
+    const host = { id: 'b', name: 'lab', transport: { kind: 'ssh', target: 'lab' } }
+    expect(remoteHostsProblem([{ ...host, role: 'operator' }])).toBeNull()
+    expect(remoteHostsProblem([host])).toBeNull()
+    expect(remoteHostsProblem([{ ...host, role: 'viewer' }])).toContain('expected admin or operator')
   })
 
   it('says what to fix rather than adding a host it could not use', () => {

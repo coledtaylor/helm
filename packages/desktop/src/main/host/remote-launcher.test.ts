@@ -109,6 +109,7 @@ describe('reaching a host on another computer', () => {
       folder: FOLDER,
       transport: SSH,
       deviceName: 'my laptop',
+      approve: null,
       onPairing: () => undefined
     })
 
@@ -140,6 +141,7 @@ describe('reaching a host on another computer', () => {
       folder: FOLDER,
       transport: SSH,
       deviceName: 'my laptop',
+      approve: null,
       onPairing: () => undefined
     })
     await host.close()
@@ -159,6 +161,7 @@ describe('reaching a host on another computer', () => {
       folder: FOLDER,
       transport: COMMAND,
       deviceName: 'my laptop',
+      approve: null,
       onPairing: () => undefined
     })
     expect(w.spawned[0]?.args).toEqual([
@@ -184,7 +187,7 @@ describe('reaching a host on another computer', () => {
   ])('S6: ssh that needs %s fails with its last line, unedited', async (_need, line) => {
     const w = world([endsWith(BRIDGE_EXIT.transportEnded, 'debug: an earlier line', line)])
     const error = await remoteError(
-      startRemoteHost(PLACES, w.deps, { folder: FOLDER, transport: SSH, deviceName: 'my laptop', onPairing: () => undefined })
+      startRemoteHost(PLACES, w.deps, { folder: FOLDER, transport: SSH, deviceName: 'my laptop', approve: null, onPairing: () => undefined })
     )
     expect(error.lastLine).toBe(line)
   })
@@ -192,7 +195,7 @@ describe('reaching a host on another computer', () => {
   it('says that no Floti host runs there in floti connect’s own words', async () => {
     const w = world([endsWith(BRIDGE_EXIT.unreachable, 'floti connect: no Floti host is running there.')])
     const error = await remoteError(
-      startRemoteHost(PLACES, w.deps, { folder: FOLDER, transport: SSH, deviceName: 'my laptop', onPairing: () => undefined })
+      startRemoteHost(PLACES, w.deps, { folder: FOLDER, transport: SSH, deviceName: 'my laptop', approve: null, onPairing: () => undefined })
     )
     expect(error.lastLine).toBe('floti connect: no Floti host is running there.')
   })
@@ -208,12 +211,69 @@ describe('reaching a host on another computer', () => {
       folder: FOLDER,
       transport: SSH,
       deviceName: 'my laptop',
+      approve: null,
       onPairing: (code) => codes.push(code)
     })
     await expect.poll(() => codes).toEqual(['7Q2K-9XZD'])
     approve()
     const host = await connecting
     await host.close()
+    expect(w.log.join('\n')).not.toContain('7Q2K-9XZD')
+  })
+
+  it('S6: approves this device in the same step with the role picked, after --pair', async () => {
+    const w = world([connects])
+    const host = await startRemoteHost(PLACES, w.deps, {
+      folder: FOLDER,
+      transport: SSH,
+      deviceName: 'my laptop',
+      approve: 'operator',
+      onPairing: () => undefined
+    })
+    expect(w.spawned[0]?.args).toEqual([
+      'bridge',
+      FOLDER,
+      '--pair',
+      'my laptop',
+      '--approve',
+      'operator',
+      '--',
+      'ssh',
+      '-o',
+      'BatchMode=yes',
+      'me@build-box'
+    ])
+    await host.close()
+  })
+
+  it('S6: an approval that failed hands on the line it wrote with the code shown again, and the first code with none', async () => {
+    let approve: () => void = () => undefined
+    const approved = new Promise<void>((resolve) => {
+      approve = resolve
+    })
+    const failed = 'floti devices: this device is not an admin here.'
+    const w = world([
+      (child) => {
+        pairsThen(approved)(child)
+        child.stderr.write(`${failed}\n${PAIRING_LINE}\n`)
+      }
+    ])
+    const told: Array<[string, string | null]> = []
+    const connecting = startRemoteHost(PLACES, w.deps, {
+      folder: FOLDER,
+      transport: SSH,
+      deviceName: 'my laptop',
+      approve: 'admin',
+      onPairing: (code, approvalFailed) => told.push([code, approvalFailed])
+    })
+    await expect
+      .poll(() => told)
+      .toEqual([
+        ['7Q2K-9XZD', null],
+        ['7Q2K-9XZD', failed]
+      ])
+    approve()
+    await (await connecting).close()
     expect(w.log.join('\n')).not.toContain('7Q2K-9XZD')
   })
 
@@ -226,7 +286,7 @@ describe('reaching a host on another computer', () => {
       )
     ])
     const error = await remoteError(
-      startRemoteHost(PLACES, w.deps, { folder: FOLDER, transport: SSH, deviceName: 'my laptop', onPairing: () => undefined })
+      startRemoteHost(PLACES, w.deps, { folder: FOLDER, transport: SSH, deviceName: 'my laptop', approve: null, onPairing: () => undefined })
     )
     expect(error.lastLine).toBe('floti bridge: nobody approved the request to pair before it expired; nothing was pinned.')
   })

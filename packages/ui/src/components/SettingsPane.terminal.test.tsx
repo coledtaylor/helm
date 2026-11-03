@@ -110,6 +110,7 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     onAddHost: vi.fn(),
     onRemoveHost: vi.fn(),
     onHostQuitChange: vi.fn(),
+    devices: { hosts: [], onApprove: vi.fn(), onRevoke: vi.fn() },
     ...overrides
   }
 }

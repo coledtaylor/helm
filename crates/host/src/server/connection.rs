@@ -959,6 +959,7 @@ impl Connection {
         if let Message::Welcome(welcome) = &mut answer {
             welcome.role = Some(self.role.into());
             welcome.away = self.away;
+            welcome.device = Some(self.device.fingerprint());
         }
         if capabilities.is_some()
             && let Some(claim) = enrolling

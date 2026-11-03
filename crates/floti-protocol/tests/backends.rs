@@ -41,6 +41,7 @@ fn welcome() -> Welcome {
         ],
         role: None,
         away: false,
+        device: None,
     }
 }
 

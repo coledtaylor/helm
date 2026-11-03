@@ -1,7 +1,10 @@
 import { useState, type JSX, type ReactNode } from 'react'
 import {
+  DEFAULT_PAIRING_ROLE,
   describeTransport,
+  type DeviceRoleName,
   type HostTransport,
+  type PairingRole,
   type QuitSessions,
   type RemoteHost,
   type RemoteHostConnection,
@@ -19,7 +22,8 @@ import { Action, Divider, Group, Select } from './SettingsKit'
  * Settings > Hosts: the hosts on other computers this device reaches, each
  * with how it is reached, where its link stands, what quitting does to the
  * sessions this device started there, and Remove; and a small form that adds
- * one by an ssh target or a command.
+ * one by an ssh target or a command, and the role this PC is approved with
+ * there as it pairs.
  *
  * Everything here is kept on this device (`hosts` and `quitSessions`) and
  * written through `settings:write`. Removing a host forgets it here and ends
@@ -126,6 +130,11 @@ function HostRow({
         {chip !== null && (
           <Chip tone={chip.tone}>{chip.label}</Chip>
         )}
+        {connection?.state === 'connected' && connection.role !== undefined && (
+          <span data-settings-host-role={connection.role} className="text-[11.5px] text-fg-muted">
+            {ROLE_LABEL[connection.role]}
+          </span>
+        )}
       </div>
       <p
         data-settings-host-reached
@@ -160,6 +169,17 @@ function ConnectionDetail({ connection, host }: { connection: RemoteHostConnecti
   if (connection.state === 'pairing') {
     return (
       <div data-settings-host-pairing className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
+        {connection.approvalFailed !== undefined && (
+          <>
+            <p>Helm could not approve this PC on {host.name} itself. It said:</p>
+            <p
+              data-settings-host-approval-failed
+              className="mt-1 mb-2 font-mono text-[11px] break-all text-fg select-text"
+            >
+              {connection.approvalFailed}
+            </p>
+          </>
+        )}
         <p>This PC is not paired with {host.name} yet. To approve it, run this in a terminal there:</p>
         <p className="mt-1 font-mono text-[11.5px] text-fg select-text">floti devices approve {connection.code}</p>
       </div>
@@ -177,6 +197,55 @@ function ConnectionDetail({ connection, host }: { connection: RemoteHostConnecti
 }
 
 const VIA_LABEL: Record<HostTransport['kind'], string> = { ssh: 'ssh', command: 'Command' }
+
+/** A role, as Settings names it. */
+export const ROLE_LABEL: Record<DeviceRoleName, string> = { admin: 'Admin', operator: 'Operator', viewer: 'Viewer' }
+
+const PAIRING_ROLE_HINT: Record<PairingRole, string> = {
+  admin: 'This PC can do everything there, pairing and revoking devices included.',
+  operator: 'This PC can start, use and end sessions there, but not pair or revoke devices or change its settings.'
+}
+
+/** A small choice of a few words, one picked: the segmented control the add forms use. */
+export function Segmented<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+  name
+}: {
+  label: string
+  options: readonly { value: T; label: string }[]
+  value: T
+  onChange: (value: T) => void
+  /** Each option's `data-<name>` attribute, for tests and drivers. */
+  name: string
+}): JSX.Element {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="flex w-fit items-center gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          {...{ [`data-${name}`]: option.value }}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            'rounded-raised px-2.5 py-1 text-[11.5px] transition-colors',
+            value === option.value ? SEGMENT_ON : 'text-fg-subtle hover:text-fg'
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 const VIA_HINT: Record<HostTransport['kind'], string> = {
   ssh: `Helm runs your own ssh with this target, exactly as typed, and ${REMOTE_CONNECT_LINE} there. It uses your ssh config, keys and agent, never asks for a password and keeps none.`,
@@ -199,7 +268,13 @@ function AddHostForm({
   onAdd: (host: RemoteHost) => void
   onCancel: () => void
 }): JSX.Element {
-  const [draft, setDraft] = useState<RemoteHostDraft>({ name: '', via: 'ssh', target: '', command: '' })
+  const [draft, setDraft] = useState<RemoteHostDraft>({
+    name: '',
+    via: 'ssh',
+    target: '',
+    command: '',
+    role: DEFAULT_PAIRING_ROLE
+  })
   const [error, setError] = useState<string | null>(null)
   const edit = (patch: Partial<RemoteHostDraft>): void => {
     setDraft((current) => ({ ...current, ...patch }))
@@ -240,28 +315,13 @@ function AddHostForm({
       </label>
       <div className="flex flex-col gap-1">
         <span className="text-[12px] text-fg-muted">Reached with</span>
-        <div
-          role="radiogroup"
-          aria-label="Reached with"
-          className="flex w-fit items-center gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
-        >
-          {(['ssh', 'command'] as const).map((via) => (
-            <button
-              key={via}
-              type="button"
-              role="radio"
-              aria-checked={draft.via === via}
-              data-settings-host-via={via}
-              onClick={() => edit({ via })}
-              className={cn(
-                'rounded-raised px-2.5 py-1 text-[11.5px] transition-colors',
-                draft.via === via ? SEGMENT_ON : 'text-fg-subtle hover:text-fg'
-              )}
-            >
-              {VIA_LABEL[via]}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          label="Reached with"
+          name="settings-host-via"
+          options={(['ssh', 'command'] as const).map((via) => ({ value: via, label: VIA_LABEL[via] }))}
+          value={draft.via}
+          onChange={(via) => edit({ via })}
+        />
         {draft.via === 'ssh' ? (
           <input
             type="text"
@@ -286,6 +346,19 @@ function AddHostForm({
           />
         )}
         <p className="text-[11px] leading-[1.5] text-fg-subtle">{VIA_HINT[draft.via]}</p>
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-[12px] text-fg-muted">This PC's role there</span>
+        <Segmented
+          label="This PC's role there"
+          name="settings-host-role"
+          options={(['admin', 'operator'] as const).map((role) => ({ value: role, label: ROLE_LABEL[role] }))}
+          value={draft.role}
+          onChange={(role) => edit({ role })}
+        />
+        <p className="text-[11px] leading-[1.5] text-fg-subtle">
+          {PAIRING_ROLE_HINT[draft.role]} Helm approves this PC with it over the same connection as it pairs.
+        </p>
       </div>
       {error !== null && (
         <p role="alert" data-settings-host-error className="text-[12px] text-danger">

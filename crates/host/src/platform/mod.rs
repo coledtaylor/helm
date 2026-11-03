@@ -17,6 +17,7 @@ pub mod folders;
 pub mod launcher;
 pub mod links;
 pub mod node_runtime;
+pub mod presence;
 pub mod private_files;
 pub mod process_table;
 pub mod process_tree;

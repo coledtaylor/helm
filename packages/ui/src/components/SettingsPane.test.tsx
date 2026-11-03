@@ -138,6 +138,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onAddHost: vi.fn(),
     onRemoveHost: vi.fn(),
     onHostQuitChange: vi.fn(),
+    devices: { hosts: [], onApprove: vi.fn(), onRevoke: vi.fn() },
     ...overrides
   }
   const view = render(<SettingsPane {...props} />)
@@ -161,6 +162,7 @@ describe('SettingsPane', () => {
       ['terminal', 'Terminal', ['Terminal']],
       ['sessions', 'Sessions', ['Sessions']],
       ['hosts', 'Hosts', ['Hosts']],
+      ['devices', 'Devices', ['Devices']],
       ['workspace', 'Workspace', ['Workspace', 'Harness templates']],
       ['files', 'Files', ['Files']],
       ['browser', 'Browser', ['Browser']],
@@ -700,6 +702,47 @@ describe('SettingsPane', () => {
     const locked = screen.getByRole('group', { name: 'locked' })
     expect(within(locked).getByText('you@locked: Permission denied (publickey,password).')).toBeTruthy()
     expect(locked.textContent).toContain('Sign in with ssh you@locked in a terminal, then try again.')
+  })
+
+  it('S6: adds a host with the role this PC is approved with there, Admin unless Operator is picked', async () => {
+    const { props } = renderPane({ section: 'hosts', sessionsInHost: true, hosts: [] })
+    await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
+    const form = screen.getByRole('form', { name: 'Add a host' })
+    const roles = within(form).getByRole('radiogroup', { name: "This PC's role there" })
+    expect(within(roles).getAllByRole('radio').map((radio) => radio.textContent)).toEqual(['Admin', 'Operator'])
+    expect(within(roles).getByRole('radio', { name: 'Admin' }).getAttribute('aria-checked')).toBe('true')
+    await userEvent.type(within(form).getByRole('textbox', { name: 'ssh target' }), 'you@lab')
+    await userEvent.click(within(form).getByRole('button', { name: 'Add host' }))
+    expect(props.onAddHost).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'you@lab', role: 'admin' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add a host…' }))
+    const again = screen.getByRole('form', { name: 'Add a host' })
+    await userEvent.click(within(again).getByRole('radio', { name: 'Operator' }))
+    await userEvent.type(within(again).getByRole('textbox', { name: 'ssh target' }), 'you@build')
+    await userEvent.click(within(again).getByRole('button', { name: 'Add host' }))
+    expect(props.onAddHost).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'you@build', role: 'operator' }))
+  })
+
+  it('S6: lists a connected host with its role, and a failed one-step approval beside the code', () => {
+    const transport = { kind: 'ssh' as const, target: 'lab' }
+    renderPane({
+      section: 'hosts',
+      sessionsInHost: true,
+      hosts: [
+        { host: { id: 'up', name: 'up', transport }, quit: 'keep', connection: { state: 'connected', role: 'operator' } },
+        {
+          host: { id: 'new', name: 'new', transport },
+          quit: 'keep',
+          connection: { state: 'pairing', code: 'K7Q-4MD', approvalFailed: 'floti devices: permission denied' }
+        }
+      ]
+    })
+    const up = screen.getByRole('group', { name: 'up' })
+    expect(up.textContent).toContain('Connected')
+    expect(up.querySelector('[data-settings-host-role]')?.textContent).toBe('Operator')
+    const pairing = screen.getByRole('group', { name: 'new' })
+    expect(within(pairing).getByText('floti devices: permission denied')).toBeTruthy()
+    expect(within(pairing).getByText('floti devices approve K7Q-4MD')).toBeTruthy()
   })
 
   it('stops this PC’s host from Settings through the question, and only while there is one', async () => {

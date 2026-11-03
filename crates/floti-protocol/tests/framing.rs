@@ -43,6 +43,7 @@ fn every_kind_of_message() -> Vec<Message> {
             )],
             role: Some(floti_protocol::channels::devices::DeviceRole::Admin),
             away: true,
+            device: Some("0123456789abcdef".to_owned()),
         }),
         Message::Request(Request {
             id: 1,

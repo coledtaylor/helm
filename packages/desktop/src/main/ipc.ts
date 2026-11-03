@@ -1,6 +1,7 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type WebContents } from 'electron'
 import { FOREIGN_PAGE, type HelmPage, type HostPageLinks } from './host/page-link'
 import type { RemoteHostLinks } from './host/remote'
+import type { PresenceCheck } from './presence'
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename } from 'node:path'
@@ -149,6 +150,8 @@ interface IpcContextBase {
    * changes `hosts` starts or ends them.
    */
   remoteHosts?: RemoteHostLinks | undefined
+  /** Asks this computer to confirm its user is present; see `presence.ts`. Unavailable when absent. */
+  presence?: PresenceCheck | undefined
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
   /**
@@ -430,6 +433,7 @@ export function registerIpc(ctx: IpcContext): void {
     },
 
     'remoteHosts:read': () => ctx.remoteHosts?.states() ?? {},
+    'presence:confirm': ({ reason }) => ctx.presence?.confirm(reason) ?? 'unavailable',
 
     // Sessions in Helm itself: no host, so no host log file.
     'app:info': async () => ({

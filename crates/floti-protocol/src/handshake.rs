@@ -32,6 +32,7 @@ impl HostIdentity {
                     backends: self.backends.clone(),
                     role: None,
                     away: false,
+                    device: None,
                 };
                 (Message::Welcome(welcome), Some(capabilities))
             }

@@ -332,8 +332,10 @@ async fn s8_a_viewer_sees_sessions_and_screens_and_its_keys_and_changes_are_refu
         .await
         .unwrap();
 
-    let (_, mut viewer) = world.local("a viewer phone", Role::Viewer).await;
+    let (key, mut viewer) = world.local("a viewer phone", Role::Viewer).await;
     assert_eq!(viewer.welcome.role, Some(DeviceRole::Viewer));
+    // The device is told its own fingerprint, to know its row in a listing.
+    assert_eq!(viewer.welcome.device, Some(key.public().fingerprint()));
     let listed = viewer.request::<SessionList>(&()).await.unwrap();
     assert_eq!(
         listed.iter().map(|row| row.id).collect::<Vec<_>>(),

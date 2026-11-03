@@ -41,6 +41,8 @@ export interface RemoteHostsStore {
   get(): Readonly<Record<string, RemoteHostView>>
   /** Calls `listener` on every change; the first subscriber starts listening to main. Returns the unsubscribe. */
   subscribe(listener: () => void): () => void
+  /** The window's own connection to one host, connecting first when there is none (Settings > Devices). */
+  connection(id: string): Promise<HostConnection>
 }
 
 export interface RemoteHostsDeps {
@@ -162,6 +164,7 @@ export function createRemoteHosts(deps: RemoteHostsDeps): RemoteHostsStore {
 
   return {
     get: () => view,
+    connection: (id) => hostFor(id).link.connection(),
     subscribe(listener) {
       listeners.add(listener)
       start()

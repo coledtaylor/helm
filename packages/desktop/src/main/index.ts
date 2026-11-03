@@ -79,7 +79,13 @@ import {
   type SessionHost,
   type SessionObserver
 } from './sessions'
-import { createDesktopHost, createDesktopRemoteHosts, createLocalPageLinks, type DesktopHost } from './host/desktop'
+import {
+  createDesktopHost,
+  createDesktopPresence,
+  createDesktopRemoteHosts,
+  createLocalPageLinks,
+  type DesktopHost
+} from './host/desktop'
 import { routePageLinks } from './host/page-link'
 import type { RemoteHostLinks } from './host/remote'
 import { createActivityService } from './activity'
@@ -897,6 +903,7 @@ function startApp(options: AppOptions = {}): void {
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
     ...(desktopHost !== null ? { hostSettingsChanged: () => desktopHost.link.writeSettings() } : {}),
     ...(remoteHosts !== null ? { remoteHosts } : {}),
+    ...(desktopHost !== null ? { presence: createDesktopPresence(() => win, (line) => console.log(line)) } : {}),
     rendererReady: () => {
       pushTheme({ services, themes, plugins, window: () => win })
       // With sessions in the local host the window reads its settings and

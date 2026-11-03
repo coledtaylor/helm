@@ -34,25 +34,42 @@ export interface RemoteHost {
   /** What every surface calls the host. */
   name: string
   transport: HostTransport
+  /**
+   * The role this device is approved with while it pairs, in the same step,
+   * through the host's own transport. Absent for a host added before a role
+   * could be chosen, which is approved on the host by hand.
+   */
+  role?: PairingRole
 }
+
+/** The roles Settings > Hosts offers when adding a host: Admin by default. */
+export type PairingRole = 'admin' | 'operator'
+
+/** The roles a host pairs a device with. */
+export type DeviceRoleName = 'viewer' | 'operator' | 'admin'
+
+/** The role a new host is added with unless the user picks another. */
+export const DEFAULT_PAIRING_ROLE: PairingRole = 'admin'
 
 /**
  * Where this device stands with a remote host, as its link reports it. Absent
  * while nothing has been heard yet.
  *
- * - `connected`: the handshake held the host to its pinned key.
+ * - `connected`: the handshake held the host to its pinned key; `role` is
+ *   what the host says this device is paired as.
  * - `retrying`: the link ended (the ssh or command process exited) and it is
  *   trying again by itself. Nothing on the host ended.
  * - `pairing`: this device is not paired with the host; `code` is the short
  *   code the host showed this device, approved there with
- *   `floti devices approve <code>`.
+ *   `floti devices approve <code>`. `approvalFailed` is the last line the
+ *   approval run through the host's transport wrote when it failed, unedited.
  * - `failed`: the transport could not reach the host; `lastLine` is the last
  *   line ssh or the command wrote, unedited.
  */
 export type RemoteHostConnection =
-  | { state: 'connected' }
+  | { state: 'connected'; role?: DeviceRoleName }
   | { state: 'retrying' }
-  | { state: 'pairing'; code: string }
+  | { state: 'pairing'; code: string; approvalFailed?: string }
   | { state: 'failed'; lastLine: string }
 
 /** More hosts than anybody adds, and a ceiling on a value rewritten whole. */
@@ -228,6 +245,10 @@ export function remoteHostsProblem(value: unknown): string | null {
     names.add(key)
     const reached = transportProblem(transport)
     if (reached !== null) return `${reached} for ${JSON.stringify(name)}`
+    const { role } = host as { role?: unknown }
+    if (role !== undefined && role !== 'admin' && role !== 'operator') {
+      return `expected admin or operator as the role for ${JSON.stringify(name)}, got ${describe(role)}`
+    }
   }
   return null
 }
@@ -244,6 +265,8 @@ export interface RemoteHostDraft {
   target: string
   /** The command line as typed, read when `via` is `command`. */
   command: string
+  /** The role this device is approved with as it pairs. */
+  role: PairingRole
 }
 
 export type RemoteHostFromDraft = { ok: true; host: RemoteHost } | { ok: false; error: string }
@@ -287,7 +310,7 @@ export function remoteHostFromDraft(
   if (id === LOCAL_HOST_KEY || hosts.some((host) => host.id === id)) {
     return { ok: false, error: 'That host id is taken.' }
   }
-  return { ok: true, host: { id, name, transport } }
+  return { ok: true, host: { id, name, transport, role: draft.role } }
 }
 
 /**

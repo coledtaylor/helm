@@ -120,6 +120,14 @@ export {
   type SettingsSectionsProps
 } from './components/SettingsSections'
 export { HostsSettings, type HostsSettingsProps, type SettingsHost } from './components/HostsSettings'
+export {
+  DEFAULT_APPROVE_ROLE,
+  DevicesSettings,
+  type DevicesSettingsProps,
+  type SettingsDevicesHost,
+  type SettingsPairedDevice,
+  type SettingsWaitingDevice
+} from './components/DevicesSettings'
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { OwnDataBanner, type OwnDataBannerProps } from './components/OwnDataBanner'
 export { HostStoppedBanner, type HostStoppedBannerProps } from './components/HostStoppedBanner'
