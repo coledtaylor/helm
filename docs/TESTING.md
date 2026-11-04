@@ -459,7 +459,11 @@ over the window, or Electron's own guards on a page.
   directory (`PORTABLE_EXECUTABLE_DIR`). Settings are seeded through the app's
   own store before it starts: the projects folder scanned, the fake `claude`
   chosen, first run done, the update check off. Nothing reaches the network, a
-  real `~/.claude` or the installed app.
+  real `~/.claude` or the installed app. The world is removed only once
+  everything it ran has exited (`worldProcesses` in `e2e/helm.ts`: each host
+  and session keeper by the pid the host logs, each fake `claude` by its
+  record), because Windows will not delete a file a live process holds. A
+  test that leaves something running fails there, naming the pids.
 - **One project**, `in the local host`: sessions, terminals, discovery, setup,
   templates, notes, files and the plugins registry are the local host's.
 - **`e2e/helm.ts`** has the `test` fixture (`world`, `helm`, `relaunch`) and
