@@ -36,7 +36,11 @@ const THEMES = ['light', 'dark'] as const
  */
 const BOUNDS = { width: 1440, height: 900 }
 
-type HelmWindow = Window & { helm: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
+/**
+ * The page's router (`app/inspect.ts`): it sends a host channel such as
+ * `settings:write` to the local host, which main does not answer.
+ */
+type HelmWindow = Window & { __helmRouted: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
 
 /** Fits the main window to `BOUNDS` inside the screen, in front, and returns where it is on screen. */
 async function frontWindow(helm: Helm): Promise<{ x: number; y: number; width: number; height: number }> {
@@ -98,7 +102,7 @@ test('every rail destination and a session terminal, in the light and the dark t
   for (const theme of THEMES) {
     const dir = join(OUT, theme)
     mkdirSync(dir, { recursive: true })
-    await ui.evaluate((value) => (window as unknown as HelmWindow).helm.invoke('settings:write', { theme: value }), theme)
+    await ui.evaluate((value) => (window as unknown as HelmWindow).__helmRouted.invoke('settings:write', { theme: value }), theme)
     await expect.poll(() => ui.evaluate(() => document.documentElement.style.colorScheme)).toBe(theme)
 
     for (const [index, id] of destinations.entries()) {

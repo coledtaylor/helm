@@ -1385,8 +1385,11 @@ fn record(dir: &Path, pid: u32, conversation: &str, cwd: &Path, name: &str) {
     std::fs::write(dir.join(format!("{pid}.json")), record.to_string()).unwrap();
 }
 
-/// A pid no process has: one that ran and has ended.
-fn ended_pid() -> u32 {
+/// A process that ran and has ended, and its pid. Keep it for as long as the
+/// pid must stay dead: on Windows, the handle it holds stops the pid being
+/// given to a new process (the sessions the test starts would otherwise take
+/// it), while the ended process still reads as not alive.
+fn ended_process() -> (std::process::Child, u32) {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--list")
         .stdout(std::process::Stdio::null())
@@ -1394,7 +1397,7 @@ fn ended_pid() -> u32 {
         .unwrap();
     let pid = child.id();
     child.wait().unwrap();
-    pid
+    (child, pid)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1411,9 +1414,10 @@ async fn the_overview_is_every_live_agent_session_on_the_machine_with_the_hosts_
         &outside,
         "elsewhere",
     );
+    let (_ended, ended_pid) = ended_process();
     record(
         &sessions,
-        ended_pid(),
+        ended_pid,
         "stale-conversation",
         &outside,
         "stale",

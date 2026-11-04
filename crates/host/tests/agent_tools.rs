@@ -876,7 +876,7 @@ async fn s12_a_starting_host_sweeps_only_the_launch_folders_whose_every_owner_is
         std::fs::write(folder.join("mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
         folder
     };
-    let dead = ended_pid();
+    let (_ended, dead) = ended_process();
     let gone = left("launch-1-aaaaaa", &format!(r#"{{"pids":[{dead}]}}"#));
     let alive = left(
         "launch-2-bbbbbb",
@@ -898,8 +898,11 @@ async fn s12_a_starting_host_sweeps_only_the_launch_folders_whose_every_owner_is
     host.stop(HostStopReason::Stop).await;
 }
 
-/// A pid no process has: one that ran and has ended.
-fn ended_pid() -> u32 {
+/// A process that ran and has ended, and its pid. Keep it for as long as the
+/// pid must stay dead: on Windows, the handle it holds stops the pid being
+/// given to a new process (the host the test starts could otherwise take it),
+/// while the ended process still reads as not alive.
+fn ended_process() -> (std::process::Child, u32) {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--list")
         .stdout(std::process::Stdio::null())
@@ -907,7 +910,7 @@ fn ended_pid() -> u32 {
         .unwrap();
     let pid = child.id();
     child.wait().unwrap();
-    pid
+    (child, pid)
 }
 
 // ---------------------------------------------------------------------------
