@@ -30,7 +30,7 @@ use floti_host::platform::startup::{StartupDefinition, linux, macos, windows};
 use floti_host::server::{HOST_KEY_FILE, HostConfig, host_public_key, local_endpoint};
 use floti_host::setup::{
     AT_NEXT_SIGN_IN_EXIT, AT_NEXT_SIGN_IN_LINE, KEEPS_RUNNING_LINE, Linger, RUNNING_LINE,
-    SetupOutcome, parse_linger, setup,
+    START_ON_CONNECT_FILE, START_ON_CONNECT_LINE, SetupOutcome, parse_linger, setup,
 };
 use floti_host::testkit::{FakeAgent, PATIENCE, RunningHost, TestDirs};
 use floti_protocol::channels::host::HostStopReason;
@@ -105,6 +105,9 @@ struct FakeOs {
     default_target: Option<String>,
     /// `loginctl enable-linger` is refused, writing [`LINGER_REFUSED`].
     linger_refused: bool,
+    /// Runs inside a WSL distro; `Some(answers)` says whether systemd.s user
+    /// manager answers there (`systemctl --user show-environment`).
+    wsl: Option<bool>,
     config: Mutex<Option<HostConfig>>,
     state: Mutex<OsState>,
 }
@@ -117,6 +120,7 @@ impl FakeOs {
             fails: None,
             default_target: Some("graphical.target".to_owned()),
             linger_refused: false,
+            wsl: None,
             config: Mutex::new(Some(host_config(dirs, agent))),
             state: Mutex::new(OsState::default()),
         }
@@ -140,6 +144,12 @@ impl FakeOs {
 
     fn lingering(self) -> Self {
         self.state.lock().unwrap().lingering = true;
+        self
+    }
+
+    /// Inside a WSL distro, whose systemd user manager answers or not.
+    fn in_wsl(mut self, user_manager_answers: bool) -> Self {
+        self.wsl = Some(user_manager_answers);
         self
     }
 
@@ -285,6 +295,10 @@ impl SignInSystem for FakeOs {
                 state.lingering = true;
                 ok("")
             }
+            ("systemctl", ["--user", "show-environment"]) if self.wsl != Some(false) => {
+                ok("HOME=/home/me
+")
+            }
             ("systemctl", ["--user", "daemon-reload"]) => ok(""),
             ("systemctl", ["--user", "enable", unit]) => {
                 state.enabled.insert((*unit).to_owned());
@@ -300,6 +314,10 @@ impl SignInSystem for FakeOs {
 
     fn desktop_session(&self) -> io::Result<bool> {
         Ok(self.signed_in)
+    }
+
+    fn inside_wsl(&self) -> bool {
+        self.wsl.is_some()
     }
 }
 
@@ -870,4 +888,50 @@ async fn a_registration_the_os_refuses_fails_with_its_last_line_unedited_and_sta
     assert_eq!(outcome.printed(), None);
     assert_eq!(os.starts(), 0);
     assert_eq!(os.runs().len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// WSL: a distro with no systemd starts the host when a client connects
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s9_in_a_wsl_distro_with_no_systemd_setup_registers_nothing_and_says_the_host_starts_when_a_client_connects()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let os = FakeOs::new(&dirs, &agent, true).in_wsl(false);
+    let definition = linux::user_unit(Path::new(UNIX_FLOTI)).unwrap();
+
+    let outcome = run_setup(&dirs, &os, &definition).await;
+
+    assert_eq!(outcome, SetupOutcome::StartsOnConnect);
+    assert_eq!(outcome.code(), 0);
+    assert_eq!(outcome.printed(), Some(START_ON_CONNECT_LINE));
+    assert_eq!(os.runs(), ["systemctl --user show-environment"]);
+    assert!(!unit_file(&dirs).exists(), "no unit is written");
+    assert!(os.enabled().is_empty());
+    assert_eq!(os.starts(), 0, "setup starts no host");
+    assert!(dirs.data.join(START_ON_CONNECT_FILE).is_file());
+    // The key is made, so a client can learn it before the host first runs.
+    assert!(host_public_key(&dirs.data).unwrap().is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn in_a_wsl_distro_whose_systemd_user_manager_answers_setup_registers_the_unit_and_forgets_starting_on_connect()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    std::fs::create_dir_all(&dirs.data).unwrap();
+    std::fs::write(dirs.data.join(START_ON_CONNECT_FILE), "").unwrap();
+    let os = FakeOs::new(&dirs, &agent, true).in_wsl(true);
+    let definition = linux::user_unit(Path::new(UNIX_FLOTI)).unwrap();
+
+    let outcome = run_setup(&dirs, &os, &definition).await;
+
+    assert_eq!(outcome, SetupOutcome::Running);
+    assert_eq!(os.runs()[0], "systemctl --user show-environment");
+    assert!(os.enabled().contains(&"floti.service".to_owned()));
+    assert!(!dirs.data.join(START_ON_CONNECT_FILE).exists());
+    assert_host_answers_with_the_key_setup_made(&dirs).await;
+    os.stop().await;
 }

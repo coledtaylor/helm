@@ -1,8 +1,9 @@
 //! When a host a desktop started has nothing left to do.
 //!
 //! Such a host outlives the desktop, so the desktop's exit cannot end it. It
-//! ends itself once it runs no session and no plain terminal and no client
-//! is attached. That is judged each time the count moves, which can only
+//! ends itself once it runs no session and no plain terminal, holds no WSL
+//! distro awake and no client is attached: a held distro counts as running,
+//! since the sessions of the host inside it end if the distro stops. That is judged each time the count moves, which can only
 //! reach nothing when a session or terminal ends or a client leaves, and once
 //! at start, after a bounded wait for the first client: the desktop that
 //! started it connects as soon as it says it is listening, and a host whose
@@ -70,6 +71,7 @@ mod tests {
             sessions,
             terminals,
             clients,
+            distros: 0,
         }
     }
 
@@ -116,6 +118,21 @@ mod tests {
         settle().await;
         assert!(!idle.load(Ordering::SeqCst), "a client is still attached");
         tx.send_replace(occupied(0, 0, 0));
+        settle().await;
+        assert!(idle.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn s7_a_host_a_desktop_started_does_not_exit_for_idleness_while_it_holds_a_distro() {
+        let (tx, idle) = watched().await;
+        tx.send_replace(Occupancy {
+            distros: 1,
+            ..Occupancy::default()
+        });
+        tokio::time::advance(WAIT * 2).await;
+        settle().await;
+        assert!(!idle.load(Ordering::SeqCst), "a distro is held awake");
+        tx.send_replace(Occupancy::default());
         settle().await;
         assert!(idle.load(Ordering::SeqCst));
     }

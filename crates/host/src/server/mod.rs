@@ -85,6 +85,7 @@ use crate::platform::node_runtime;
 use crate::platform::private_files::sweep_stale_temps;
 use crate::platform::process_tree::{self, ProcessTree};
 use crate::platform::socket::{self, Endpoint, LocalListener, LocalSocket};
+use crate::platform::wsl::{self, WslProgram, WslSide};
 use crate::session::ClientId;
 use crate::store::Store;
 use crate::{Error, Result};
@@ -249,6 +250,9 @@ pub struct HostRun {
     /// they outlive the host. `None` runs them in the host itself, ending
     /// with it.
     pub keeper: Option<PathBuf>,
+    /// The `wsl.exe` it keeps distros awake with (`wsl:keepAwake`), or
+    /// `None` where there is no WSL ([`WslSide::program`]).
+    pub wsl: Option<WslProgram>,
 }
 
 impl HostRun {
@@ -269,6 +273,7 @@ impl HostRun {
             node: node_runtime::runtime(env, exe.as_deref(), &node_runtime::Native),
             desktop: false,
             keeper: exe,
+            wsl: wsl::Native.program(env),
         }
     }
 }
@@ -283,6 +288,7 @@ impl Default for HostRun {
             node: None,
             desktop: false,
             keeper: None,
+            wsl: None,
         }
     }
 }

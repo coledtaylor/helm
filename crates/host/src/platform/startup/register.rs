@@ -105,6 +105,24 @@ pub trait SignInSystem {
     /// console or over remote desktop, connected or not: where a logon task
     /// runs when it is started. Asked only for the logon task.
     fn desktop_session(&self) -> io::Result<bool>;
+
+    /// Whether this process runs inside a WSL distro, where systemd may not
+    /// be running at all. Asked only for the user unit.
+    fn inside_wsl(&self) -> bool {
+        false
+    }
+}
+
+/// Whether the user's systemd service manager answers here: `systemctl
+/// --user show-environment` succeeds. In a WSL distro that runs no systemd
+/// it fails, and no unit would ever be started.
+pub fn user_manager_answers(system: &dyn SignInSystem) -> bool {
+    system
+        .run(&OsCommand::new(
+            "systemctl",
+            &["--user", "show-environment"],
+        ))
+        .is_ok_and(|ran| ran.success)
 }
 
 /// The real OS: commands run windowless with no standard input.
@@ -129,6 +147,12 @@ impl SignInSystem for NativeSystem {
 
     fn desktop_session(&self) -> io::Result<bool> {
         super::signin::desktop_session()
+    }
+
+    fn inside_wsl(&self) -> bool {
+        use crate::platform::folders::UserEnv;
+        use crate::platform::wsl::{Native as NativeWsl, WslSide};
+        NativeWsl.inside(&UserEnv::from_process())
     }
 }
 

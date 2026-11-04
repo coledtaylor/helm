@@ -32,7 +32,14 @@
 //! either way on any Linux computer. A host started by the OS's mechanism
 //! exits with status 0 whenever it is stopped on purpose, so the systemd
 //! unit's restart on failure starts again only a host that crashed or was
-//! killed. `floti keeper <data folder> <runtime folder>` is the
+//! killed. In WSL, where systemd's user manager does not answer, setup
+//! registers nothing and records that the host starts on connect, and
+//! `floti connect` then starts the host when nothing answers. `floti bridge
+//! ... --as-written -- wsl.exe -d <distro> --` appends the line unquoted, as
+//! `wsl.exe` reads it. `floti keep-awake`, run inside a distro by the
+//! Windows host's `wsl:keepAwake` hold, follows its own host's sessions and
+//! exits once none runs or the host stops, which lets the distro go.
+//! `floti keeper <data folder> <runtime folder>` is the
 //! session keeper a host starts for itself, which holds its sessions so they
 //! outlive it; it is not run by hand.
 
@@ -47,10 +54,11 @@ use floti_host::bridge::{
 };
 use floti_host::connect::{ConnectStep, run_connect};
 use floti_host::doctor::{DoctorStep, run_doctor};
+use floti_host::keep_awake::run_keep_awake;
 use floti_host::version;
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--floti <path>] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti doctor [--record]\n       floti version\n       floti setup [--linger | --no-linger]\n       floti update-stop [<client folder>] --ask | --stop";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--floti <path>] [--as-written] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti keep-awake\n       floti doctor [--record]\n       floti version\n       floti setup [--linger | --no-linger]\n       floti update-stop [<client folder>] --ask | --stop";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -91,6 +99,7 @@ fn main() -> ExitCode {
         }
         ["connect"] => ExitCode::from(run_connect(ConnectStep::Relay).code()),
         ["connect", "--host-key"] => ExitCode::from(run_connect(ConnectStep::HostKey).code()),
+        ["keep-awake"] => ExitCode::from(run_keep_awake()),
         ["doctor"] => ExitCode::from(run_doctor(DoctorStep::Check).code()),
         ["doctor", "--record"] => ExitCode::from(run_doctor(DoctorStep::Record).code()),
         ["update-stop", ..] => match update_stop::parse(&args[1..]) {
@@ -124,8 +133,10 @@ fn usage() -> ExitCode {
 
 /// What follows `bridge` when it reaches a host through a transport: the
 /// client folder, then, optionally, `--floti <path>`, the full path of floti
-/// on the host's computer, then `--` and the program with its arguments, each
-/// kept as the OS gave it.
+/// on the host's computer, then, optionally, `--as-written` for a program
+/// that reads the line from its own command line as written (`wsl.exe` on
+/// this PC), then `--` and the program with its arguments, each kept as the
+/// OS gave it.
 fn bridge_through(args: &[OsString]) -> Option<(OsString, Transport)> {
     let (folder, mut rest) = args.split_first()?;
     let mut floti: Option<String> = None;
@@ -140,6 +151,13 @@ fn bridge_through(args: &[OsString]) -> Option<(OsString, Transport)> {
         floti = Some(path.to_owned());
         rest = more;
     }
+    let mut as_written = false;
+    if let [flag, more @ ..] = rest
+        && flag == "--as-written"
+    {
+        as_written = true;
+        rest = more;
+    }
     let [separator, program, args @ ..] = rest else {
         return None;
     };
@@ -150,6 +168,7 @@ fn bridge_through(args: &[OsString]) -> Option<(OsString, Transport)> {
                 program: program.clone(),
                 args: args.to_vec(),
                 floti,
+                as_written,
             },
         )
     })

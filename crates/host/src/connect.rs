@@ -17,8 +17,13 @@
 //! completes the handshake is served in full.
 //!
 //! Standard output carries the host's bytes and nothing else. Every other
-//! word goes to standard error as one line, starting `floti connect: `. It
-//! starts no host: with none running, it says so.
+//! word goes to standard error as one line, starting `floti connect: `. With
+//! no host running it says so, except where `floti setup` recorded that the
+//! host starts on connect ([`START_ON_CONNECT_FILE`], in a WSL distro with no
+//! systemd user manager): there it starts `floti host` outside its own tie,
+//! as the session keeper is started, so the host outlives this connection,
+//! waits for it to answer, then relays. The host still refuses to start as
+//! root or from an SSH session, as it does everywhere.
 //!
 //! `floti connect --host-key` prints the host's public key, as 64 hex
 //! digits on one line, for a device that has pinned no host yet to hold the
@@ -29,11 +34,13 @@
 //! How it ends is its exit status ([`ConnectExit`]).
 
 use std::io::Write;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::client::is_closed;
 use crate::platform::folders::{self, UserEnv};
+use crate::platform::process_tree::{self, ProcessTree};
 use crate::platform::socket::{LocalSocket, Native as NativeSocket};
 use crate::server::{host_public_key, relay_endpoint};
 
@@ -125,8 +132,16 @@ async fn relay(env: &UserEnv) -> ConnectExit {
         Ok(folders) => folders,
         Err(err) => return fail(ConnectExit::Failed, &err.to_string()),
     };
-    let Ok(socket) = NativeSocket.connect(&relay_endpoint(&folders)).await else {
-        return no_host();
+    let endpoint = relay_endpoint(&folders);
+    let socket = match NativeSocket.connect(&endpoint).await {
+        Ok(socket) => socket,
+        Err(_) if folders.data.join(START_ON_CONNECT_FILE).is_file() => {
+            match start_host(&endpoint, START_DEADLINE).await {
+                Ok(socket) => socket,
+                Err(why) => return fail(ConnectExit::NoHost, &why),
+            }
+        }
+        Err(_) => return no_host(),
     };
     let (mut from_host, mut to_host) = tokio::io::split(socket);
     // Both directions run at once, so a reader that is slow on one side
@@ -196,6 +211,58 @@ async fn relay(env: &UserEnv) -> ConnectExit {
 }
 
 const CHUNK: usize = 64 * 1024;
+
+/// The file in the data folder that says the host starts when a client
+/// connects: `floti setup` writes it in a WSL distro whose systemd user
+/// manager does not answer, where nothing else would start the host.
+pub const START_ON_CONNECT_FILE: &str = "start-on-connect";
+
+/// How long `floti connect` waits for a host it started to answer.
+pub const START_DEADLINE: Duration = Duration::from_secs(60);
+
+/// How often it looks.
+const LOOK_AGAIN: Duration = Duration::from_millis(100);
+
+/// Starts `floti host`, this executable, alone
+/// ([`ProcessTree::start_alone`](crate::platform::process_tree::ProcessTree::start_alone)):
+/// outside this process's tie, so it outlives the connection that started
+/// it, and holding none of the connection's pipes, so the connection ends
+/// when its transport does. Waits up to `within` for it to answer on
+/// `endpoint`. A host that cannot start says why in its own log; this says
+/// that it did not answer, with how it exited when it did.
+async fn start_host(
+    endpoint: &crate::platform::socket::Endpoint,
+    within: Duration,
+) -> Result<crate::platform::socket::LocalStream, String> {
+    let exe = std::env::current_exe()
+        .map_err(|err| format!("could not tell where this floti is: {err}"))?;
+    let mut child = process_tree::Native
+        .start_alone(&exe, &["host"])
+        .map_err(|err| format!("could not start the Floti host: {err}"))?;
+    let deadline = Instant::now() + within;
+    loop {
+        if let Ok(socket) = NativeSocket.connect(endpoint).await {
+            return Ok(socket);
+        }
+        // A second connect may have started one first: that one answers.
+        if let Some(code) = child.exited()
+            && code != Some(0)
+            && NativeSocket.connect(endpoint).await.is_err()
+            && code != Some(i32::from(crate::ALREADY_RUNNING_EXIT))
+        {
+            let how = code.map_or_else(|| "killed".to_owned(), |code| format!("exit code {code}"));
+            return Err(format!(
+                "the Floti host it started there exited ({how}) before it answered."
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the Floti host it started there did not answer within {within:?}."
+            ));
+        }
+        tokio::time::sleep(LOOK_AGAIN).await;
+    }
+}
 
 fn no_host() -> ConnectExit {
     say(NO_HOST_LINE);

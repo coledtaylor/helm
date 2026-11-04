@@ -67,6 +67,16 @@ pub trait ProgramLauncher {
         let _ = command;
     }
 
+    /// Appends `line` to `command` for a program that reads the rest of its
+    /// own command line as written, such as `wsl.exe` after `--` ("Pass the
+    /// remaining command line as is"). On Windows, where a program is given
+    /// one command line and splits it itself, the line goes on as it is,
+    /// never quoted as one argument; on macOS and Linux, where a program is
+    /// given a list of arguments, it is one more argument.
+    fn append_as_written(&self, command: &mut std::process::Command, line: &str) {
+        command.arg(line);
+    }
+
     /// For a test: writes in `folder` the script this OS's users write to
     /// run another program, which runs `program` with every argument it is
     /// given: a batch file on Windows, a shell script with its execute bit

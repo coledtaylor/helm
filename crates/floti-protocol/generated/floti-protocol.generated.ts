@@ -3365,6 +3365,17 @@ error: string | null, };
  */
 export type WriteConflict = { onDiskHash: string, onDiskContent: string, mtimeMs: Millis, };
 
+export type WslKeepAwakeRequest = { 
+/**
+ * The distro's name, as `wsl.exe --list` gives it.
+ */
+distro: string, 
+/**
+ * floti's full path inside the distro, for a login whose `PATH` does
+ * not have it; absent for `floti` on that `PATH`.
+ */
+floti?: string, };
+
 /** Every request channel: what it takes, what it answers and the capability it needs. */
 export interface RequestChannels {
   "agentBrowser:answer": { request: AgentBrowserToolAnswer; response: null; capability: "browser" };
@@ -3492,6 +3503,7 @@ export interface RequestChannels {
   "template:rename": { request: RenameTemplateRequest; response: TemplateWriteResult; capability: null };
   "template:substitute": { request: TemplateFileRequest; response: TemplateWriteResult; capability: null };
   "usage:read": { request: null; response: Array<UsageSnapshot>; capability: null };
+  "wsl:keepAwake": { request: WslKeepAwakeRequest; response: null; capability: null };
 }
 
 /** Every event channel: its events, its snapshot (null when it carries no state) and the capability it needs. */
@@ -3687,6 +3699,7 @@ export const CHANNELS = [
   { name: "template:substitute", kind: "request", capability: null },
   { name: "usage:changed", kind: "event", capability: null },
   { name: "usage:read", kind: "request", capability: null },
+  { name: "wsl:keepAwake", kind: "request", capability: null },
 ] as const;
 
 /** A channel, or a family written `family:*`, that stays out of the protocol, with why. */

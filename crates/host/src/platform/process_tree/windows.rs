@@ -16,9 +16,11 @@
 //! included, and Windows closes the handle when the host ends, however it
 //! ends.
 
+use std::ffi::OsStr;
 use std::io;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -33,11 +35,12 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, GetCurrentProcess, OpenProcess,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, CreateProcessW, GetCurrentProcess,
+    GetExitCodeProcess, OpenProcess, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, STARTUPINFOW, WaitForSingleObject,
 };
 
-use super::{Ending, ProcessTree};
+use super::{Ending, ProcessTree, Started};
 use crate::{Error, Result};
 
 /// Whether this process's tree ends with it: decided at the first ask, and
@@ -132,6 +135,94 @@ impl ProcessTree for Native {
 
     fn prepare_lasting_root(&self, command: &mut Command) {
         command.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
+    }
+
+    // `std::process::Command` always lets a child inherit every inheritable
+    // handle, which would keep the pipes this process was handed open for
+    // as long as the child runs: `CreateProcessW` is told to pass none.
+    fn start_alone(&self, program: &Path, args: &[&str]) -> io::Result<Box<dyn Started>> {
+        let mut line: Vec<u16> = Vec::new();
+        let words = std::iter::once(program.as_os_str()).chain(args.iter().map(OsStr::new));
+        for (at, word) in words.enumerate() {
+            let units: Vec<u16> = word.encode_wide().collect();
+            // Each word goes in double quotes, so none may hold one or end
+            // with the backslash that would escape the closing one.
+            if units.contains(&u16::from(b'"')) || units.last() == Some(&u16::from(b'\\')) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "cannot start {}: {} cannot be quoted",
+                        program.display(),
+                        word.display()
+                    ),
+                ));
+            }
+            if at > 0 {
+                line.push(u16::from(b' '));
+            }
+            line.push(u16::from(b'"'));
+            line.extend(units);
+            line.push(u16::from(b'"'));
+        }
+        line.push(0);
+        let application: Vec<u16> = program.as_os_str().encode_wide().chain(Some(0)).collect();
+        // SAFETY: both are plain C structs for which all zeroes is valid.
+        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        startup.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(u32::MAX);
+        let mut started: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `application` and `line` are NUL-terminated and outlive
+        // the call, `line` is writable as CreateProcessW asks, and the
+        // environment and folder are this process's (null).
+        let made = unsafe {
+            CreateProcessW(
+                application.as_ptr(),
+                line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut started,
+            )
+        };
+        if made == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the thread handle CreateProcessW made, closed once.
+        unsafe { CloseHandle(started.hThread) };
+        Ok(Box::new(Alone(started.hProcess)))
+    }
+}
+
+/// The handle of a process [`Native::start_alone`] started, closed when
+/// this is dropped.
+struct Alone(HANDLE);
+
+// SAFETY: a process handle may be waited on and closed from any thread.
+unsafe impl Send for Alone {}
+
+impl Started for Alone {
+    fn exited(&mut self) -> Option<Option<i32>> {
+        // SAFETY: `self.0` is a process handle with SYNCHRONIZE and
+        // PROCESS_QUERY_INFORMATION, as CreateProcessW hands it.
+        if unsafe { WaitForSingleObject(self.0, 0) } != WAIT_OBJECT_0 {
+            return None;
+        }
+        let mut code = 0u32;
+        // SAFETY: as above; `code` is written by the call.
+        if unsafe { GetExitCodeProcess(self.0, &mut code) } == 0 {
+            return Some(None);
+        }
+        Some(Some(code.cast_signed()))
+    }
+}
+
+impl Drop for Alone {
+    fn drop(&mut self) {
+        // SAFETY: the process handle CreateProcessW made, closed once.
+        unsafe { CloseHandle(self.0) };
     }
 }
 

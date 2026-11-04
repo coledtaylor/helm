@@ -10001,6 +10001,25 @@
         "mtimeMs"
       ],
       "type": "object"
+    },
+    "WslKeepAwakeRequest": {
+      "properties": {
+        "distro": {
+          "description": "The distro's name, as `wsl.exe --list` gives it.",
+          "type": "string"
+        },
+        "floti": {
+          "description": "floti's full path inside the distro, for a login whose `PATH` does\nnot have it; absent for `floti` on that `PATH`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "distro"
+      ],
+      "type": "object"
     }
   },
   "$ref": "#/$defs/Message",
@@ -11844,6 +11863,17 @@
           "$ref": "#/$defs/UsageSnapshot"
         },
         "type": "array"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "wsl:keepAwake",
+      "request": {
+        "$ref": "#/$defs/WslKeepAwakeRequest"
+      },
+      "response": {
+        "type": "null"
       }
     }
   ],

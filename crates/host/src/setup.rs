@@ -29,6 +29,13 @@
 //!   keeps running with nobody signed in (the Linux unit with lingering on).
 //! - [`AT_NEXT_SIGN_IN_LINE`], status [`AT_NEXT_SIGN_IN_EXIT`]: registered,
 //!   and nobody is signed in, so the host starts at the next sign-in.
+//! - [`START_ON_CONNECT_LINE`], status 0: in a WSL distro whose systemd user
+//!   manager does not answer (`systemctl --user show-environment`), so no
+//!   unit would ever run. Nothing is registered or started; setup records
+//!   [`START_ON_CONNECT_FILE`] in the data folder, and `floti connect` starts
+//!   the host when a client connects. In a distro where the user manager
+//!   answers, the unit is registered as on any Linux computer, and the
+//!   record is removed.
 //! - A failure: one line on standard error starting `floti setup: `, with
 //!   the last line the failing OS command wrote, unedited, and status 1. A
 //!   refused lingering also names the fix: an administrator there runs
@@ -46,12 +53,15 @@ use floti_protocol::message::ClientKind;
 use floti_protocol::noise::KeyPair;
 
 use crate::client;
+pub use crate::connect::START_ON_CONNECT_FILE;
 use crate::host_log::LOG_FILE;
 use crate::keys::load_or_create_key_pair;
 use crate::platform::folders::{self, Folders, UserEnv};
 pub use crate::platform::startup::register::Linger;
-use crate::platform::startup::register::{NativeSystem, SignInSystem, Started, register_and_start};
-use crate::platform::startup::{self, Account, StartAtSignIn, StartupDefinition};
+use crate::platform::startup::register::{
+    NativeSystem, SignInSystem, Started, register_and_start, user_manager_answers,
+};
+use crate::platform::startup::{self, Account, StartAtSignIn, StartupDefinition, StartupKind};
 use crate::server::{HOST_KEY_FILE, local_endpoint};
 
 /// What `floti setup` prints once the host is running.
@@ -61,6 +71,10 @@ pub const RUNNING_LINE: &str = "The Floti host is running, and starts at each si
 /// with nobody signed in.
 pub const KEEPS_RUNNING_LINE: &str =
     "The Floti host is running, and keeps running with nobody signed in.";
+
+/// What `floti setup` prints in a WSL distro whose systemd user manager does
+/// not answer, where the host starts when a client connects.
+pub const START_ON_CONNECT_LINE: &str = "The Floti host starts when a client connects.";
 
 /// What `floti setup` prints when nobody is signed in to start it in.
 pub const AT_NEXT_SIGN_IN_LINE: &str = "The Floti host starts at the next sign-in.";
@@ -87,6 +101,9 @@ pub enum SetupOutcome {
     KeepsRunning,
     /// The host is registered and starts at the next sign-in.
     AtNextSignIn,
+    /// Nothing is registered: in a WSL distro with no systemd user manager,
+    /// `floti connect` starts the host when a client connects.
+    StartsOnConnect,
     /// Why it failed, as one line.
     Failed(String),
 }
@@ -95,7 +112,7 @@ impl SetupOutcome {
     /// The process's exit status.
     pub fn code(&self) -> u8 {
         match self {
-            Self::Running | Self::KeepsRunning => 0,
+            Self::Running | Self::KeepsRunning | Self::StartsOnConnect => 0,
             Self::AtNextSignIn => AT_NEXT_SIGN_IN_EXIT,
             Self::Failed(_) => 1,
         }
@@ -108,6 +125,7 @@ impl SetupOutcome {
             Self::Running => Some(RUNNING_LINE),
             Self::KeepsRunning => Some(KEEPS_RUNNING_LINE),
             Self::AtNextSignIn => Some(AT_NEXT_SIGN_IN_LINE),
+            Self::StartsOnConnect => Some(START_ON_CONNECT_LINE),
             Self::Failed(_) => None,
         }
     }
@@ -197,6 +215,24 @@ pub async fn setup(
         Ok(key) => key,
         Err(why) => return SetupOutcome::Failed(why),
     };
+    let on_connect = folders.data.join(START_ON_CONNECT_FILE);
+    if definition.kind == StartupKind::SystemdUserUnit
+        && system.inside_wsl()
+        && !user_manager_answers(system)
+    {
+        // Nothing would start a unit here: `floti connect` starts the host.
+        return match std::fs::write(&on_connect, START_ON_CONNECT_LINE) {
+            Ok(()) => SetupOutcome::StartsOnConnect,
+            Err(err) => {
+                SetupOutcome::Failed(format!("could not write {}: {err}", on_connect.display()))
+            }
+        };
+    }
+    if let Err(err) = std::fs::remove_file(&on_connect)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        return SetupOutcome::Failed(format!("could not remove {}: {err}", on_connect.display()));
+    }
     match register_and_start(system, definition, &home, &folders.data, linger) {
         Ok(Started::AtNextSignIn) => SetupOutcome::AtNextSignIn,
         Ok(started @ (Started::Running | Started::KeepsRunning)) => {

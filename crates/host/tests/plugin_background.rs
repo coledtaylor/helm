@@ -239,6 +239,7 @@ impl HostWorld {
                 node: None,
                 desktop: false,
                 keeper: None,
+                wsl: None,
             },
         });
         let client = TestClient::connect(&endpoint, &[]).await;

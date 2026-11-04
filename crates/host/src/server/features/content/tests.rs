@@ -59,6 +59,7 @@ impl World {
                 node: None,
                 desktop: false,
                 keeper: None,
+                wsl: None,
             },
         )
         .unwrap();

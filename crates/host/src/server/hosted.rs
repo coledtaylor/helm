@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -95,6 +95,8 @@ pub(crate) struct Hosted {
     /// Who is here: each attached client's device, and the device that
     /// started each running session and opened each plain terminal.
     devices: Mutex<Devices>,
+    /// How many WSL distros the host holds awake now.
+    held_distros: AtomicUsize,
     occupancy: watch::Sender<Occupancy>,
 }
 
@@ -105,6 +107,9 @@ pub struct Occupancy {
     pub sessions: usize,
     pub terminals: usize,
     pub clients: usize,
+    /// The WSL distros it holds awake (`wsl:keepAwake`): each keeps a
+    /// host inside one running, which a window closing must not end.
+    pub distros: usize,
 }
 
 impl Occupancy {
@@ -190,6 +195,7 @@ impl Hosted {
             stopped: AtomicBool::new(false),
             agent_tools: OnceLock::new(),
             devices: Mutex::new(devices),
+            held_distros: AtomicUsize::new(0),
             occupancy: watch::Sender::new(Occupancy::default()),
         })
     }
@@ -209,6 +215,12 @@ impl Hosted {
     /// The device `client`'s connection proved, while it is attached.
     pub fn device_of(&self, client: ClientId) -> Option<PublicKey> {
         lock(&self.devices).clients.get(&client).copied()
+    }
+
+    /// The host now holds `count` WSL distros awake.
+    pub fn hold_distros(&self, count: usize) {
+        self.held_distros.store(count, Ordering::SeqCst);
+        self.settle();
     }
 
     /// How busy the host is, now and as it changes.
@@ -236,6 +248,7 @@ impl Hosted {
             sessions: sessions.len(),
             terminals: terminals.len(),
             clients,
+            distros: self.held_distros.load(Ordering::SeqCst),
         };
         self.occupancy.send_if_modified(|occupancy| {
             let moved = *occupancy != now;

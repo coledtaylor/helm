@@ -82,6 +82,7 @@ pub mod doctor;
 pub mod error;
 pub mod history;
 pub mod host_log;
+pub mod keep_awake;
 pub mod keeper;
 pub mod keys;
 pub mod platform;

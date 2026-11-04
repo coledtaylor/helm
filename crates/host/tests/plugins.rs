@@ -123,6 +123,7 @@ fn start_host(dirs: &TestDirs, endpoint: &Endpoint, node: Option<PathBuf>) -> Ru
             node,
             desktop: false,
             keeper: None,
+            wsl: None,
         },
     })
 }

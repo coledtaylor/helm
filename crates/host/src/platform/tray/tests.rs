@@ -14,6 +14,7 @@ fn occupied(sessions: usize, terminals: usize, clients: usize) -> Occupancy {
         sessions,
         terminals,
         clients,
+        distros: 0,
     }
 }
 

@@ -103,6 +103,9 @@ switch (process.env.FAKE_SSH_FAIL) {
     process.stdin.on('end', () => fail(`${target}: Permission denied (publickey,password).`))
     break
   default:
+    // ssh carries no variable to the other computer: a wsl.exe started
+    // there writes UTF-16LE.
+    delete process.env.WSL_UTF8
     if (process.env.FAKE_SSH_LOGIN_TEXT) process.stdout.write(`${process.env.FAKE_SSH_LOGIN_TEXT}\n`)
     runLine(line)
 }

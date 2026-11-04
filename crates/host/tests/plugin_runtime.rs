@@ -328,6 +328,7 @@ fn start_host(dirs: &TestDirs, endpoint: &Endpoint) -> RunningHost {
             node: None,
             desktop: false,
             keeper: None,
+            wsl: None,
         },
     })
 }

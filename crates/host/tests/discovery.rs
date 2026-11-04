@@ -53,6 +53,7 @@ fn config(dirs: &TestDirs, endpoint: &Endpoint) -> HostConfig {
             node: None,
             desktop: false,
             keeper: None,
+            wsl: None,
         },
     }
 }

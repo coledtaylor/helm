@@ -29,18 +29,24 @@ use floti_host::bridge::{CONNECT_LINE, HOST_KEY_LINE, Transport, remote_floti_pr
 use floti_host::client::{ClientError, ClientKeys, DEVICE_KEY_FILE, PINNED_HOST_FILE, duplex};
 use floti_host::connect::NO_HOST_LINE;
 use floti_host::fake_agent;
+use floti_host::keys::load_or_create_key_pair;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use floti_host::platform::socket::{
     Endpoint, LocalListener, LocalSocket, LocalStream, Native as NativeSocket,
 };
 use floti_host::platform::startup;
-use floti_host::server::{HostConfig, host_public_key, local_endpoint, relay_endpoint};
+use floti_host::server::{
+    HOST_KEY_FILE, HostConfig, LOCK_FILE, host_public_key, local_endpoint, relay_endpoint,
+};
+use floti_host::setup::{START_ON_CONNECT_FILE, START_ON_CONNECT_LINE};
 use floti_host::testkit::{
     FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs, record_test_host, run_floti,
 };
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
 use floti_protocol::channels::common::SessionRecord;
-use floti_protocol::channels::host::{HostQuit, HostQuitRequest, HostStopReason};
+use floti_protocol::channels::host::{
+    HostQuit, HostQuitRequest, HostStop, HostStopReason, HostStopRequest,
+};
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, SessionClose, SessionList, SessionRestorable, SessionStart,
     SessionStreamOpen, SessionTerminal, StartSessionRequest,
@@ -1275,6 +1281,7 @@ async fn where_the_login_path_has_no_floti_the_bridge_reaches_the_floti_it_names
         program: OsString::from("ssh"),
         args: Vec::new(),
         floti: Some(floti.to_owned()),
+        as_written: false,
     }
     .line("connect");
     assert_eq!(line, expected);
@@ -1288,6 +1295,7 @@ fn the_floti_named_on_the_other_computer_is_quoted_when_it_has_a_blank_and_refus
         program: OsString::from("ssh"),
         args: Vec::new(),
         floti: floti.map(str::to_owned),
+        as_written: false,
     };
     assert_eq!(through(None).line("connect"), CONNECT_LINE);
     assert_eq!(through(None).line("connect --host-key"), HOST_KEY_LINE);
@@ -1870,4 +1878,294 @@ async fn a_servers_host_that_is_killed_is_started_again_by_its_unit_and_takes_it
     assert!(!restarted_on_failure(status));
     let next = RunningHost::start(config(&dirs, &agent));
     next.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// WSL: a distro reached through this PC's wsl.exe with the line as wsl.exe
+// reads it, or through a Windows PC's ssh and its wsl.exe; and a distro with
+// no systemd, whose host `floti connect` starts. The fake wsl stands in for
+// wsl.exe everywhere.
+// ---------------------------------------------------------------------------
+
+/// The distro the fake wsl knows.
+const DISTRO: &str = "Debian";
+
+/// `command`, with the fake wsl knowing `distros`.
+fn knowing(mut command: Command, distros: &str) -> Command {
+    command.env("FAKE_WSL_DISTROS", distros);
+    command
+}
+
+/// `node wsl.mjs -d <DISTRO> --`: this PC's wsl.exe.
+fn wsl_transport() -> Vec<String> {
+    vec![
+        node_on_path().to_string_lossy().into_owned(),
+        fake_transport("wsl.mjs").to_string_lossy().into_owned(),
+        "-d".to_owned(),
+        DISTRO.to_owned(),
+        "--".to_owned(),
+    ]
+}
+
+/// `ssh -o BatchMode=yes <TARGET> wsl.exe -d <DISTRO> --`: the Windows PC's
+/// wsl.exe, through its ssh.
+fn wsl_through_ssh() -> Vec<String> {
+    let mut words = ssh_transport();
+    words.extend(["wsl.exe", "-d", DISTRO, "--"].map(str::to_owned));
+    words
+}
+
+/// `floti bridge <folder> --as-written -- <transport>...`.
+fn bridge_as_written(dirs: &TestDirs, folder: &Path, transport: &[String]) -> Command {
+    let mut command = floti_command(dirs, &dirs.runtime);
+    command
+        .arg("bridge")
+        .arg(folder)
+        .arg("--as-written")
+        .arg("--")
+        .args(transport);
+    command
+}
+
+/// Runs the bridge `bridge` makes for a new client folder, then again: the
+/// first learns and pins the host's key, and both are served with nothing
+/// asked.
+async fn learn_and_reconnect_with(world: &World, name: &str, bridge: impl Fn(&Path) -> Command) {
+    let folder = world.dirs.root().join(name);
+    let mut first = Bridge::spawn(bridge(&folder));
+    list_attach_and_type(&mut first, &world.dirs.folder("a project")).await;
+    assert_eq!(
+        ClientKeys::open(&folder).unwrap().pinned_host(),
+        Some(world.host_key())
+    );
+    first.close_stdin();
+    let ended = first.ended().await;
+    assert_eq!(ended.code, Some(0), "{ended:?}");
+    let mut again = Bridge::spawn(bridge(&folder));
+    again.welcomed().await;
+    assert!(!again.request::<SessionList>(1, &()).await.is_empty());
+    again.close_stdin();
+    assert_eq!(again.ended().await.code, Some(0));
+}
+
+/// The fake wsl's runs: the distro each named and the line it ran there.
+fn wsl_lines(dirs: &TestDirs) -> Vec<(String, String)> {
+    transport_runs(dirs)
+        .iter()
+        .filter(|run| run["program"] == "wsl")
+        .map(|run| {
+            (
+                run["distro"].as_str().unwrap_or_default().to_owned(),
+                run["line"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// The lines a client that learns the key and then reconnects runs.
+fn learn_and_reconnect_lines() -> [(String, String); 3] {
+    [HOST_KEY_LINE, CONNECT_LINE, CONNECT_LINE].map(|line| (DISTRO.to_owned(), line.to_owned()))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s4_a_distro_on_this_pc_is_reached_with_wsl_d_and_the_line_as_written_and_pins_its_key_with_nothing_asked()
+ {
+    let world = World::start();
+    learn_and_reconnect_with(&world, "this pc", |folder| {
+        knowing(
+            bridge_as_written(&world.dirs, folder, &wsl_transport()),
+            DISTRO,
+        )
+    })
+    .await;
+    assert_eq!(wsl_lines(&world.dirs), learn_and_reconnect_lines());
+    assert!(
+        transport_runs(&world.dirs)
+            .iter()
+            .all(|run| run["program"] == "wsl")
+    );
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_a_distro_on_a_windows_pc_is_reached_through_its_ssh_and_its_wsl_exe() {
+    let world = World::start();
+    learn_and_reconnect_with(&world, "a laptop", |folder| {
+        knowing(
+            bridge_through(&world.dirs, &world.dirs.runtime, folder, &wsl_through_ssh()),
+            DISTRO,
+        )
+    })
+    .await;
+    let runs = transport_runs(&world.dirs);
+    let ssh: Vec<&Value> = runs.iter().filter(|run| run["program"] == "ssh").collect();
+    for run in &ssh {
+        assert_eq!(argv_of(run)[..3], ["-o", "BatchMode=yes", TARGET]);
+    }
+    assert_eq!(
+        ssh.iter()
+            .map(|run| run["line"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        [HOST_KEY_LINE, CONNECT_LINE, CONNECT_LINE]
+            .map(|line| format!("wsl.exe -d {DISTRO} -- {line}"))
+    );
+    assert_eq!(wsl_lines(&world.dirs), learn_and_reconnect_lines());
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s10_a_distro_that_is_not_there_ends_the_bridge_with_wsls_last_line_readable_on_this_pc_and_through_ssh()
+ {
+    let world = World::start();
+    let dirs = &world.dirs;
+    let folder = world.pinned_folder("a laptop");
+    // On this PC wsl.exe is told WSL_UTF8=1, and writes UTF-8.
+    let here = Bridge::spawn(knowing(
+        bridge_as_written(dirs, &folder, &wsl_transport()),
+        "Ubuntu",
+    ))
+    .ended()
+    .await;
+    assert_ended_with_line(&here, 8, "Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND");
+    // Through ssh no variable reaches it, and it writes UTF-16LE.
+    let there = Bridge::spawn(knowing(
+        bridge_through(dirs, &dirs.runtime, &folder, &wsl_through_ssh()),
+        "Ubuntu",
+    ))
+    .ended()
+    .await;
+    assert_ended_with_line(&there, 8, "Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND");
+    world.stop().await;
+}
+
+/// Asks the host at `endpoint` to stop, through a client of its own.
+async fn ask_to_stop(endpoint: &Endpoint) {
+    let mut client = TestClient::connect(endpoint, &[]).await;
+    let _ = client
+        .request::<HostStop>(&HostStopRequest {
+            reason: HostStopReason::Stop,
+        })
+        .await;
+}
+
+/// A host `floti connect` started, whose data folder is `data`: the test
+/// stops it, and one a failing test left running is stopped as it unwinds.
+struct ConnectStartedHost {
+    endpoint: Endpoint,
+    data: PathBuf,
+    stopped: bool,
+}
+
+impl ConnectStartedHost {
+    /// Stops it, and waits for it to let go of its lock, which it holds for
+    /// as long as it runs.
+    async fn stop(mut self) {
+        ask_to_stop(&self.endpoint).await;
+        self.stopped = true;
+        let lock = std::fs::File::options()
+            .read(true)
+            .open(self.data.join(LOCK_FILE))
+            .expect("the host's lock file");
+        let deadline = Instant::now() + PATIENCE;
+        while lock.try_lock().is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "the host floti connect started had not exited within {PATIENCE:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+}
+
+impl Drop for ConnectStartedHost {
+    fn drop(&mut self) {
+        if self.stopped {
+            return;
+        }
+        let endpoint = self.endpoint.clone();
+        // On a thread of its own: this may run on the test's runtime.
+        let _ = std::thread::spawn(move || {
+            if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                runtime.block_on(ask_to_stop(&endpoint));
+            }
+        })
+        .join();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s9_in_a_distro_set_to_start_on_connect_floti_connect_starts_the_host_and_its_sessions_outlive_the_connection()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    // What `floti setup` leaves in a distro with no systemd: the host's key
+    // and the record that it starts on connect, and no host running.
+    std::fs::create_dir_all(&dirs.data).unwrap();
+    load_or_create_key_pair(&dirs.data.join(HOST_KEY_FILE)).unwrap();
+    std::fs::write(dirs.data.join(START_ON_CONNECT_FILE), START_ON_CONNECT_LINE).unwrap();
+    let endpoint = local_endpoint(&dirs.folders());
+    record_test_host(&endpoint, &dirs.data);
+    let host = ConnectStartedHost {
+        endpoint: endpoint.clone(),
+        data: dirs.data.clone(),
+        stopped: false,
+    };
+    let folder = dirs.root().join("this pc");
+    let (log_var, log_dir) = agent.log_env();
+    let bridge = || {
+        let mut command = knowing(bridge_as_written(&dirs, &folder, &wsl_transport()), DISTRO);
+        command
+            // The host it starts runs its shell sessions where `%COMSPEC%`
+            // is not set, as no SSH session's.
+            .env("SHELL", "/bin/sh")
+            .env(&log_var, &log_dir)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("SSH_CONNECTION")
+            .env_remove("SSH_CLIENT")
+            .env_remove("SSH_TTY");
+        command
+    };
+    let mut first = Bridge::spawn(bridge());
+    first.welcomed().await;
+    let session = work_in_a_session(
+        &mut first,
+        1,
+        1,
+        &agent,
+        &dirs.folder("a project"),
+        "in wsl",
+    )
+    .await;
+    assert_eq!(
+        ClientKeys::open(&folder).unwrap().pinned_host(),
+        host_public_key(&dirs.data).unwrap()
+    );
+    first.close_stdin();
+    assert_eq!(first.ended().await.code, Some(0));
+
+    // The connection has ended, and the host it started still runs the
+    // session.
+    let mut client = TestClient::connect(&endpoint, &[]).await;
+    let listed: Vec<u64> = client
+        .request::<SessionList>(&())
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(listed, [session.id]);
+    drop(client);
+
+    // The next connection finds it running, and starts no other.
+    let mut again = Bridge::spawn(bridge());
+    again.welcomed().await;
+    assert_eq!(again.listed(1).await, [session.id]);
+    again.close_stdin();
+    assert_eq!(again.ended().await.code, Some(0));
+
+    host.stop().await;
+    drop(agent);
 }

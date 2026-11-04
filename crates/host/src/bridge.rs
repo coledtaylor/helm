@@ -59,7 +59,7 @@ use std::process::{ExitStatus, Stdio};
 
 use floti_protocol::noise::PublicKey;
 use floti_protocol::{FrameDecoder, Message, encode_frame};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::AsyncReadExt;
 use tokio::process::{Child, ChildStderr};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -71,6 +71,7 @@ use crate::connect::ConnectExit;
 use crate::platform::folders::{self, UserEnv};
 use crate::platform::launcher::{self, ProgramLauncher};
 use crate::platform::socket::LocalStream;
+use crate::platform::wsl::UTF8_VAR;
 use crate::server::local_endpoint;
 
 /// How the bridge ended, which is its exit status.
@@ -178,6 +179,12 @@ pub struct Transport {
     /// was installed in on its `PATH`, or `None` for `floti` on that `PATH`.
     /// A path [`remote_floti_problem`] refuses is never given here.
     pub floti: Option<String>,
+    /// The program reads the rest of its own command line as written, as
+    /// `wsl.exe -d <distro> --` on this computer does ("Pass the remaining
+    /// command line as is"): the line is appended to it unquoted
+    /// ([`ProgramLauncher::append_as_written`]) rather than as one argument,
+    /// and it runs with `WSL_UTF8=1` (`floti bridge ... --as-written -- ...`).
+    pub as_written: bool,
 }
 
 impl Transport {
@@ -187,11 +194,18 @@ impl Transport {
     /// `cmd`, the shell Windows' OpenSSH runs a line in, read as one word,
     /// backslashes kept.
     pub fn line(&self, rest: &str) -> String {
-        match &self.floti {
-            None => format!("floti {rest}"),
-            Some(path) if path.contains([' ', '\t', '\\']) => format!("\"{path}\" {rest}"),
-            Some(path) => format!("{path} {rest}"),
-        }
+        floti_line(self.floti.as_deref(), rest)
+    }
+}
+
+/// The line that runs floti with `rest` on another computer or in a distro:
+/// `floti <rest>`, or `<path> <rest>` with the path in double quotes when it
+/// holds a blank or a backslash ([`Transport::line`]).
+pub fn floti_line(floti: Option<&str>, rest: &str) -> String {
+    match floti {
+        None => format!("floti {rest}"),
+        Some(path) if path.contains([' ', '\t', '\\']) => format!("\"{path}\" {rest}"),
+        Some(path) => format!("{path} {rest}"),
     }
 }
 
@@ -375,9 +389,14 @@ impl Running {
         ) + " "
             + line;
         let mut command = tokio::process::Command::new(&transport.program);
+        command.args(&transport.args);
+        if transport.as_written {
+            command.env(UTF8_VAR, "1");
+            launcher::Native.append_as_written(command.as_std_mut(), line);
+        } else {
+            command.arg(line);
+        }
         command
-            .args(&transport.args)
-            .arg(line)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -514,25 +533,82 @@ impl Running {
     }
 }
 
+/// How much of the end of a transport's standard error is kept to find its
+/// last line in.
+const STDERR_KEPT: usize = 64 * 1024;
+
 /// Reads `stderr` to its end, keeping the last line that is not blank, as
 /// written but for its line ending.
 async fn last_line(stderr: ChildStderr) -> Option<String> {
-    let mut reader = BufReader::new(stderr);
-    let mut last = None;
-    let mut line = Vec::new();
+    let mut reader = stderr;
+    let mut kept: Vec<u8> = Vec::new();
+    let mut buf = vec![0; 8 * 1024];
     loop {
-        line.clear();
-        match reader.read_until(b'\n', &mut line).await {
-            Ok(0) | Err(_) => return last,
-            Ok(_) => {
-                let text = String::from_utf8_lossy(&line);
-                let text = text.trim_end_matches(['\r', '\n']);
-                if !text.trim().is_empty() {
-                    last = Some(text.to_owned());
+        match reader.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                kept.extend_from_slice(&buf[..n]);
+                if kept.len() > STDERR_KEPT * 2 {
+                    // An even cut keeps UTF-16 aligned.
+                    let cut = (kept.len() - STDERR_KEPT) & !1;
+                    kept.drain(..cut);
                 }
             }
         }
     }
+    last_line_of(&kept)
+}
+
+/// The last line in `bytes` that is not blank, without its line ending.
+/// `wsl.exe` writes UTF-16LE (always, when it runs on another PC through
+/// ssh), so bytes that are UTF-16LE are read as that, others as UTF-8.
+pub fn last_line_of(bytes: &[u8]) -> Option<String> {
+    let text = decode_output(bytes);
+    text.lines()
+        .map(|line| line.trim_end_matches(['\r', '\n']))
+        .rfind(|line| !line.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// `bytes` as text: UTF-16LE when they are, else UTF-8 with anything that is
+/// not replaced.
+pub fn decode_output(bytes: &[u8]) -> String {
+    if looks_utf16le(bytes) {
+        let units: Vec<u16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        let text = String::from_utf16_lossy(&units);
+        return text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned();
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Whether `bytes` read as UTF-16LE: a byte-order mark, or text whose every
+/// other byte is mostly zero, as ASCII is in UTF-16LE and never in UTF-8.
+fn looks_utf16le(bytes: &[u8]) -> bool {
+    if bytes.starts_with(&[0xff, 0xfe]) {
+        return true;
+    }
+    if bytes.len() < 2 {
+        return false;
+    }
+    let pairs = bytes.len() / 2;
+    let high_zero = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter(|pair| pair[1] == 0)
+        .count();
+    let low_zero = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter(|pair| pair[0] == 0)
+        .count();
+    high_zero * 2 > pairs && low_zero * 4 < pairs
 }
 
 /// What the thread reading standard input hands on.

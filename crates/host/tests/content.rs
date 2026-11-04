@@ -1463,6 +1463,7 @@ impl Wire {
                 node: None,
                 desktop: false,
                 keeper: None,
+                wsl: None,
             },
         });
         let mut client = TestClient::connect(&endpoint, CAPABILITIES).await;

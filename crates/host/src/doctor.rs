@@ -40,7 +40,13 @@ use crate::bridge::{Transport, reach_through, remote_floti_problem};
 use crate::client::{self, ClientError, ClientKeys, Connection, TRANSPORT_HANDSHAKE_DEADLINE};
 use crate::platform::folders::{self, Folders, UserEnv};
 use crate::platform::private_files::{Native as NativeFiles, PrivateFiles};
+use crate::platform::wsl::{self, WslSide, distro_name_problem};
 use crate::server::{host_public_key, local_endpoint};
+
+/// `-d <distro> --`: what follows `wsl.exe` to run a line in `distro`.
+fn in_distro(distro: &str) -> Vec<String> {
+    vec!["-d".to_owned(), distro.to_owned(), "--".to_owned()]
+}
 
 /// The hosts on other computers `floti doctor` checks, in the data folder.
 pub const HOSTS_FILE: &str = "hosts.json";
@@ -109,23 +115,58 @@ pub enum RecordedTransport {
         #[serde(default)]
         args: Vec<String>,
     },
+    /// A WSL distro: on this PC through its `wsl.exe`, or, with `through`,
+    /// on the Windows PC that ssh target reaches, through that PC's.
+    Wsl {
+        distro: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through: Option<String>,
+    },
 }
 
 impl RecordedHost {
     /// The transport that reaches it: `ssh -o BatchMode=yes <target>`, so
-    /// ssh never asks for a password, or the command as given.
+    /// ssh never asks for a password, the command as given, `wsl.exe -d
+    /// <distro> --` with the line as written, or `ssh -o BatchMode=yes
+    /// <target> wsl.exe -d <distro> --`.
     pub fn transport(&self) -> Transport {
-        let (program, args): (String, Vec<String>) = match &self.transport {
+        let batch = || vec!["-o".to_owned(), "BatchMode=yes".to_owned()];
+        let (program, args, as_written): (String, Vec<String>, bool) = match &self.transport {
             RecordedTransport::Ssh { target } => (
                 "ssh".to_owned(),
-                vec!["-o".to_owned(), "BatchMode=yes".to_owned(), target.clone()],
+                [batch(), vec![target.clone()]].concat(),
+                false,
             ),
-            RecordedTransport::Command { program, args } => (program.clone(), args.clone()),
+            RecordedTransport::Command { program, args } => (program.clone(), args.clone(), false),
+            RecordedTransport::Wsl {
+                distro,
+                through: None,
+            } => {
+                let program = wsl::Native.program(&UserEnv::from_process()).map_or_else(
+                    || "wsl.exe".to_owned(),
+                    |wsl| wsl.program.to_string_lossy().into_owned(),
+                );
+                (program, in_distro(distro), true)
+            }
+            RecordedTransport::Wsl {
+                distro,
+                through: Some(target),
+            } => (
+                "ssh".to_owned(),
+                [
+                    batch(),
+                    vec![target.clone(), "wsl.exe".to_owned()],
+                    in_distro(distro),
+                ]
+                .concat(),
+                false,
+            ),
         };
         Transport {
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
             floti: self.floti.clone(),
+            as_written,
         }
     }
 
@@ -133,12 +174,26 @@ impl RecordedHost {
     /// the line it runs there (`ssh build-box floti connect`, or the command
     /// followed by `floti connect`).
     pub fn line_to_try(&self) -> String {
-        let words: Vec<&str> = match &self.transport {
-            RecordedTransport::Ssh { target } => vec!["ssh", target],
-            RecordedTransport::Command { program, args } => std::iter::once(program.as_str())
-                .chain(args.iter().map(String::as_str))
+        let distro_words = |distro: &'_ str| -> Vec<String> { in_distro(distro) };
+        let owned: Vec<String> = match &self.transport {
+            RecordedTransport::Ssh { target } => vec!["ssh".to_owned(), target.clone()],
+            RecordedTransport::Command { program, args } => std::iter::once(program.clone())
+                .chain(args.iter().cloned())
                 .collect(),
+            RecordedTransport::Wsl {
+                distro,
+                through: None,
+            } => [vec!["wsl.exe".to_owned()], distro_words(distro)].concat(),
+            RecordedTransport::Wsl {
+                distro,
+                through: Some(target),
+            } => [
+                vec!["ssh".to_owned(), target.clone(), "wsl.exe".to_owned()],
+                distro_words(distro),
+            ]
+            .concat(),
         };
+        let words: Vec<&str> = owned.iter().map(String::as_str).collect();
         let typed: Vec<String> = words.into_iter().map(shell_word).collect();
         format!("{} {}", typed.join(" "), self.transport().line("connect"))
     }
@@ -158,6 +213,14 @@ impl RecordedHost {
         let empty = match &self.transport {
             RecordedTransport::Ssh { target } => target.trim().is_empty(),
             RecordedTransport::Command { program, .. } => program.trim().is_empty(),
+            RecordedTransport::Wsl { distro, through } => {
+                if let Some(problem) = distro_name_problem(distro) {
+                    return Some(format!("{}: {problem}", self.name));
+                }
+                through
+                    .as_ref()
+                    .is_some_and(|target| target.trim().is_empty())
+            }
         };
         if empty {
             return Some(format!("{} has no ssh target or command", self.name));

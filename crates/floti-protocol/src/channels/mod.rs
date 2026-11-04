@@ -87,6 +87,7 @@ pub mod host;
 pub mod plugins;
 pub mod sessions;
 pub mod workspace;
+pub mod wsl;
 
 use crate::channel::Catalogue;
 
@@ -101,4 +102,5 @@ pub fn declare(catalogue: &mut Catalogue) {
     agent_browser::declare(catalogue);
     agent_plugin::declare(catalogue);
     carry::declare(catalogue);
+    wsl::declare(catalogue);
 }

@@ -26,6 +26,8 @@
 //! - [`agent_plugin`]: the plugin tool servers a client offers, their calls
 //!   carried to it, and its answers.
 //! - [`carry`]: a client's own data, merged into the host's store once.
+//! - [`wsl`]: keeping a WSL distro on this computer running while the host
+//!   inside it has sessions (`wsl:keepAwake`).
 
 mod agent_browser;
 mod agent_plugin;
@@ -42,6 +44,7 @@ mod resources;
 mod sessions;
 mod templates;
 mod workspace;
+mod wsl;
 
 use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
@@ -235,6 +238,7 @@ impl Features {
     /// at the executable the settings choose before any feature captures how
     /// a backend runs.
     pub fn new(hosted: Arc<Hosted>, folders: Folders, run: HostRun) -> crate::Result<Self> {
+        let wsl_program = run.wsl.clone();
         let workspace = Arc::new(WorkspaceContext::new(&hosted, folders, run)?);
         let context = FeatureContext {
             hosted,
@@ -276,6 +280,7 @@ impl Features {
             )?),
             Box::new(Arc::clone(&browser)),
             Box::new(Arc::clone(&plugin_tools)),
+            Box::new(wsl::Wsl::new(&context, wsl_program)),
         ];
         Ok(Self {
             features,

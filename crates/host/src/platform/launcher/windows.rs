@@ -32,6 +32,11 @@ impl ProgramLauncher for Native {
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
+    fn append_as_written(&self, command: &mut std::process::Command, line: &str) {
+        use std::os::windows::process::CommandExt;
+        command.raw_arg(line);
+    }
+
     #[cfg(any(test, feature = "testkit"))]
     fn write_wrapper_script(&self, folder: &Path, name: &str, program: &Path) -> String {
         let file = format!("{name}.cmd");

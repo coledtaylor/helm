@@ -5,15 +5,20 @@
 // A transport carries bytes unchanged: the line's program gets this process's
 // standard input, output and error as they are, and its exit status is this
 // process's. `floti` in the line is the `floti` binary the test built, named
-// by FAKE_SSH_FLOTI; every other program is looked up on PATH. Nothing runs
+// by FAKE_SSH_FLOTI; `wsl.exe` (or `wsl`) is the fake wsl beside this file,
+// never the real one; every other program is looked up on PATH. Nothing runs
 // through a shell.
 
 import { spawn } from 'node:child_process'
 import { appendFileSync } from 'node:fs'
 import { machine, type } from 'node:os'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { watchOwner } from '../fake-agents/common.mjs'
+
+/** The fake `wsl.exe` (wsl.mjs), which a line naming `wsl.exe` runs. */
+const FAKE_WSL = join(dirname(fileURLToPath(import.meta.url)), 'wsl.mjs')
 
 /** The desktop's line for a computer's OS and CPU (`SYSTEM_LINE` in packages/core/src/hostInstall.ts). */
 export const SYSTEM_LINE = 'uname -sm || echo %OS% %PROCESSOR_ARCHITECTURE%'
@@ -32,6 +37,12 @@ function playSetup(outcome) {
   }
   // A Linux server: lingering was turned on, so the host keeps running with
   // nobody signed in.
+  // A WSL distro with no systemd user manager: nothing is registered, and
+  // the host starts when a client connects.
+  if (outcome === 'on-connect') {
+    process.stdout.write('The Floti host starts when a client connects.\n')
+    process.exit(0)
+  }
   if (outcome === 'server') {
     process.stdout.write('The Floti host is running, and keeps running with nobody signed in.\n')
     process.exit(0)
@@ -114,7 +125,8 @@ export function runLine(line) {
   // `<floti> setup` is played, never run: a real one registers the host to
   // start at sign-in with this computer's own scheduler. FAKE_SSH_SETUP picks
   // what it says: `running` (the default), `server` (a Linux server, with
-  // lingering on), `next-sign-in`, or `fail:<line>`.
+  // lingering on), `on-connect` (a WSL distro with no systemd), `next-sign-in`,
+  // or `fail:<line>`.
   if (args.length === 1 && args[0] === 'setup') playSetup(process.env.FAKE_SSH_SETUP || 'running')
   // FAKE_SSH_MISSING_LINE plays a computer that cannot run one line: a line
   // starting with it fails as `sh` says a program it cannot find, with 127.
@@ -132,8 +144,11 @@ export function runLine(line) {
       ? { ...process.env, FLOTI_RUNTIME_DIR: process.env.FAKE_SSH_ELSEWHERE_RUNTIME }
       : process.env
   const floti = process.env.FAKE_SSH_FLOTI
-  const resolved = program === 'floti' && floti ? floti : program
-  const child = spawn(resolved, args, { stdio: 'inherit', windowsHide: true, env })
+  // `wsl.exe` in a line is the fake wsl, never the real one.
+  const wsl = program === 'wsl.exe' || program === 'wsl'
+  const resolved = wsl ? process.execPath : program === 'floti' && floti ? floti : program
+  const resolvedArgs = wsl ? [FAKE_WSL, ...args] : args
+  const child = spawn(resolved, resolvedArgs, { stdio: 'inherit', windowsHide: true, env })
   child.on('error', () => {
     process.stderr.write(`sh: 1: ${program}: not found\n`)
     process.exit(127)

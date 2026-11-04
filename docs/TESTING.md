@@ -607,10 +607,26 @@ real ones. They share `common.mjs`:
   computer's scheduler: `FAKE_SSH_SETUP` is `running` (the default, status 0),
   `server` (a Linux server with lingering turned on: `The Floti host is
   running, and keeps running with nobody signed in.`, status 0),
-  `next-sign-in` (status 10) or `fail:<line>` (status 1), which plays a
-  refused lingering too. The install scripts themselves run for real, with
-  `HOME` and `LOCALAPPDATA` set to the test's own folder
-  (`remote-install.scripts.test.ts`).
+  `next-sign-in` (status 10), `on-connect` (a WSL distro with no systemd:
+  `The Floti host starts when a client connects.`, status 0) or
+  `fail:<line>` (status 1), which plays a refused lingering too. The install
+  scripts themselves run for real, with `HOME` and `LOCALAPPDATA` set to the
+  test's own folder (`remote-install.scripts.test.ts`).
+- **`wsl.mjs`** is `wsl.exe`, and no test runs the real one or touches a real
+  distro. `wsl.exe` (or `wsl`) at the start of a line any fake runs is this
+  file. It plays `--list --quiet` (the distros `FAKE_WSL_DISTROS` names,
+  comma-separated; with none, wsl.exe's own "no installed distributions"
+  text and a failure), `--version` (WSL 3.0.3.0), and `-d <distro> --
+  <line>`, which runs the line in "the distro" (this computer, the test's own
+  folders) as the fake ssh runs one, with `uname -sm` answering `Linux
+  x86_64` unless `FAKE_SSH_SYSTEM` says otherwise, and the install line's
+  `eval "$(echo <base64> | base64 -d)"` form decoded first. A distro it does
+  not know fails with wsl.exe's own `There is no distribution with the
+  supplied name.` and `Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND`;
+  `FAKE_WSL_NOT_INSTALLED` plays a PC with no WSL. What wsl.exe itself writes
+  is UTF-16LE, or UTF-8 when `WSL_UTF8=1`, as the real one does; the fake ssh
+  carries no `WSL_UTF8` across, as a real ssh does not. Runs are recorded
+  with `program` `wsl` and the `distro`.
 
 The host's tests (`crates/host/tests/remote.rs`) drive both through
 `floti bridge`; the desktop's run the same files through its own bridge. A

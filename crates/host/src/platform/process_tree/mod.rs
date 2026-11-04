@@ -100,6 +100,45 @@ pub trait ProcessTree {
     fn prepare_lasting_root(&self, command: &mut std::process::Command) {
         self.prepare_root(command);
     }
+
+    /// Starts `program` with `args` alone: as a lasting root
+    /// ([`ProcessTree::prepare_lasting_root`]), with nothing on its standard
+    /// input, output and error, and holding nothing of this process's open,
+    /// so a pipe this process was handed closes once this process and the
+    /// pipe's other holders end, whatever it started. `floti connect` starts
+    /// the host this way. On macOS and Linux every descriptor but the
+    /// standard three is closed at exec already; Windows hands a child every
+    /// handle marked inheritable unless it is started with none.
+    fn start_alone(
+        &self,
+        program: &std::path::Path,
+        args: &[&str],
+    ) -> std::io::Result<Box<dyn Started>> {
+        let mut command = std::process::Command::new(program);
+        command
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        self.prepare_lasting_root(&mut command);
+        Ok(Box::new(command.spawn()?))
+    }
+}
+
+/// A program [`ProcessTree::start_alone`] started.
+pub trait Started: Send {
+    /// Its exit code once it has exited (no code when a signal ended it),
+    /// nothing while it runs or when that cannot be told.
+    fn exited(&mut self) -> Option<Option<i32>>;
+}
+
+impl Started for std::process::Child {
+    fn exited(&mut self) -> Option<Option<i32>> {
+        match self.try_wait() {
+            Ok(Some(status)) => Some(status.code()),
+            _ => None,
+        }
+    }
 }
 
 /// Every process under `root` in `table`, a list of (pid, parent pid): its
