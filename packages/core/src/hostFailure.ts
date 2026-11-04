@@ -19,7 +19,7 @@
  */
 
 import { NO_HOST_LINE, saysNotFound, describeInstallFailure, type InstallStep } from './hostInstall'
-import { describeTransport, transportFix, type HostTransport } from './hosts'
+import { describeTransport, sshTargetOf, transportFix, type HostTransport } from './hosts'
 
 /** What main tells apart that the last line alone cannot say. */
 export type HostFailureCause =
@@ -66,6 +66,8 @@ export type HostFailureKind =
   | 'tooOld'
   | 'notRunning'
   | 'missing'
+  | 'noDistro'
+  | 'noWsl'
   | 'other'
 
 /** One failure as every surface draws it. */
@@ -92,13 +94,32 @@ const PASSWORD =
 const KEY_CHANGED = /REMOTE HOST IDENTIFICATION HAS CHANGED|Host key for .* has changed/i
 const KEY_UNKNOWN = /Host key verification failed|host key is known for|host key .* is not known/i
 
+/** wsl.exe's words for a distro it does not have. */
+const NO_DISTRO = /WSL_E_DISTRO_NOT_FOUND|There is no distribution with the supplied name/i
+/** wsl.exe's, or Windows', words for a PC with no WSL. */
+const NO_WSL =
+  /Windows Subsystem for Linux is not installed|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED|'wsl(\.exe)?' is not recognized|wsl(\.exe)?: (command )?not found/i
+
 /** Says what went wrong reaching a host, from its transport, the lines written and what main told apart. */
 export function classifyHostFailure(input: HostFailureInput): HostFailure {
   const { name, transport, lastLine, cause } = input
   const reach = describeTransport(transport)
-  const ssh = transport.kind === 'ssh'
-  const transportSaid = ssh ? 'ssh said' : 'The command said'
+  // ssh's own failures read the same whether ssh reaches the host or a
+  // Windows PC a distro is on.
+  const sshTarget = sshTargetOf(transport)
+  const ssh = sshTarget !== null
+  const transportSaid =
+    transport.kind === 'ssh'
+      ? 'ssh said'
+      : transport.kind === 'wsl'
+        ? ssh
+          ? 'ssh said'
+          : 'wsl.exe said'
+        : 'The command said'
   const said = input.said ?? lastLine
+  const wsl = transport.kind === 'wsl' ? transport : null
+  /** Where the distro is: `this PC`, or the ssh target of the PC it is on. */
+  const wslPc = wsl?.through ?? 'this PC'
   const failure = (kind: HostFailureKind, title: string, chip: string, fix: string, saidBy = transportSaid): HostFailure => ({
     kind,
     title,
@@ -108,9 +129,20 @@ export function classifyHostFailure(input: HostFailureInput): HostFailure {
     fix
   })
 
+  const noWsl = (): HostFailure =>
+    failure(
+      'noWsl',
+      `WSL is not installed on ${wslPc}`,
+      'No WSL',
+      `Run wsl --install in a terminal${wsl?.through === undefined ? '' : ` on ${wslPc}`}, restart if it asks, then try again.`,
+      'wsl.exe said'
+    )
+
   switch (cause?.kind) {
     case 'transportMissing':
-      return ssh
+      // This PC's wsl.exe is not there: WSL is not installed here.
+      if (wsl !== null && !ssh) return noWsl()
+      return ssh || transport.kind !== 'command'
         ? failure(
             'noTransport',
             'Helm could not find ssh on this PC',
@@ -184,6 +216,19 @@ export function classifyHostFailure(input: HostFailureInput): HostFailure {
       break
   }
 
+  if (wsl !== null) {
+    if (NO_DISTRO.test(said)) {
+      return failure(
+        'noDistro',
+        `WSL has no distro named ${wsl.distro} on ${wslPc}`,
+        'No distro',
+        `wsl --list in a terminal${wsl.through === undefined ? '' : ` on ${wslPc}`} shows the distros there. Pick one of those, then try again.`,
+        'wsl.exe said'
+      )
+    }
+    if (NO_WSL.test(said)) return noWsl()
+  }
+
   if (KEY_CHANGED.test(said)) {
     return failure(
       'hostKeyChanged',
@@ -203,7 +248,7 @@ export function classifyHostFailure(input: HostFailureInput): HostFailure {
   if (UNRESOLVED.test(said)) {
     return failure(
       'unresolved',
-      ssh ? `ssh does not know ${transport.target}` : `The command does not know ${name}`,
+      ssh ? `ssh does not know ${sshTarget}` : `The command does not know ${name}`,
       'Unknown name',
       'Check the name, or add a Host for it to ~/.ssh/config, then try again.'
     )

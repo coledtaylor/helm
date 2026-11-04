@@ -318,6 +318,7 @@ const hostInstall: HostInstallActions = {
  */
 const addHostActions: AddHostActions = {
   sshHosts: () => helm.invoke("remoteHosts:sshHosts"),
+  wslDistros: () => helm.invoke("remoteHosts:wslDistros"),
   check: hostInstall.check,
   install: hostInstall.install,
   cancelInstall: hostInstall.cancel,

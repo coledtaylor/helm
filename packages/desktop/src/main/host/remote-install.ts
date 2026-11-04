@@ -24,7 +24,7 @@ import {
   type ProtocolVersionNumbers,
   type RemoteSystem
 } from '@helm/core/types'
-import { transportArgv } from './remote-launcher'
+import { runsAsWritten, systemWsl, transportArgv, type TransportPrograms } from './remote-launcher'
 
 /**
  * Installing and updating floti on a host's computer, over the same login
@@ -63,6 +63,16 @@ export interface TransportRun {
   notFound?: boolean
 }
 
+/** How a run's last argument goes on its command line. */
+export interface RunHow {
+  /**
+   * The last argument is appended to the command line as written, never
+   * quoted as one argument, and the program runs with `WSL_UTF8=1`: for this
+   * PC's `wsl.exe` (`runsAsWritten`).
+   */
+  asWritten?: boolean
+}
+
 /**
  * Runs `argv` without a shell, with the file at `stdinFile` as its standard
  * input, or none. When `signal` aborts, the run is stopped: its program ends.
@@ -70,11 +80,16 @@ export interface TransportRun {
 export type RunTransport = (
   argv: readonly string[],
   stdinFile: string | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  how?: RunHow
 ) => Promise<TransportRun>
 
 export interface RemoteInstallDeps {
   run: RunTransport
+  /** The programs that run this PC's ssh and `wsl.exe`: `ssh` and System32's when absent. */
+  programs?: TransportPrograms
+  /** This process's environment, where System32 is found when `wsl` is absent. */
+  env?: NodeJS.ProcessEnv
   /** This PC's `process.platform` and `process.arch`. */
   platform: string
   arch: string
@@ -185,19 +200,62 @@ export function installLine(os: FlotiOs, script: string, args: readonly string[]
   return `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`
 }
 
+/** Characters `cmd` reads rather than passes on, outside double quotes. */
+const CMD_READS = /[|&<>^%()]/
+
+/**
+ * The line a distro's shell is given: as it is when `cmd` (which Windows'
+ * OpenSSH runs a line in, before `wsl.exe`) would pass it on unaltered, and
+ * otherwise as `eval "$(echo <base64> | base64 -d)"`, whose only `|` is in
+ * double quotes, so the line reaches the distro's shell as it was written,
+ * with standard input left for the line. floti's own lines go as they are.
+ */
+export function wslLine(line: string): string {
+  if (!CMD_READS.test(line)) return line
+  return `eval "$(echo ${Buffer.from(line, 'utf8').toString('base64')} | base64 -d)"`
+}
+
+/**
+ * What a program wrote, as text: UTF-16LE when it is (what `wsl.exe` writes to
+ * a pipe without `WSL_UTF8=1`, as it always does through ssh), else UTF-8.
+ * The same judgement as `decode_output` in crates/host/src/bridge.rs: a
+ * byte-order mark, or every other byte mostly zero, as ASCII is in UTF-16LE
+ * and never in UTF-8.
+ */
+export function decodeOutput(bytes: Uint8Array): string {
+  const pairs = Math.floor(bytes.length / 2)
+  let utf16 = bytes[0] === 0xff && bytes[1] === 0xfe
+  if (!utf16 && pairs > 0) {
+    let highZero = 0
+    let lowZero = 0
+    for (let i = 0; i + 1 < bytes.length; i += 2) {
+      if (bytes[i + 1] === 0) highZero += 1
+      if (bytes[i] === 0) lowZero += 1
+    }
+    utf16 = highZero * 2 > pairs && lowZero * 4 < pairs
+  }
+  if (!utf16) return new TextDecoder('utf-8').decode(bytes)
+  return new TextDecoder('utf-16le').decode(bytes.subarray(0, pairs * 2)).replace(/^\uFEFF/, '')
+}
+
 export function createRemoteInstaller(deps: RemoteInstallDeps): RemoteInstaller {
   const plans = new Map<string, Plan>()
   const newId = deps.newId ?? randomUUID
 
+  const programs: TransportPrograms = {
+    ...deps.programs,
+    wsl: deps.programs?.wsl ?? systemWsl(deps.env ?? {})
+  }
   const runThere = (
     transport: HostTransport,
     line: string,
     stdinFile: string | null = null,
     signal?: AbortSignal
-  ): Promise<TransportRun> =>
-    signal === undefined
-      ? deps.run([...transportArgv(transport), line], stdinFile)
-      : deps.run([...transportArgv(transport), line], stdinFile, signal)
+  ): Promise<TransportRun> => {
+    const argv = [...transportArgv(transport, programs), transport.kind === 'wsl' ? wslLine(line) : line]
+    if (runsAsWritten(transport)) return deps.run(argv, stdinFile, signal, { asWritten: true })
+    return signal === undefined ? deps.run(argv, stdinFile) : deps.run(argv, stdinFile, signal)
+  }
 
   /** How many sessions the floti there says an update ends, or null when it cannot say. */
   const sessionsThere = async (transport: HostTransport, floti: string | undefined): Promise<number | null> => {
@@ -325,23 +383,66 @@ export function createRemoteInstaller(deps: RemoteInstallDeps): RemoteInstaller 
 const KEPT = 64 * 1024
 
 /**
+ * A word on a Windows command line, quoted the way a program's own C runtime
+ * splits it back: as it is when it holds no blank or quote, else in double
+ * quotes with each quote, and the backslashes before one, escaped.
+ */
+export function windowsArgument(word: string): string {
+  if (word !== '' && !/[\s"]/.test(word)) return word
+  let quoted = '"'
+  let slashes = 0
+  for (const char of word) {
+    if (char === '\\') {
+      slashes += 1
+      continue
+    }
+    quoted += char === '"' ? '\\'.repeat(slashes * 2 + 1) + '"' : '\\'.repeat(slashes) + char
+    slashes = 0
+  }
+  return `${quoted}${'\\'.repeat(slashes * 2)}"`
+}
+
+/** How `spawnTransportRun` starts a program. */
+export interface TransportSpawnOptions {
+  env: NodeJS.ProcessEnv
+  stdio: ['pipe', 'pipe', 'pipe']
+  windowsHide: true
+  /** Set for a run as written: the command line is the arguments as given. */
+  windowsVerbatimArguments?: true
+  argv0?: string
+}
+
+/**
  * Runs a transport for real: the program and its arguments without a shell,
  * windowless, with `env` as it is (the user's ssh finds their config, keys and
  * agent), and a file piped to its standard input when one is given.
+ *
+ * A run as written (this PC's `wsl.exe`) gets `WSL_UTF8=1` and, on Windows, a
+ * command line built here: every word before the last quoted as its program's
+ * runtime reads it (`windowsArgument`), and the last, the distro's line,
+ * appended as it is. Elsewhere the line is one more argument. What it writes
+ * is read as UTF-16LE when it is (`decodeOutput`).
  */
 export function spawnTransportRun(
-  spawn: (
-    command: string,
-    args: string[],
-    options: { env: NodeJS.ProcessEnv; stdio: ['pipe', 'pipe', 'pipe']; windowsHide: true }
-  ) => ChildProcess,
-  env: NodeJS.ProcessEnv
+  spawn: (command: string, args: string[], options: TransportSpawnOptions) => ChildProcess,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform
 ): RunTransport {
-  return (argv, stdinFile, signal) =>
+  return (argv, stdinFile, signal, how) =>
     new Promise((done) => {
       const [program, ...args] = argv as [string, ...string[]]
-      let stdout = ''
-      let stderr = ''
+      const out: Buffer[] = []
+      const err: Buffer[] = []
+      const text = (chunks: Buffer[]): string => {
+        const all = Buffer.concat(chunks)
+        // The last lines are what is shown; an even cut keeps UTF-16 whole.
+        return decodeOutput(all.length > KEPT ? all.subarray(all.length - KEPT) : all)
+      }
+      const keep = (chunks: Buffer[], chunk: Buffer | string): void => {
+        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+        let size = chunks.reduce((sum, each) => sum + each.length, 0)
+        while (chunks.length > 1 && size - (chunks[0]?.length ?? 0) >= KEPT) size -= chunks.shift()?.length ?? 0
+      }
       let settled = false
       const finish = (run: TransportRun): void => {
         if (settled) return
@@ -351,8 +452,8 @@ export function spawnTransportRun(
       }
       const failedToRun = (error: unknown): TransportRun => ({
         code: null,
-        stdout,
-        stderr,
+        stdout: text(out),
+        stderr: text(err),
         error: couldNotRun(program, error),
         ...((error as NodeJS.ErrnoException).code === 'ENOENT' ? { notFound: true } : {})
       })
@@ -362,24 +463,32 @@ export function spawnTransportRun(
         child?.kill()
       }
       if (signal?.aborted === true) {
-        finish({ code: null, stdout, stderr })
+        finish({ code: null, stdout: '', stderr: '' })
         return
       }
       signal?.addEventListener('abort', stop, { once: true })
+      const options: TransportSpawnOptions = { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }
+      let spawnArgs = args
+      if (how?.asWritten === true) {
+        options.env = { ...env, WSL_UTF8: '1' }
+        if (platform === 'win32') {
+          // Node quotes nothing with verbatim arguments, so each word but the
+          // line is quoted here, the program's own name included.
+          options.windowsVerbatimArguments = true
+          options.argv0 = windowsArgument(program)
+          spawnArgs = args.map((word, at) => (at === args.length - 1 ? word : windowsArgument(word)))
+        }
+      }
       try {
-        child = spawn(program, args, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+        child = spawn(program, spawnArgs, options)
       } catch (error) {
         finish(failedToRun(error))
         return
       }
-      child.stdout?.on('data', (chunk: Buffer | string) => {
-        stdout = (stdout + chunk.toString()).slice(-KEPT)
-      })
-      child.stderr?.on('data', (chunk: Buffer | string) => {
-        stderr = (stderr + chunk.toString()).slice(-KEPT)
-      })
+      child.stdout?.on('data', (chunk: Buffer | string) => keep(out, chunk))
+      child.stderr?.on('data', (chunk: Buffer | string) => keep(err, chunk))
       child.once('error', (error) => finish(failedToRun(error)))
-      child.once('close', (code: number | null) => finish({ code, stdout, stderr }))
+      child.once('close', (code: number | null) => finish({ code, stdout: text(out), stderr: text(err) }))
       const stdin = child.stdin
       if (stdin === null) return
       // A program that exits before reading all of it closes the pipe.

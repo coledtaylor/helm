@@ -6,7 +6,8 @@ import type {
   InstallOffer,
   InstallOutcome,
   RemoteHost,
-  SshConfigHosts
+  SshConfigHosts,
+  WslDistroList
 } from '@helm/core/types'
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -64,7 +65,7 @@ function added(request: HostAddRequest, agents: Record<string, typeof SIGNED_IN>
  * The dialog over fake actions: each call to check, install and add waits on
  * a promise the test settles, so a test sees every screen between them.
  */
-function world(options: { config?: SshConfigHosts; hosts?: RemoteHost[] } = {}) {
+function world(options: { config?: SshConfigHosts; hosts?: RemoteHost[]; wsl?: WslDistroList[] } = {}) {
   const checks: { target: HostCheckTarget; answer: ReturnType<typeof deferred<HostCheck>> }[] = []
   const installs: { id: string; answer: ReturnType<typeof deferred<InstallOutcome>> }[] = []
   const adds: { request: HostAddRequest; answer: ReturnType<typeof deferred<HostAddOutcome>> }[] = []
@@ -87,7 +88,8 @@ function world(options: { config?: SshConfigHosts; hosts?: RemoteHost[] } = {}) 
       adds.push({ request, answer })
       return answer.promise
     }),
-    cancelAdd: vi.fn<AddHostActions['cancelAdd']>()
+    cancelAdd: vi.fn<AddHostActions['cancelAdd']>(),
+    wslDistros: vi.fn<NonNullable<AddHostActions['wslDistros']>>(async () => options.wsl ?? [])
   }
   const onQuitChange = vi.fn()
   const onClose = vi.fn()
@@ -456,5 +458,135 @@ describe('the add-a-host dialog', () => {
     w.adds[2]?.answer.resolve({ ...added(w.adds[2].request, null), agentsError: 'setup:status is not served' } as HostAddOutcome)
     await vi.waitFor(() => expect(w.step()).toBe('added'))
     expect(w.dialog().querySelector('[data-add-host-agents-unknown]')?.textContent).toContain('setup:status is not served')
+  })
+})
+describe('the add-a-host dialog’s WSL distros', () => {
+  const HERE: WslDistroList = {
+    through: null,
+    pcName: 'this PC',
+    distros: ['Ubuntu', 'Debian'],
+    said: null
+  }
+  const WIN_BOX: WslDistroList = {
+    through: 'win-box',
+    pcName: 'win-box',
+    distros: ['Ubuntu'],
+    said: null
+  }
+  const UBUNTU_ADDED: RemoteHost = {
+    id: 'h-ubuntu',
+    name: 'Ubuntu',
+    transport: { kind: 'wsl', distro: 'Ubuntu' }
+  }
+
+  it('S1: lists this PC’s distros beside the ssh hosts: Debian to pick, Ubuntu already added', async () => {
+    const w = world({ wsl: [HERE], hosts: [UBUNTU_ADDED] })
+    const list = await within(w.dialog()).findByRole('radiogroup', {
+      name: 'WSL distros on this PC'
+    })
+    const rows = within(list).getAllByRole('radio')
+    expect(rows.map((row) => row.getAttribute('data-add-host-wsl-distro'))).toEqual(['Ubuntu', 'Debian'])
+    const ubuntu = rows[0] as HTMLButtonElement
+    expect(ubuntu.disabled).toBe(true)
+    expect(ubuntu.textContent).toContain('Added')
+    expect((rows[1] as HTMLButtonElement).disabled).toBe(false)
+    expect(w.actions.wslDistros).toHaveBeenCalledOnce()
+  })
+
+  it('S2: lists the distros of a Windows host under its name; a PC with no WSL says so with wsl.exe’s line, and the ssh list still works', async () => {
+    const none: WslDistroList = {
+      through: null,
+      pcName: 'this PC',
+      distros: [],
+      said: 'For more information please visit https://aka.ms/wslinstall'
+    }
+    const w = world({ wsl: [none, WIN_BOX] })
+    const there = await within(w.dialog()).findByRole('radiogroup', {
+      name: 'WSL distros on win-box'
+    })
+    expect(
+      within(there)
+        .getAllByRole('radio')
+        .map((row) => row.textContent)
+    ).toEqual(['Ubuntu'])
+    const here = w.dialog().querySelector('[data-add-host-wsl="this PC"]') as HTMLElement
+    expect(here.querySelector('[data-add-host-wsl-none]')?.textContent).toContain('This PC has no WSL distros to add.')
+    expect(here.querySelector('[data-add-host-wsl-said]')?.textContent).toBe(none.said)
+    await pick(w)
+    expect(
+      within(w.dialog()).getByRole<HTMLInputElement>('textbox', {
+        name: 'Name in Helm'
+      }).value
+    ).toBe('build-box')
+  })
+
+  it('S3, S4: picking this PC’s Debian checks through wsl.exe -d Debian -- floti version and adds it as Debian, reached through wsl.exe', async () => {
+    const w = world({ wsl: [HERE] })
+    await userEvent.click(await within(w.dialog()).findByRole('radio', { name: 'Debian' }))
+    expect(
+      within(w.dialog()).getByRole<HTMLInputElement>('textbox', {
+        name: 'Name in Helm'
+      }).value
+    ).toBe('Debian')
+    await userEvent.click(w.button('Connect'))
+    expect(w.checks[0]?.target).toEqual({
+      transport: { kind: 'wsl', distro: 'Debian' },
+      attempt: 'attempt-1'
+    })
+    expect(w.dialog().textContent).toContain('wsl.exe -d Debian -- floti version')
+    w.checks[0]?.answer.resolve(READY)
+    await vi.waitFor(() => expect(w.adds).toHaveLength(1))
+    expect(w.adds[0]?.request).toMatchObject({
+      name: 'Debian',
+      transport: { kind: 'wsl', distro: 'Debian' }
+    })
+    expect(w.dialog().textContent).toContain('wsl.exe -d Debian -- floti connect')
+  })
+
+  it('S5: picking Ubuntu on win-box checks through ssh win-box and its wsl.exe, and names it Ubuntu on win-box', async () => {
+    const w = world({ wsl: [WIN_BOX] })
+    await userEvent.click(await within(w.dialog()).findByRole('radio', { name: 'Ubuntu' }))
+    expect(
+      within(w.dialog()).getByRole<HTMLInputElement>('textbox', {
+        name: 'Name in Helm'
+      }).value
+    ).toBe('Ubuntu on win-box')
+    await userEvent.click(w.button('Connect'))
+    expect(w.checks[0]?.target).toEqual({
+      transport: { kind: 'wsl', distro: 'Ubuntu', through: 'win-box' },
+      attempt: 'attempt-1'
+    })
+    expect(w.dialog().textContent).toContain('ssh -o BatchMode=yes win-box wsl.exe -d Ubuntu -- floti version')
+  })
+
+  it('S10: a distro gone says WSL has no distro of that name, with wsl.exe’s line and wsl --list; no WSL says to run wsl --install; nothing is added', async () => {
+    const w = world({ wsl: [HERE] })
+    await userEvent.click(await within(w.dialog()).findByRole('radio', { name: 'Debian' }))
+    await userEvent.click(w.button('Connect'))
+    const gone = 'Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND'
+    w.checks[0]?.answer.resolve({
+      kind: 'failed',
+      lastLine: gone,
+      said: `There is no distribution with the supplied name.\n${gone}`
+    })
+    await vi.waitFor(() => expect(w.step()).toBe('failed'))
+    expect(within(w.dialog()).getByRole('heading').textContent).toBe('WSL has no distro named Debian on this PC')
+    expect(w.dialog().textContent).toContain('wsl.exe said')
+    expect(w.dialog().querySelector('[data-add-host-line]')?.textContent).toBe(gone)
+    expect(w.dialog().querySelector('[data-add-host-fix]')?.textContent).toContain('wsl --list')
+    cleanup()
+
+    const nowsl = world({ wsl: [HERE] })
+    await userEvent.click(await within(nowsl.dialog()).findByRole('radio', { name: 'Debian' }))
+    await userEvent.click(nowsl.button('Connect'))
+    nowsl.checks[0]?.answer.resolve({
+      kind: 'failed',
+      lastLine: 'spawn wsl.exe ENOENT',
+      cause: 'transportMissing'
+    })
+    await vi.waitFor(() => expect(nowsl.step()).toBe('failed'))
+    expect(within(nowsl.dialog()).getByRole('heading').textContent).toBe('WSL is not installed on this PC')
+    expect(nowsl.dialog().querySelector('[data-add-host-fix]')?.textContent).toContain('wsl --install')
+    expect(nowsl.actions.add).not.toHaveBeenCalled()
   })
 })

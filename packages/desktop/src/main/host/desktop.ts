@@ -6,7 +6,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir, hostname, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { listProfiles, readPluginFolders, readPluginSettings } from '@helm/core'
-import { parseSums, type FlotiOs, type RemoteHost, type SshConfigHosts } from '@helm/core/types'
+import { parseSums, type FlotiOs, type RemoteHost, type SshConfigHosts, type WslDistroList } from '@helm/core/types'
 import { createClientFolderRemoteAdder, type RemoteHostAdder } from './remote-add'
 import { readSshConfigHosts } from './ssh-config'
 import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
@@ -35,8 +35,10 @@ import { createPageLinks, type PageLinks } from './page-link'
 import { doctorHosts, recordDoctorHosts } from './doctor-hosts'
 import type { PortForwards } from './forwards'
 import { createRemoteHostLinks, type RemoteHostLinks } from './remote'
-import { openRemotePageBridge, remoteClientFolder, startRemoteHost } from './remote-launcher'
+import { openRemotePageBridge, remoteClientFolder, startRemoteHost, systemWsl } from './remote-launcher'
 import { createRemoteInstaller, spawnTransportRun, type RemoteInstaller } from './remote-install'
+import { createWslKeepAwake } from './wsl-awake'
+import { listWslDistros } from './wsl-distros'
 import { PROTOCOL_VERSION } from './protocol'
 import { RELEASES_DOWNLOAD } from '../update'
 import type { PluginBackgroundReport, RemoteHostStates } from '../../shared/ipc'
@@ -183,10 +185,21 @@ export function createDesktopRemoteHosts(options: {
   plugins: RemotePlugins
   /** The ports of each host's sessions forwarded to this PC, which close with their sessions. */
   forwards: PortForwards
+  /** This PC's own host link, which keeps distros here awake. */
+  localLink: HostLink
   log: (line: string) => void
 }): RemoteHostLinks {
   const folderOf = (id: string): string => remoteClientFolder(places(), process.platform, id)
-  return createRemoteHostLinks({
+  // A distro through another PC is held by that PC's host, found on its link.
+  let links: RemoteHostLinks | null = null
+  const wsl = createWslKeepAwake({
+    local: () => options.localLink.current(),
+    reachedWithSsh: (target) => links?.reachedWithSsh(target) ?? null,
+    log: options.log
+  })
+  options.localLink.onConnected(() => wsl.localConnected())
+  links = createRemoteHostLinks({
+    wsl,
     start: (host) =>
       startRemoteHost(
         places(),
@@ -231,6 +244,21 @@ export function createDesktopRemoteHosts(options: {
     log: options.log,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
+  })
+  return links
+}
+
+/** The WSL distros on this PC and on each connected Windows host (`remoteHosts:wslDistros`). */
+export function readDesktopWslDistros(
+  hosts: () => readonly RemoteHost[],
+  links: RemoteHostLinks
+): Promise<WslDistroList[]> {
+  return listWslDistros({
+    run: spawnTransportRun(spawn, process.env),
+    platform: process.platform,
+    programs: { wsl: systemWsl(process.env) },
+    hosts,
+    states: () => links.states()
   })
 }
 
@@ -282,6 +310,7 @@ export function createDesktopRemoteInstaller(log: (line: string) => void): Remot
   const scripts = at.packaged ? join(at.resourcesPath, 'install') : join(at.repoRoot, 'scripts', 'install')
   return createRemoteInstaller({
     run: spawnTransportRun(spawn, process.env),
+    env: process.env,
     platform: process.platform,
     arch: process.arch,
     version: app.getVersion(),

@@ -86,6 +86,7 @@ import {
   createDesktopRemoteInstaller,
   createLocalPageLinks,
   readDesktopSshHosts,
+  readDesktopWslDistros,
   type DesktopHost
 } from './host/desktop'
 import { routePageLinks } from './host/page-link'
@@ -588,6 +589,7 @@ function startApp(options: AppOptions = {}): void {
           },
           plugins: desktopHost.remotePlugins,
           forwards,
+          localLink: desktopHost.link,
           log: (line) => console.log(line)
         })
       : null
@@ -933,7 +935,8 @@ function startApp(options: AppOptions = {}): void {
             hosts: () => services.settings.hosts,
             log: (line) => console.log(line)
           }),
-          sshHosts: readDesktopSshHosts
+          sshHosts: readDesktopSshHosts,
+          wslDistros: () => readDesktopWslDistros(() => services.settings.hosts, remoteHosts)
         }
       : {}),
     ...(forwards !== null ? { forwards } : {}),

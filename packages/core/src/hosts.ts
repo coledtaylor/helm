@@ -7,9 +7,11 @@
  * connects to anything; the links are the desktop's.
  *
  * A host is reached the way the user already reaches that computer: their own
- * `ssh` with the target exactly as typed, or a command of their choosing that
- * carries bytes. This device keeps the target or the command and nothing else
- * about how to get there: no key, password or passphrase, and no ssh option.
+ * `ssh` with the target exactly as typed, a command of their choosing that
+ * carries bytes, or `wsl.exe` for a WSL distro on this PC or, through ssh, on
+ * a Windows PC. This device keeps the target, the command or the distro and
+ * nothing else about how to get there: no key, password or passphrase, and no
+ * ssh option.
  */
 
 /** The key `quitSessions` holds this PC's own host under; no remote host has it as its id. */
@@ -26,6 +28,14 @@ export type HostTransport =
    * last argument when it runs.
    */
   | { kind: 'command'; program: string; args: readonly string[] }
+  /**
+   * A WSL distro running a Linux host of its own. With no `through` it is a
+   * distro on this PC, reached with this PC's `wsl.exe -d <distro> --`; with
+   * `through`, a distro on the Windows PC that ssh target reaches, through
+   * `ssh -o BatchMode=yes <through> wsl.exe -d <distro> --` there. Either way
+   * the handshake runs end to end with the host inside the distro.
+   */
+  | { kind: 'wsl'; distro: string; through?: string }
 
 /** A host on another computer, as this device keeps it in the `hosts` setting. */
 export interface RemoteHost {
@@ -223,18 +233,88 @@ function quoteWord(word: string): string {
     .join(`'"'`)
 }
 
-/** How a host is reached, as Settings and the status bar's tooltip say it: `ssh build-box`, or the command. */
+/**
+ * How a host is reached, as Settings and the status bar's tooltip say it:
+ * `ssh build-box`, the command, `wsl.exe -d Ubuntu`, or `ssh win-box wsl.exe
+ * -d Ubuntu` for a distro on another PC.
+ */
 export function describeTransport(transport: HostTransport): string {
-  return transport.kind === 'ssh'
-    ? `ssh ${transport.target}`
-    : formatCommandLine([transport.program, ...transport.args])
+  switch (transport.kind) {
+    case 'ssh':
+      return `ssh ${transport.target}`
+    case 'command':
+      return formatCommandLine([transport.program, ...transport.args])
+    case 'wsl': {
+      const wsl = `wsl.exe -d ${transport.distro}`
+      return transport.through === undefined ? wsl : `ssh ${transport.through} ${wsl}`
+    }
+  }
 }
 
 /** What to do when a host's transport could not reach it, after the line it wrote. */
 export function transportFix(transport: HostTransport): string {
-  return transport.kind === 'ssh'
-    ? `Sign in with ssh ${transport.target} in a terminal, then try again.`
-    : `Run ${formatCommandLine([transport.program, ...transport.args])} in a terminal to see what it needs, then try again.`
+  switch (transport.kind) {
+    case 'ssh':
+      return `Sign in with ssh ${transport.target} in a terminal, then try again.`
+    case 'command':
+      return `Run ${formatCommandLine([transport.program, ...transport.args])} in a terminal to see what it needs, then try again.`
+    case 'wsl':
+      return `Run ${describeTransport(transport)} in a terminal to see what it needs, then try again.`
+  }
+}
+
+/** The ssh target a host is reached through: its own, or the Windows PC's a distro there is reached through. */
+export function sshTargetOf(transport: HostTransport): string | null {
+  if (transport.kind === 'ssh') return transport.target
+  if (transport.kind === 'wsl') return transport.through ?? null
+  return null
+}
+
+/** The longest distro name this device keeps; WSL's own are far shorter. */
+const DISTRO_NAME_MAX = 64
+
+/**
+ * Why `name` cannot be a WSL distro's name, or null: WSL allows letters,
+ * digits, `.`, `_` and `-`, the same rule as `distro_name_problem` in
+ * crates/host/src/platform/wsl/mod.rs, which refuses it again. One that starts
+ * with `-` would be read by `wsl.exe` as an option, so it is refused too.
+ */
+export function distroNameProblem(name: unknown): string | null {
+  if (typeof name !== 'string' || name === '') return 'Pick the WSL distro to add.'
+  if (name.length > DISTRO_NAME_MAX || !/^[A-Za-z0-9._-]+$/.test(name) || name.startsWith('-')) {
+    return `${JSON.stringify(name)} is not a WSL distro name: one is letters, digits, '.', '_' and '-'.`
+  }
+  return null
+}
+
+/**
+ * The WSL distros on one Windows PC, as the add-a-host dialog's pick screen
+ * lists them under `WSL distros on <pcName>`: this PC's, found with its own
+ * `wsl.exe --list --quiet`, and each connected Windows host's, found through
+ * `ssh <target> wsl.exe --list --quiet`.
+ */
+export interface WslDistroList {
+  /** The ssh target of the PC, or null for this PC. */
+  through: string | null
+  /** `this PC`, or the Windows host's name in Helm. */
+  pcName: string
+  distros: readonly string[]
+  /** With no distros: the last line wsl.exe or ssh wrote, as written, which says why. */
+  said: string | null
+}
+
+/** Whether `transport` reaches the distro `distro` on the PC `through` names (this PC when absent). */
+export function sameDistro(transport: HostTransport, distro: Extract<HostTransport, { kind: 'wsl' }>): boolean {
+  return (
+    transport.kind === 'wsl' &&
+    transport.distro.toLowerCase() === distro.distro.toLowerCase() &&
+    (transport.through ?? null) === (distro.through ?? null)
+  )
+}
+
+/** The name a distro's host gets in Helm unless the user types another: `Ubuntu`, or `Ubuntu on win-box` for another PC's. */
+export function wslHostName(distro: string, pcName?: string): string {
+  return pcName === undefined ? distro : `${distro} on ${pcName}`
 }
 
 /**
@@ -245,7 +325,9 @@ export function transportFix(transport: HostTransport): string {
  * needs, in the user's own terminal, where it can ask; Helm never answers it.
  */
 export function lineToTryByHand(host: Pick<RemoteHost, 'transport' | 'floti'>): string {
-  return `${describeTransport(host.transport)} ${flotiLine(host.floti, 'connect')}`
+  // wsl.exe runs what follows `--` in the distro.
+  const separator = host.transport.kind === 'wsl' ? ' --' : ''
+  return `${describeTransport(host.transport)}${separator} ${flotiLine(host.floti, 'connect')}`
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +373,18 @@ function transportProblem(transport: unknown): string | null {
     const { program, args } = transport as { program?: unknown; args?: unknown }
     return commandProblem(program, args)
   }
-  return `expected ssh or a command, got ${describe(kind)}`
+  if (kind === 'wsl') {
+    const { distro, through } = transport as {
+      distro?: unknown
+      through?: unknown
+    }
+    const named = distroNameProblem(distro)
+    if (named !== null) return `expected a WSL distro: ${named}`
+    if (through === undefined) return null
+    const problem = sshTargetProblem(through)
+    return problem === null ? null : `expected the ssh target of the PC the distro is on: ${problem}`
+  }
+  return `expected ssh, a command or a WSL distro, got ${describe(kind)}`
 }
 
 function nameProblem(name: unknown): string | null {
@@ -356,6 +449,10 @@ export interface RemoteHostDraft {
   target: string
   /** The command line as typed, read when `via` is `command`. */
   command: string
+  /** The distro picked, read when `via` is `wsl`. */
+  distro?: string
+  /** The ssh target of the Windows PC the picked distro is on; absent for one on this PC. */
+  through?: string
 }
 
 export type RemoteHostFromDraft = { ok: true; host: RemoteHost } | { ok: false; error: string }
@@ -380,6 +477,15 @@ export function remoteHostFromDraft(
     const problem = sshTargetProblem(target)
     if (problem !== null) return { ok: false, error: problem }
     transport = { kind: 'ssh', target }
+  } else if (draft.via === 'wsl') {
+    const distro = draft.distro ?? ''
+    const named = distroNameProblem(distro)
+    if (named !== null) return { ok: false, error: named }
+    if (draft.through !== undefined) {
+      const problem = sshTargetProblem(draft.through)
+      if (problem !== null) return { ok: false, error: problem }
+    }
+    transport = draft.through === undefined ? { kind: 'wsl', distro } : { kind: 'wsl', distro, through: draft.through }
   } else {
     const split = splitCommandLine(draft.command)
     if (!split.ok) return { ok: false, error: split.error }
@@ -390,11 +496,24 @@ export function remoteHostFromDraft(
     transport = { kind: 'command', program, args }
   }
   const typed = draft.name.trim()
-  const name = typed === '' && transport.kind === 'ssh' ? transport.target : typed
+  const name =
+    typed !== ''
+      ? typed
+      : transport.kind === 'ssh'
+        ? transport.target
+        : transport.kind === 'wsl' && transport.through === undefined
+          ? wslHostName(transport.distro)
+          : typed
   const named = nameProblem(name)
   if (named !== null) return { ok: false, error: named }
   if (hosts.some((host) => host.name.toLowerCase() === name.toLowerCase())) {
     return { ok: false, error: `There is already a host named ${name}.` }
+  }
+  if (transport.kind === 'wsl' && hosts.some((host) => sameDistro(host.transport, transport))) {
+    return {
+      ok: false,
+      error: `${describeTransport(transport)} is added already.`
+    }
   }
   if (id === LOCAL_HOST_KEY || hosts.some((host) => host.id === id)) {
     return { ok: false, error: 'That host id is taken.' }

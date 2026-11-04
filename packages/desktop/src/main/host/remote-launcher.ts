@@ -84,25 +84,85 @@ export function remoteClientFolder(places: Pick<HostPlaces, 'dataDir'>, platform
   return pathsFor(platform).join(places.dataDir, 'remote-hosts', name)
 }
 
-/** The program and arguments that carry the bytes: ssh in batch mode with the target as typed, or the command as given. */
-export function transportArgv(transport: HostTransport): string[] {
-  return transport.kind === 'ssh'
-    ? ['ssh', '-o', 'BatchMode=yes', transport.target]
-    : [transport.program, ...transport.args]
+/**
+ * This PC's `wsl.exe`: the one in Windows' System32, never one found on
+ * `PATH`. A test passes its own program in its place (`RemoteLauncherDeps.wsl`),
+ * the fake in test/fake-ssh/wsl.mjs, so no test runs the real one.
+ */
+export function systemWsl(env: NodeJS.ProcessEnv): string[] {
+  const root = env.SystemRoot ?? env.windir ?? 'C:\\Windows'
+  return [`${root.replace(/[\\/]+$/, '')}\\System32\\wsl.exe`]
+}
+
+/**
+ * The program and arguments that carry the bytes: ssh in batch mode with the
+ * target as typed, the command as given, this PC's `wsl` (`wsl.exe` and any
+ * arguments before its own) with `-d <distro> --`, or ssh to the Windows PC a
+ * distro is on with that PC's `wsl.exe -d <distro> --`, which Windows'
+ * OpenSSH runs in `cmd`. The line to run there goes after it.
+ */
+export function transportArgv(transport: HostTransport, programs: TransportPrograms = {}): string[] {
+  const ssh = programs.ssh ?? ['ssh']
+  switch (transport.kind) {
+    case 'ssh':
+      return [...ssh, '-o', 'BatchMode=yes', transport.target]
+    case 'command':
+      return [transport.program, ...transport.args]
+    case 'wsl':
+      return transport.through === undefined
+        ? [...(programs.wsl ?? ['wsl.exe']), '-d', transport.distro, '--']
+        : [...ssh, '-o', 'BatchMode=yes', transport.through, 'wsl.exe', '-d', transport.distro, '--']
+  }
+}
+
+/**
+ * The programs, each with any arguments before its own, that run this PC's
+ * `ssh` and `wsl.exe`: `ssh` on `PATH` and System32's `wsl.exe` in Helm. A test
+ * passes the fakes in test/fake-ssh, so none runs the real ones.
+ */
+export interface TransportPrograms {
+  ssh?: readonly string[] | undefined
+  wsl?: readonly string[] | undefined
+}
+
+/**
+ * Whether the line to run there goes on the transport's command line as
+ * written rather than quoted as one argument: for this PC's `wsl.exe`, which
+ * hands the rest of its command line after `--` to the distro's shell as it
+ * appears ("Pass the remaining command line as is"). Through ssh the line is
+ * one argument, which ssh sends as it is and the PC's `cmd` hands to its
+ * `wsl.exe` unquoted.
+ */
+export function runsAsWritten(transport: HostTransport): boolean {
+  return transport.kind === 'wsl' && transport.through === undefined
 }
 
 /**
  * `floti bridge`'s arguments for a remote host. `floti` is the full path of
  * the floti Helm installed there, which every line run there starts with, for
- * a login whose `PATH` does not have it.
+ * a login whose `PATH` does not have it. A distro on this PC gets
+ * `--as-written`, so the bridge appends the line to `wsl.exe`'s command line
+ * as written and runs it with `WSL_UTF8=1`.
  */
-export function remoteBridgeArgs(folder: string, transport: HostTransport, floti?: string): string[] {
+export function remoteBridgeArgs(
+  folder: string,
+  transport: HostTransport,
+  floti?: string,
+  programs: TransportPrograms = {}
+): string[] {
   const path = floti === undefined ? [] : ['--floti', floti]
-  return ['bridge', folder, ...path, '--', ...transportArgv(transport)]
+  const written = runsAsWritten(transport) ? ['--as-written'] : []
+  return ['bridge', folder, ...path, ...written, '--', ...transportArgv(transport, programs)]
 }
 
-/** What a remote host's bridge needs from the launcher's world. */
-export type RemoteLauncherDeps = Pick<LauncherDeps, 'platform' | 'env' | 'exists' | 'spawn' | 'appVersion' | 'log'>
+/**
+ * What a remote host's bridge needs from the launcher's world. `programs`
+ * runs this PC's ssh and `wsl.exe`: `ssh` and System32's (`systemWsl`) when
+ * absent.
+ */
+export type RemoteLauncherDeps = Pick<LauncherDeps, 'platform' | 'env' | 'exists' | 'spawn' | 'appVersion' | 'log'> & {
+  programs?: TransportPrograms | undefined
+}
 
 export interface RemoteTarget {
   /** The host's own client folder on this device (`remoteClientFolder`). */
@@ -177,7 +237,10 @@ function spawnBridge(
   if (!deps.exists(binary)) return { binary, missing: true }
   // The user's own environment, as it is: their ssh finds their config, keys
   // and agent the way it does in their terminal.
-  const args = remoteBridgeArgs(target.folder, target.transport, target.floti)
+  const args = remoteBridgeArgs(target.folder, target.transport, target.floti, {
+    ...deps.programs,
+    wsl: deps.programs?.wsl ?? systemWsl(deps.env)
+  })
   const child = deps.spawn(binary, args, {
     env: deps.env,
     stdio: ['pipe', 'pipe', 'pipe'],

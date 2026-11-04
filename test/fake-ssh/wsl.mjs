@@ -46,13 +46,14 @@ function fail(text, code = 1) {
 
 /**
  * The line a distro's shell would read from `words`, as written on wsl.exe's
- * command line. On Windows the line was written as is and Node split it, so a
- * word with a blank in it was in double quotes and is put back in them. Where
- * there is no wsl.exe (macOS and Linux, in tests only) the line arrives as one
- * argument, and is that argument.
+ * command line. Where the line was written as is (this PC's wsl.exe on
+ * Windows, or a line the fake ssh split as Windows' cmd would hand it on),
+ * Node split it, so a word with a blank in it was in double quotes and is put
+ * back in them. Where there is no wsl.exe (macOS and Linux, in tests only) the
+ * line arrives as one argument, and is that argument.
  */
 function lineOf(words) {
-  if (process.platform !== 'win32') return words.join(' ')
+  if (words.length === 1) return words[0]
   return words.map((word) => (/[ \t]/.test(word) ? `"${word}"` : word)).join(' ')
 }
 

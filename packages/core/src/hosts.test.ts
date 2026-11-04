@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   describeHostSystem,
   describeTransport,
+  distroNameProblem,
   formatCommandLine,
   lineToTryByHand,
   LOCAL_HOST_KEY,
@@ -13,7 +14,8 @@ import {
   sshTargetProblem,
   storedRemoteHosts,
   transportFix,
-  withoutRemoteHost
+  withoutRemoteHost,
+  wslHostName
 } from './hosts'
 import { DEFAULT_SETTINGS, quitChoice, quitEndsSessions } from './types'
 
@@ -219,5 +221,101 @@ describe('a host’s OS and CPU, kept with it', () => {
     expect(remoteHostsProblem([host('Linux')])).toMatch(/expected an OS and CPU/)
     expect(remoteHostsProblem([host({ os: '', cpu: 'x64' })])).toMatch(/expected the OS/)
     expect(remoteHostsProblem([host({ os: 'Linux', cpu: 'x\u0007' })])).toMatch(/expected the CPU/)
+  })
+})
+describe('a WSL distro as a host', () => {
+  const here: RemoteHost = {
+    id: 'w',
+    name: 'Ubuntu',
+    transport: { kind: 'wsl', distro: 'Ubuntu' }
+  }
+  const draft = (patch: Partial<RemoteHostDraft>): RemoteHostDraft => ({
+    name: '',
+    via: 'wsl',
+    target: '',
+    command: '',
+    ...patch
+  })
+
+  it('S4: says how it is reached, on this PC or through a Windows PC, and the line to try by hand', () => {
+    expect(describeTransport({ kind: 'wsl', distro: 'Ubuntu' })).toBe('wsl.exe -d Ubuntu')
+    expect(describeTransport({ kind: 'wsl', distro: 'Ubuntu', through: 'win-box' })).toBe(
+      'ssh win-box wsl.exe -d Ubuntu'
+    )
+    expect(transportFix({ kind: 'wsl', distro: 'Ubuntu', through: 'win-box' })).toBe(
+      'Run ssh win-box wsl.exe -d Ubuntu in a terminal to see what it needs, then try again.'
+    )
+    expect(lineToTryByHand({ transport: { kind: 'wsl', distro: 'Debian' } })).toBe('wsl.exe -d Debian -- floti connect')
+    expect(
+      lineToTryByHand({
+        transport: { kind: 'wsl', distro: 'Debian', through: 'win-box' },
+        floti: '/home/me/.local/bin/floti'
+      })
+    ).toBe('ssh win-box wsl.exe -d Debian -- /home/me/.local/bin/floti connect')
+  })
+
+  it('checks a distro name as WSL allows one', () => {
+    for (const name of ['Ubuntu', 'Ubuntu-24.04', 'my_distro']) expect(distroNameProblem(name)).toBeNull()
+    for (const name of ['', 'two words', 'a;b', '-d', 'x'.repeat(65)]) expect(distroNameProblem(name)).not.toBeNull()
+  })
+
+  it('S3: a distro on this PC is named after itself, and one through a PC keeps its target', () => {
+    expect(remoteHostFromDraft(draft({ distro: 'Debian' }), [here], 'd')).toEqual({
+      ok: true,
+      host: {
+        id: 'd',
+        name: 'Debian',
+        transport: { kind: 'wsl', distro: 'Debian' }
+      }
+    })
+    expect(
+      remoteHostFromDraft(
+        draft({
+          distro: 'Ubuntu',
+          through: 'win-box',
+          name: wslHostName('Ubuntu', 'win-box')
+        }),
+        [here],
+        'u'
+      )
+    ).toEqual({
+      ok: true,
+      host: {
+        id: 'u',
+        name: 'Ubuntu on win-box',
+        transport: { kind: 'wsl', distro: 'Ubuntu', through: 'win-box' }
+      }
+    })
+  })
+
+  it('S1: a distro added already is not added twice, and a bad name or target says what to fix', () => {
+    const again = remoteHostFromDraft(draft({ distro: 'ubuntu', name: 'Another' }), [here], 'x')
+    expect(again).toEqual({
+      ok: false,
+      error: 'wsl.exe -d ubuntu is added already.'
+    })
+    expect(remoteHostFromDraft(draft({ distro: 'two words' }), [], 'x').ok).toBe(false)
+    expect(remoteHostFromDraft(draft({ distro: 'Ubuntu', through: '-oProxyCommand=x', name: 'u' }), [], 'x').ok).toBe(
+      false
+    )
+  })
+
+  it('the hosts setting keeps a WSL host and refuses one it could not reach', () => {
+    expect(
+      remoteHostsProblem([
+        here,
+        {
+          id: 'v',
+          name: 'Ubuntu on win-box',
+          transport: { kind: 'wsl', distro: 'Ubuntu', through: 'win-box' }
+        }
+      ])
+    ).toBeNull()
+    expect(remoteHostsProblem([{ ...here, transport: { kind: 'wsl', distro: 'a b' } }])).toMatch(
+      /expected a WSL distro/
+    )
+    expect(remoteHostsProblem([{ ...here, transport: { kind: 'wsl', distro: 'Ubuntu', through: '' } }])).toMatch(
+      /expected the ssh target of the PC/
+    )
   })
 })

@@ -84,7 +84,8 @@ import type {
   HostCheckTarget,
   InstallOutcome,
   RemoteHostConnection,
-  SshConfigHosts
+  SshConfigHosts,
+  WslDistroList
 } from '@helm/core/types'
 import type { BrowserCommand } from './browserKeys'
 import type { ProbeOp, TermCreateOptions } from './protocol'
@@ -782,6 +783,15 @@ export interface IpcRequests {
    * writes nothing.
    */
   'remoteHosts:sshHosts': { request: void; response: SshConfigHosts }
+
+  /**
+   * The WSL distros the add-a-host dialog offers: this PC's, from its own
+   * `wsl.exe --list --quiet` (Windows only), and each connected Windows
+   * host's, from `ssh -o BatchMode=yes <target> wsl.exe --list --quiet`. A PC
+   * with none, or no WSL, comes with the line wsl.exe or ssh wrote. Nothing
+   * is started or changed on any computer.
+   */
+  'remoteHosts:wslDistros': { request: void; response: WslDistroList[] }
 
   /**
    * Adds a host by connecting to it: main mints its id and makes its first
@@ -2179,6 +2189,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'remoteHosts:install': true,
   'remoteHosts:cancel': true,
   'remoteHosts:sshHosts': true,
+  'remoteHosts:wslDistros': true,
   'remoteHosts:add': true,
   'remoteHosts:cancelAdd': true,
   'remoteHosts:reconnect': true,

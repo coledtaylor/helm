@@ -8,7 +8,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename } from 'node:path'
 import { pluginThemeOf, type AppSettings } from '@helm/core'
-import { remoteHostsProblem, type SshConfigHosts } from '@helm/core/types'
+import { remoteHostsProblem, type SshConfigHosts, type WslDistroList } from '@helm/core/types'
 import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
@@ -170,6 +170,8 @@ interface IpcContextBase {
   remoteAdd?: RemoteHostAdder | undefined
   /** The Host names in this PC's `~/.ssh/config`, for the add-a-host dialog; see `host/ssh-config.ts`. */
   sshHosts?: (() => Promise<SshConfigHosts>) | undefined
+  /** The WSL distros on this PC and on each connected Windows host (`wsl-distros.ts`). */
+  wslDistros?: (() => Promise<WslDistroList[]>) | undefined
   /** The ports of those hosts' sessions forwarded to this PC's loopback; see `host/forwards.ts`. */
   forwards?: PortForwards | undefined
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
@@ -480,6 +482,7 @@ export function registerIpc(ctx: IpcContext): void {
       return remoteInstall.check(checked)
     },
     'remoteHosts:sshHosts': () => ctx.sshHosts?.() ?? { found: false, hosts: [] },
+    'remoteHosts:wslDistros': () => ctx.wslDistros?.() ?? [],
     'remoteHosts:add': (request) => {
       const { remoteAdd, remoteHosts } = ctx
       if (remoteAdd === undefined || remoteHosts === undefined) return Promise.reject(new Error(NO_REMOTE_HOSTS))

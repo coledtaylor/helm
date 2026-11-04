@@ -6,6 +6,7 @@ import { createHostLink, type HostLink } from './link'
 import { createPageLinks, type PageLinks } from './page-link'
 import type * as P from './protocol'
 import { RemoteHostError } from './remote-launcher'
+import type { WslKeepAwake } from './wsl-awake'
 
 /**
  * Helm's links to the hosts on other computers this device has added (the
@@ -62,6 +63,8 @@ export interface RemoteHostLinks {
   sync(hosts: readonly RemoteHost[]): void
   /** Where each host stands, by id; a host nothing has been heard from yet is absent. */
   states(): RemoteHostStates
+  /** Main's connection now to the host this device reaches with `ssh <target>`, or null. */
+  reachedWithSsh(target: string): HostConnection | null
   /** The page links to one host, or null for a host this device does not have. */
   pageLinks(id: string): PageLinks | null
   allPageLinks(): readonly PageLinks[]
@@ -120,6 +123,12 @@ export interface RemoteHostLinksDeps {
    * that changes them: what `floti doctor` is told to check (`doctor-hosts.ts`).
    */
   hostsChanged?: (hosts: readonly RemoteHost[]) => void
+  /**
+   * Keeping WSL distros awake (`wsl-awake.ts`): told whether each host runs
+   * a session, at each `session:activity`, and each time a host's link
+   * connects or a host is removed.
+   */
+  wsl?: Pick<WslKeepAwake, 'activity' | 'connected' | 'forget'>
   log: (line: string) => void
   setTimeout: (run: () => void, ms: number) => unknown
   clearTimeout: (timer: unknown) => void
@@ -206,8 +215,12 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       for (const subscription of entry.subscriptions) subscription.unsubscribe()
       const refresh = (): void => void refreshOwn(entry, connection)
       const ignore = (): void => undefined
+      const activity = (states: readonly P.SessionActivityState[]): void => {
+        refresh()
+        deps.wsl?.activity(entry.host, connection, states.length > 0)
+      }
       entry.subscriptions = [
-        connection.subscribe('session:activity', { snapshot: refresh, event: refresh, error: ignore }),
+        connection.subscribe('session:activity', { snapshot: activity, event: activity, error: ignore }),
         connection.subscribe('session:exit', { event: refresh, error: ignore })
       ]
       await refreshOwn(entry, connection)
@@ -217,6 +230,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       })
       atSignIn.delete(entry.host.id)
       setState(entry, { state: 'connected', version: connection.welcome.hostVersion })
+      deps.wsl?.connected(entry.host)
     })
     // Before the first connect, so what hangs on the link hears it.
     entry.attached = deps.linked?.(host, entry.link) ?? null
@@ -227,6 +241,7 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
   const forget = (entry: Entry, removeFolder: boolean): void => {
     entries.delete(entry.host.id)
     states.delete(entry.host.id)
+    deps.wsl?.forget(entry.host.id)
     for (const subscription of entry.subscriptions) subscription.unsubscribe()
     entry.attached?.stop()
     void (async () => {
@@ -271,6 +286,14 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
     },
 
     states: () => Object.fromEntries(states),
+
+    reachedWithSsh(target) {
+      for (const entry of entries.values()) {
+        const { transport } = entry.host
+        if (transport.kind === 'ssh' && transport.target === target) return entry.link.current()
+      }
+      return null
+    },
 
     pageLinks: (id) => entries.get(id)?.pages ?? null,
 

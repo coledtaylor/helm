@@ -764,6 +764,47 @@ describe('SettingsPane', () => {
     expect(within(screen.getByRole('group', { name: 'up' })).queryByRole('button', { name: 'Reconnect now' })).toBeNull()
   })
 
+  it('S4: a WSL host’s row says it is reached through wsl.exe, here or through its Windows host, with floti’s version and the OS, keeping its sessions by default', () => {
+    renderPane({
+      section: 'hosts',
+      sessionsInHost: true,
+      hosts: [
+        {
+          host: {
+            id: 'h-debian',
+            name: 'Debian',
+            transport: { kind: 'wsl', distro: 'Debian' },
+            system: { os: 'Linux', cpu: 'x86_64' }
+          },
+          quit: 'keep',
+          connection: { state: 'connected', version: '3.0.0' }
+        },
+        {
+          host: {
+            id: 'h-ubuntu',
+            name: 'Ubuntu on win-box',
+            transport: { kind: 'wsl', distro: 'Ubuntu', through: 'win-box' }
+          },
+          quit: 'keep',
+          connection: { state: 'connected', version: '3.0.0' }
+        }
+      ]
+    })
+    const debian = screen.getByRole('group', { name: 'Debian' })
+    expect(debian.querySelector('[data-settings-host-reached]')?.textContent).toBe(
+      'wsl.exe -d Debian · floti 3.0.0 · Linux x86_64'
+    )
+    expect(
+      within(debian).getByRole<HTMLSelectElement>('combobox', {
+        name: 'When you quit, on Debian'
+      }).value
+    ).toBe('keep')
+    const ubuntu = screen.getByRole('group', { name: 'Ubuntu on win-box' })
+    expect(ubuntu.querySelector('[data-settings-host-reached]')?.textContent).toBe(
+      'ssh win-box wsl.exe -d Ubuntu · floti 3.0.0'
+    )
+  })
+
   it('S5: each host shows its name, target, connection state and quit choice, with no role, role picker, pairing code or approve step', () => {
     const transport = { kind: 'ssh' as const, target: 'you@lab' }
     renderPane({

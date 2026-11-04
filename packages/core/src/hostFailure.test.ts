@@ -136,3 +136,89 @@ describe('what went wrong reaching a host, one row of the design’s table each'
     expect(failure.fix).toContain('wsl.exe -d Ubuntu --')
   })
 })
+describe('what went wrong reaching a WSL distro', () => {
+  const HERE: HostTransport = { kind: 'wsl', distro: 'Debian' }
+  const THERE: HostTransport = {
+    kind: 'wsl',
+    distro: 'Ubuntu',
+    through: 'win-box'
+  }
+
+  it('S10: the picked distro is not there: wsl.exe’s last line as written, and wsl --list as the fix', () => {
+    const said = 'There is no distribution with the supplied name.\nError code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND'
+    const lastLine = 'Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND'
+    const failure = classifyHostFailure({
+      name: 'Debian',
+      transport: HERE,
+      lastLine,
+      said,
+      step: 'check'
+    })
+    expect(failure).toMatchObject({
+      kind: 'noDistro',
+      title: 'WSL has no distro named Debian on this PC',
+      saidBy: 'wsl.exe said',
+      line: lastLine
+    })
+    expect(failure.fix).toContain('wsl --list in a terminal shows the distros there')
+    const there = classifyHostFailure({
+      name: 'Ubuntu on win-box',
+      transport: THERE,
+      lastLine,
+      said
+    })
+    expect(there.title).toBe('WSL has no distro named Ubuntu on win-box')
+    expect(there.fix).toContain('wsl --list in a terminal on win-box')
+  })
+
+  it('S10: this PC has no WSL: its wsl.exe is not there, or says WSL is not installed; the fix is wsl --install', () => {
+    const missing = classifyHostFailure({
+      name: 'Debian',
+      transport: HERE,
+      lastLine: 'Helm could not run C:\\Windows\\System32\\wsl.exe on this PC (ENOENT).',
+      cause: { kind: 'transportMissing' }
+    })
+    expect(missing).toMatchObject({
+      kind: 'noWsl',
+      title: 'WSL is not installed on this PC',
+      chip: 'No WSL'
+    })
+    expect(missing.fix).toContain('wsl --install')
+    const line = "The Windows Subsystem for Linux is not installed. You can install by running 'wsl.exe --install'."
+    expect(classifyHostFailure({ name: 'Debian', transport: HERE, lastLine: line })).toMatchObject({
+      kind: 'noWsl',
+      line
+    })
+  })
+
+  it('a distro through a PC that ssh cannot reach reads as ssh’s failure, naming that PC', () => {
+    const line = 'ssh: Could not resolve hostname win-box: Name or service not known'
+    const failure = classifyHostFailure({
+      name: 'Ubuntu on win-box',
+      transport: THERE,
+      lastLine: line
+    })
+    expect(failure).toMatchObject({
+      kind: 'unresolved',
+      title: 'ssh does not know win-box',
+      saidBy: 'ssh said'
+    })
+    const noSsh = classifyHostFailure({
+      name: 'Ubuntu on win-box',
+      transport: THERE,
+      lastLine: 'Helm could not run ssh on this PC (ENOENT).',
+      cause: { kind: 'transportMissing' }
+    })
+    expect(noSsh.kind).toBe('noTransport')
+  })
+
+  it('anything else falls back to running the transport by hand', () => {
+    const failure = classifyHostFailure({
+      name: 'Debian',
+      transport: HERE,
+      lastLine: 'something else'
+    })
+    expect(failure).toMatchObject({ kind: 'other', saidBy: 'wsl.exe said' })
+    expect(failure.fix).toBe('Run wsl.exe -d Debian in a terminal to see what it needs, then try again.')
+  })
+})

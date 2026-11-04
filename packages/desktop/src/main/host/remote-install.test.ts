@@ -1,7 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { FLOTI_TARGETS, SYSTEM_LINE, type HostTransport } from '@helm/core/types'
 import { RELEASE_TARGETS } from '../../../scripts/floti-release.mjs'
-import { createRemoteInstaller, installLine, lastLineOf, type RemoteInstallDeps, type TransportRun } from './remote-install'
+import type { ChildProcess } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import {
+  createRemoteInstaller,
+  decodeOutput,
+  installLine,
+  lastLineOf,
+  spawnTransportRun,
+  windowsArgument,
+  wslLine,
+  type RemoteInstallDeps,
+  type RunHow,
+  type TransportRun,
+  type TransportSpawnOptions
+} from './remote-install'
 
 /**
  * The desktop's check, offer and install on a host's computer, with the
@@ -376,5 +390,146 @@ describe('the install line', () => {
     const decoded = Buffer.from(line.split(' ').at(-1) ?? '', 'base64').toString('utf16le')
     expect(decoded).not.toContain('# ')
     expect(decoded.trimEnd().endsWith(`} '2.6.0' 'floti-2.6.0-windows-x64.exe' '${'f'.repeat(64)}' '-'`)).toBe(true)
+  })
+})
+describe('installing floti in a WSL distro', () => {
+  /** The line a distro's shell runs, from what `wslLine` made of it. */
+  const unwrapped = (line: string): string => {
+    const wrapped = /^eval "\$\(echo ([A-Za-z0-9+/=]+) \| base64 -d\)"$/.exec(line)
+    return wrapped?.[1] === undefined ? line : Buffer.from(wrapped[1], 'base64').toString('utf8')
+  }
+
+  function distroWorld(transport: HostTransport) {
+    const runs: {
+      argv: readonly string[]
+      line: string
+      how: RunHow | undefined
+      stdinFile: string | null
+    }[] = []
+    const installer = createRemoteInstaller({
+      run: async (argv, stdinFile, _signal, how) => {
+        const line = unwrapped(argv.at(-1) ?? '')
+        runs.push({ argv, line, how, stdinFile })
+        if (line.startsWith('floti ')) return { code: 127, stdout: '', stderr: 'sh: 1: floti: not found\n' }
+        if (line === SYSTEM_LINE) return { code: 0, stdout: 'Linux x86_64\n', stderr: '' }
+        if (line.startsWith('sh -c ')) return { code: 0, stdout: '/home/me/.local/bin/floti\n', stderr: '' }
+        return {
+          code: 0,
+          stdout: 'The Floti host starts when a client connects.\n',
+          stderr: ''
+        }
+      },
+      programs: { wsl: ['C:\\Windows\\System32\\wsl.exe'] },
+      platform: 'win32',
+      arch: 'x64',
+      version: '2.6.0',
+      protocol: { major: 1, minor: 2 },
+      ownBuild: async () => null,
+      sums: async () => new Map([['floti-2.6.0-linux-x64', LINUX_SHA]]),
+      script: async () => '# install.sh\nfloti_install "$@"\n',
+      releaseBase: (version) => `https://github.com/coledtaylor/helm/releases/download/v${version}`,
+      newId: () => 'offer-1',
+      log: () => undefined
+    })
+    return { installer, runs, transport }
+  }
+
+  it('S3: this PC’s distro is checked, offered the Linux build and installed through wsl.exe -d Debian --, each line run as written and reaching the shell unaltered', async () => {
+    const w = distroWorld({ kind: 'wsl', distro: 'Debian' })
+    const check = await w.installer.check({ transport: w.transport })
+    expect(check).toMatchObject({
+      kind: 'offer',
+      offer: { how: 'download', system: { os: 'linux', cpu: 'x64' } }
+    })
+    expect(await w.installer.install('offer-1')).toMatchObject({
+      ok: true,
+      floti: '/home/me/.local/bin/floti'
+    })
+    expect(w.runs.map((run) => run.argv.slice(0, 4))).toEqual(
+      Array.from({ length: 4 }, () => ['C:\\Windows\\System32\\wsl.exe', '-d', 'Debian', '--'])
+    )
+    expect(w.runs.every((run) => run.how?.asWritten === true)).toBe(true)
+    expect(w.runs.map((run) => run.line)).toEqual([
+      'floti version',
+      SYSTEM_LINE,
+      expect.stringMatching(/^sh -c /),
+      '/home/me/.local/bin/floti setup'
+    ])
+    // The system line holds characters cmd reads, so it went encoded.
+    expect(w.runs[1]?.argv.at(-1)).toBe(wslLine(SYSTEM_LINE))
+    expect(w.runs[2]?.line).toContain(`'floti-2.6.0-linux-x64' '${LINUX_SHA}'`)
+  })
+
+  it('S5: a distro on win-box is installed through ssh -o BatchMode=yes win-box wsl.exe -d Ubuntu --, the line as one argument', async () => {
+    const w = distroWorld({
+      kind: 'wsl',
+      distro: 'Ubuntu',
+      through: 'win-box'
+    })
+    await w.installer.check({ transport: w.transport })
+    expect(await w.installer.install('offer-1')).toMatchObject({ ok: true })
+    expect(w.runs).toHaveLength(4)
+    expect(
+      w.runs.every((run) => run.argv.slice(0, -1).join(' ') === 'ssh -o BatchMode=yes win-box wsl.exe -d Ubuntu --')
+    ).toBe(true)
+    expect(w.runs.every((run) => run.how === undefined)).toBe(true)
+  })
+
+  it('wraps only a line holding characters cmd reads', () => {
+    expect(wslLine('floti connect')).toBe('floti connect')
+    expect(wslLine('a | b')).toMatch(/^eval "\$\(echo [A-Za-z0-9+/=]+ \| base64 -d\)"$/)
+    expect(unwrapped(wslLine('echo %OS% & x > y'))).toBe('echo %OS% & x > y')
+  })
+
+  it('S10: reads what wsl.exe wrote as UTF-16LE, with or without a byte-order mark, and UTF-8 as it is', () => {
+    const text = 'There is no distribution with the supplied name.\r\n'
+    expect(decodeOutput(Buffer.from(text, 'utf16le'))).toBe(text)
+    expect(decodeOutput(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]))).toBe(text)
+    expect(decodeOutput(Buffer.from('Linux x86_64 – ünïcode\n', 'utf8'))).toBe('Linux x86_64 – ünïcode\n')
+    expect(decodeOutput(new Uint8Array())).toBe('')
+  })
+
+  it('quotes a word as a Windows program’s runtime reads it back', () => {
+    expect(windowsArgument('-d')).toBe('-d')
+    expect(windowsArgument('')).toBe('""')
+    expect(windowsArgument('C:\\Program Files\\nodejs\\node.exe')).toBe('"C:\\Program Files\\nodejs\\node.exe"')
+    expect(windowsArgument('say "hi"')).toBe('"say \\"hi\\""')
+    expect(windowsArgument('C:\\a b\\')).toBe('"C:\\a b\\\\"')
+  })
+
+  it('runs this PC’s wsl.exe as written on Windows: WSL_UTF8=1, the words before the line quoted, the line appended as it is', async () => {
+    const calls: {
+      command: string
+      args: string[]
+      options: TransportSpawnOptions
+    }[] = []
+    const spawn = (command: string, args: string[], options: TransportSpawnOptions): ChildProcess => {
+      calls.push({ command, args, options })
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        stdin: null,
+        kill: () => true
+      })
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from('Debian\r\n', 'utf16le'))
+        child.stdout.emit('end')
+        child.stderr.emit('end')
+        child.emit('exit', 0, null)
+        child.emit('close', 0, null)
+      })
+      return child as unknown as ChildProcess
+    }
+    const run = spawnTransportRun(spawn, { PATH: 'x' }, 'win32')
+    const said = await run(['C:\\Program Files\\wsl.exe', '-d', 'My Distro', '--', 'floti connect'], null, undefined, {
+      asWritten: true
+    })
+    expect(said.stdout).toBe('Debian\r\n')
+    expect(calls[0]?.options).toMatchObject({
+      windowsVerbatimArguments: true,
+      env: { PATH: 'x', WSL_UTF8: '1' }
+    })
+    expect(calls[0]?.args).toEqual(['-d', '"My Distro"', '--', 'floti connect'])
+    expect(calls[0]?.options.argv0).toBe('"C:\\Program Files\\wsl.exe"')
   })
 })

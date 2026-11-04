@@ -5,8 +5,11 @@ import {
   describeHostSystem,
   describeTransport,
   hostSystem,
+  lineToTryByHand,
   REMOTE_CONNECT_LINE,
   remoteHostFromDraft,
+  sameDistro,
+  wslHostName,
   type AgentRow,
   type HostAddOutcome,
   type HostAddRequest,
@@ -20,7 +23,8 @@ import {
   type QuitSessions,
   type RemoteHost,
   type RemoteSystem,
-  type SshConfigHosts
+  type SshConfigHosts,
+  type WslDistroList
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { Chip, type ChipTone } from './Chip'
@@ -47,8 +51,12 @@ import { Overlay } from './Overlay'
  * user's yes (`install`), then to add the host (`add`): main makes the first
  * connection, which pins the host's key, and only then writes the host. Until
  * Connect nothing is contacted: the pick screen reads only the Host names of
- * this computer's ssh config (`sshHosts`). Cancel or close stops what is
- * running (`cancelAdd`, `cancelInstall`), and nothing is added or kept.
+ * this computer's ssh config (`sshHosts`), and the WSL distros on this PC and
+ * on each connected Windows host (`wslDistros`), which `wsl.exe --list` reads
+ * without starting one. A distro picked is checked, installed into and
+ * reached through `wsl.exe -d <distro> --`, here or through that PC's ssh,
+ * the same way. Cancel or close stops what is running (`cancelAdd`,
+ * `cancelInstall`), and nothing is added or kept.
  *
  * The user's login is the access: there is no pairing code, approval, role or
  * prompt, and Helm never asks for a password or accepts a host key. Every
@@ -60,6 +68,8 @@ import { Overlay } from './Overlay'
 export interface AddHostActions {
   /** The Host names of this computer's ssh config and the files it includes. */
   sshHosts: () => Promise<SshConfigHosts>
+  /** The WSL distros on this PC and on each connected Windows host; none are listed when absent. */
+  wslDistros?: () => Promise<WslDistroList[]>
   check: (target: HostCheckTarget) => Promise<HostCheck>
   /** Does what the check with `id` offered; `host` names what it is for. */
   install: (id: string, host: string) => Promise<InstallOutcome>
@@ -108,10 +118,21 @@ type Screen =
     }
   | { step: 'failed'; failure: HostFailure; retry: Retry }
 
+/** A distro picked from a WSL list: its name, and the PC it is on. */
+interface PickedDistro {
+  distro: string
+  /** The ssh target of the Windows PC, or null for this PC. */
+  through: string | null
+  /** That PC's name in Helm, for the name the host gets. */
+  pcName: string
+}
+
 interface Draft {
   via: HostTransport['kind']
   /** The Host picked from the ssh config list. */
   picked: string | null
+  /** The distro picked from a WSL list, read when `via` is `wsl`. */
+  distro: PickedDistro | null
   /** A target typed instead. */
   target: string
   command: string
@@ -120,7 +141,7 @@ interface Draft {
   named: boolean
 }
 
-const EMPTY_DRAFT: Draft = { via: 'ssh', picked: null, target: '', command: '', name: '', named: false }
+const EMPTY_DRAFT: Draft = { via: 'ssh', picked: null, distro: null, target: '', command: '', name: '', named: false }
 
 /** The ssh target the draft names: the typed one, or else the pick. */
 function targetOf(draft: Draft): string {
@@ -130,6 +151,10 @@ function targetOf(draft: Draft): string {
 /** The name the draft gives the host: as typed once edited, or else what it follows. */
 function nameOf(draft: Draft): string {
   if (draft.named) return draft.name
+  if (draft.via === 'wsl' && draft.distro !== null) {
+    const { distro, through, pcName } = draft.distro
+    return wslHostName(distro, through === null ? undefined : pcName)
+  }
   return draft.via === 'ssh' ? targetOf(draft) : ''
 }
 
@@ -146,6 +171,7 @@ export function AddHostDialog({
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
   const [problem, setProblem] = useState<string | null>(null)
   const [sshList, setSshList] = useState<SshConfigHosts | null>(null)
+  const [wslLists, setWslLists] = useState<WslDistroList[] | null>(null)
   const [subject, setSubject] = useState<Subject | null>(null)
   // The check or connection running, which Cancel stops, and the offer shown,
   // which Cancel forgets. A result that comes back for an earlier run, or
@@ -166,6 +192,15 @@ export function AddHostDialog({
       },
       () => {
         if (current) setSshList({ found: false, hosts: [] })
+      }
+    )
+    const listing = actions.wslDistros?.() ?? Promise.resolve([])
+    listing.then(
+      (lists) => {
+        if (current) setWslLists(lists)
+      },
+      () => {
+        if (current) setWslLists([])
       }
     )
     return () => {
@@ -285,8 +320,16 @@ export function AddHostDialog({
   }
 
   const start = (): void => {
+    const picked = draft.via === 'wsl' ? draft.distro : null
     const result = remoteHostFromDraft(
-      { via: draft.via, name: nameOf(draft), target: targetOf(draft), command: draft.command },
+      {
+        via: draft.via,
+        name: nameOf(draft),
+        target: targetOf(draft),
+        command: draft.command,
+        ...(picked === null ? {} : { distro: picked.distro }),
+        ...(picked === null || picked.through === null ? {} : { through: picked.through })
+      },
       hosts,
       'adding'
     )
@@ -358,7 +401,17 @@ export function AddHostDialog({
   let body: ReactNode
   let footer: ReactNode
   if (screen.step === 'pick' || subject === null) {
-    body = <PickScreen draft={draft} list={sshList} problem={problem} onEdit={edit} onSubmit={start} />
+    body = (
+      <PickScreen
+        draft={draft}
+        list={sshList}
+        wslLists={wslLists}
+        hosts={hosts}
+        problem={problem}
+        onEdit={edit}
+        onSubmit={start}
+      />
+    )
     footer = (
       <>
         <GhostButton data-add-host-cancel onClick={cancel}>
@@ -502,23 +555,29 @@ function GhostButton({
 
 const VIA_HINT: Record<HostTransport['kind'], string> = {
   ssh: 'Helm reads only the Host names in ~/.ssh/config. ssh works out the address, user and key when it connects.',
-  command: `Run without a shell, with ${REMOTE_CONNECT_LINE} added as its last argument. It must carry input and output unchanged and ask nothing.`
+  command: `Run without a shell, with ${REMOTE_CONNECT_LINE} added as its last argument. It must carry input and output unchanged and ask nothing.`,
+  wsl: `Helm runs floti in the distro with wsl.exe -d <distro> -- ${REMOTE_CONNECT_LINE}, through ssh for another PC’s. Nothing is approved in the distro.`
 }
 
 function PickScreen({
   draft,
   list,
+  wslLists,
+  hosts,
   problem,
   onEdit,
   onSubmit
 }: {
   draft: Draft
   list: SshConfigHosts | null
+  wslLists: WslDistroList[] | null
+  hosts: readonly RemoteHost[]
   problem: string | null
   onEdit: (patch: Partial<Draft>) => void
   onSubmit: () => void
 }): JSX.Element {
-  const ssh = draft.via === 'ssh'
+  // A distro is picked on the ssh screen, beside the ssh hosts.
+  const ssh = draft.via !== 'command'
   const typed = draft.target.trim() !== ''
   return (
     <form
@@ -544,8 +603,21 @@ function PickScreen({
         <>
           <div className="flex flex-col gap-1.5">
             <span className={dialogLabel}>From your SSH config</span>
-            <SshHostList list={list} picked={typed ? null : draft.picked} onPick={(picked) => onEdit({ picked, target: '' })} />
+            <SshHostList
+              list={list}
+              picked={typed || draft.via === 'wsl' ? null : draft.picked}
+              onPick={(picked) => onEdit({ via: 'ssh', picked, distro: null, target: '' })}
+            />
           </div>
+          {wslLists?.map((each) => (
+            <WslDistroPicks
+              key={each.through ?? ''}
+              list={each}
+              hosts={hosts}
+              picked={draft.via === 'wsl' ? draft.distro : null}
+              onPick={(distro) => onEdit({ via: 'wsl', distro, picked: null, target: '' })}
+            />
+          ))}
           <div className="flex gap-3">
             <label className="flex min-w-0 flex-1 flex-col gap-1.5">
               <span className={dialogLabel}>Or type a target</span>
@@ -556,7 +628,7 @@ function PickScreen({
                 placeholder="user@host"
                 spellCheck={false}
                 value={draft.target}
-                onChange={(event) => onEdit({ target: event.target.value })}
+                onChange={(event) => onEdit({ via: 'ssh', distro: null, target: event.target.value })}
                 className={cn(dialogInput, 'font-mono text-[11.5px]')}
               />
             </label>
@@ -585,7 +657,7 @@ function PickScreen({
       <button
         type="button"
         data-add-host-via={ssh ? 'command' : 'ssh'}
-        onClick={() => onEdit({ via: ssh ? 'command' : 'ssh' })}
+        onClick={() => onEdit({ via: ssh ? 'command' : 'ssh', distro: null })}
         className="w-fit text-[11px] text-fg-subtle underline-offset-2 transition-colors hover:text-fg hover:underline"
       >
         {ssh ? 'Reach it with a command instead' : 'Reach it with ssh instead'}
@@ -605,13 +677,97 @@ function NameField({ draft, onEdit }: { draft: Draft; onEdit: (patch: Partial<Dr
         type="text"
         data-add-host-name
         aria-label="Name in Helm"
-        placeholder={draft.via === 'ssh' ? 'build-box' : 'wsl-ubuntu'}
+        placeholder={draft.via === 'command' ? 'wsl-ubuntu' : draft.via === 'wsl' ? 'Ubuntu' : 'build-box'}
         spellCheck={false}
         value={nameOf(draft)}
         onChange={(event) => onEdit({ name: event.target.value, named: true })}
         className={dialogInput}
       />
     </label>
+  )
+}
+
+/**
+ * One PC's WSL distros: `WSL distros on this PC`, or on a Windows host. Each
+ * row in mono; a distro already added shows an Added chip and is not offered
+ * again. A PC with none, or no WSL, says so with the line wsl.exe wrote.
+ */
+function WslDistroPicks({
+  list,
+  hosts,
+  picked,
+  onPick
+}: {
+  list: WslDistroList
+  hosts: readonly RemoteHost[]
+  picked: PickedDistro | null
+  onPick: (distro: PickedDistro) => void
+}): JSX.Element {
+  const title = `WSL distros on ${list.pcName}`
+  const through = list.through ?? undefined
+  const added = (distro: string): boolean =>
+    hosts.some((host) =>
+      sameDistro(host.transport, {
+        kind: 'wsl',
+        distro,
+        ...(through === undefined ? {} : { through })
+      })
+    )
+  return (
+    <div data-add-host-wsl={list.through ?? 'this PC'} className="flex flex-col gap-1.5">
+      <span className={dialogLabel}>{title}</span>
+      {list.distros.length === 0 ? (
+        <p
+          data-add-host-wsl-none
+          className="rounded-well border border-border bg-surface-sunken px-3 py-2 text-[11.5px] leading-[1.5] text-fg-muted"
+        >
+          {list.through === null ? 'This PC has no WSL distros to add.' : `${list.pcName} has no WSL distros to add.`}
+          {list.said !== null && (
+            <span
+              data-add-host-wsl-said
+              className="mt-1 block font-mono text-[11px] break-words text-fg-subtle select-text"
+            >
+              {list.said}
+            </span>
+          )}
+        </p>
+      ) : (
+        <div
+          role="radiogroup"
+          aria-label={title}
+          className="flex max-h-[148px] flex-col overflow-y-auto rounded-well border border-border bg-surface-sunken p-0.5"
+        >
+          {list.distros.map((distro) => {
+            const isAdded = added(distro)
+            const on = picked !== null && picked.distro === distro && picked.through === list.through
+            return (
+              <button
+                key={distro}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                disabled={isAdded}
+                data-add-host-wsl-distro={distro}
+                data-add-host-wsl-added={isAdded ? '' : undefined}
+                onClick={() => onPick({ distro, through: list.through, pcName: list.pcName })}
+                className={cn(
+                  'flex h-7 shrink-0 items-center gap-2 rounded-raised px-2 text-left font-mono text-[12px] transition-colors',
+                  isAdded
+                    ? 'cursor-default text-fg-subtle'
+                    : on
+                      ? 'bg-active text-fg'
+                      : 'text-fg-muted hover:bg-hover hover:text-fg'
+                )}
+              >
+                <ServerIcon width={13} height={13} className={cn('shrink-0', on ? 'text-accent' : 'text-fg-subtle')} />
+                <span className="min-w-0 flex-1 truncate">{distro}</span>
+                {isAdded && <Chip tone="neutral">Added</Chip>}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -677,6 +833,20 @@ function SshHostList({
 
 type StepState = 'done' | 'now' | 'wait'
 
+/** The line the check runs, as typed by hand: `ssh -o BatchMode=yes build-box floti version`, `wsl.exe -d Debian -- floti version`. */
+function checkLine(transport: HostTransport): string {
+  switch (transport.kind) {
+    case 'ssh':
+      return `ssh -o BatchMode=yes ${transport.target} floti version`
+    case 'command':
+      return `${describeTransport(transport)} floti version`
+    case 'wsl': {
+      const wsl = `wsl.exe -d ${transport.distro} -- floti version`
+      return transport.through === undefined ? wsl : `ssh -o BatchMode=yes ${transport.through} ${wsl}`
+    }
+  }
+}
+
 function CheckingScreen({
   subject,
   phase,
@@ -687,9 +857,17 @@ function CheckingScreen({
   installed: boolean
 }): JSX.Element {
   const { name, transport } = subject
-  const ssh = transport.kind === 'ssh'
-  const versionLine =
-    transport.kind === 'ssh' ? `ssh -o BatchMode=yes ${transport.target} floti version` : `${describeTransport(transport)} floti version`
+  // ssh carries the check and the connection, to the host or to the PC a distro is on.
+  const ssh = transport.kind === 'ssh' || (transport.kind === 'wsl' && transport.through !== undefined)
+  const versionLine = checkLine(transport)
+  const through =
+    transport.kind === 'wsl'
+      ? transport.through === undefined
+        ? 'wsl.exe'
+        : 'your ssh and that PC’s wsl.exe'
+      : transport.kind === 'ssh'
+        ? 'your ssh'
+        : 'your command'
   const order: Phase[] = ['check', 'install', 'connect']
   const at = order.indexOf(phase)
   const state = (step: Phase): StepState => {
@@ -699,8 +877,8 @@ function CheckingScreen({
   return (
     <div className="flex flex-col gap-3.5">
       <p className="text-[11.5px] leading-[1.55] text-fg-muted">
-        Helm asks {name}, through your {ssh ? 'ssh' : 'command'}, whether floti is there and which version, then connects
-        to it. Nothing is changed there without your yes.
+        Helm asks {name}, through {through}, whether floti is there and which version, then connects to it. Nothing is
+        changed there without your yes.
       </p>
       <ol data-add-host-steps className="flex flex-col gap-2.5">
         <Step state={state('check')} step="check" title={`Reach ${name} and look for floti there`} line={versionLine} />
@@ -715,14 +893,14 @@ function CheckingScreen({
           state={state('connect')}
           step="connect"
           title={`Connect to ${name}`}
-          line={`${describeTransport(transport)} ${REMOTE_CONNECT_LINE}`}
+          line={lineToTryByHand({ transport })}
         />
         <Step state="wait" step="quit" title="Choose what quitting does there" />
       </ol>
       <p className="text-[11px] leading-[1.5] text-fg-subtle">
         {ssh
           ? 'ssh runs without a terminal, so it never stops here to ask for a password. If it needs one, Helm says so and what to do.'
-          : 'The command runs without a terminal, so it never stops here to ask for anything. If it needs something, Helm shows what it said.'}
+          : `${transport.kind === 'wsl' ? 'wsl.exe' : 'The command'} runs without a terminal, so it never stops here to ask for anything. If it needs something, Helm shows what it said.`}
       </p>
     </div>
   )
