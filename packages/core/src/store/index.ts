@@ -1,29 +1,14 @@
 export {
   archiveCursor,
-  archiveSearchQuery,
-  archiveStateOf,
   archiveTranscriptFile,
-  archivedBytes,
-  clearArchive,
   evictToCeiling,
-  forgetArchiveFiles,
-  indexedArchiveFiles,
   readArchiveStats,
   readArchivedConversation,
-  searchArchive,
   type ArchiveInput,
-  type ArchiveMatch,
   type ArchiveWrite,
   type Eviction
 } from './archive'
-export {
-  countConfigSnapshots,
-  insertConfigSnapshot,
-  readAllConfigSnapshots,
-  readConfigSnapshot,
-  readConfigSnapshots,
-  type NewConfigSnapshot
-} from './config'
+export { insertConfigSnapshot, type NewConfigSnapshot } from './config'
 export {
   countCopyableData,
   readConfigSnapshotPage,
@@ -51,20 +36,13 @@ export {
   historyCursor,
   historySummary,
   indexHistory,
-  readHistoryProjects,
   readHistoryPrompts,
-  readHistorySession,
   readHistorySessions,
   renameHistorySession,
   type HistoryIndexInput
 } from './history'
 export { knownMigrations, migrate, type MigrationOutcome } from './migrate'
-export {
-  cacheProjects,
-  forgetProjects,
-  readCachedProjects,
-  type CachedProject
-} from './projects'
+export type { CachedProject } from './projects'
 export {
   addPluginFolder,
   forgetPluginSettings,
@@ -98,15 +76,5 @@ export {
   SettingsValidationError,
   SETTING_VALIDATORS
 } from './settings'
-export {
-  countUsageMessages,
-  forgetUsageFiles,
-  indexUsageFile,
-  indexedUsageFiles,
-  readUsageMessages,
-  readUsageSpend,
-  usageCursor,
-  type UsageIndexInput,
-  type UsageSpendQuery
-} from './usage'
+export { indexUsageFile, type UsageIndexInput } from './usage'
 export * as schema from './schema'

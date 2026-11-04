@@ -5,19 +5,16 @@ import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_SETTINGS,
-  EMPTY_INVENTORY,
   LOCAL_HOST_KEY,
   PINNED_PROJECTS_MAX,
   isProjectPinned,
   quitEndsSessions,
   sessionLabel,
   withProjectPinned,
-  type AppSettings,
-  type Project
+  type AppSettings
 } from '../types'
 import { openStore, type Store } from './db'
 import { knownMigrations } from './migrate'
-import { cacheProjects, forgetProjects, readCachedProjects } from './projects'
 import { sessions } from './schema'
 import { reconcileRunningSessions } from './sessions'
 import {
@@ -58,17 +55,6 @@ async function withFile(test: (file: string, onFile: Store) => void): Promise<vo
     await rm(folder, { recursive: true, force: true })
   }
 }
-
-const project = (overrides: Partial<Project> = {}): Project => ({
-  path: join(dir, 'repos', 'alpha'),
-  name: 'alpha',
-  kind: 'repo',
-  harnessPath: dir,
-  hasClaudeDir: true,
-  inventory: { ...EMPTY_INVENTORY, skills: 7, agents: 16, commands: 20, claudeMd: true },
-  git: { branch: 'main', detached: false, dirty: 3, ahead: 1, behind: 0 },
-  ...overrides
-})
 
 describe('openStore', () => {
   it('creates the file and applies every migration', async () => {
@@ -1174,70 +1160,6 @@ describe('pinned projects', () => {
       expect(validateSetting('pinnedProjects', held)).toBeNull()
     }
     expect(held).toHaveLength(2)
-  })
-})
-
-describe('project cache', () => {
-  it('round-trips a project including its inventory and git state', () => {
-    cacheProjects(store, [project()], [])
-
-    const [cached] = readCachedProjects(store)
-    expect(cached).toMatchObject({
-      name: 'alpha',
-      kind: 'repo',
-      hasClaudeDir: true,
-      inventory: { skills: 7, agents: 16, commands: 20 },
-      git: { branch: 'main', dirty: 3, ahead: 1 }
-    })
-    expect(cached?.lastSeenAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
-  })
-
-  it('upserts on path rather than duplicating', () => {
-    cacheProjects(store, [project()], [])
-    cacheProjects(store, [project({ git: { branch: 'main', detached: false, dirty: 0, ahead: 0, behind: 0 } })], [])
-
-    const cached = readCachedProjects(store)
-    expect(cached).toHaveLength(1)
-    expect(cached[0]?.git?.dirty).toBe(0)
-  })
-
-  it('stores a null git state for a directory that is not a repo', () => {
-    cacheProjects(store, [project({ git: null })], [])
-    expect(readCachedProjects(store)[0]?.git).toBeNull()
-  })
-
-  /*
-   * The harness's `template:` is the one thing a cached row carries that is not
-   * on the `Project` object, so it comes in beside the projects rather than on
-   * them. The second half of this is the one that matters: a later write that
-   * forgot to pass the harnesses would put null over it, and the launcher would
-   * paint a harness with no provenance for the first frame of every start.
-   */
-  it('carries a harness template through the cache, and only for the harness row', () => {
-    const harnessRow = project({ path: dir, name: 'work', kind: 'harness' })
-    const harness = { path: dir, name: 'work', template: 'demo', version: '1', repoPaths: [] }
-    cacheProjects(store, [harnessRow, project()], [harness])
-
-    const cached = readCachedProjects(store)
-    expect(cached.find((p) => p.kind === 'harness')?.template).toBe('demo')
-    expect(cached.find((p) => p.kind === 'repo')?.template).toBeNull()
-
-    cacheProjects(store, [harnessRow, project()], [harness])
-    expect(readCachedProjects(store).find((p) => p.kind === 'harness')?.template).toBe('demo')
-  })
-
-  it('forgets rows by path, however they were spelled, and only those', () => {
-    const alpha = join(dir, 'repos', 'alpha')
-    const beta = join(dir, 'repos', 'beta')
-    cacheProjects(store, [project(), project({ path: beta, name: 'beta' })], [])
-
-    expect(forgetProjects(store, [alpha.toUpperCase()])).toBe(1)
-    expect(readCachedProjects(store).map((p) => p.path)).toEqual([beta])
-    // Idempotent, because the caller works out what to forget from a list that
-    // may already have been reconciled by the scan that preceded it.
-    expect(forgetProjects(store, [alpha])).toBe(0)
-    expect(forgetProjects(store, [])).toBe(0)
-    expect(readCachedProjects(store)).toHaveLength(1)
   })
 })
 

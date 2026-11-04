@@ -5,7 +5,6 @@ import { HISTORY_NAME_MAX } from '../types'
 import type {
   ArchiveSessionState,
   HistoryPage,
-  HistoryProject,
   HistoryPrompt,
   HistoryQuery,
   HistorySession,
@@ -483,42 +482,6 @@ export function readHistoryPrompts(store: Store, sessionId: string): HistoryProm
   }))
 }
 
-/** The recorded working directories, busiest-most-recent first. */
-export function readHistoryProjects(store: Store): HistoryProject[] {
-  const rows = store.raw
-    .prepare(
-      `SELECT project_key,
-              MAX(project)      AS project,
-              COUNT(*)          AS sessions,
-              SUM(prompt_count) AS prompts,
-              MAX(last_at)      AS last_at,
-              SUM(CASE WHEN transcript_file IS NOT NULL AND project_exists = 1
-                       THEN 1 ELSE 0 END) AS resumable,
-              MAX(project_exists) AS exists_flag
-       FROM history_sessions
-       GROUP BY project_key
-       ORDER BY last_at DESC`
-    )
-    .all() as Array<{
-    project: string
-    sessions: number
-    prompts: number
-    last_at: number
-    resumable: number
-    exists_flag: number
-  }>
-
-  return rows.map((row) => ({
-    project: row.project,
-    name: basename(row.project) || row.project,
-    sessions: row.sessions,
-    prompts: row.prompts,
-    lastAt: row.last_at,
-    resumable: row.resumable,
-    exists: row.exists_flag === 1
-  }))
-}
-
 export function historySummary(store: Store, file: string): HistorySummary {
   const totals = store.raw
     .prepare(
@@ -549,7 +512,7 @@ export function historySummary(store: Store, file: string): HistorySummary {
   }
 }
 
-/** One session by id, or null. The resume path's lookup. */
+/** One session by id, or null: the row `renameHistorySession` answers with. */
 export function readHistorySession(store: Store, sessionId: string): HistorySession | null {
   const row = store.raw
     .prepare(

@@ -8,7 +8,6 @@ import {
   historyCursor,
   historySummary,
   indexHistory,
-  readHistoryProjects,
   readHistoryPrompts,
   readHistorySession,
   readHistorySessions,
@@ -177,17 +176,6 @@ describe('indexHistory', () => {
     // directory listing that reports otherwise cannot silently miss.
     index([{ sessionId: 'AbC', text: 'x' }], { transcripts: transcripts('aBc') })
     expect(readHistorySession(store, 'AbC')?.transcriptFile).not.toBeNull()
-  })
-
-  it('groups a directory recorded under two casings as one project', () => {
-    index([
-      { sessionId: 'a', text: 'x', project: 'C:\\repos\\Alpha' },
-      { sessionId: 'b', text: 'y', project: 'C:\\repos\\alpha' }
-    ])
-
-    const projects = readHistoryProjects(store)
-    expect(projects).toHaveLength(1)
-    expect(projects[0]).toMatchObject({ sessions: 2, prompts: 2, name: expect.any(String) })
   })
 
   it('is idempotent: re-running a pass changes nothing', () => {

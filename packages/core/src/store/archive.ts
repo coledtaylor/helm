@@ -80,41 +80,6 @@ export function archiveCursor(store: Store, file: string): number {
   return row?.bytes ?? 0
 }
 
-/** Every transcript path the archive has a cursor for. */
-export function indexedArchiveFiles(store: Store): Map<string, number> {
-  const rows = store.raw.prepare('SELECT file, bytes FROM transcript_index').all() as Array<{
-    file: string
-    bytes: number
-  }>
-  return new Map(rows.map((row) => [row.file, row.bytes]))
-}
-
-/**
- * Forgets cursors for transcripts that are no longer on disk.
- *
- * The archived conversations stay - that is the entire feature. What goes is
- * the cursor, so the table does not grow for ever with paths that cannot be
- * read.
- */
-export function forgetArchiveFiles(store: Store, files: readonly string[]): number {
-  if (files.length === 0) return 0
-  const drop = store.raw.prepare('DELETE FROM transcript_index WHERE file = ?')
-  let removed = 0
-  const apply = store.raw.transaction(() => {
-    for (const file of files) removed += drop.run(file).changes
-  })
-  apply()
-  return removed
-}
-
-/** What a session's archive currently is, or null if there has never been one. */
-export function archiveStateOf(store: Store, sessionId: string): ArchiveSessionState | null {
-  const row = store.raw
-    .prepare('SELECT state FROM transcript_sessions WHERE session_id = ?')
-    .get(sessionId.toLowerCase()) as { state: ArchiveSessionState } | undefined
-  return row?.state ?? null
-}
-
 // ---------------------------------------------------------------------------
 // Writing
 // ---------------------------------------------------------------------------
@@ -267,7 +232,7 @@ export interface Eviction {
 }
 
 /** Stored bytes the archive is currently using. What the ceiling is measured on. */
-export function archivedBytes(store: Store): number {
+function archivedBytes(store: Store): number {
   const row = store.raw
     .prepare(
       "SELECT COALESCE(SUM(stored_bytes), 0) AS n FROM transcript_sessions WHERE state = 'archived'"
@@ -526,20 +491,4 @@ export function readArchiveStats(store: Store, maxBytes: number): ArchiveStats {
     oldestAt: totals.oldest_at,
     newestAt: totals.newest_at
   }
-}
-
-/**
- * Empties the archive. Only the checks call this, and they own their database.
- *
- * The message delete goes first so the FTS trigger un-indexes each row; a
- * `DELETE FROM transcript_fts` on a contentless table would be the other half
- * of the same job done twice.
- */
-export function clearArchive(store: Store): void {
-  const apply = store.raw.transaction(() => {
-    store.raw.prepare('DELETE FROM transcript_messages').run()
-    store.raw.prepare('DELETE FROM transcript_sessions').run()
-    store.raw.prepare('DELETE FROM transcript_index').run()
-  })
-  apply()
 }

@@ -3,15 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ArchiveRole, ArchiveRow } from '../archive/transcript'
+import type { ArchiveSessionState } from '../types'
 import {
   archiveCursor,
   archiveSearchQuery,
-  archiveStateOf,
   archiveTranscriptFile,
-  archivedBytes,
   evictToCeiling,
-  forgetArchiveFiles,
-  indexedArchiveFiles,
   readArchiveStats,
   readArchivedConversation,
   searchArchive
@@ -76,6 +73,16 @@ function archive(file: string, sessionId: string): ReturnType<typeof archiveTran
   return archiveTranscriptFile(store, { file, sessionId, tail })
 }
 
+/** Stored bytes the archive holds, which is what the ceiling is measured on. */
+function storedBytes(): number {
+  return readArchiveStats(store, 0).storedBytes
+}
+
+/** What a session's archive is, or null when it never had one. */
+function stateOf(sessionId: string): ArchiveSessionState | null {
+  return readArchivedConversation(store, sessionId)?.state ?? null
+}
+
 describe('archiving a transcript', () => {
   it('adds exactly the messages a transcript grew by', () => {
     const file = join(dir, 'grown.jsonl')
@@ -100,17 +107,6 @@ describe('archiving a transcript', () => {
 
     expect(second.messages).toBe(1)
     expect(readArchivedConversation(store, 'sess')?.messageCount).toBe(3)
-  })
-
-  it('forgets a cursor for a transcript that has gone, and keeps the conversation', () => {
-    const file = join(dir, 'reaped.jsonl')
-    plant(file, [line({ at: 1 })])
-    archive(file, 'sess')
-
-    expect(indexedArchiveFiles(store).has(file)).toBe(true)
-    expect(forgetArchiveFiles(store, [file])).toBe(1)
-    expect(indexedArchiveFiles(store).has(file)).toBe(false)
-    expect(readArchivedConversation(store, 'sess')?.messages).toHaveLength(1)
   })
 })
 
@@ -223,7 +219,7 @@ describe('the ceiling', () => {
 
   it('drops the oldest session whole, and only as far as it has to', () => {
     fill()
-    const before = archivedBytes(store)
+    const before = storedBytes()
     const each = before / 4
 
     // Room for three of the four, so exactly one has to go - and which one it
@@ -232,9 +228,9 @@ describe('the ceiling', () => {
     const eviction = evictToCeiling(store, ceiling)
 
     expect(eviction.sessions).toEqual(['oldest'])
-    expect(archivedBytes(store)).toBeLessThanOrEqual(ceiling)
-    expect(archiveStateOf(store, 'older')).toBe('archived')
-    expect(archiveStateOf(store, 'newest')).toBe('archived')
+    expect(storedBytes()).toBeLessThanOrEqual(ceiling)
+    expect(stateOf('older')).toBe('archived')
+    expect(stateOf('newest')).toBe('archived')
   })
 
   it('never leaves half a conversation behind', () => {
@@ -244,7 +240,7 @@ describe('the ceiling', () => {
       Array.from({ length: 12 }, (_, i) => line({ session: 'wide', at: i, text: `part ${String(i)} `.repeat(40) }))
     )
     archive(file, 'wide')
-    const total = archivedBytes(store)
+    const total = storedBytes()
 
     evictToCeiling(store, Math.round(total / 2))
 
@@ -254,15 +250,15 @@ describe('the ceiling', () => {
       .prepare("SELECT COUNT(*) AS n FROM transcript_messages WHERE session_id = 'wide'")
       .get() as { n: number }
     expect(kept.n).toBe(0)
-    expect(archiveStateOf(store, 'wide')).toBe('evicted')
+    expect(stateOf('wide')).toBe('evicted')
   })
 
   it('tells a session it dropped from one it never had', () => {
     fill()
-    evictToCeiling(store, Math.round(archivedBytes(store) * 0.6))
+    evictToCeiling(store, Math.round(storedBytes() * 0.6))
 
-    expect(archiveStateOf(store, 'oldest')).toBe('evicted')
-    expect(archiveStateOf(store, 'never-seen')).toBeNull()
+    expect(stateOf('oldest')).toBe('evicted')
+    expect(stateOf('never-seen')).toBeNull()
 
     const dropped = readArchivedConversation(store, 'oldest')
     expect(dropped?.state).toBe('evicted')
@@ -286,7 +282,7 @@ describe('the ceiling', () => {
 
     expect(again.messages).toBe(0)
     expect(again.skippedEvicted).toBe(true)
-    expect(archiveStateOf(store, 'sess')).toBe('evicted')
+    expect(stateOf('sess')).toBe('evicted')
   })
 
   it('stops when there is nothing left to drop rather than looping', () => {
@@ -298,13 +294,13 @@ describe('the ceiling', () => {
 
   it('counts what it has and what it dropped separately', () => {
     fill()
-    const total = archivedBytes(store)
+    const total = storedBytes()
     evictToCeiling(store, Math.round(total / 2))
 
     const stats = readArchiveStats(store, 1024 ** 3)
     expect(stats.sessions + stats.evictedSessions).toBe(4)
     expect(stats.evictedSessions).toBeGreaterThan(0)
-    expect(stats.storedBytes).toBe(archivedBytes(store))
+    expect(stats.storedBytes).toBe(storedBytes())
     expect(stats.rawBytes).toBeGreaterThan(stats.storedBytes)
     expect(stats.maxBytes).toBe(1024 ** 3)
   })
