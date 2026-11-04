@@ -12,6 +12,7 @@ pub(super) fn declare(catalogue: &mut Catalogue) {
         .request::<PtermOpen>()
         .request::<PtermClose>()
         .request::<PtermShells>()
+        .request::<PtermCheckShell>()
         .request::<PtermResize>()
         .event::<PtermExit>()
         .stream::<PtermTerminal>();
@@ -31,6 +32,12 @@ request_channel! {
 request_channel! {
     /// The shells the host's machine has, for the shell pickers.
     PtermShells = "pterm:shells", () => Vec<DetectedShell>
+}
+
+request_channel! {
+    /// Whether a path the user typed is a shell the host can run, checked the
+    /// way the shells it finds are, for the shell pickers to keep.
+    PtermCheckShell = "pterm:checkShell", PtermCheckShellRequest => CheckedShell
 }
 
 request_channel! {
@@ -83,6 +90,22 @@ pub struct PtermOpened {
 pub struct PtermCloseRequest {
     #[ts(type = "number")]
     pub id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PtermCheckShellRequest {
+    /// The executable's full path, as the user typed it.
+    pub path: String,
+}
+
+/// A typed path checked: the shell as the pickers show it, or a sentence
+/// saying why it cannot be one. Exactly one of the two is set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckedShell {
+    pub shell: Option<DetectedShell>,
+    pub problem: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

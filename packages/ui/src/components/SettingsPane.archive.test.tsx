@@ -81,6 +81,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     terminalFontStack: 'monospace',
     shells: [],
     onLocateShell: vi.fn(),
+    onShellPath: vi.fn(async () => null),
     archiveStats: stats(),
     transcriptArchiveMaxBytes: 256 * MB,
     onTranscriptArchiveMaxBytesChange: vi.fn(),

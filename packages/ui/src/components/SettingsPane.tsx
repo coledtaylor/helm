@@ -1,4 +1,4 @@
-import type { JSX } from 'react'
+import { useState, type JSX } from 'react'
 import {
   ACCENT_SWATCHES,
   offerableUsageModes,
@@ -167,8 +167,14 @@ export interface SettingsPaneProps {
   terminalFontStack: string
   /** Shells found on this machine. Empty until the probe lands. */
   shells: DetectedShell[]
-  /** Native file picker, for a shell installed somewhere `where.exe` misses. */
+  /** Native file picker, for a shell installed somewhere detection misses. */
   onLocateShell: () => void
+  /**
+   * A shell's full path, typed or pasted, for one the file picker refuses (an
+   * app execution alias). Resolves with a sentence saying why the path was
+   * refused, or null once it is the shell.
+   */
+  onShellPath: (path: string) => Promise<string | null>
 
   /**
    * What the transcript archive holds. Null until the first read lands.
@@ -347,6 +353,7 @@ export function SettingsPane({
   terminalFontStack,
   shells,
   onLocateShell,
+  onShellPath,
   archiveStats,
   transcriptArchiveMaxBytes,
   onTranscriptArchiveMaxBytesChange,
@@ -663,6 +670,7 @@ export function SettingsPane({
               fontStack={terminalFontStack}
               shells={shells}
               onLocateShell={onLocateShell}
+              onShellPath={onShellPath}
             />
           )}
 
@@ -1789,13 +1797,15 @@ function TerminalGroup({
   onChange,
   fontStack,
   shells,
-  onLocateShell
+  onLocateShell,
+  onShellPath
 }: {
   terminal: TerminalSettings
   onChange: (patch: Partial<TerminalSettings>) => void
   fontStack: string
   shells: DetectedShell[]
   onLocateShell: () => void
+  onShellPath: (path: string) => Promise<string | null>
 }): JSX.Element {
   const chosenShell = terminal.terminalShell
   // A shell picked by hand may not be one of the detected ones, and dropping it
@@ -1890,23 +1900,26 @@ function TerminalGroup({
         label="Shell for project panes"
         hint="Claude sessions are unaffected. A project page can override it."
       >
-        <div className="flex items-center gap-2">
-          <Select
-            value={chosenShell ?? ''}
-            label="Default shell"
-            data-settings-terminal-shell={chosenShell ?? ''}
-            onChange={(value) => onChange({ terminalShell: value === '' ? null : value })}
-          >
-            <option value="">Detect automatically</option>
-            {shellOptions.map((shell) => (
-              <option key={shell.path} value={shell.path}>
-                {shell.name} - {shell.label}
-              </option>
-            ))}
-          </Select>
-          <Action data-settings-terminal-shell-locate onClick={onLocateShell}>
-            Choose…
-          </Action>
+        <div className="flex flex-col items-stretch gap-1.5">
+          <div className="flex items-center gap-2">
+            <Select
+              value={chosenShell ?? ''}
+              label="Default shell"
+              data-settings-terminal-shell={chosenShell ?? ''}
+              onChange={(value) => onChange({ terminalShell: value === '' ? null : value })}
+            >
+              <option value="">Detect automatically</option>
+              {shellOptions.map((shell) => (
+                <option key={shell.path} value={shell.path}>
+                  {shell.name} - {shell.label}
+                </option>
+              ))}
+            </Select>
+            <Action data-settings-terminal-shell-locate onClick={onLocateShell}>
+              Choose…
+            </Action>
+          </div>
+          <ShellPathField onShellPath={onShellPath} />
         </div>
       </Row>
 
@@ -2079,6 +2092,80 @@ function fontInstalled(family: string): boolean {
   }
   installedFonts.set(family, answer)
   return answer
+}
+
+/**
+ * A shell's full path, typed or pasted. The system file dialog will not hand
+ * over an app execution alias - PowerShell 7 from the Microsoft Store is one -
+ * so this is how such a shell is chosen. The host checks the path the way it
+ * checks the shells it finds; a refused one keeps the text and says why under
+ * it, and a kept one clears the field, the picker above now showing it.
+ */
+function ShellPathField({
+  onShellPath
+}: {
+  onShellPath: (path: string) => Promise<string | null>
+}): JSX.Element {
+  const [draft, setDraft] = useState('')
+  const [problem, setProblem] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
+  const path = draft.trim()
+
+  const submit = (): void => {
+    if (path === '' || checking) return
+    setChecking(true)
+    void onShellPath(path)
+      .then((refused) => {
+        setProblem(refused)
+        if (refused === null) setDraft('')
+      })
+      .finally(() => setChecking(false))
+  }
+
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          data-settings-terminal-shell-path
+          aria-label="Shell path"
+          aria-invalid={problem !== null}
+          placeholder="Or type the full path to a shell"
+          spellCheck={false}
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            setProblem(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit()
+            if (e.key === 'Escape') {
+              setDraft('')
+              setProblem(null)
+            }
+          }}
+          className={cn(
+            'h-[30px] min-w-0 flex-1 rounded-well border bg-surface-sunken px-2.5',
+            'font-mono text-[11.5px] text-fg placeholder:font-sans placeholder:text-fg-subtle select-text',
+            'focus:outline-none',
+            problem === null ? 'border-border focus:border-accent' : 'border-danger/50'
+          )}
+        />
+        <Action data-settings-terminal-shell-use onClick={submit} disabled={path === '' || checking}>
+          Use
+        </Action>
+      </div>
+      {problem !== null && (
+        <p
+          role="alert"
+          data-settings-terminal-shell-problem
+          className="text-right text-[11px] leading-[1.5] break-words text-danger select-text"
+        >
+          {problem}
+        </p>
+      )}
+    </>
+  )
 }
 
 const sameFile = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()

@@ -1212,6 +1212,16 @@ export interface IpcRequests {
    * answer is a property of the installation, not of Helm's state.
    */
   'pterm:shells': { request: void; response: DetectedShell[] }
+  /**
+   * Whether a path the user typed is a shell the host can run, checked the
+   * way the shells it finds are: there is a file there, looked at without
+   * following it, so an app execution alias the system file dialog refuses
+   * passes. The answer has the shell or a sentence saying why not.
+   */
+  'pterm:checkShell': {
+    request: { path: string }
+    response: { shell: DetectedShell | null; problem: string | null }
+  }
 
   'profile:list': { request: void; response: Profile[] }
   /** Create or update. Returns the problems instead of throwing for a draft
@@ -2232,6 +2242,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'pterm:open': true,
   'pterm:close': true,
   'pterm:shells': true,
+  'pterm:checkShell': true,
   'profile:list': true,
   'profile:save': true,
   'profile:delete': true,

@@ -50,6 +50,7 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("pterm:open", REQUEST, Some(Capability::Terminal)),
     ("pterm:close", REQUEST, Some(Capability::Terminal)),
     ("pterm:shells", REQUEST, None),
+    ("pterm:checkShell", REQUEST, None),
     ("pterm:resize", REQUEST, Some(Capability::Terminal)),
     ("pterm:exit", EVENT, Some(Capability::Terminal)),
     ("pterm:data", STREAM, Some(Capability::Terminal)),
@@ -630,6 +631,28 @@ fn plain_terminal_channels_round_trip_over_cbor() {
             label: "Z shell".into(),
             args: vec!["-l".into()],
         }],
+    );
+    let alias = "C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe";
+    exchange::<PtermCheckShell>(
+        PtermCheckShellRequest { path: alias.into() },
+        CheckedShell {
+            shell: Some(DetectedShell {
+                path: alias.into(),
+                name: "pwsh.exe".into(),
+                label: "PowerShell 7".into(),
+                args: vec!["-NoLogo".into()],
+            }),
+            problem: None,
+        },
+    );
+    exchange::<PtermCheckShell>(
+        PtermCheckShellRequest {
+            path: "D:\\gone\\nu.exe".into(),
+        },
+        CheckedShell {
+            shell: None,
+            problem: Some("Nothing is at D:\\gone\\nu.exe.".into()),
+        },
     );
     exchange::<PtermResize>(
         PtermResizeRequest {

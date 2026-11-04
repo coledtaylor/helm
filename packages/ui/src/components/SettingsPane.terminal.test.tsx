@@ -78,6 +78,7 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     terminalFontStack: '"Cascadia Mono", "SF Mono", Menlo, Consolas, ui-monospace, monospace',
     shells: SHELLS,
     onLocateShell: vi.fn(),
+    onShellPath: vi.fn(async () => null),
     archiveStats: null,
     transcriptArchiveMaxBytes: DEFAULT_SETTINGS.transcriptArchiveMaxBytes,
     onTranscriptArchiveMaxBytesChange: vi.fn(),
@@ -247,6 +248,44 @@ describe('the Terminal group', () => {
 
     const picker = within(group('Terminal')).getByRole('combobox', { name: 'Default shell' })
     expect(within(picker).getByRole('option', { name: 'nu.exe - Chosen by you' })).toHaveProperty('selected', true)
+  })
+
+  it('hands over a typed shell path, trimmed, and clears the field once it is kept', async () => {
+    const user = userEvent.setup()
+    const alias = 'C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe'
+    const props = renderPane()
+    const terminal = within(group('Terminal'))
+    const field = terminal.getByRole('textbox', { name: 'Shell path' })
+    expect(terminal.getByRole('button', { name: 'Use' })).toHaveProperty('disabled', true)
+
+    await user.type(field, `  ${alias} {Enter}`)
+
+    expect(vi.mocked(props.onShellPath).mock.calls).toEqual([[alias]])
+    await vi.waitFor(() => expect(field).toHaveProperty('value', ''))
+    expect(terminal.queryByRole('alert')).toBeNull()
+    expect(field.getAttribute('aria-invalid')).toBe('false')
+  })
+
+  it('says why a typed path was refused under the field, keeps the text, and lets it be fixed', async () => {
+    const user = userEvent.setup()
+    const missing = 'D:\\gone\\nu.exe'
+    const onShellPath = vi.fn(async (path: string) => (path === missing ? `Nothing is at ${missing}.` : null))
+    renderPane({ onShellPath })
+    const terminal = within(group('Terminal'))
+    const field = terminal.getByRole('textbox', { name: 'Shell path' })
+
+    await user.type(field, missing)
+    await user.click(terminal.getByRole('button', { name: 'Use' }))
+
+    expect((await terminal.findByRole('alert')).textContent).toBe(`Nothing is at ${missing}.`)
+    expect(field).toHaveProperty('value', missing)
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+
+    await user.clear(field)
+    expect(terminal.queryByRole('alert')).toBeNull()
+    await user.type(field, 'D:\\tools\\nu.exe{Enter}')
+    expect(onShellPath).toHaveBeenLastCalledWith('D:\\tools\\nu.exe')
+    await vi.waitFor(() => expect(field).toHaveProperty('value', ''))
   })
 })
 

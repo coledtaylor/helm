@@ -3,9 +3,9 @@
 //! Requests: the session list; start, the launcher's launch, a profile's
 //! launch and a resume from history; rename, resize, focus and close with its
 //! confirmation; the restore offer and restore; the plain terminals' open,
-//! close, resize and shell list; and what a device's deliberate quit asks:
-//! the sessions it started (`host:deviceSessions`) and the quit itself
-//! (`host:quit`).
+//! close, resize, shell list and the check of a shell the user typed; and
+//! what a device's deliberate quit asks: the sessions it started
+//! (`host:deviceSessions`) and the quit itself (`host:quit`).
 //!
 //! Events: `session:exit` with each finished row, `session:notify`,
 //! `session:confirm` when a close has to be agreed to first,
@@ -42,13 +42,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use floti_protocol::channel::Router;
 use floti_protocol::channels::host::{HostDeviceSessions, HostQuit};
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, CloseSessionResult, HistoryResume, LiveSession, ProfileLaunch, PtermClose,
-    PtermExit, PtermExited, PtermOpen, PtermResize, PtermShells, PtermStreamOpen, PtermTerminal,
-    SessionActivate, SessionActivityChanged, SessionActivityState, SessionClose, SessionConfirm,
-    SessionConfirmAnswer, SessionConfirmKind, SessionConfirmRequest, SessionConfirmed, SessionExit,
-    SessionFocus, SessionLaunch, SessionList, SessionNotify, SessionRename, SessionResize,
-    SessionRestorable, SessionRestore, SessionStart, SessionStreamOpen, SessionTerminal,
-    SessionsOverview, SessionsOverviewChanged,
+    CloseSessionRequest, CloseSessionResult, HistoryResume, LiveSession, ProfileLaunch,
+    PtermCheckShell, PtermClose, PtermExit, PtermExited, PtermOpen, PtermResize, PtermShells,
+    PtermStreamOpen, PtermTerminal, SessionActivate, SessionActivityChanged, SessionActivityState,
+    SessionClose, SessionConfirm, SessionConfirmAnswer, SessionConfirmKind, SessionConfirmRequest,
+    SessionConfirmed, SessionExit, SessionFocus, SessionLaunch, SessionList, SessionNotify,
+    SessionRename, SessionResize, SessionRestorable, SessionRestore, SessionStart,
+    SessionStreamOpen, SessionTerminal, SessionsOverview, SessionsOverviewChanged,
 };
 use tokio::sync::broadcast::{self, error::RecvError};
 
@@ -56,7 +56,7 @@ use super::{Caller, Feature, FeatureContext, Streams, TerminalAttachment};
 use crate::server::events::Events;
 use crate::server::hosted::{Hosted, label_of, session_id};
 use crate::server::records::ExitNotice;
-use crate::session::{ActivityTracker, ClientId, Session, TermSize, TerminalExit};
+use crate::session::{ActivityTracker, ClientId, Session, TermSize, TerminalExit, check_shell};
 
 /// How often the backends' records are read for activity, as today's app
 /// reads them. A read is a folder listing and one small file per live
@@ -372,6 +372,7 @@ impl Feature for Sessions {
                 Ok(restored)
             })
             .handle::<PtermShells>(|()| Ok(terminals.shells()))
+            .handle::<PtermCheckShell>(|request| Ok(check_shell(&request.path)))
             .handle::<PtermOpen>(move |request| hosted.open_terminal(client, request))
             .handle::<PtermClose>(|request| {
                 terminals.close(request.id);

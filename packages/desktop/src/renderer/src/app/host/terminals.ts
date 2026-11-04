@@ -170,7 +170,8 @@ export function createTerminalsAdapter(deps: TerminalsAdapterDeps): TerminalsAda
           ?.request('pterm:close', { id })
           .catch(failed('pterm:close'))
       },
-      'pterm:shells': async () => (await link.connection()).request('pterm:shells', null)
+      'pterm:shells': async () => (await link.connection()).request('pterm:shells', null),
+      'pterm:checkShell': async ({ path }) => (await link.connection()).request('pterm:checkShell', { path })
     },
     sends: {
       'pterm:input': ({ id, data }) => streams.write('pterm:data', id, data),

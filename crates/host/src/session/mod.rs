@@ -48,5 +48,5 @@ pub use report::{
     BlockedKind, MAX_MESSAGE_CHARS, ProgramStatus, ReportState, ReportedStatus, StatusReport,
 };
 pub use screen::{SCROLLBACK_LINES, Screen, TermSize};
-pub use shells::{detect_shells, shell_args};
+pub use shells::{check_shell, detect_shells, shell_args};
 pub use terminals::{TerminalExit, Terminals};

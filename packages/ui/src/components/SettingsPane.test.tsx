@@ -106,6 +106,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     terminalFontStack: 'Cascadia Mono, monospace',
     shells: [],
     onLocateShell: vi.fn(),
+    onShellPath: vi.fn(async () => null),
     archiveStats: null,
     transcriptArchiveMaxBytes: DEFAULT_SETTINGS.transcriptArchiveMaxBytes,
     onTranscriptArchiveMaxBytesChange: vi.fn(),

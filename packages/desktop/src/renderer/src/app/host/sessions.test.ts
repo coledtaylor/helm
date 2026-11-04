@@ -541,6 +541,22 @@ describe('plain terminals over the window’s own connection', () => {
     expect(connection.payloads('pterm:close')).toEqual([{ id: 3 }])
   })
 
+  it('asks the host whether a typed shell path is a shell, and answers what it says', async () => {
+    const alias = 'C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe'
+    const kept = { path: alias, name: 'pwsh.exe', label: 'PowerShell 7', args: ['-NoLogo'] }
+    const connection = new FakeConnection().answer('pterm:checkShell', ({ path }: { path: string }) =>
+      path === alias ? { shell: kept, problem: null } : { shell: null, problem: `Nothing is at ${path}.` }
+    )
+    const { adapters } = world({ connection })
+
+    await expect(ask(adapters, 'pterm:checkShell', { path: alias })).resolves.toEqual({ shell: kept, problem: null })
+    await expect(ask(adapters, 'pterm:checkShell', { path: 'D:\\gone\\nu.exe' })).resolves.toEqual({
+      shell: null,
+      problem: 'Nothing is at D:\\gone\\nu.exe.'
+    })
+    expect(connection.payloads('pterm:checkShell')).toEqual([{ path: alias }, { path: 'D:\\gone\\nu.exe' }])
+  })
+
   it('gives a page that has just loaded its terminal tabs’ shells back, one each, then opens new ones', async () => {
     let next = 20
     const opening = () => new FakeConnection().answer('pterm:open', () => ({ id: next++, shell: 'bash', requested: null, problem: null }))

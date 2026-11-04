@@ -578,6 +578,12 @@ export type CarryStatus = {
 finishedAt: string | null, };
 
 /**
+ * A typed path checked: the shell as the pickers show it, or a sentence
+ * saying why it cannot be one. Exactly one of the two is set.
+ */
+export type CheckedShell = { shell: DetectedShell | null, problem: string | null, };
+
+/**
  * What a project's `.claude/` folder holds, counted the way Claude Code
  * resolves it.
  */
@@ -2357,6 +2363,12 @@ export type ProjectKind = "harness" | "repo" | "folder";
  */
 export type ProtocolVersion = { major: number, minor: number, };
 
+export type PtermCheckShellRequest = { 
+/**
+ * The executable's full path, as the user typed it.
+ */
+path: string, };
+
 export type PtermCloseRequest = { id: number, };
 
 export type PtermExited = { id: number, exitCode: number, };
@@ -3486,6 +3498,7 @@ export interface RequestChannels {
   "profile:list": { request: null; response: Array<Profile>; capability: null };
   "profile:pin": { request: PinProfilesRequest; response: Array<Profile>; capability: null };
   "profile:save": { request: SaveProfileRequest; response: SaveProfileResult; capability: null };
+  "pterm:checkShell": { request: PtermCheckShellRequest; response: CheckedShell; capability: null };
   "pterm:close": { request: PtermCloseRequest; response: null; capability: "terminal" };
   "pterm:open": { request: PtermOpenRequest; response: PtermOpened; capability: "terminal" };
   "pterm:resize": { request: PtermResizeRequest; response: null; capability: "terminal" };
@@ -3667,6 +3680,7 @@ export const CHANNELS = [
   { name: "profile:pin", kind: "request", capability: null },
   { name: "profile:save", kind: "request", capability: null },
   { name: "profiles:changed", kind: "event", capability: null },
+  { name: "pterm:checkShell", kind: "request", capability: null },
   { name: "pterm:close", kind: "request", capability: "terminal" },
   { name: "pterm:data", kind: "stream", capability: "terminal" },
   { name: "pterm:exit", kind: "event", capability: "terminal" },

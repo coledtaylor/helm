@@ -892,6 +892,26 @@ export function App(): JSX.Element {
         if (path !== null) writeSettings({ terminalShell: path });
       });
   }, [writeSettings]);
+  /**
+   * A shell's path typed in Settings: the host checks it as it checks the
+   * shells it finds, and only a path it kept becomes the setting. Answers the
+   * sentence the row shows when it is refused.
+   */
+  const chooseShellPath = useCallback(
+    async (typed: string): Promise<string | null> => {
+      try {
+        const { shell, problem } = await helm.invoke("pterm:checkShell", {
+          path: typed,
+        });
+        if (shell === null) return problem ?? `${typed} is not a shell.`;
+        writeSettings({ terminalShell: shell.path });
+        return null;
+      } catch (error) {
+        return `The shell could not be checked: ${(error as Error).message}`;
+      }
+    },
+    [writeSettings],
+  );
 
   const savedShellHeight =
     settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct;
@@ -4019,6 +4039,7 @@ export function App(): JSX.Element {
       terminalFontStack={terminalFontStack(terminalSettings.terminalFontFamily)}
       shells={shells}
       onLocateShell={locateShell}
+      onShellPath={chooseShellPath}
       // The archive's own figures, from the one subscription the history pane
       // reads them from, so the two cannot disagree about how much is stored.
       archiveStats={historyState.archiveStats}
