@@ -1,31 +1,30 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import type { JSX } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   archiveCursor,
   archiveTranscriptFile,
-  directoryExists,
   historyCursor,
   historySummary,
   indexHistory,
   openStore,
   readArchiveStats,
-  readArchiveTail,
   readArchivedConversation,
   readHistoryPrompts,
   readHistorySessions,
-  readHistoryTail,
   renameHistorySession,
-  scanTranscripts,
+  type ArchiveRow,
+  type HistoryLine,
   type HistoryPage,
   type HistoryQuery,
   type HistorySummary,
-  type Store
+  type Store,
+  type TranscriptFile
 } from '@helm/core'
 import { SessionHistory } from '@helm/ui'
 import { bridge } from './bridge.testkit'
@@ -34,9 +33,9 @@ import { sessionHistoryProps, useHistory } from './useHistory'
 /**
  * The history pane as the window runs it - `useHistory` feeding
  * `SessionHistory` through the app's own wiring - against a real index and
- * archive over a `.claude` tree on disk. Only the IPC hop is stood in for: each
- * channel answers with what its handler in `main/ipc.ts` calls. The main
- * process's side of keeping that index current is `main/history.test.ts`.
+ * archive in `helm.db`. Only the hop to the host is stood in for: each channel
+ * answers from that index, which holds what the prompts and transcripts below
+ * were read as.
  */
 
 vi.mock('./bridge', () => import('./bridge.testkit'))
@@ -48,50 +47,59 @@ const uuid = (n: number): string => `00000000-0000-4000-8000-${n.toString(16).pa
 const S = { staging: uuid(1), notes: uuid(2), docs: uuid(3), parser: uuid(4), terminal: uuid(5) }
 
 let root: string
-let claudeDir: string
 let store: Store
 let alpha: string
 /** Every page `history:sessions` answered, with the query that asked for it. */
 let queries: Array<{ payload: HistoryQuery; result: HistoryPage }> = []
+/** Every prompt submitted, in order. */
+let prompts: HistoryLine[]
+/** The transcripts still on disk, by session, with their messages. */
+let transcripts: Map<string, { file: string; rows: ArchiveRow[] }>
 
-const historyFile = (): string => join(claudeDir, 'history.jsonl')
-const projectsDir = (): string => join(claudeDir, 'projects')
+const historyFile = (): string => join(root, '.claude', 'history.jsonl')
 
 /** Prompts as the CLI appends them on submit. */
-function appendPrompts(prompts: Array<{ sessionId: string; project: string; display: string; at: number }>): void {
-  for (const { sessionId, project, display, at } of prompts) {
-    appendFileSync(historyFile(), `${JSON.stringify({ display, pastedContents: {}, timestamp: at, project, sessionId })}\n`)
-  }
+function appendPrompts(lines: Array<{ sessionId: string; project: string; display: string; at: number }>): void {
+  for (const { sessionId, project, display, at } of lines) prompts.push({ sessionId, project, display, timestamp: at })
 }
 
 /** A transcript where the CLI keeps it, under a directory named for the folder. */
-function writeTranscript(sessionId: string, cwd: string, messages: Array<{ role: 'user' | 'assistant'; text: string }>): string {
-  const file = join(projectsDir(), cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
-  mkdirSync(dirname(file), { recursive: true })
-  for (const { role, text } of messages) {
-    const content = role === 'user' ? text : [{ type: 'text', text }]
-    const line = { type: role, uuid: randomUUID(), sessionId, cwd, timestamp: new Date(T0).toISOString(), message: { role, content } }
-    appendFileSync(file, `${JSON.stringify(line)}\n`)
+function writeTranscript(sessionId: string, cwd: string, messages: Array<{ role: 'user' | 'assistant'; text: string }>): void {
+  const file = join(root, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
+  const rows = messages.map(({ role, text }) => ({ uuid: randomUUID(), sessionId, role, at: T0, text }))
+  transcripts.set(sessionId, { file, rows })
+}
+
+function directoryExists(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
   }
-  return file
 }
 
 /**
- * One pass of what the main process does when `history.jsonl` or a transcript
- * changes (`main/history.ts`, `main/archive.ts`): index what was appended, then
- * archive what the transcripts gained.
+ * One pass of indexing: what was submitted since the index's cursor, then what
+ * the transcripts gained since theirs. Cursors count lines and messages.
  */
 function indexPass(): HistorySummary {
   const file = historyFile()
-  const transcripts = scanTranscripts(projectsDir())
+  const from = historyCursor(store, file)
+  const onDisk = new Map<string, TranscriptFile>(
+    [...transcripts].map(([sessionId, { file: transcript, rows }]) => [
+      sessionId,
+      { sessionId, file: transcript, bytes: rows.length, modifiedMs: T0 }
+    ])
+  )
   const summary = indexHistory(store, {
     file,
-    tail: readHistoryTail(file, historyCursor(store, file)),
-    transcripts,
+    tail: { lines: prompts.slice(from), bytes: prompts.length, reset: false, skipped: 0 },
+    transcripts: onDisk,
     directoryExists
   })
-  for (const { file: transcript, sessionId } of transcripts.values()) {
-    const tail = readArchiveTail(transcript, archiveCursor(store, transcript), sessionId)
+  for (const [sessionId, { file: transcript, rows }] of transcripts) {
+    const at = archiveCursor(store, transcript)
+    const tail = { rows: rows.slice(at), bytes: rows.length, reset: false, skipped: 0, read: rows.length - at }
     archiveTranscriptFile(store, { file: transcript, sessionId, tail })
   }
   return summary
@@ -99,10 +107,11 @@ function indexPass(): HistorySummary {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'helm history view-'))
-  claudeDir = join(root, '.claude')
   alpha = join(root, 'alpha')
   const beta = join(root, 'beta')
-  for (const dir of [claudeDir, alpha, beta]) mkdirSync(dir)
+  for (const dir of [alpha, beta]) mkdirSync(dir)
+  prompts = []
+  transcripts = new Map()
 
   appendPrompts([
     { sessionId: S.staging, project: alpha, display: 'deploy the staging site', at: T0 + 1000 },
@@ -113,7 +122,7 @@ beforeEach(() => {
   ])
   writeTranscript(S.staging, alpha, [{ role: 'user', text: 'deploy the staging site' }])
   writeTranscript(S.notes, beta, [{ role: 'user', text: 'write the release notes' }])
-  const parser = writeTranscript(S.parser, beta, [
+  writeTranscript(S.parser, beta, [
     { role: 'user', text: 'refactor the parser' },
     { role: 'assistant', text: 'Done. The token is zorblatt.' }
   ])
@@ -122,7 +131,7 @@ beforeEach(() => {
   indexPass()
   // Claude Code reaps the parser session's transcript after Helm archived it.
   // The docs session never had one Helm saw.
-  rmSync(parser)
+  transcripts.delete(S.parser)
   indexPass()
 
   bridge.reset()

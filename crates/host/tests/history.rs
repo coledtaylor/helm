@@ -1,8 +1,5 @@
-//! History and the transcript archive, against today's app: the cases
-//! core's tests check for the history index (`store/history.test.ts`), the
-//! archive (`store/archive.test.ts`) and the service around them
-//! (`main/history.test.ts`), with the same inputs and expectations, then the
-//! same through a real host on its socket.
+//! History and the transcript archive: the history index, the archive and the
+//! service around them, then the same through a real host on its socket.
 //!
 //! Every folder is temporary: the data folder with `floti.db`, the home and
 //! the agent's config folder in it. No agent runs; the transcripts are
@@ -1880,8 +1877,7 @@ fn the_tree_the_config_folder_names_is_read_and_not_the_one_in_the_home() {
     );
 }
 
-/// discovery/history.test.ts, directoryExists, with the same inputs and
-/// expectations.
+/// A recorded folder counts as there only while it is a directory.
 #[test]
 fn a_recorded_folder_exists_when_it_is_a_directory_and_not_when_it_is_a_file_or_missing() {
     let dirs = TestDirs::new();

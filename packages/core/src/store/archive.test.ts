@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile, appendFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { readArchiveTail, parseArchiveLine, messageText } from '../archive/transcript'
+import type { ArchiveRole, ArchiveRow } from '../archive/transcript'
 import {
   archiveCursor,
   archiveSearchQuery,
@@ -19,14 +19,24 @@ import {
 import { openStore, type Store } from './db'
 import { indexHistory, readHistorySessions } from './history'
 
+/**
+ * The archive `helm.db` keeps for an install that ran sessions in Helm's own
+ * process, which the copy into the host reads (`copy.ts`). The rows are the
+ * ones that install's transcript reader produced; each test hands them to the
+ * archive as one transcript's tail, with the cursor counted in rows.
+ */
+
 let dir: string
 let store: Store
+/** Each planted transcript's rows, by file. */
+let transcripts: Map<string, ArchiveRow[]>
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'helm-archive-'))
-  // The transcripts are files, which is what the archive reads; the rows it
-  // writes are about the store, not its file, so the store is in memory.
+  // The rows the archive writes are about the store, not its file, so the
+  // store is in memory.
   store = openStore({ file: ':memory:' })
+  transcripts = new Map()
 })
 
 afterEach(async () => {
@@ -42,153 +52,59 @@ const uuid = (): string => {
 }
 
 interface LineOpts {
-  type?: string
-  content?: unknown
+  role?: ArchiveRole
+  text?: string
   at?: number
   session?: string
-  extra?: Record<string, unknown>
 }
 
-function line({ type = 'user', content = 'hello', at = 0, session = 'sess', extra }: LineOpts = {}): string {
-  return JSON.stringify({
-    type,
-    uuid: uuid(),
-    sessionId: session,
-    timestamp: new Date(1_760_000_000_000 + at).toISOString(),
-    message: { content },
-    ...extra
-  })
+/** One message of a transcript, as the archive is given it. */
+function line({ role = 'user', text = 'hello', at = 0, session = 'sess' }: LineOpts = {}): ArchiveRow {
+  return { uuid: uuid(), sessionId: session, role, at: 1_760_000_000_000 + at, text: text.trim() }
 }
 
-/** A transcript on disk, and the tail read of it applied to the archive. */
-async function plant(file: string, lines: string[]): Promise<void> {
-  await writeFile(file, lines.map((l) => `${l}\n`).join(''), 'utf8')
+/** A transcript's whole content, replacing what it held. */
+function plant(file: string, rows: ArchiveRow[]): void {
+  transcripts.set(file, rows)
 }
 
+/** What the transcript gained since the archive's cursor, applied to the archive. */
 function archive(file: string, sessionId: string): ReturnType<typeof archiveTranscriptFile> {
-  const tail = readArchiveTail(file, archiveCursor(store, file), sessionId)
+  const rows = transcripts.get(file) ?? []
+  const from = archiveCursor(store, file)
+  const tail = { rows: rows.slice(from), bytes: rows.length, reset: false, skipped: 0, read: rows.length - from }
   return archiveTranscriptFile(store, { file, sessionId, tail })
 }
 
-describe('parsing a transcript line', () => {
-  it('keeps user and assistant messages and nothing else', () => {
-    expect(parseArchiveLine(line({ type: 'user' }), 'sess')?.role).toBe('user')
-    expect(parseArchiveLine(line({ type: 'assistant', content: [{ type: 'text', text: 'hi' }] }), 'sess')?.role).toBe(
-      'assistant'
-    )
-    for (const type of ['system', 'attachment', 'file-history-snapshot', 'queue-operation', 'mode']) {
-      expect(parseArchiveLine(line({ type }), 'sess')).toBeNull()
-    }
-  })
-
-  it('skips a line that is not usable rather than throwing', () => {
-    expect(parseArchiveLine('{not json', 'sess')).toBeNull()
-    expect(parseArchiveLine('[]', 'sess')).toBeNull()
-    expect(parseArchiveLine(JSON.stringify({ type: 'user' }), 'sess')).toBeNull()
-    // No timestamp the parser can read is a row with no place on a time axis.
-    expect(
-      parseArchiveLine(JSON.stringify({ type: 'user', uuid: 'u', timestamp: 'never', message: { content: 'x' } }), 's')
-    ).toBeNull()
-  })
-
-  it('skips the caveats the CLI injects around a slash command', () => {
-    expect(parseArchiveLine(line({ extra: { isMeta: true } }), 'sess')).toBeNull()
-  })
-
-  it('falls back to the file name when a row declares no session', () => {
-    const raw = JSON.stringify({
-      type: 'user',
-      uuid: 'u1',
-      timestamp: new Date().toISOString(),
-      message: { content: 'x' }
-    })
-    expect(parseArchiveLine(raw, 'FROM-THE-FILE')?.sessionId).toBe('from-the-file')
-  })
-})
-
-describe('what a message is worth keeping', () => {
-  it('keeps text and thinking, marks tools, and drops their results', () => {
-    expect(
-      messageText([
-        { type: 'text', text: 'first' },
-        { type: 'thinking', thinking: 'second' },
-        { type: 'tool_use', name: 'Read', input: { file: 'x'.repeat(10_000) } },
-        { type: 'tool_result', content: 'y'.repeat(10_000) },
-        { type: 'image', source: {} }
-      ])
-    ).toBe('first\n\nsecond\n\n[tool: Read]')
-  })
-
-  it('takes a plain string content as it is', () => {
-    expect(messageText('  just words  ')).toBe('just words')
-  })
-
-  it('is empty when there was nothing anybody said', () => {
-    expect(messageText([{ type: 'tool_result', content: 'x' }])).toBe('')
-    expect(messageText(undefined)).toBe('')
-  })
-})
-
-describe('the byte cursor', () => {
-  it('reads only what was appended', async () => {
-    const file = join(dir, 'a.jsonl')
-    await plant(file, [line({ at: 1 }), line({ at: 2 })])
-    const first = archive(file, 'sess')
-    expect(first.messages).toBe(2)
-    const after = archiveCursor(store, file)
-    expect(after).toBeGreaterThan(0)
-
-    await appendFile(file, `${line({ at: 3 })}\n`, 'utf8')
-    const tail = readArchiveTail(file, after, 'sess')
-    expect(tail.rows).toHaveLength(1)
-    // The whole point: the second pass read the appended bytes and not the file.
-    expect(tail.read).toBeLessThan(after)
-    expect(tail.read).toBeGreaterThan(0)
-  })
-
-  it('reads exactly the bytes a transcript grew by and adds exactly the messages in them', async () => {
+describe('archiving a transcript', () => {
+  it('adds exactly the messages a transcript grew by', () => {
     const file = join(dir, 'grown.jsonl')
-    await plant(file, [line({ at: 1 }), line({ at: 2, type: 'assistant', content: [{ type: 'text', text: 'one' }] })])
-    archive(file, 'sess')
+    const first = [line({ at: 1 }), line({ at: 2, role: 'assistant', text: 'one' })]
+    plant(file, first)
+    expect(archive(file, 'sess').messages).toBe(2)
 
-    const appended = `${line({ at: 3, content: 'two' })}\n${line({ at: 4, type: 'assistant', content: [{ type: 'text', text: 'three' }] })}\n`
-    await appendFile(file, appended, 'utf8')
-    const tail = readArchiveTail(file, archiveCursor(store, file), 'sess')
-    expect(tail.read).toBe(Buffer.byteLength(appended))
-
-    const second = archiveTranscriptFile(store, { file, sessionId: 'sess', tail })
-    expect(second.messages).toBe(2)
+    plant(file, [...first, line({ at: 3, text: 'two' }), line({ at: 4, role: 'assistant', text: 'three' })])
+    expect(archive(file, 'sess').messages).toBe(2)
     expect(readArchivedConversation(store, 'sess')?.messages.map((m) => m.text)).toEqual(['hello', 'one', 'two', 'three'])
   })
 
-  it('re-reads from zero when the file it belonged to was replaced', async () => {
-    const file = join(dir, 'b.jsonl')
-    await plant(file, [line({ at: 1 }), line({ at: 2 }), line({ at: 3 })])
-    archive(file, 'sess')
-    await plant(file, [line({ at: 4 })])
-
-    const tail = readArchiveTail(file, archiveCursor(store, file), 'sess')
-    expect(tail.reset).toBe(true)
-    expect(tail.rows).toHaveLength(1)
-  })
-
-  it('does not double-count a message a fork put in a second file', async () => {
+  it('does not double-count a message a fork put in a second file', () => {
     const a = join(dir, 'parent.jsonl')
     const shared = line({ at: 1 })
-    await plant(a, [shared, line({ at: 2 })])
+    plant(a, [shared, line({ at: 2 })])
     archive(a, 'sess')
 
     const b = join(dir, 'fork.jsonl')
-    await plant(b, [shared, line({ at: 3 })])
+    plant(b, [shared, line({ at: 3 })])
     const second = archive(b, 'sess')
 
     expect(second.messages).toBe(1)
     expect(readArchivedConversation(store, 'sess')?.messageCount).toBe(3)
   })
 
-  it('forgets a cursor for a transcript that has gone, and keeps the conversation', async () => {
+  it('forgets a cursor for a transcript that has gone, and keeps the conversation', () => {
     const file = join(dir, 'reaped.jsonl')
-    await plant(file, [line({ at: 1 })])
+    plant(file, [line({ at: 1 })])
     archive(file, 'sess')
 
     expect(indexedArchiveFiles(store).has(file)).toBe(true)
@@ -199,10 +115,10 @@ describe('the byte cursor', () => {
 })
 
 describe('storage', () => {
-  it('compresses a body worth compressing and stores a short one as it is', async () => {
+  it('compresses a body worth compressing and stores a short one as it is', () => {
     const file = join(dir, 'sizes.jsonl')
     const long = 'the quick brown fox jumps over the lazy dog. '.repeat(40)
-    await plant(file, [line({ at: 1, content: 'short' }), line({ at: 2, content: long })])
+    plant(file, [line({ at: 1, text: 'short' }), line({ at: 2, text: long })])
     archive(file, 'sess')
 
     const rows = store.raw
@@ -226,12 +142,12 @@ describe('search', () => {
     expect(archiveSearchQuery('   ')).toBeNull()
   })
 
-  it('finds a token planted in the middle of a conversation', async () => {
+  it('finds a token planted in the middle of a conversation', () => {
     const file = join(dir, 'search.jsonl')
-    await plant(file, [
-      line({ at: 1, content: 'opening question' }),
-      line({ at: 2, type: 'assistant', content: [{ type: 'text', text: 'the answer is zorblatt' }] }),
-      line({ at: 3, content: 'closing remark' })
+    plant(file, [
+      line({ at: 1, text: 'opening question' }),
+      line({ at: 2, role: 'assistant', text: 'the answer is zorblatt' }),
+      line({ at: 3, text: 'closing remark' })
     ])
     archive(file, 'sess')
 
@@ -240,7 +156,7 @@ describe('search', () => {
     expect(searchArchive(store, 'nothinglikethis').size).toBe(0)
   })
 
-  it('finds it through the conversations scope of the history list and not through the prompts scope', async () => {
+  it('finds it through the conversations scope of the history list and not through the prompts scope', () => {
     indexHistory(store, {
       file: join(dir, 'history.jsonl'),
       tail: {
@@ -258,10 +174,10 @@ describe('search', () => {
       directoryExists: () => true
     })
     const file = join(dir, 'scoped.jsonl')
-    await plant(file, [
-      line({ at: 1, content: 'opening question' }),
-      line({ at: 2, type: 'assistant', content: [{ type: 'text', text: 'the answer is zorblatt' }] }),
-      line({ at: 3, content: 'closing remark' })
+    plant(file, [
+      line({ at: 1, text: 'opening question' }),
+      line({ at: 2, role: 'assistant', text: 'the answer is zorblatt' }),
+      line({ at: 3, text: 'closing remark' })
     ])
     archive(file, 'sess')
 
@@ -270,9 +186,9 @@ describe('search', () => {
     expect(readHistorySessions(store, { search: 'zorblatt', scope: 'prompts' }).total).toBe(0)
   })
 
-  it('does not throw on input FTS5 would refuse', async () => {
+  it('does not throw on input FTS5 would refuse', () => {
     const file = join(dir, 'odd.jsonl')
-    await plant(file, [line({ at: 1, content: 'ordinary words' })])
+    plant(file, [line({ at: 1, text: 'ordinary words' })])
     archive(file, 'sess')
 
     for (const term of ['"', '(', 'NEAR(', 'a AND', '*', '^']) {
@@ -280,9 +196,9 @@ describe('search', () => {
     }
   })
 
-  it('stops finding a conversation the ceiling dropped', async () => {
+  it('stops finding a conversation the ceiling dropped', () => {
     const file = join(dir, 'gone.jsonl')
-    await plant(file, [line({ at: 1, content: 'the word is zorblatt '.repeat(20) })])
+    plant(file, [line({ at: 1, text: 'the word is zorblatt '.repeat(20) })])
     archive(file, 'sess')
     expect(searchArchive(store, 'zorblatt').size).toBe(1)
 
@@ -295,18 +211,18 @@ describe('search', () => {
 
 describe('the ceiling', () => {
   /** Four sessions, oldest first, each big enough to be worth evicting. */
-  async function fill(): Promise<void> {
+  function fill(): void {
     for (const [index, name] of ['oldest', 'older', 'newer', 'newest'].entries()) {
       const file = join(dir, `${name}.jsonl`)
-      await plant(file, [
-        line({ session: name, at: index * 1000, content: `conversation ${name} `.repeat(60) })
+      plant(file, [
+        line({ session: name, at: index * 1000, text: `conversation ${name} `.repeat(60) })
       ])
       archive(file, name)
     }
   }
 
-  it('drops the oldest session whole, and only as far as it has to', async () => {
-    await fill()
+  it('drops the oldest session whole, and only as far as it has to', () => {
+    fill()
     const before = archivedBytes(store)
     const each = before / 4
 
@@ -321,11 +237,11 @@ describe('the ceiling', () => {
     expect(archiveStateOf(store, 'newest')).toBe('archived')
   })
 
-  it('never leaves half a conversation behind', async () => {
+  it('never leaves half a conversation behind', () => {
     const file = join(dir, 'many.jsonl')
-    await plant(
+    plant(
       file,
-      Array.from({ length: 12 }, (_, i) => line({ session: 'wide', at: i, content: `part ${String(i)} `.repeat(40) }))
+      Array.from({ length: 12 }, (_, i) => line({ session: 'wide', at: i, text: `part ${String(i)} `.repeat(40) }))
     )
     archive(file, 'wide')
     const total = archivedBytes(store)
@@ -341,8 +257,8 @@ describe('the ceiling', () => {
     expect(archiveStateOf(store, 'wide')).toBe('evicted')
   })
 
-  it('tells a session it dropped from one it never had', async () => {
-    await fill()
+  it('tells a session it dropped from one it never had', () => {
+    fill()
     evictToCeiling(store, Math.round(archivedBytes(store) * 0.6))
 
     expect(archiveStateOf(store, 'oldest')).toBe('evicted')
@@ -357,13 +273,13 @@ describe('the ceiling', () => {
     expect(dropped?.storedBytes).toBe(0)
   })
 
-  it('does not re-archive what it just dropped', async () => {
+  it('does not re-archive what it just dropped', () => {
     const file = join(dir, 'again.jsonl')
-    await plant(file, [line({ session: 'sess', at: 1, content: 'body '.repeat(80) })])
+    plant(file, [line({ session: 'sess', at: 1, text: 'body '.repeat(80) })])
     archive(file, 'sess')
     evictToCeiling(store, 0)
 
-    // The cursor is at EOF, so nothing is re-offered. Force the issue: pretend
+    // The cursor is at the end, so nothing is re-offered. Force the issue: pretend
     // the file was replaced, which re-offers every row it has ever had.
     store.raw.prepare('DELETE FROM transcript_index WHERE file = ?').run(file)
     const again = archive(file, 'sess')
@@ -373,15 +289,15 @@ describe('the ceiling', () => {
     expect(archiveStateOf(store, 'sess')).toBe('evicted')
   })
 
-  it('stops when there is nothing left to drop rather than looping', async () => {
-    await fill()
+  it('stops when there is nothing left to drop rather than looping', () => {
+    fill()
     const eviction = evictToCeiling(store, 0)
     expect(eviction.sessions).toHaveLength(4)
     expect(eviction.storedBytes).toBe(0)
   })
 
-  it('counts what it has and what it dropped separately', async () => {
-    await fill()
+  it('counts what it has and what it dropped separately', () => {
+    fill()
     const total = archivedBytes(store)
     evictToCeiling(store, Math.round(total / 2))
 

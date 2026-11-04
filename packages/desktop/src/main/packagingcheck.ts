@@ -14,7 +14,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { screenshot, sleep, stripAnsi, waitFor } from './bridge'
 import { answerStartupGates, atPrompt, type Collector, type CheckContext } from './checkkit'
 import type { Check } from './fidelity'
-import { CLAUDE_TESTED_RANGE } from './setup'
+import { CLAUDE_TESTED_RANGE } from '../shared/claude'
 
 /**
  * The packaging criteria: packaging, first run, and the claim that anyone

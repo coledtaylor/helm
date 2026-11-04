@@ -1,4 +1,3 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,106 +12,34 @@ import {
   usageCursor
 } from '../store/usage'
 import { costOfTokens, priceFor, PRICES } from './prices'
-import { parseUsageLine, readUsageTail, scanUsageTranscripts } from './transcripts'
+import type { UsageRow, UsageTail } from './transcripts'
 
 /**
- * The dollar half, unit-tested where a driver would be slow: the shapes a
- * transcript row can take, the arithmetic, and the index's idempotence.
+ * The dollar half, unit-tested where a driver would be slow: the arithmetic,
+ * and the index `helm.db` keeps for an install that ran sessions in Helm's own
+ * process, which the copy into the host reads (`store/copy.ts`).
  */
 
 const AT = '2026-08-10T09:00:00.000Z'
 
-function assistantRow(
-  overrides: {
-    uuid?: string
-    model?: string
-    timestamp?: string
-    usage?: unknown
-  } = {}
-): string {
-  return `${JSON.stringify({
-    type: 'assistant',
+/** One assistant message's tokens, as that install's transcript reader gave them. */
+function assistantRow(overrides: { uuid?: string; model?: string; timestamp?: string } = {}): UsageRow {
+  return {
     uuid: overrides.uuid ?? 'a1',
-    timestamp: overrides.timestamp ?? AT,
-    isSidechain: false,
-    requestId: 'req_1',
-    message: {
-      model: overrides.model ?? 'claude-opus-5',
-      role: 'assistant',
-      content: [],
-      usage:
-        'usage' in overrides
-          ? overrides.usage
-          : {
-              input_tokens: 100,
-              output_tokens: 200,
-              cache_creation_input_tokens: 1000,
-              cache_read_input_tokens: 50_000,
-              cache_creation: {
-                ephemeral_1h_input_tokens: 400,
-                ephemeral_5m_input_tokens: 600
-              }
-            }
-    }
-  })}\n`
+    at: Date.parse(overrides.timestamp ?? AT),
+    model: overrides.model ?? 'claude-opus-5',
+    input: 100,
+    output: 200,
+    cacheWrite5m: 600,
+    cacheWrite1h: 400,
+    cacheRead: 50_000
+  }
 }
 
-describe('parseUsageLine', () => {
-  it('reads the four token classes and splits cache writes by TTL', () => {
-    const row = parseUsageLine(assistantRow())
-
-    expect(row).toEqual({
-      uuid: 'a1',
-      at: Date.parse(AT),
-      model: 'claude-opus-5',
-      input: 100,
-      output: 200,
-      cacheWrite5m: 600,
-      cacheWrite1h: 400,
-      cacheRead: 50_000
-    })
-  })
-
-  it('treats an unsplit cache write as the five-minute default', () => {
-    const row = parseUsageLine(
-      assistantRow({
-        usage: { input_tokens: 1, output_tokens: 2, cache_creation_input_tokens: 900 }
-      })
-    )
-
-    expect(row?.cacheWrite5m).toBe(900)
-    expect(row?.cacheWrite1h).toBe(0)
-  })
-
-  it('trusts the total over the parts when they disagree', () => {
-    const row = parseUsageLine(
-      assistantRow({
-        usage: {
-          cache_creation_input_tokens: 1000,
-          cache_creation: { ephemeral_1h_input_tokens: 400, ephemeral_5m_input_tokens: 0 }
-        }
-      })
-    )
-
-    expect(row?.cacheWrite1h).toBe(400)
-    expect(row?.cacheWrite5m).toBe(600)
-  })
-
-  it('skips rows that are not assistant messages', () => {
-    expect(parseUsageLine(JSON.stringify({ type: 'user', uuid: 'u1' }))).toBeNull()
-    expect(parseUsageLine(JSON.stringify({ type: 'attachment' }))).toBeNull()
-  })
-
-  it('skips an assistant row with no usage, no uuid, or no timestamp', () => {
-    expect(parseUsageLine(assistantRow({ usage: undefined }))).toBeNull()
-    expect(parseUsageLine(assistantRow({ uuid: '' }))).toBeNull()
-    expect(parseUsageLine(assistantRow({ timestamp: 'not a date' }))).toBeNull()
-  })
-
-  it('keeps a synthetic model rather than dropping the row', () => {
-    expect(parseUsageLine(assistantRow({ model: '<synthetic>' }))?.model).toBe('<synthetic>')
-  })
-})
+/** A whole transcript's rows as one tail, its cursor counted in rows. */
+function tail(...rows: UsageRow[]): UsageTail {
+  return { rows, bytes: rows.length, reset: false, skipped: 0 }
+}
 
 describe('priceFor', () => {
   it('prices the four classes off the base input rate', () => {
@@ -167,13 +94,10 @@ describe('priceFor', () => {
 describe('the usage index', () => {
   let dir: string
   let store: Store
-  let projects: string
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'helm-cost-'))
     store = openStore({ file: join(dir, 'helm.db') })
-    projects = join(dir, 'projects')
-    mkdirSync(join(projects, 'alpha'), { recursive: true })
   })
 
   afterEach(async () => {
@@ -181,63 +105,40 @@ describe('the usage index', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  const write = (name: string, body: string): string => {
-    const file = join(projects, 'alpha', name)
-    writeFileSync(file, body)
-    return file
-  }
-
-  it('finds transcripts nested under a session, where subagents write', () => {
-    write('s1.jsonl', assistantRow())
-    mkdirSync(join(projects, 'alpha', 's1', 'subagents'), { recursive: true })
-    writeFileSync(join(projects, 'alpha', 's1', 'subagents', 'agent-x.jsonl'), assistantRow())
-
-    expect(scanUsageTranscripts(projects).map((t) => t.file.endsWith('agent-x.jsonl'))).toContain(
-      true
-    )
-    expect(scanUsageTranscripts(projects)).toHaveLength(2)
-  })
-
-  it('reads only what was appended since the cursor', () => {
-    const file = write('s1.jsonl', assistantRow({ uuid: 'a1' }))
-    const first = readUsageTail(file, 0)
-    expect(first.rows).toHaveLength(1)
-
-    writeFileSync(file, assistantRow({ uuid: 'a1' }) + assistantRow({ uuid: 'a2' }))
-    const second = readUsageTail(file, first.bytes)
-
-    expect(second.rows.map((r) => r.uuid)).toEqual(['a2'])
-    expect(second.reset).toBe(false)
-  })
+  /** A transcript's path; the index keys its cursor by it. */
+  const file = (name: string): string => join(dir, 'projects', 'alpha', name)
 
   it('counts a message once even when two transcripts contain it', () => {
     // What a fork does: the new file carries a copy of the parent's history.
-    const parent = write('s1.jsonl', assistantRow({ uuid: 'shared' }))
-    const fork = write('s2.jsonl', assistantRow({ uuid: 'shared' }) + assistantRow({ uuid: 'own' }))
+    const parent = file('s1.jsonl')
+    const fork = file('s2.jsonl')
 
-    indexUsageFile(store, { file: parent, tail: readUsageTail(parent, 0) })
-    const added = indexUsageFile(store, { file: fork, tail: readUsageTail(fork, 0) })
+    indexUsageFile(store, { file: parent, tail: tail(assistantRow({ uuid: 'shared' })) })
+    const added = indexUsageFile(store, {
+      file: fork,
+      tail: tail(assistantRow({ uuid: 'shared' }), assistantRow({ uuid: 'own' }))
+    })
 
     expect(added).toBe(1)
     expect(countUsageMessages(store)).toBe(2)
   })
 
   it('re-reading a whole file from zero does not double the totals', () => {
-    const file = write('s1.jsonl', assistantRow({ uuid: 'a1' }) + assistantRow({ uuid: 'a2' }))
-    indexUsageFile(store, { file, tail: readUsageTail(file, 0) })
-    indexUsageFile(store, { file, tail: readUsageTail(file, 0) })
+    const whole = tail(assistantRow({ uuid: 'a1' }), assistantRow({ uuid: 'a2' }))
+    indexUsageFile(store, { file: file('s1.jsonl'), tail: whole })
+    indexUsageFile(store, { file: file('s1.jsonl'), tail: whole })
 
     expect(countUsageMessages(store)).toBe(2)
   })
 
   it('keeps a cursor per file, and forgets one whose transcript was reaped', () => {
-    const file = write('s1.jsonl', assistantRow())
-    indexUsageFile(store, { file, tail: readUsageTail(file, 0) })
+    const reaped = file('s1.jsonl')
+    indexUsageFile(store, { file: reaped, tail: tail(assistantRow()) })
 
-    expect(usageCursor(store, file)).toBeGreaterThan(0)
+    expect(usageCursor(store, reaped)).toBeGreaterThan(0)
     expect(indexedUsageFiles(store).size).toBe(1)
 
-    expect(forgetUsageFiles(store, [file])).toBe(1)
+    expect(forgetUsageFiles(store, [reaped])).toBe(1)
     expect(indexedUsageFiles(store).size).toBe(0)
     // The rows stay: the tokens were spent whether or not the record survives.
     expect(countUsageMessages(store)).toBe(1)
@@ -247,14 +148,15 @@ describe('the usage index', () => {
     const now = Date.parse('2026-08-10T12:00:00Z')
     const hoursAgo = (n: number): string => new Date(now - n * 3_600_000).toISOString()
 
-    const file = write(
-      's1.jsonl',
-      assistantRow({ uuid: 'in-session', timestamp: hoursAgo(1) }) +
-        assistantRow({ uuid: 'earlier-today', timestamp: hoursAgo(9) }) +
-        assistantRow({ uuid: 'last-week', timestamp: hoursAgo(24 * 3) }) +
+    indexUsageFile(store, {
+      file: file('s1.jsonl'),
+      tail: tail(
+        assistantRow({ uuid: 'in-session', timestamp: hoursAgo(1) }),
+        assistantRow({ uuid: 'earlier-today', timestamp: hoursAgo(9) }),
+        assistantRow({ uuid: 'last-week', timestamp: hoursAgo(24 * 3) }),
         assistantRow({ uuid: 'too-old', timestamp: hoursAgo(24 * 20) })
-    )
-    indexUsageFile(store, { file, tail: readUsageTail(file, 0) })
+      )
+    })
 
     const spend = readUsageSpend(store, {
       nowMs: now,
@@ -284,11 +186,10 @@ describe('the usage index', () => {
 
   it('reports a model it has no rate for rather than pricing it as something else', () => {
     const now = Date.parse('2026-08-10T12:00:00Z')
-    const file = write(
-      's1.jsonl',
-      assistantRow({ uuid: 'x', model: 'claude-unreleased-9', timestamp: new Date(now).toISOString() })
-    )
-    indexUsageFile(store, { file, tail: readUsageTail(file, 0) })
+    indexUsageFile(store, {
+      file: file('s1.jsonl'),
+      tail: tail(assistantRow({ uuid: 'x', model: 'claude-unreleased-9', timestamp: new Date(now).toISOString() }))
+    })
 
     const spend = readUsageSpend(store, {
       nowMs: now,

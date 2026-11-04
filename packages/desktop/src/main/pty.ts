@@ -139,8 +139,7 @@ export interface SpawnOptions {
    * line under a rule of its own, and its rule strips the first and last quote
    * on it. With more than one quoted argument - a shim path holding a space and
    * a session name holding one - that leaves the shim's path split in half.
-   * `claudePtyArgs` builds the string that survives it; see the comment there
-   * for the measurement.
+   * Such a line is passed as the string, already quoted the way cmd reads it.
    */
   args?: string[] | string
   cols: number

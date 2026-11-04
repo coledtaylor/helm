@@ -13,35 +13,11 @@
  */
 
 export * from './types'
-export {
-  messageText,
-  parseArchiveLine,
-  readArchiveTail,
-  type ArchiveRole,
-  type ArchiveRow,
-  type ArchiveTail
-} from './archive/transcript'
-export {
-  claudeHome,
-  directoryExists,
-  historyFileIn,
-  projectsDirIn,
-  readHistoryTail,
-  scanTranscripts,
-  type HistoryLine,
-  type HistoryTail,
-  type TranscriptFile
-} from './discovery/history'
+export type { ArchiveRole, ArchiveRow, ArchiveTail } from './archive/transcript'
+export type { HistoryLine, HistoryTail, TranscriptFile } from './discovery/history'
 export { isInsideRoot } from './files/inside'
 export { cleanStaleMcpConfigs } from './launch/mcp'
 export { cleanStaleShims, probeProcess, type OwnerLiveness, type ShimOwner } from './launch/overlay'
 export * from './store'
-export {
-  parseUsageLine,
-  readUsageTail,
-  scanUsageTranscripts,
-  type TranscriptStat,
-  type UsageRow,
-  type UsageTail
-} from './usage/transcripts'
+export type { UsageRow, UsageTail } from './usage/transcripts'
 export * from './theme/load'

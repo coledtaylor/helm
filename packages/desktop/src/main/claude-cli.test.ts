@@ -1,14 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { writeFakeClaude } from '../../test/world'
-import { installCandidates, readClaudeVersion, resolveClaudeCommand } from './claude-cli'
+import { describe, expect, it } from 'vitest'
+import { installCandidates } from './claude-cli'
 
-/**
- * Finding `claude` where an install leaves it on each OS, and running the fake
- * one the tests use in the form this OS's install would have.
- */
+/** Finding `claude` where an install leaves it on each OS. */
 
 describe('installCandidates', () => {
   it('looks in ~/.local/bin on every OS, for an .exe or .cmd first on Windows', () => {
@@ -26,21 +20,5 @@ describe('installCandidates', () => {
       '/opt/homebrew/bin/claude',
       '/usr/local/bin/claude'
     ])
-  })
-})
-
-describe('the fake claude', () => {
-  let bin: string
-  beforeAll(() => {
-    bin = mkdtempSync(join(tmpdir(), 'helm fake bin-'))
-  })
-  afterAll(() => rmSync(bin, { recursive: true, force: true }))
-
-  it("is written as this OS's install would leave it, and runs from a path with spaces", async () => {
-    const claude = writeFakeClaude(bin)
-    expect(claude.endsWith(process.platform === 'win32' ? 'claude.cmd' : 'claude')).toBe(true)
-    const command = resolveClaudeCommand(claude)
-    expect(command).toMatchObject({ resolved: claude, shim: process.platform === 'win32' })
-    expect(await readClaudeVersion(claude)).toMatch(/\d+\.\d+\.\d+/)
   })
 })

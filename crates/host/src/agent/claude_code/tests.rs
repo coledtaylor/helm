@@ -1367,7 +1367,7 @@ fn a_resume_gets_the_settings_file_too() {
 }
 
 // ---------------------------------------------------------------------------
-// Tested versions (setup.ts)
+// Tested versions
 // ---------------------------------------------------------------------------
 
 fn fake_version(world: &World, asked: &str) -> String {
@@ -1442,7 +1442,7 @@ fn a_version_that_cannot_be_read_is_unknown_and_still_launches() {
 }
 
 // ---------------------------------------------------------------------------
-// Sign-in (setup.ts)
+// Sign-in
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1658,8 +1658,7 @@ fn history_with_no_projects_folder_is_known_and_empty() {
     );
 }
 
-// The prompt record (discovery/history.test.ts, readHistoryTail), with the
-// same inputs and expectations.
+// The prompt record: reading `history.jsonl` from a cursor.
 
 /// One line of `history.jsonl` as the CLI writes it.
 fn history_line(session: &str, display: &str) -> String {
@@ -1866,8 +1865,7 @@ fn the_record_keeps_each_line_as_recorded_with_its_folder_and_time() {
     );
 }
 
-// Finding transcripts (discovery/history.test.ts, scanTranscripts), with the
-// same inputs and expectations.
+// Finding transcripts under `projects/`, by session id.
 
 /// A session id of the shape the transcript scan recognises.
 fn scanned_uuid(n: u32) -> String {
@@ -1973,8 +1971,8 @@ fn the_scan_returns_nothing_when_there_is_no_projects_directory() {
     assert!(scanned(&world).is_empty());
 }
 
-// The config folder (discovery/history.test.ts, claudeHome), with the same
-// inputs and expectations. The home is the test's own, so `~/.claude` names a
+// The config folder: `CLAUDE_CONFIG_DIR`, or `.claude` in the home. The home
+// is the test's own, so `~/.claude` names a
 // place the test chose rather than the machine's.
 
 fn env_in(home: &Path, config_dir: Option<&str>) -> crate::platform::folders::UserEnv {
