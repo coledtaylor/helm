@@ -5,8 +5,7 @@ import { RECONNECT_FIRST_MS } from '../../../../shared/host/reconnect'
 import type { EventChannel, EventPayload, HostLinkOpened } from '../../../../shared/ipc'
 import { WINDOW_CAPABILITIES, createPageLink, type HostEnd, type PageLinkDeps } from './link'
 
-const UNREACHABLE =
-  'No local host answered on its socket; turn off “Run sessions in the local host” in Settings to use Helm’s own sessions.'
+const UNREACHABLE = 'No local host answered on its socket.'
 
 /**
  * Main and the host behind it, as the page sees them over `hostLink:*`: each
@@ -24,7 +23,7 @@ class FakeMain {
   private next = 1
   private readonly listeners = new Map<string, Set<(payload: never) => void>>()
   private readonly decoders = new Map<number, FrameDecoder>()
-  answer: () => HostLinkOpened = () => ({ inHost: true, connection: this.next++, appVersion: '2.9.0' })
+  answer: () => HostLinkOpened = () => ({ connection: this.next++, appVersion: '2.9.0' })
 
   readonly bridge: PageLinkDeps['bridge'] = {
     invoke: ((channel: string) => {
@@ -55,8 +54,8 @@ class FakeMain {
     }) as PageLinkDeps['bridge']['on']
   }
 
-  /** Whether the host welcomes the hello; when false, the bridge ends with `why` instead. */
-  welcome: { why: string } | true = true
+  /** Whether the host welcomes the hello; otherwise the bridge ends with `why`, or the host refuses it. */
+  welcome: { why: string } | { refused: Message } | true = true
 
   private received(connection: number, message: Message): void {
     if (message.type === 'hello') {
@@ -69,6 +68,8 @@ class FakeMain {
           capabilities: ['terminal'],
           backends: []
         })
+      } else if ('refused' in this.welcome) {
+        this.reply(connection, this.welcome.refused)
       } else {
         this.end(connection, this.welcome.why)
       }
@@ -132,9 +133,8 @@ function world() {
 }
 
 describe('a Helm page’s own connection to the local host', () => {
-  it('learns whether sessions run in the host from the first open, and connects on that same open', async () => {
+  it('connects on its first open, saying what the window can do', async () => {
     const w = world()
-    expect(await w.link.inHost()).toBe(true)
     await w.link.connection()
     expect(w.main.opens).toHaveLength(1)
     expect(w.main.hellos).toEqual([
@@ -151,13 +151,6 @@ describe('a Helm page’s own connection to the local host', () => {
     expect(WINDOW_CAPABILITIES).not.toContain('browser')
   })
 
-  it('says sessions do not run in the host when main says so, and connects to nothing', async () => {
-    const w = world()
-    w.main.answer = () => ({ inHost: false })
-    expect(await w.link.inHost()).toBe(false)
-    expect(w.main.hellos).toEqual([])
-  })
-
   it('has every caller join one connect, so a read asked before it settled waits for the host’s answer', async () => {
     const w = world()
     const subscribed: string[] = []
@@ -170,9 +163,9 @@ describe('a Helm page’s own connection to the local host', () => {
     expect(await a.request('history:summary', null)).toBe('answered')
   })
 
-  it('rejects with the sentence naming the setting when the host cannot be reached, never answering empty', async () => {
+  it('S5: rejects with the sentence saying what failed when the host cannot be reached, never answering empty', async () => {
     const w = world()
-    w.main.answer = () => ({ inHost: true, unreachable: UNREACHABLE })
+    w.main.answer = () => ({ unreachable: UNREACHABLE })
     await expect(w.link.connection()).rejects.toThrow(UNREACHABLE)
     // And asks again the next time, as main's link does.
     await expect(w.link.connection()).rejects.toThrow(UNREACHABLE)
@@ -181,9 +174,28 @@ describe('a Helm page’s own connection to the local host', () => {
 
   it('rejects with the bridge’s sentence when it ends before the host welcomed the page', async () => {
     const w = world()
-    const why = 'The local host did not prove the key Helm expected, so Helm did not connect to it; turn off …'
+    const why = 'The local host did not prove the key Helm expected, so Helm did not connect to it.'
     w.main.welcome = { why }
     await expect(w.link.connection()).rejects.toThrow(why)
+  })
+
+  it('S5: rejects with the host’s refusal of the hello ending at its cause, naming no setting', async () => {
+    const w = world()
+    w.main.welcome = {
+      refused: {
+        type: 'refused',
+        host: { major: 2, minor: 0 },
+        client: { major: 1, minor: 0 },
+        update: 'client',
+        message: 'This host speaks protocol 2.0 and Helm speaks 1.0: update Helm.'
+      }
+    }
+    const error = await w.link.connection().then(
+      () => null,
+      (e: unknown) => e as Error
+    )
+    expect(error?.message).toBe('This host speaks protocol 2.0 and Helm speaks 1.0: update Helm.')
+    expect(error?.message).not.toMatch(/Settings|own sessions/)
   })
 
   it('connects again when wanted after the connection ended', async () => {
@@ -204,7 +216,7 @@ describe('a Helm page’s own connection to the local host', () => {
     w.link.onConnected(() => (connects += 1))
     await w.link.connection()
 
-    w.main.end(1, 'The local host closed the connection; turn off …', {
+    w.main.end(1, 'The local host closed the connection.', {
       planned: false,
       restarts: true
     })
@@ -212,7 +224,7 @@ describe('a Helm page’s own connection to the local host', () => {
     expect(ends).toEqual([{ planned: false, restarts: true }])
 
     // Main cannot reach a host yet.
-    w.main.answer = () => ({ inHost: true, unreachable: UNREACHABLE })
+    w.main.answer = () => ({ unreachable: UNREACHABLE })
     const waits: number[] = []
     for (let tries = 0; tries < 3; tries++) {
       waits.push(...w.timers.pending())
@@ -223,7 +235,6 @@ describe('a Helm page’s own connection to the local host', () => {
 
     let next = 10
     w.main.answer = () => ({
-      inHost: true,
       connection: next++,
       appVersion: '2.9.0'
     })
@@ -243,7 +254,7 @@ describe('a Helm page’s own connection to the local host', () => {
     await w.link.connection()
     w.main.end(1, 'Connection to build-box closed by remote host.', { planned: false, restarts: false })
     await settle()
-    w.main.answer = () => ({ inHost: true, unreachable: 'build-box is not connected.' })
+    w.main.answer = () => ({ unreachable: 'build-box is not connected.' })
     for (let tries = 0; tries < 3; tries++) {
       w.timers.fireAll()
       await settle()
@@ -256,7 +267,7 @@ describe('a Helm page’s own connection to the local host', () => {
     expect(w.main.opens).toHaveLength(5)
     expect(w.timers.pending()).toEqual([RECONNECT_FIRST_MS])
 
-    w.main.answer = () => ({ inHost: true, connection: 20, appVersion: '2.9.0' })
+    w.main.answer = () => ({ connection: 20, appVersion: '2.9.0' })
     w.link.reconnectNow()
     await settle()
     expect(connects).toBe(2)

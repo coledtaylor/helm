@@ -8,7 +8,7 @@ import { PATIENCE } from '../../../test/patience'
  * No retries, by rule: a test that fails is reporting something broken, in the
  * app or in the test, and either way it gets fixed rather than re-run.
  */
-export default defineConfig<{ sessionsInHost: boolean }>({
+export default defineConfig({
   testDir: '.',
   testMatch: '**/*.spec.ts',
   timeout: 60_000,
@@ -22,14 +22,8 @@ export default defineConfig<{ sessionsInHost: boolean }>({
   // time keeps timing on a loaded machine from becoming a variable.
   workers: 1,
   reporter: [['list']],
-  projects: [
-    { name: 'helm' },
-    // Every spec again with "Run sessions in the local host" on
-    // (`e2e/helm.ts`, `sessionsInHost`), where sessions, terminals, discovery,
-    // setup, templates, notes, files and the plugins registry are the host's.
-    // A test whose subject exists on one side only skips the other, naming
-    // the test that covers it there.
-    { name: 'in the local host', use: { sessionsInHost: true } }
-  ],
+  // One project: sessions, terminals, discovery, setup, templates, notes,
+  // files and the plugins registry are the local host's.
+  projects: [{ name: 'in the local host' }],
   outputDir: '../../../reports/e2e-results'
 })

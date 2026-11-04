@@ -197,7 +197,6 @@ export function createRemoteHostLinks(deps: RemoteHostLinksDeps): RemoteHostLink
       clearTimeout: deps.clearTimeout
     })
     entry.pages = createPageLinks({
-      inHost: true,
       appVersion: deps.appVersion,
       ...(deps.deviceName !== undefined ? { deviceName: deps.deviceName } : {}),
       isHelmPage: deps.isHelmPage,

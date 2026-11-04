@@ -503,8 +503,8 @@ export interface SessionConfirmRequest {
   /** What the agreeing button says. Plural when quitting ends several. */
   confirmLabel: string
   /**
-   * With sessions in the local host, the quit question's third answer: quit
-   * and leave the sessions running in the host. Absent where there is none.
+   * The quit question's third answer: quit and leave the sessions running
+   * in the host. Absent where there is none.
    */
   keepLabel?: string
   /** Names of the sessions this ends, for the dialog to list. */
@@ -670,22 +670,19 @@ export interface BrowserOpened {
 export const BROWSER_TABS_MAX = 10
 
 /**
- * What opening a Helm page's own connection to the local host answered:
- * sessions do not run in the host this run; or they do and main started a
- * bridge for the page, whose frames travel on `hostLink:*` under this
- * connection number; or they do and the host could not be reached, saying why.
+ * What opening a Helm page's own connection to a host answered: main started
+ * a bridge for the page, whose frames travel on `hostLink:*` under this
+ * connection number; or the host could not be reached, saying why.
  * `deviceName` is the computer's name, which the page's `hello` gives as this
  * device's name, as main's does.
  */
 export type HostLinkOpened =
-  | { inHost: false }
   | {
-      inHost: true
       connection: number
       appVersion: string
       deviceName?: string
     }
-  | { inHost: true; unreachable: string }
+  | { unreachable: string }
 
 /**
  * Where each host on another computer stands with this device, by its id
@@ -832,10 +829,9 @@ export interface IpcRequests {
   'settings:write': { request: Partial<AppSettings>; response: AppSettings }
 
   /**
-   * With sessions in the local host, the settings Helm keeps for itself:
-   * everything but the host's scan roots, pins and setup stamp. A write does
-   * what `settings:write` does with them (the theme, the picked `claude`, what
-   * the host is told) and answers Helm's own settings after.
+   * The settings Helm keeps for itself: everything but the host's scan
+   * roots, pins and setup stamp. A write applies the theme, tells the host
+   * what it is told of them, and answers Helm's own settings after.
    */
   'ownSettings:read': { request: void; response: AppSettings }
   'ownSettings:write': { request: Partial<AppSettings>; response: AppSettings }
@@ -855,26 +851,24 @@ export interface IpcRequests {
   'profileDialog:import': { request: void; response: ProfileFileChosen }
 
   /**
-   * With sessions in the local host, the pane layout the last run saved, which
-   * the host's restore offer is placed by. Main keeps it; the window asks.
+   * The pane layout the last run saved, which the host's restore offer is
+   * placed by. Main keeps it; the window asks.
    */
   'windowSessions:lostLayout': { request: void; response: SavedPaneLayout | null }
   /**
-   * With sessions in the local host, how many sessions are running in this
-   * PC's host, whichever device started them: what stopping it ends. Rejects
+   * How many sessions are running in this PC's host, whichever device started them: what stopping it ends. Rejects
    * with the link's sentence when the host cannot be reached.
    */
   'windowSessions:hostSessionCount': { request: void; response: number }
   /**
-   * With sessions in the local host, stops this PC's host once the user has
-   * agreed: every session in it ends and is recorded as ended, and none is
+   * Stops this PC's host once the user has agreed: every session in it ends and is recorded as ended, and none is
    * offered back. Helm connects again on its next request, which starts a
    * fresh host. Main holds the host link, so main sends the stop.
    */
   'windowSessions:stopHost': { request: void; response: void }
   /**
-   * With sessions in the local host, what the hidden plugin host window has
-   * reported of the background pages it runs, which Settings lays over the
+   * What the hidden plugin host window has reported of the background pages
+   * it runs, which Settings lays over the
    * host's list. Main alone hears those reports.
    */
   'pluginBackground:states': { request: void; response: PluginBackgroundReport[] }
@@ -1178,8 +1172,8 @@ export interface IpcRequests {
    * something is watching (`sessions:watch`), so this is empty rather than
    * stale before the first one.
    *
-   * With "Run sessions in the local host" on, the host runs the pass over its
-   * sessions and this answers the host's last set: it waits for Helm's first
+   * The host runs the pass over its sessions and this answers the host's
+   * last set: it waits for Helm's first
    * connect rather than answering empty, and rejects with the sentence saying
    * the host could not be reached, so the pane paints Unknown, never
    * "nothing there".
@@ -1870,12 +1864,11 @@ export interface IpcSends {
   }
 
   /**
-   * With sessions in the local host: a session ended that the host judged
-   * nobody saw, from what the window told it was on screen. Main shows the OS
+   * A session ended that the host judged nobody saw, from what the window told it was on screen. Main shows the OS
    * notification, which only main can.
    */
   'windowSessions:notify': SessionRecord
-  /** With sessions in the local host, the window's answer to main's `windowSessions:quitConfirm`. */
+  /** The window's answer to main's `windowSessions:quitConfirm`. */
   'windowSessions:quitConfirmed': { id: number; answer: QuitAnswer }
 
   /** Spike harness: the renderer's answer to a `probe:req`. */
@@ -1900,8 +1893,7 @@ export interface IpcSends {
   /** A tool call answered, from the background host. Main takes it from that window only. */
   'plugins:toolResult': PluginToolOutcome
   /**
-   * With sessions in the local host, what a background page asked that only
-   * Helm's window can draw (one of the plugin's tabs, a secret dialog), from
+   * What a background page asked that only Helm's window can draw (one of the plugin's tabs, a secret dialog), from
    * the hidden plugin host window, for main to hand the window.
    */
   'pluginWindow:ask': PluginUiRequest
@@ -1929,18 +1921,17 @@ export interface IpcEvents {
   'git:updated': Record<string, GitState | null>
   'scan:status': ScanStatus
   'settings:changed': AppSettings
-  /** With sessions in the local host, Helm's own settings after any change to them. */
+  /** Helm's own settings after any change to them. */
   'ownSettings:changed': AppSettings
   /**
-   * With sessions in the local host, main's question before Helm quits with
-   * sessions running, asked in the window; answered on `windowSessions:quitConfirmed`.
+   * Main's question before Helm quits with sessions running, asked in the window; answered on `windowSessions:quitConfirmed`.
    */
   'windowSessions:quitConfirm': SessionConfirmRequest
-  /** With sessions in the local host, a click on a session's notification: bring its tab forward. */
+  /** A click on a session's notification: bring its tab forward. */
   'windowSessions:activate': { id: number }
-  /** With sessions in the local host, what the hidden plugin host window reports of the background pages it runs. */
+  /** What the hidden plugin host window reports of the background pages it runs. */
   'pluginBackground:changed': PluginBackgroundReport[]
-  /** With sessions in the local host, where the copy of Helm's own database into it stands, after each change. */
+  /** Where the copy of Helm's own database into the local host stands, after each change. */
   'ownData:changed': OwnDataCopyState
   /**
    * Where each host on another computer stands with this device, whole,
@@ -1950,9 +1941,9 @@ export interface IpcEvents {
   'remoteHosts:changed': RemoteHostStates
   /** Every port forwarded to this PC now, whole, after each change. */
   'forwards:changed': ForwardedPort[]
-  /** With sessions in the local host, a background page's ask for the window, from the hidden window through main. */
+  /** A background page's ask for the window, from the hidden window through main. */
   'pluginWindow:asked': PluginUiRequest
-  /** With sessions in the local host, the window closed a secret dialog the hidden window handed it. */
+  /** The window closed a secret dialog the hidden window handed it. */
   'pluginWindow:answered': { requestId: string }
   /** The whole list after any write, so every surface showing profiles agrees
    * without each of them refetching. */

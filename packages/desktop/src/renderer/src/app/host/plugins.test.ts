@@ -18,7 +18,7 @@ import type {
 import { createBackgroundAdapter, createPluginsAdapter } from './plugins'
 import type { HostAdapter } from './router'
 
-const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+const UNREACHABLE = 'No local host answered on its socket.'
 const DIR = '/plugins/my sample'
 
 const hostPlugin = (patch: Partial<P.PluginInfo> = {}): P.PluginInfo => ({

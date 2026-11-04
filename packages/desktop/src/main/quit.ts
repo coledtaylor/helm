@@ -4,9 +4,8 @@ import type { QuitAnswer } from '../shared/ipc'
  * Quitting while sessions run: asked once, before anything ends.
  *
  * Electron runs `before-quit` before it closes a single window, and
- * `before-quit` is where sessions end: Helm's own, with the setting off (main
- * owns process lifetime), or, with sessions in the local host, the ones this
- * device started there when the quit setting says so. So a window's `close`
+ * `before-quit` is where sessions end: the ones this device started in the
+ * local host, when the quit setting says so. So a window's `close`
  * handler cannot ask on behalf of a quit: by the time it runs, the sessions it
  * would ask about are gone. A quit that asks has to ask before it calls
  * `app.quit()`. That is the app menu's Quit Helm (Cmd+Q on macOS), which is
@@ -19,8 +18,7 @@ import type { QuitAnswer } from '../shared/ipc'
  * the other, so a quit agreed to from the menu closes the window without a
  * second question, and a second request while the question is on screen waits
  * for that answer rather than opening another. Cancel ends nothing and leaves
- * the app open. With sessions in the local host the question has a third
- * answer, Keep running and quit, which quits and leaves the sessions running
+ * the app open. The question has a third answer, Keep running and quit, which quits and leaves the sessions running
  * there; it applies to this quit only and never changes the setting.
  *
  * A quit code starts is not held here. One that calls `app.quit()` - the E2E

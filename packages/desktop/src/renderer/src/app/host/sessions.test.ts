@@ -16,7 +16,7 @@ import type {
 import type { HostAdapter } from './router'
 import { createSessionsAdapters } from './sessions'
 
-const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+const UNREACHABLE = 'No local host answered on its socket.'
 
 const ROW: P.SessionRecord = {
   id: 7,

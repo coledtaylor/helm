@@ -17,12 +17,9 @@ import { createWorkspaceAdapter, type WorkspaceAdapter } from './workspace'
  * (history, workspace, profiles, config, files, sessions and terminals,
  * plugins) and a router of its own in front of them.
  *
- * This PC's host is keyed `LOCAL_HOST_KEY`, and its bridge is the one the
- * window has always had (`helm` in `bridge.ts`): its router asks main whether
- * sessions run in the local host and is the preload's bridge when they do not.
- * A host on another computer is keyed by its id in the `hosts` setting, and is
- * reached only while sessions run in the local host, so its router knows that
- * from the start.
+ * This PC's host is keyed `LOCAL_HOST_KEY`, and its bridge is the window's
+ * own (`helm` in `bridge.ts`). A host on another computer is keyed by its id
+ * in the `hosts` setting.
  *
  * Every router sends what `boundary.rs` lists as client-only to the preload's
  * bridge, as this PC's always has. What only this device keeps stays with
@@ -159,7 +156,6 @@ export function createHostBridge(
   ]
   const helm = createRouter({
     own: deps.own,
-    inHost: local ? () => link.inHost() : true,
     adapters,
     clientOnly: isClientOnly,
     hostInternal: isHostInternal,

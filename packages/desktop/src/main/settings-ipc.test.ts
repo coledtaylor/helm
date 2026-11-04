@@ -1,5 +1,4 @@
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BrowserWindow } from 'electron'
@@ -13,7 +12,7 @@ import { PATIENCE } from '../../../../test/patience'
 
 /**
  * Electron as `registerIpc` meets it: the request handlers are captured so the
- * test can call them the way the renderer's `invoke` would, a directory or file
+ * test can call them the way the renderer's `invoke` would, a directory
  * picker answers with whatever the test chose, and Windows' light or dark mode
  * is the test's to flip.
  */
@@ -56,28 +55,25 @@ vi.mock('electron', async () => {
   }
 })
 
-// The content viewer's highlighter loads every shiki grammar; nothing here
-// reaches it.
-vi.mock('./content', () => ({ highlightForEditor: () => Promise.resolve(null) }))
-
 /**
- * The settings surface's main half, through `registerIpc` with the real store,
- * the real theme service on a real folder, and the fake `claude` on PATH: what
- * each request does to the database and to the window, and what goes back to
- * the renderer. The renderer half is `renderer/src/app/settings-hooks.test.tsx`.
+ * This device's own settings, main's half, through `registerIpc` with the real
+ * store and the real theme service on a real folder: what each request does to
+ * the database and to the window, and what goes back to the renderer. The
+ * host's half of the settings is the host's; the renderer half is
+ * `renderer/src/app/settings-hooks.test.tsx`.
  */
 describe('settings over IPC', () => {
   let world: World
   let services: Services
   let themes: ThemeService
   let themesDir: string
-  /** A second CLI, somewhere else, that answers a version of its own. */
-  let picked: string
   let nativeTheme: Electron.NativeTheme
   let update: typeof UpdateModule
   const events: Array<{ channel: EventChannel; payload: unknown }> = []
-  /** What tells the local host Helm's settings again, as `index.ts` passes it when sessions run there. */
+  /** What tells the local host Helm's settings again, as `index.ts` passes it. */
   const hostSettingsChanged = vi.fn()
+  /** The folders the window's picker handed to the host's scan roots. */
+  const acceptedRoots: string[][] = []
   const win = {
     isDestroyed: () => false,
     setBackgroundColor: vi.fn(),
@@ -113,18 +109,6 @@ describe('settings over IPC', () => {
     })
     delete process.env['CLAUDE_CONFIG_DIR']
 
-    const pickedDir = join(world.root, 'picked bin')
-    mkdirSync(pickedDir)
-    // A CLI that answers with its own version: a `.cmd` on Windows, an
-    // executable script elsewhere.
-    if (process.platform === 'win32') {
-      picked = join(pickedDir, 'claude.cmd')
-      writeFileSync(picked, ['@echo off', 'echo 2.1.500 (Claude Code)', ''].join('\r\n'))
-    } else {
-      picked = join(pickedDir, 'claude')
-      writeFileSync(picked, ['#!/bin/sh', "echo '2.1.500 (Claude Code)'", ''].join('\n'), { mode: 0o755 })
-    }
-
     nativeTheme = (await import('electron')).nativeTheme
     update = await import('./update')
     const { createServices } = await import('./services')
@@ -137,22 +121,29 @@ describe('settings over IPC', () => {
       services,
       window: () => win as unknown as BrowserWindow,
       pageLinks: {} as never,
-      sessions: {} as never,
-      restore: {} as never,
-      activity: {} as never,
-      resources: {} as never,
-      pterm: {} as never,
+      remoteHosts: {} as never,
+      remoteInstall: {} as never,
+      remoteAdd: {} as never,
+      sshHosts: () => Promise.resolve({ found: false, hosts: [] }),
+      wslDistros: () => Promise.resolve([]),
+      forwards: {} as never,
       browsers: {} as never,
       browserMcp: null,
-      history: {} as never,
-      archive: {} as never,
-      usage: {} as never,
-      plugins: { pushTheme: vi.fn() } as never,
-      config: {} as never,
-      content: {} as never,
+      workspace: {
+        acceptRoots: (paths: string[]) => {
+          acceptedRoots.push(paths)
+          return Promise.resolve([world.projectsDir, ...paths])
+        },
+        settings: () => Promise.resolve(stored())
+      } as never,
       files: {} as never,
-      templates: {} as never,
       themes,
+      plugins: { pushTheme: vi.fn() } as never,
+      hostPlugins: {} as never,
+      remotePlugins: {} as never,
+      pluginBackground: () => null,
+      localHost: {} as never,
+      ownData: {} as never,
       rendererReady: () => undefined,
       hostSettingsChanged
     })
@@ -172,33 +163,33 @@ describe('settings over IPC', () => {
     electron.pick = null
   })
 
-  describe('sessions in the local host', () => {
+  describe('the local host', () => {
     it('tells the host at once when the browser tools are switched off or on or held to this machine, and not for what it is not given', async () => {
       hostSettingsChanged.mockClear()
-      await invoke('settings:write', { browserMcp: false })
+      await invoke('ownSettings:write', { browserMcp: false })
       expect(hostSettingsChanged).toHaveBeenCalledTimes(1)
-      await invoke('settings:write', { browserMcp: true })
-      await invoke('settings:write', { browserMcpLocalOnly: true })
-      await invoke('settings:write', { browserMcpLocalOnly: false })
+      await invoke('ownSettings:write', { browserMcp: true })
+      await invoke('ownSettings:write', { browserMcpLocalOnly: true })
+      await invoke('ownSettings:write', { browserMcpLocalOnly: false })
       expect(hostSettingsChanged).toHaveBeenCalledTimes(4)
       expect(stored()).toMatchObject({ browserMcp: true, browserMcpLocalOnly: false })
 
-      await invoke('settings:write', { browserSearch: 'off' })
+      await invoke('ownSettings:write', { browserSearch: 'off' })
       expect(hostSettingsChanged).toHaveBeenCalledTimes(4)
     })
 
     it('tells the host at once when the archive’s ceiling changes', async () => {
       hostSettingsChanged.mockClear()
-      await invoke('settings:write', { transcriptArchiveMaxBytes: 512 * 1024 * 1024 })
+      await invoke('ownSettings:write', { transcriptArchiveMaxBytes: 512 * 1024 * 1024 })
       expect(hostSettingsChanged).toHaveBeenCalledTimes(1)
       expect(stored()).toMatchObject({ transcriptArchiveMaxBytes: 512 * 1024 * 1024 })
     })
 
     it('tells the host at once when the session tools are switched off or on', async () => {
       hostSettingsChanged.mockClear()
-      await invoke('settings:write', { sessionMcp: false })
+      await invoke('ownSettings:write', { sessionMcp: false })
       expect(hostSettingsChanged).toHaveBeenCalledTimes(1)
-      await invoke('settings:write', { sessionMcp: true })
+      await invoke('ownSettings:write', { sessionMcp: true })
       expect(hostSettingsChanged).toHaveBeenCalledTimes(2)
       expect(stored()).toMatchObject({ sessionMcp: true })
     })
@@ -206,18 +197,18 @@ describe('settings over IPC', () => {
 
   describe('validation', () => {
     it('refuses a malformed value with the validator’s sentence, and keeps what was stored', async () => {
-      await invoke('settings:write', { paneGap: 8 })
+      await invoke('ownSettings:write', { paneGap: 8 })
       events.length = 0
 
-      await expect(invoke('settings:write', { paneGap: 999 })).rejects.toThrow(/paneGap/)
+      await expect(invoke('ownSettings:write', { paneGap: 999 })).rejects.toThrow(/paneGap/)
       expect(stored().paneGap).toBe(8)
-      expect(emitted('settings:changed')).toEqual([])
+      expect(emitted('ownSettings:changed')).toEqual([])
     })
   })
 
   describe('themes', () => {
     it('applies a chosen theme to Windows, the window background and the title-bar buttons', async () => {
-      await invoke('settings:write', { theme: 'light', themeLight: 'daylight' })
+      await invoke('ownSettings:write', { theme: 'light', themeLight: 'daylight' })
 
       expect(nativeTheme.themeSource).toBe('light')
       expect(lastTheme()?.applied).toMatchObject({ id: 'daylight', kind: 'light' })
@@ -229,7 +220,7 @@ describe('settings over IPC', () => {
         expect(win.setAccentColor).toHaveBeenLastCalledWith('#d1d3da')
       }
 
-      await invoke('settings:write', { theme: 'dark', themeDark: 'graphite' })
+      await invoke('ownSettings:write', { theme: 'dark', themeDark: 'graphite' })
       expect(nativeTheme.themeSource).toBe('dark')
       expect(lastTheme()?.applied).toMatchObject({ id: 'graphite', kind: 'dark' })
       expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#25282e')
@@ -237,11 +228,11 @@ describe('settings over IPC', () => {
     })
 
     it('following Windows paints whichever slot Windows’ mode picks, and repaints when it changes', async () => {
-      await invoke('settings:write', { theme: 'dark' })
+      await invoke('ownSettings:write', { theme: 'dark' })
       expect(nativeTheme.themeSource).toBe('dark')
 
       electron.windowsDark = false
-      await invoke('settings:write', { theme: 'system', themeDark: 'graphite', themeLight: 'daylight' })
+      await invoke('ownSettings:write', { theme: 'system', themeDark: 'graphite', themeLight: 'daylight' })
       expect(nativeTheme.themeSource).toBe('system')
       expect(lastTheme()).toMatchObject({ preference: 'system', resolved: 'light', applied: { id: 'daylight' } })
 
@@ -258,7 +249,7 @@ describe('settings over IPC', () => {
         expect(emitted<ThemeListing>('themes:changed').at(-1)?.themes.map((t) => t.id)).toContain('ink')
       }, { timeout: PATIENCE })
 
-      await invoke('settings:write', { theme: 'dark', themeDark: 'ink' })
+      await invoke('ownSettings:write', { theme: 'dark', themeDark: 'ink' })
       expect(lastTheme()?.applied).toMatchObject({ id: 'ink', fallback: false })
       expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#000000')
 
@@ -276,7 +267,7 @@ describe('settings over IPC', () => {
       await vi.waitFor(() => {
         expect(emitted<ThemeListing>('themes:changed').at(-1)?.themes.map((t) => t.id)).toContain('ink')
       }, { timeout: PATIENCE })
-      await invoke('settings:write', { theme: 'dark', themeDark: 'ink' })
+      await invoke('ownSettings:write', { theme: 'dark', themeDark: 'ink' })
       expect(lastTheme()?.applied.id).toBe('ink')
 
       writeFileSync(file, '{ "name": "Ink", "kind": "dark", "colors": {')
@@ -300,80 +291,22 @@ describe('settings over IPC', () => {
     })
   })
 
-  describe('the Claude CLI', () => {
-    it('reports the claude discovery finds on PATH, with the version that executable gives', async () => {
-      const status = await invoke('setup:status')
-      expect(status).toMatchObject({ source: 'discovered', version: '2.1.999 (Claude Code)' })
-      // PATHEXT spells the extension in capitals; it is the same file.
-      expect(status.path?.toLowerCase()).toBe(world.claude.toLowerCase())
-    })
-
-    it('locates a CLI by the picker, stores it, and reports its own version until it is cleared', async () => {
-      electron.pick = picked
-      const located = await invoke('setup:locateClaude')
-
-      expect(located).toMatchObject({ source: 'setting', path: picked, version: '2.1.500 (Claude Code)' })
-      expect(stored().claudePath).toBe(picked)
-      expect(emitted<{ claudePath: string | null }>('settings:changed').at(-1)?.claudePath).toBe(picked)
-      expect(await invoke('setup:status')).toMatchObject({ source: 'setting', path: picked })
-
-      await invoke('settings:write', { claudePath: null })
-      expect(stored().claudePath).toBeNull()
-      const cleared = await invoke('setup:status')
-      expect(cleared).toMatchObject({ source: 'discovered', version: '2.1.999 (Claude Code)' })
-      expect(cleared.path?.toLowerCase()).toBe(world.claude.toLowerCase())
-    })
-  })
-
-  describe('scan roots and pins', () => {
-    const projectPaths = (result: { projects: Array<{ path: string }> }): string[] =>
-      result.projects.map((project) => project.path.toLowerCase()).sort()
-
-    it('adds a picked folder as a root, and the next scan lists what is in it', async () => {
+  describe('scan roots', () => {
+    it('hands a folder picked in the window to the host’s scan roots, and nothing when the picker is cancelled', async () => {
       const more = join(world.root, 'more projects')
-      const gamma = join(more, 'gamma')
-      mkdirSync(gamma, { recursive: true })
-      writeFileSync(join(gamma, 'README.md'), '# gamma\n')
-      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: gamma, stdio: 'ignore' })
-
       electron.pick = more
       expect(await invoke('roots:add')).toEqual([world.projectsDir, more])
-      expect(stored().scanRoots).toEqual([world.projectsDir, more])
+      expect(acceptedRoots).toEqual([[more]])
 
-      const scanned = await invoke('discovery:scan', { includeGit: false })
-      expect(projectPaths(scanned)).toEqual(
-        [world.projects.alpha, world.projects.beta, gamma].map((path) => path.toLowerCase()).sort()
-      )
-    })
-
-    it('removes a root: its projects and their cached rows go, the other root’s stay, and nothing on disk moves', async () => {
-      const more = join(world.root, 'more projects')
-      expect(stored().scanRoots).toEqual([world.projectsDir, more])
-
-      expect(await invoke('roots:remove', { path: world.projectsDir })).toEqual([more])
-      expect(stored().scanRoots).toEqual([more])
-      const cached = (await invoke('discovery:cached')).map((project) => project.path.toLowerCase())
-      expect(cached).toEqual([join(more, 'gamma').toLowerCase()])
-
-      const scanned = await invoke('discovery:scan', { includeGit: false })
-      expect(projectPaths(scanned)).toEqual([join(more, 'gamma').toLowerCase()])
-      expect(existsSync(world.projects.alpha)).toBe(true)
-      expect(readFileSync(join(world.projects.alpha, 'README.md'), 'utf8')).toBe('# main\n')
-    })
-
-    it('leaves every pin in place across a rescan, one whose folder is gone included', async () => {
-      const gone = join(world.root, 'unplugged', 'tools')
-      const pins = [world.projects.alpha, gone].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
-      await invoke('settings:write', { pinnedProjects: pins })
-
-      await invoke('discovery:scan', { includeGit: false })
-      expect(stored().pinnedProjects).toEqual(pins)
+      electron.pick = null
+      await invoke('roots:add')
+      expect(acceptedRoots).toEqual([[more]])
     })
   })
 
   describe('updates', () => {
     it('asks the release source on every press, with no throttle and whether or not the launch check is on', async () => {
-      await invoke('settings:write', { updateCheck: false })
+      await invoke('ownSettings:write', { updateCheck: false })
       let asked = 0
       update.pointReleases(() => {
         asked += 1
@@ -394,7 +327,7 @@ describe('settings over IPC', () => {
     })
 
     it('says why it could not ask, and hands back the same releases page either way', async () => {
-      const info = await invoke('app:info')
+      const info = await invoke('ownApp:info')
       expect(info.version).toBe('0.0.0-test')
       expect(info.releasesUrl).toMatch(/^https:\/\//)
 
@@ -417,7 +350,7 @@ describe('settings over IPC', () => {
 
       // The launch check does stamp one, which is what makes the line above a
       // statement about the manual one rather than about a timestamp nothing writes.
-      await invoke('settings:write', { updateCheck: true })
+      await invoke('ownSettings:write', { updateCheck: true })
       update.pointReleases(() => Promise.resolve('v9.9.9'))
       await update.maybeCheckForUpdate(services, null)
       expect(stored().lastUpdateCheckAt).not.toBeNull()

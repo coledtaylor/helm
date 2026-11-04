@@ -15,7 +15,7 @@ const OUTSIDE = '/elsewhere/tooling'
 const CLAUDE_MD = '/work dir/alpha/CLAUDE.md'
 const NOTE = '/work dir/alpha/notes/a.md'
 
-const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+const UNREACHABLE = 'No local host answered on its socket.'
 
 const scope = (kind: P.ConfigScopeKind, path: string, label: string): P.ConfigScope => ({
   kind,

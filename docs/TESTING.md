@@ -444,14 +444,13 @@ over the window, or Electron's own guards on a page.
 | `history` | an ended session is in history and resumes where it ran |
 | `profiles` | a profile made in the form starts with its overlay when saved |
 | `launcher` | Ctrl+N, a folder typed, a profile and mode picked there; a conversation reopened in the pane beside; a new harness and a new profile each end in a session |
-| `restore` | with sessions in Helm itself, the main process killed outright, then started again: the sessions come back in their panes, folders, profile and mode, a `/clear`ed one in the conversation it moved to; not now reopens nothing and is not asked again; ticked to resume without asking, the next crash is put back unasked |
 | `config` | an edit saved to disk and undone byte for byte |
 | `content` | a wikilink followed; an HTML artifact framed with no reach |
 | `files` | a file opened from the tree beside its session, its changed lines counted, its line numbers to the bottom, and the view following the session's next edit; Ctrl+P, and the hand-offs to VS Code, Explorer and the clipboard |
 | `browser` | browsing; the security posture; the refusals; a cookie surviving a restart |
 | `agent-tools` | a session drives the browser pane through its own token, and only its own tabs |
 | `plugins` | the sample plugin against a server of its own: its background page, a secret it asks for, its panel, badge, status and a tab with parameters; `helm.fetch` held to the manifest's origins on every redirect; Helm's shortcuts from inside a plugin page and its commands from Ctrl+Shift+P; a crashed plugin page and Reload; an unsupported `apiVersion` said in Settings, and a plugin turned off and on; a theme change reaching a page without reloading it; a session calling the plugin's tools, answered by its background page, and losing them when they are turned off in Settings |
-| `host-sessions` | with "Run sessions in the local host" on: the first start pinning the host's key and served in full; a session and a project terminal in the host, drawn again after a reload; the sessions pane showing a host session's process tree and ports as the host read them; a host session's browser tools, a profile's and a plugin's sessions, and the plugin's and Helm's session tools through the host; quitting, and Helm killed outright; an ended session listed in history and archived by the host, nothing of it in `helm.db`, and resumed through the host where it ran; the status bar showing the usage the host read, and a rewritten reading reaching it |
+| `host-sessions` | the first start pinning the host's key and served in full; a session and a project terminal in the host, drawn again after a reload; the sessions pane showing a host session's process tree and ports as the host read them; a host session's browser tools, a profile's and a plugin's sessions, and the plugin's and Helm's session tools through the host; quitting, and Helm killed outright; an ended session listed in history and archived by the host, nothing of it in `helm.db`, and resumed through the host where it ran; the status bar showing the usage the host read, and a rewritten reading reaching it |
 
 - **Each test gets a world** (`test/world.ts`): a temporary root with a space in
   its path, in the run's root, named owner of its fake agents (a `test-owner`
@@ -461,11 +460,8 @@ over the window, or Electron's own guards on a page.
   own store before it starts: the projects folder scanned, the fake `claude`
   chosen, first run done, the update check off. Nothing reaches the network, a
   real `~/.claude` or the installed app.
-- **Every spec runs twice**: in the `helm` project with "Run sessions in the
-  local host" off, and in `in the local host` with it on (`sessionsInHost` in
-  `e2e/helm.ts`). A test whose subject exists on one side only, such as
-  `restore`'s crash that ends the sessions, skips the other through that
-  fixture, with a reason naming the test that covers it there.
+- **One project**, `in the local host`: sessions, terminals, discovery, setup,
+  templates, notes, files and the plugins registry are the local host's.
 - **`e2e/helm.ts`** has the `test` fixture (`world`, `helm`, `relaunch`) and
   the helpers: `startSession`, `typeLine`, `terminalText`, `claudeRunIn`,
   `processAlive`.

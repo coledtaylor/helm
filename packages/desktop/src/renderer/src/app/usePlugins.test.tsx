@@ -84,7 +84,7 @@ describe('usePlugins', () => {
   })
 
   it('keeps the list unknown and says why when main could not look, rather than reading it as no plugins', async () => {
-    const sentence = 'Helm could not reach the local host (it is not running); turn off “Run sessions in the local host”.'
+    const sentence = 'Helm could not reach the local host (it is not running).'
     bridge.answer('plugins:list', () => Promise.reject(new Error(sentence)))
     const { result } = renderHook(() => usePlugins())
     await waitFor(() => expect(result.current.error).toBe(sentence))

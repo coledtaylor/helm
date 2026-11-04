@@ -46,7 +46,6 @@ const BACKGROUND = 2
 function world(overrides: Partial<PageLinksDeps> = {}) {
   const bridges: FakeBridge[] = []
   const links = createPageLinks({
-    inHost: true,
     appVersion: '2.9.0',
     isHelmPage: (id) => id === WINDOW || id === BACKGROUND,
     ready: () => Promise.resolve(),
@@ -79,17 +78,11 @@ describe('each Helm page’s own connection to the local host', () => {
     expect(w.bridges[0]?.endedByHelm).toBe(false)
   })
 
-  it('says sessions do not run in the host when the setting is off, and opens nothing', async () => {
-    const w = world({ inHost: false })
-    expect(await w.links.open(new FakePage(WINDOW))).toEqual({ inHost: false })
-    expect(w.bridges).toEqual([])
-  })
-
   it('passes bytes both ways unread, under the connection’s number', async () => {
     const w = world()
     const page = new FakePage(WINDOW)
     const opened = await w.links.open(page)
-    expect(opened).toEqual({ inHost: true, connection: 1, appVersion: '2.9.0' })
+    expect(opened).toEqual({ connection: 1, appVersion: '2.9.0' })
     const frame = Uint8Array.of(0, 0, 0, 1, 0xa0)
     w.links.send(WINDOW, 1, frame)
     expect(w.bridges[0]?.written).toEqual([frame])
@@ -108,9 +101,9 @@ describe('each Helm page’s own connection to the local host', () => {
     await opening
     expect(w.bridges).toHaveLength(1)
 
-    const sentence = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+    const sentence = 'No local host answered on its socket.'
     const failing = world({ ready: () => Promise.reject(new Error(sentence)) })
-    expect(await failing.links.open(new FakePage(WINDOW))).toEqual({ inHost: true, unreachable: sentence })
+    expect(await failing.links.open(new FakePage(WINDOW))).toEqual({ unreachable: sentence })
     expect(failing.bridges).toEqual([])
   })
 
@@ -183,7 +176,7 @@ describe('each Helm page’s own connection to the local host', () => {
     await w.links.open(new FakePage(BACKGROUND))
     await w.links.stop()
     expect(w.bridges.map((b) => b.endedByHelm)).toEqual([true, true])
-    expect(await w.links.open(new FakePage(WINDOW))).toEqual({ inHost: true, unreachable: 'Helm is quitting.' })
+    expect(await w.links.open(new FakePage(WINDOW))).toEqual({ unreachable: 'Helm is quitting.' })
     expect(w.bridges).toHaveLength(2)
   })
 })

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
-import { seedSettings, type World } from '../test/world'
+import type { World } from '../test/world'
 import { expect, test as base } from './helm'
 
 /**
@@ -18,14 +18,6 @@ const CREDENTIALS = `{"claudeAiOauth":{"accessToken":"${CREDENTIALS_MARKER}"}}`
 const test = base.extend({
   world: async ({ world }, use) => {
     writeFileSync(join(world.projects.alpha, 'CLAUDE.md'), ORIGINAL)
-    await use(world)
-  }
-})
-
-/** The same world with "Run sessions in the local host" on: the console reads and writes through the host. */
-const inHost = test.extend({
-  world: async ({ world }, use) => {
-    seedSettings(world, { sessionsInHost: true })
     await use(world)
   }
 })
@@ -84,21 +76,7 @@ test('a CLAUDE.md edited and saved in the config console, then restored to its o
   await editSaveAndRestore(helm.window, world)
 })
 
-inHost('a CLAUDE.md edited and saved in the config console through the local host, then restored to its original bytes', async ({
-  world,
-  helm
-}) => {
-  await editSaveAndRestore(helm.window, world)
-})
-
 test('the user’s .credentials.json, selected in the config console, says what it is and shows none of it', async ({
-  world,
-  helm
-}) => {
-  await selectCredentials(helm.window, world)
-})
-
-inHost('the user’s .credentials.json, selected in the config console through the local host, says what it is and shows none of it', async ({
   world,
   helm
 }) => {

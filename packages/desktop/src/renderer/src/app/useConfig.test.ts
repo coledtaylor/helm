@@ -177,7 +177,7 @@ describe('useConfig: health', () => {
 })
 
 describe('useConfig: could not look', () => {
-  const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+  const UNREACHABLE = 'No local host answered on its socket.'
   const refuse = (): never => {
     throw new Error(`Error invoking remote method 'config:scopes': Error: ${UNREACHABLE}`)
   }

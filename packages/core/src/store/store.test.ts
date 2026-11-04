@@ -203,7 +203,6 @@ describe('settings', () => {
       browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false,
-      sessionsInHost: true,
       quitSessions: { local: 'keep' },
       hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
       profilesCopiedToHostAt: '2026-10-29T08:00:00.000Z',
@@ -232,28 +231,23 @@ describe('settings', () => {
     })
   })
 
-  it('keeps running sessions in the local host off until it is turned on, on across a restart, and off again once turned off', async () => {
-    expect(readSettings(store).sessionsInHost).toBe(false)
-    await withFile((file, onFile) => {
-      expect(readSettings(onFile).sessionsInHost).toBe(false)
-      writeSettings(onFile, { sessionsInHost: true })
-      onFile.close()
+  it('S2: ignores a stored run-sessions-in-the-local-host row an earlier version wrote, and takes the next write', () => {
+    // An earlier version kept this switch; helm.db keeps its row and the host
+    // is the only path whatever it says.
+    store.raw
+      .prepare('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
+      .run('sessionsInHost', JSON.stringify(false), '')
 
-      const turnedOn = openStore({ file })
-      try {
-        expect(readSettings(turnedOn).sessionsInHost).toBe(true)
-        writeSettings(turnedOn, { sessionsInHost: false })
-      } finally {
-        turnedOn.close()
-      }
-
-      const turnedOff = openStore({ file })
-      try {
-        expect(readSettings(turnedOff).sessionsInHost).toBe(false)
-      } finally {
-        turnedOff.close()
-      }
-    })
+    const settings = readSettings(store)
+    expect(settings).not.toHaveProperty('sessionsInHost')
+    const fresh = openStore({ file: ':memory:' })
+    try {
+      expect(settings).toEqual(readSettings(fresh))
+    } finally {
+      fresh.close()
+    }
+    expect(() => writeSettings(store, { theme: 'dark' })).not.toThrow()
+    expect(readSettings(store).theme).toBe('dark')
   })
 
   it('has quitting end the sessions on this PC’s host until Settings keeps them, and keeps that choice across a restart', async () => {
@@ -869,12 +863,6 @@ describe('settings validation', () => {
       bad: ['false', 'true', 0, 1, null, [], {}]
     },
     {
-      // A string that reads as off would start the host.
-      key: 'sessionsInHost',
-      good: [true, false],
-      bad: ['false', 'true', 0, 1, null, [], {}]
-    },
-    {
       // A choice that is neither would read as "end" and end sessions the user
       // meant to keep.
       key: 'quitSessions',
@@ -1095,7 +1083,6 @@ describe('settings validation', () => {
       browserRecentUrls: ['http://localhost:3000/'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false,
-      sessionsInHost: true,
       quitSessions: { local: 'keep' },
       hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
       profilesCopiedToHostAt: null,
@@ -1146,7 +1133,6 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   browserRecentUrls: ['http://localhost:3000/'],
   browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
   sessionMcp: false,
-  sessionsInHost: true,
   quitSessions: { local: 'keep' },
   hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
   profilesCopiedToHostAt: null,

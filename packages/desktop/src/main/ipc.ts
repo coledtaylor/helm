@@ -11,22 +11,10 @@ import { pluginThemeOf, type AppSettings } from '@helm/core'
 import { remoteHostsProblem, type SshConfigHosts, type WslDistroList } from '@helm/core/types'
 import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
-import type { ConfigService } from './config'
-import { localConfigConsole, type ConfigConsoleService } from './config-console'
-import type { ContentService } from './content'
 import type { FilesService } from './files'
-import { localFilesReads, type FilesReads } from './files-reads'
-import type { TemplateService } from './templates'
-import type { RestoreService } from './restore'
-import type { ArchiveService } from './archive'
-import type { HistoryService } from './history'
-import { localHistoryReads, type HistoryReads } from './history-reads'
-import type { UsageService } from './usage'
 import { applyWindowTheme } from './chrome'
 import type { ThemeService } from './themes'
-import type { PtermHost } from './pterm'
-import { readClaudeVersion, setClaudeOverride } from './claude-cli'
-import { readClaudeStatus } from './setup'
+import { setClaudeOverride } from './claude-cli'
 import { checkForUpdate, RELEASES_PAGE } from './update'
 import { appMode, dataDir, dbFile } from './paths'
 import type { PluginHost } from './plugins/host'
@@ -35,13 +23,11 @@ import type { HostPlugins } from './host/plugins'
 import type { RemotePlugins } from './host/remote-plugins'
 import { activePty, windowsBuildNumber } from './pty'
 import { createClipboardText } from './clipboard'
-import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
+import { nativeProfileDialogs } from './profiles'
 import { updateSettings, type Services } from './services'
-import { localWorkspace, type WorkspaceService } from './workspace'
-import { registerConfirmAnswers, showExitNotification, type SessionHost } from './sessions'
+import type { WorkspaceService } from './workspace'
+import { registerConfirmAnswers, showExitNotification } from './sessions'
 import { isClientOnly, isHostInternal } from '../shared/host/protocol'
-import type { ActivityService } from './activity'
-import type { ResourcesService } from './resources'
 import type {
   EventChannel,
   EventPayload,
@@ -55,20 +41,24 @@ import type {
 /**
  * The main-process half of the contract.
  *
- * `RequestHandlers` is `Record<RequestChannel, ...>`, so leaving a channel
- * unhandled does not compile. Nothing in this process may call `ipcMain.handle`
- * outside `registerIpc` - that is what keeps the surface enumerable.
+ * Main handles only what `boundary.rs` lists as client-only, and the
+ * host-internal channels from the hidden plugin window: every other channel
+ * is the host's, which each Helm page reaches over its own connection, so
+ * main has no handler for it and the page's router refuses it
+ * (`renderer/src/app/host/router.ts`). `ipc.boundary.test.ts` checks both
+ * halves. Nothing in this process may call `ipcMain.handle` outside
+ * `registerIpc` - that is what keeps the surface enumerable.
  */
 
 type RequestHandlers = {
-  [K in RequestChannel]: (
+  [K in RequestChannel]?: (
     payload: IpcRequests[K]['request'],
     event: Electron.IpcMainInvokeEvent
   ) => IpcRequests[K]['response'] | Promise<IpcRequests[K]['response']>
 }
 
 type SendHandlers = {
-  [K in SendChannel]: (payload: SendPayload<K>, event: Electron.IpcMainEvent) => void
+  [K in SendChannel]?: (payload: SendPayload<K>, event: Electron.IpcMainEvent) => void
 }
 
 /**
@@ -125,151 +115,66 @@ export function emit<K extends EventChannel>(
   win.webContents.send(channel, payload)
 }
 
-/**
- * Where history, the transcript archive and usage are read this run: Helm's
- * own services over `helm.db`, or - when sessions run in the local host - the
- * host's, through `HistoryReads`, with none of Helm's own built.
- */
-type HistoryWiring =
-  | {
-      /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
-      history: HistoryService
-      /** Keeps the conversations Claude Code deletes; see `archive.ts`. */
-      archive: ArchiveService
-      /** Mirrors Claude Code's cached plan-limit figures; see `usage.ts`. */
-      usage: UsageService
-      historyReads?: undefined
-    }
-  | {
-      /**
-       * With sessions in the local host, reads that refuse: the window reads
-       * the host's over its own connection (`renderer/src/app/host/history.ts`).
-       */
-      historyReads: HistoryReads
-      history?: undefined
-      archive?: undefined
-      usage?: undefined
-    }
-
-export type IpcContext = IpcContextBase & HistoryWiring
-
-interface IpcContextBase {
+export interface IpcContext {
   services: Services
   window: () => BrowserWindow | null
   /** Each Helm page's own connections to the local host and to each remote host; see `host/page-link.ts`. */
   pageLinks: HostPageLinks
   /**
-   * The links to the hosts on other computers this device added, with
-   * sessions in the local host; see `host/remote.ts`. A settings write that
-   * changes `hosts` starts or ends them.
+   * The links to the hosts on other computers this device added; see
+   * `host/remote.ts`. A settings write that changes `hosts` starts or ends them.
    */
-  remoteHosts?: RemoteHostLinks | undefined
+  remoteHosts: RemoteHostLinks
   /** Installs and updates floti on those hosts' computers, after a yes; see `host/remote-install.ts`. */
-  remoteInstall?: RemoteInstaller | undefined
+  remoteInstall: RemoteInstaller
   /** Adds a host by connecting to it; see `host/remote-add.ts`. */
-  remoteAdd?: RemoteHostAdder | undefined
+  remoteAdd: RemoteHostAdder
   /** The Host names in this PC's `~/.ssh/config`, for the add-a-host dialog; see `host/ssh-config.ts`. */
-  sshHosts?: (() => Promise<SshConfigHosts>) | undefined
+  sshHosts: () => Promise<SshConfigHosts>
   /** The WSL distros on this PC and on each connected Windows host (`wsl-distros.ts`). */
-  wslDistros?: (() => Promise<WslDistroList[]>) | undefined
+  wslDistros: () => Promise<WslDistroList[]>
   /** The ports of those hosts' sessions forwarded to this PC's loopback; see `host/forwards.ts`. */
-  forwards?: PortForwards | undefined
-  /** Owns the hosted `claude` processes; see `sessions.ts`. */
-  sessions: SessionHost
-  /**
-   * The saved profiles: Helm's own database, or the local host's when sessions
-   * run there (`profiles.ts`). Helm's own when absent.
-   */
-  profiles?: ProfileService | undefined
-  /** What a crash took, offered back once; see `restore.ts`. */
-  restore: RestoreService
-  /** What each of those is doing, from Claude Code's registry. */
-  activity: ActivityService
-  /** What each of those is holding: process tree and ports. */
-  resources: ResourcesService
-  /** Owns the project shells; see `pterm.ts`. */
-  pterm?: PtermHost | undefined
+  forwards: PortForwards
   /** Owns the browser pane's `WebContentsView`s; see `browser.ts`. */
   browsers: BrowserHost
   /**
-   * Serves those views to the sessions Helm hosts; see `browser-mcp.ts`.
-   *
-   * Here only so `browserMcp` can take effect at once rather than at the next
-   * restart. Nothing on any channel reaches it, and nothing ever should: a
-   * renderer that could ask the endpoint for anything would be a page away from
-   * a token.
+   * Answers the browser calls the host relays for its sessions; see
+   * `browser-mcp.ts`. Nothing on any channel reaches it, and nothing ever
+   * should.
    */
   browserMcp: BrowserMcpHost | null
-  /** The one surface that writes to a `.claude` tree; see `config.ts`. */
-  config?: ConfigService | undefined
   /**
-   * The config console as the window reaches it: the local host's when
-   * sessions run there (`host/config.ts`), and `config` above otherwise.
+   * The local host's scan roots, for `roots:add`: the window's picker is its
+   * own, and the folders chosen go to the host (`host/workspace.ts`).
    */
-  configConsole?: ConfigConsoleService | undefined
-  /** Reads, renders and searches what Claude writes; see `content.ts`. */
-  content?: ContentService | undefined
-  /** The Files view's tree, file reads, Ctrl+P list and watches; see `files.ts`. */
+  workspace: WorkspaceService
+  /** Opening a file in the editor on this PC; see `files.ts`. */
   files: FilesService
-  /**
-   * What the Files view and the note viewer read, write and watch: the local
-   * host's when sessions run there (`host/files.ts`), and `content` and
-   * `files` above otherwise. Opening a file in an editor is `files`' either way.
-   */
-  filesReads?: FilesReads | undefined
-  /** Authors what `template:list` reads back; see `templates.ts`. */
-  templates?: TemplateService | undefined
-  /**
-   * Discovery, scan roots, harnesses, setup, templates and the settings the
-   * window reads: the local host's when sessions run there
-   * (`host/workspace.ts`), and Helm's own (`localWorkspace`) otherwise.
-   */
-  workspace?: WorkspaceService | undefined
   /** Built-in and user themes, and the watch on the user's; see `themes.ts`. */
   themes: ThemeService
-  /** Plugin folders, their pages' bridge calls, services and secrets; see `plugins/host.ts`. */
+  /** The plugin pages' frames, runtime and theme, and the tool relay; see `plugins/host.ts`. */
   plugins: PluginHost
-  /**
-   * What main keeps of the local host's plugins while sessions run there
-   * (`host/plugins.ts`): the hidden window's reports of the background pages
-   * it runs. Absent otherwise, when `plugins` keeps everything.
-   */
-  hostPlugins?: HostPlugins | undefined
+  /** The hidden window's reports of the local host's background pages it runs; see `host/plugins.ts`. */
+  hostPlugins: HostPlugins
   /**
    * Each remote host's plugins (`host/remote-plugins.ts`), whose background
    * pages the hidden window runs on that host's origin and reports by host.
    */
-  remotePlugins?: RemotePlugins | undefined
-  /** The hidden window plugins' background pages run in, while sessions run in the local host. */
-  pluginBackground?: (() => Electron.WebContents | null) | undefined
-  /**
-   * Whether sessions run in the local host this run. Then every Helm page
-   * reaches the host over its own connection, and main registers only what
-   * `boundary.rs` lists as client-only, and the host-internal channels from the
-   * hidden plugin window: a host feature asked over Electron IPC has no
-   * handler and is refused.
-   */
-  sessionsInHost?: boolean | undefined
-  /**
-   * This PC's host, while sessions run in it: how many sessions it runs, and
-   * stopping it once the user has agreed. Absent otherwise.
-   */
-  localHost?: LocalHostControl | undefined
-  /**
-   * The copy of Helm's own database into the local host, while sessions run
-   * in it (`host/own-data.ts`): its state answers `ownData:state`. Absent
-   * otherwise, when nothing is copied and the state is `idle`.
-   */
-  ownData?: OwnDataCopy | undefined
+  remotePlugins: RemotePlugins
+  /** The hidden window plugins' background pages run in. */
+  pluginBackground: () => Electron.WebContents | null
+  /** This PC's host: how many sessions it runs, and stopping it once the user has agreed. */
+  localHost: LocalHostControl
+  /** The copy of Helm's own database into the local host (`host/own-data.ts`): its state answers `ownData:state`. */
+  ownData: OwnDataCopy
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
    * Called when the `claude` path, the terminal shell, the archive's ceiling,
-   * either browser tools setting or the session tools setting changes, when
-   * sessions run in the local host, which is told all of them. Absent
-   * otherwise.
+   * either browser tools setting or the session tools setting changes: the
+   * local host is told all of them.
    */
-  hostSettingsChanged?: (() => void) | undefined
+  hostSettingsChanged: () => void
   /**
    * Stands in for the native file and directory pickers.
    *
@@ -277,19 +182,13 @@ interface IpcContextBase {
    * has to prove that "add a folder" and "locate claude" work end to end -
    * cannot click one. Same reasoning as the session host's `Confirm`: the
    * question is answered by the driver, and every other step still goes through
-   * the real handler, the real settings write and the real rescan.
+   * the real handler and the real settings write.
    *
    * Only `--packaging-firstrun` passes these. The app itself passes none and gets the
    * dialogs.
    */
   chooseDirectory?: ((title: string) => string | null) | undefined
   chooseFile?: ((title: string) => string | null) | undefined
-  /**
-   * A different `.claude` tree for the setup pane to report on. Only
-   * `--packaging-firstrun` passes one - it is how "a machine with a fresh `~/.claude`"
-   * is simulated without going anywhere near the user's real one.
-   */
-  claudeHome?: string | undefined
 }
 
 /** What Settings' Stop host reaches: main holds the link to this PC's host. */
@@ -300,76 +199,26 @@ export interface LocalHostControl {
   stop(): Promise<void>
 }
 
-/** Refuses a host control asked for while sessions run in Helm itself. */
-const noLocalHost = (): Promise<never> => Promise.reject(new Error('Sessions do not run in the local host.'))
-
-/** Why there is nothing to install on: other hosts are reached only with sessions in the local host. */
-const NO_REMOTE_HOSTS = 'Hosts on other computers are reached only with sessions in the local host.'
-
 /**
- * A service main does not run while sessions run in the local host: every
- * call to it fails, saying where it is. Nothing reaches one, since the
- * channels that would are not registered then.
+ * How main handles a channel: a client-only one from any Helm page, a
+ * host-internal one only from the hidden plugin window, and any other never.
  */
-function hostKeeps<T extends object>(what: string): T {
-  const refuse = (): never => {
-    throw new Error(`${what} run in the local host while sessions run there; main has none.`)
-  }
-  return new Proxy({} as T, { get: (_target, key) => (key === 'then' ? undefined : refuse) })
-}
-
-/** Whether main handles a channel this run: every one with the setting off; with it on, see `IpcContext.sessionsInHost`. */
-export function mainHandles(channel: string, sessionsInHost: boolean): 'always' | 'fromPluginWindow' | 'never' {
-  if (!sessionsInHost || isClientOnly(channel)) return 'always'
+export function mainHandles(channel: string): 'always' | 'fromPluginWindow' | 'never' {
+  if (isClientOnly(channel)) return 'always'
   return isHostInternal(channel) ? 'fromPluginWindow' : 'never'
 }
 
 export function registerIpc(ctx: IpcContext): void {
-  const { services } = ctx
-  const inHost = ctx.sessionsInHost === true
-  registerConfirmAnswers(inHost)
+  const { services, workspace } = ctx
+  registerConfirmAnswers(true)
   /** Whether a message came from the hidden plugin window, the only page a host-internal channel is taken from. */
-  const fromPluginWindow = (sender: WebContents): boolean => ctx.pluginBackground?.()?.id === sender.id
-  const profileService =
-    ctx.profiles ??
-    createLocalProfiles(services, nativeProfileDialogs(ctx.window), (channel, payload) =>
-      emit(ctx.window(), channel, payload)
-    )
-  const historyReads: HistoryReads =
-    ctx.historyReads !== undefined ? ctx.historyReads : localHistoryReads(services.store, ctx)
+  const fromPluginWindow = (sender: WebContents): boolean => ctx.pluginBackground()?.id === sender.id
   // One for the app, so a later copy supersedes one still retrying.
   const clipboardText = createClipboardText(clipboard)
 
-  // With sessions in the local host main builds none of these, and registers
-  // none of the channels that would reach them; asked anyway, each refuses.
-  const pterm: PtermHost = ctx.pterm ?? hostKeeps<PtermHost>('Terminals')
-  const templates: TemplateService = ctx.templates ?? hostKeeps<TemplateService>('Templates')
-  const configConsole: ConfigConsoleService =
-    ctx.configConsole ??
-    (ctx.config !== undefined ? localConfigConsole(ctx.config) : hostKeeps<ConfigConsoleService>('The config console'))
-  const filesReads: FilesReads =
-    ctx.filesReads ??
-    (ctx.content !== undefined ? localFilesReads(ctx.content, ctx.files) : hostKeeps<FilesReads>('The Files view'))
-
-  /** The CLI status, always read against the same config directory. */
-  const claudeStatus = (picked?: string): ReturnType<typeof readClaudeStatus> =>
-    readClaudeStatus({
-      claudePath: picked ?? services.settings.claudePath,
-      ...(ctx.claudeHome !== undefined ? { configDir: ctx.claudeHome } : {})
-    })
-
-  const workspace: WorkspaceService =
-    ctx.workspace ??
-    localWorkspace({
-      services,
-      emit: (channel, payload) => emit(ctx.window(), channel, payload),
-      claudeStatus,
-      templates
-    })
-
   const profileDialogs = nativeProfileDialogs(ctx.window)
 
-  /** What this build says of itself, wherever sessions run. */
+  /** What this build says of itself. */
   const ownAppInfo = (): OwnAppInfo => ({
     version: app.getVersion(),
     mode: appMode,
@@ -397,10 +246,10 @@ export function registerIpc(ctx: IpcContext): void {
     // A host added starts its link; one removed has its link let go of, with
     // nothing said to it, and its client folder removed.
     if (patch.hosts !== undefined) ctx.remoteHosts?.sync(next.hosts)
-    // Sessions in the local host run the `claude` and open the shell the
-    // host was told, and get the browser and session tools and the browser's
-    // reach as it was told, and the host holds its archive to the ceiling it
-    // was told, so it is told again at once when any of those changes.
+    // Sessions run the `claude` and open the shell the host was told, and get
+    // the browser and session tools and the browser's reach as it was told,
+    // and the host holds its archive to the ceiling it was told, so it is told
+    // again at once when any of those changes.
     if (
       patch.claudePath !== undefined ||
       patch.terminalShell !== undefined ||
@@ -409,36 +258,7 @@ export function registerIpc(ctx: IpcContext): void {
       patch.browserMcpLocalOnly !== undefined ||
       patch.sessionMcp !== undefined
     ) {
-      ctx.hostSettingsChanged?.()
-    }
-    /*
-     * The endpoint follows its own tick, immediately.
-     *
-     * `browserMcpLocalOnly` is deliberately **not** here: it is read through
-     * a function at every tool call, so it takes effect on the next one
-     * without anything being told. This one is different because it owns a
-     * socket - and an off switch for a listener that only takes effect at the
-     * next restart is an off switch somebody would reasonably believe had
-     * already worked.
-     *
-     * Sessions already running keep their tokens until it stops, and stopping
-     * revokes them: a session that had the tools loses them mid-task, which
-     * is the honest consequence of turning them off and is what the sentence
-     * in the pane says.
-     *
-     * **Several families, one socket**, so the question is whether *anything*
-     * is still on rather than whether this one is - a plugin offering tools
-     * counts too, which is why the endpoint decides (`sync`). Unticking one
-     * family with another still on takes that family's route away - the
-     * endpoint reads the settings per request - and leaves the listener up
-     * for the rest, which is what makes them independent capabilities rather
-     * than one with several switches.
-     */
-    if (
-      (patch.browserMcp !== undefined || patch.sessionMcp !== undefined) &&
-      ctx.browserMcp !== null
-    ) {
-      void ctx.browserMcp.sync()
+      ctx.hostSettingsChanged()
     }
     if (patch.theme !== undefined) nativeTheme.themeSource = patch.theme
     if (
@@ -462,9 +282,8 @@ export function registerIpc(ctx: IpcContext): void {
       return ctx.pageLinks.open(helmPageOf(event.sender), payload?.host ?? null)
     },
 
-    'remoteHosts:read': () => ctx.remoteHosts?.states() ?? {},
+    'remoteHosts:read': () => ctx.remoteHosts.states(),
     'remoteHosts:check': (target) => {
-      if (ctx.remoteInstall === undefined) return Promise.reject(new Error(NO_REMOTE_HOSTS))
       if ('host' in target) {
         const host = ctx.services.settings.hosts.find((each) => each.id === target.host)
         if (host === undefined) return Promise.reject(new Error('This PC has no such host.'))
@@ -476,16 +295,15 @@ export function registerIpc(ctx: IpcContext): void {
       const remoteInstall = ctx.remoteInstall
       const { attempt, ...checked } = target
       // A check for the add-a-host dialog stops with its Cancel.
-      if (attempt !== undefined && ctx.remoteAdd !== undefined) {
+      if (attempt !== undefined) {
         return ctx.remoteAdd.during(attempt, (signal) => remoteInstall.check(checked, signal))
       }
       return remoteInstall.check(checked)
     },
-    'remoteHosts:sshHosts': () => ctx.sshHosts?.() ?? { found: false, hosts: [] },
-    'remoteHosts:wslDistros': () => ctx.wslDistros?.() ?? [],
+    'remoteHosts:sshHosts': () => ctx.sshHosts(),
+    'remoteHosts:wslDistros': () => ctx.wslDistros(),
     'remoteHosts:add': (request) => {
       const { remoteAdd, remoteHosts } = ctx
-      if (remoteAdd === undefined || remoteHosts === undefined) return Promise.reject(new Error(NO_REMOTE_HOSTS))
       return remoteAdd.add(request, (host, connected) => {
         // The link takes the connection the add made, then the write that
         // lists the host keeps that link rather than making another.
@@ -502,51 +320,31 @@ export function registerIpc(ctx: IpcContext): void {
       })
     },
     'remoteHosts:cancelAdd': ({ attempt }) => {
-      ctx.remoteAdd?.cancel(attempt)
+      ctx.remoteAdd.cancel(attempt)
     },
     'remoteHosts:install': async ({ id, host }) => {
-      if (ctx.remoteInstall === undefined) throw new Error(NO_REMOTE_HOSTS)
       const outcome = await ctx.remoteInstall.install(id)
-      if (outcome.ok) ctx.remoteHosts?.installed(host, outcome.floti, outcome.startsAtNextSignIn)
+      if (outcome.ok) ctx.remoteHosts.installed(host, outcome.floti, outcome.startsAtNextSignIn)
       return outcome
     },
     'remoteHosts:cancel': ({ id }) => {
-      ctx.remoteInstall?.cancel(id)
+      ctx.remoteInstall.cancel(id)
     },
     'remoteHosts:reconnect': ({ id }) => {
-      ctx.remoteHosts?.reconnect(id)
+      ctx.remoteHosts.reconnect(id)
     },
-    'forwards:open': ({ host, session, port }) => {
-      if (ctx.forwards === undefined) return Promise.reject(new Error(NO_REMOTE_HOSTS))
-      return ctx.forwards.open(host, session, port)
-    },
-    'forwards:read': () => ctx.forwards?.list() ?? [],
-
-    // Sessions in Helm itself: no host, so no host log file.
-    'app:info': async () => ({
-      ...ownAppInfo(),
-      claudeVersion: await readClaudeVersion(),
-      hostLogFile: null
-    }),
+    'forwards:open': ({ host, session, port }) => ctx.forwards.open(host, session, port),
+    'forwards:read': () => ctx.forwards.list(),
 
     'ownApp:info': () => ownAppInfo(),
-    'ownData:state': () => ctx.ownData?.state() ?? { state: 'idle' },
+    'ownData:state': () => ctx.ownData.state(),
     'windowSessions:lostLayout': () => services.lost.layout,
-    'windowSessions:hostSessionCount': () => ctx.localHost?.sessionCount() ?? noLocalHost(),
-    'windowSessions:stopHost': () => ctx.localHost?.stop() ?? noLocalHost(),
-    'pluginBackground:states': () => [...(ctx.hostPlugins?.reports() ?? []), ...(ctx.remotePlugins?.reports() ?? [])],
+    'windowSessions:hostSessionCount': () => ctx.localHost.sessionCount(),
+    'windowSessions:stopHost': () => ctx.localHost.stop(),
+    'pluginBackground:states': () => [...ctx.hostPlugins.reports(), ...ctx.remotePlugins.reports()],
 
-    'settings:read': () => workspace.settings(),
-
-    'settings:write': async (patch) => {
-      const next = await workspace.writeSettings(patch)
-      emit(ctx.window(), 'settings:changed', next)
-      settingsWritten(patch, next)
-      return next
-    },
-
-    // With sessions in the local host, the window keeps the host's half of
-    // the settings over its own connection and Helm's half here.
+    // The window keeps the host's half of the settings over its own
+    // connection and Helm's half here.
     'ownSettings:read': () => services.settings,
 
     'ownSettings:write': (patch) => {
@@ -575,14 +373,8 @@ export function registerIpc(ctx: IpcContext): void {
       }
     },
 
-    'discovery:cached': () => workspace.cached(),
-
-    'discovery:scan': (payload) => workspace.scan(payload?.includeGit ?? true),
-
-    'roots:suggest': () => workspace.suggestRoots(),
-
-    // The picker is the window's own; the folders chosen go wherever the roots
-    // are kept.
+    // The picker is the window's own; the folders chosen go to the host's scan
+    // roots.
     'roots:add': async () => {
       const title = 'Add a folder to scan'
       if (ctx.chooseDirectory) {
@@ -600,42 +392,6 @@ export function registerIpc(ctx: IpcContext): void {
       if (result.canceled || result.filePaths.length === 0) return (await workspace.settings()).scanRoots
       return workspace.acceptRoots(result.filePaths)
     },
-
-    'roots:accept': ({ path }) => workspace.acceptRoots([path]),
-
-    'roots:remove': ({ path }) => workspace.removeRoot(path),
-
-    'setup:status': () => workspace.setupStatus(),
-
-    // The picker is the window's own; the executable chosen is checked, and
-    // kept, wherever sessions run.
-    'setup:locateClaude': async () => {
-      const title = 'Locate the claude executable'
-      let picked: string | undefined
-      if (ctx.chooseFile) {
-        picked = ctx.chooseFile(title) ?? undefined
-      } else {
-        const win = ctx.window()
-        const options: Electron.OpenDialogOptions = {
-          title,
-          properties: ['openFile'],
-          filters:
-            process.platform === 'win32'
-              ? [
-                  { name: 'Programs', extensions: ['exe', 'cmd', 'bat'] },
-                  { name: 'All files', extensions: ['*'] }
-                ]
-              : [{ name: 'All files', extensions: ['*'] }]
-        }
-        const result = win
-          ? await dialog.showOpenDialog(win, options)
-          : await dialog.showOpenDialog(options)
-        picked = result.canceled ? undefined : result.filePaths[0]
-      }
-      return picked === undefined ? workspace.setupStatus() : workspace.locateClaude(picked)
-    },
-
-    'setup:complete': () => workspace.completeSetup(),
 
     'path:chooseDirectory': async ({ title }) => {
       if (ctx.chooseDirectory) return { path: ctx.chooseDirectory(title ?? 'Choose a folder') }
@@ -671,25 +427,6 @@ export function registerIpc(ctx: IpcContext): void {
       return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
     },
 
-    'harness:create': (request) => workspace.createHarness(request),
-
-    'template:list': () => workspace.templates.list(),
-
-    'template:preview': (request) => workspace.templates.preview(request),
-
-    // Authoring. Every one of these writes inside the templates directory and
-    // nowhere else; `template:import` is the only one that reads outside it,
-    // and reading is all it does - see `assertTemplateWritable`.
-    'template:detail': ({ template }) => workspace.templates.detail(template),
-    'template:create': (request) => workspace.templates.create(request),
-    'template:rename': (request) => workspace.templates.rename(request),
-    'template:delete': ({ template }) => workspace.templates.remove(template),
-    'template:metadata': (request) => workspace.templates.metadata(request),
-    'template:substitute': (request) => workspace.templates.substitute(request),
-    'template:import': (request) => workspace.templates.importFiles(request),
-    'template:folderPreview': (request) => workspace.templates.folderPreview(request),
-    'template:fromFolder': (request) => workspace.templates.fromFolder(request),
-
     'update:check': () => checkForUpdate(),
 
     'theme:resolved': () => ctx.themes.state(services.settings).resolved,
@@ -710,122 +447,8 @@ export function registerIpc(ctx: IpcContext): void {
       shell.showItemInFolder(path)
     },
 
-    // The renderer awaits this one, so a failure to spawn arrives as a rejected
-    // promise with a sentence in it rather than a tab that never fills in.
-    'session:start': (request) => ctx.sessions.start(request),
-    'session:launch': (request) => ctx.sessions.launch(request),
-    'session:restorable': () => ctx.restore.offer(),
-    'session:restore': (request) => ctx.restore.restore(request),
-    'session:close': (request) => ctx.sessions.close(request),
-    'session:list': async () => {
-      await ctx.sessions.settled()
-      return ctx.sessions.list()
-    },
-    // A read of what main already holds, not a fresh pass: the poller is what
-    // decides when the registry is re-read, and a channel that forced a read
-    // would let a renderer set the poll rate.
-    'session:activity': () => ctx.activity.states(),
-    'sessions:overview': () => ctx.activity.overview(),
-    // Whatever the last pass produced. Never a fresh enumeration: the pass runs
-    // only while something is watching, and a channel that forced one would let
-    // a renderer spawn a powershell.exe per invoke. With sessions in the local
-    // host, the host's last set once Helm has reached it, or a rejection
-    // saying it could not be.
-    'sessions:resources': () => ctx.resources.snapshots(),
-    'session:rename': (request) => ctx.sessions.rename(request),
-
-    'pterm:open': (request) => pterm.open(request),
-    'pterm:close': ({ id }) => {
-      pterm.close(id)
-    },
-    'pterm:shells': () => pterm.detected(),
-
-    // Each write tells the window itself, from wherever the profiles live.
-    'profile:list': () => profileService.list(),
-    'profile:save': (request) => profileService.save(request),
-    'profile:delete': async ({ id }) => ({ deleted: await profileService.remove(id) }),
-    'profile:pin': ({ ids }) => profileService.pin(ids),
-    'profile:export': ({ id }) => profileService.exportProfile(id),
-    'profile:import': () => profileService.importProfile(),
-
-    'profile:launch': (request) => ctx.sessions.launchProfile(request),
-
-    'history:summary': () => historyReads.summary(),
-    'history:sessions': (query) => historyReads.sessions(query ?? {}),
-    'history:prompts': ({ sessionId }) => historyReads.prompts(sessionId),
-    'history:projects': () => historyReads.projects(),
-    'history:refresh': () => historyReads.refresh(),
-    // The one write in this family. It touches `history_names` and nothing the
-    // index owns, so no pass is forced and no other window has to be told: the
-    // renderer adopts the row it gets back.
-    'history:rename': ({ sessionId, name }) => historyReads.rename(sessionId, name),
-    // Awaited by the renderer for the same reason `session:start` is: the
-    // reasons a resume cannot happen are sentences, and a tab is the wrong
-    // place to learn them.
-    'history:resume': (request) => ctx.sessions.resume(request),
-
-    // Read-only, both of them, and there is deliberately no third channel here
-    // that captures or deletes anything: what the archive holds is decided by a
-    // pass in the main process or the local host, and the ceiling is an
-    // ordinary setting.
-    'archive:conversation': ({ sessionId }) => historyReads.conversation(sessionId),
-    'archive:stats': () => historyReads.archiveStats(),
-
-    // A free function rather than a method on either service: one editor, one
-    // highlighter, and nothing about a draft in a box belongs to a scope.
-    'editor:highlight': ({ path, source }) => filesReads.highlight(path, source),
-
-    'config:scopes': () => configConsole.scopes(),
-    'config:tree': ({ scopePath }) => configConsole.tree(scopePath),
-    'config:read': ({ path }) => configConsole.read(path),
-    'config:render': ({ path, source }) => configConsole.render(path, source),
-    // Every byte Helm writes into a `.claude` tree goes through this one
-    // handler, which is what makes "no write without a snapshot" a property of
-    // the app rather than of whoever remembered to take one.
-    'config:write': (request) => configConsole.write(request),
-    'config:snapshots': ({ scopePath, path }) => configConsole.snapshots(scopePath, path),
-    'config:snapshot': ({ id }) => configConsole.snapshot(id),
-    'config:restore': ({ id, path }) => configConsole.restore(id, path),
-    'config:watch': ({ path }) => configConsole.watch(path),
-
-    // The other three things a directory supports. They reach the same
-    // snapshot-first path `config:write` does; what is new here is the
-    // question, not a second route to the disk.
-    'config:create': (request) => configConsole.create(request),
-    'config:rename': (request) => configConsole.rename(request),
-    'config:delete': (request) => configConsole.remove(request),
-
-    'config:effective': (request) => configConsole.effective(request),
-
-    'config:mcpPreview': (request) => configConsole.mcpPreview(request),
-    'config:mcpAdd': (request) => configConsole.mcpAdd(request),
-    'config:mcpRemove': (request) => configConsole.mcpRemove(request),
-    'config:mcpApprove': (request) => configConsole.mcpApprove(request),
-    'config:mcpList': ({ cwd }) => configConsole.mcpList(cwd),
-
-    'config:doctor': () => configConsole.doctor(),
-
-    'usage:read': () => historyReads.usage(),
-
-    'content:scopes': () => filesReads.scopes(),
-    'content:document': ({ scopePath, path }) => filesReads.document(scopePath, path),
-    'content:render': ({ scopePath, path, source }) => filesReads.render(scopePath, path, source),
-    'content:search': ({ scopePath, query }) => filesReads.search(scopePath, query),
-    'content:write': (request) => filesReads.write(request),
-    'content:snapshots': ({ scopePath, path }) => filesReads.snapshots(scopePath, path),
-    'content:restore': ({ id, path }) => filesReads.restore(id, path),
-    'content:artifact': ({ scopePath, path }) => filesReads.artifact(scopePath, path),
-    'files:dir': ({ root, relPath }) => filesReads.dir(root, relPath),
-    'files:status': ({ root }) => filesReads.status(root),
-    'files:read': ({ root, path }) => filesReads.read(root, path),
-    'files:list': ({ root }) => filesReads.list(root),
-    'files:watch': ({ roots }) => filesReads.watch(roots),
     'files:editor': () => ({ name: ctx.files.editor() }),
     'files:openInEditor': ({ path, line }) => ctx.files.openInEditor(path, line),
-
-    'content:wikilink': async ({ scopePath, target, from }) => ({
-      path: await filesReads.wikilink(scopePath, target, from)
-    }),
 
     // A link in a note or a terminal is the user's, not Helm's, so it opens
     // where they expect links to open. The scheme check is the whole security
@@ -845,45 +468,6 @@ export function registerIpc(ctx: IpcContext): void {
 
     'clipboard:read': () => clipboardText.read(),
     'clipboard:write': async (text) => ({ outcome: await clipboardText.write(text) }),
-
-    /*
-     * Plugins. Every decision - what a manifest allows, whose secret may go
-     * where, what a page may open - is in `main/plugins/`; these delegate.
-     */
-    'plugins:list': () => ctx.plugins.list(),
-    'plugins:add': async (request) => {
-      const title = 'Add a plugin folder'
-      let path: string | null
-      if (typeof request?.path === 'string' && request.path !== '') path = request.path
-      else if (ctx.chooseDirectory) path = ctx.chooseDirectory(title)
-      else {
-        const win = ctx.window()
-        const options: Electron.OpenDialogOptions = { title, properties: ['openDirectory'] }
-        const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
-        path = result.canceled ? null : (result.filePaths[0] ?? null)
-      }
-      if (path === null) return { path: null, error: null, plugins: await (ctx.plugins.list()) }
-      return ctx.plugins.add(path)
-    },
-    'plugins:remove': ({ path, deleteSecrets }) =>
-      ctx.plugins.remove(path, deleteSecrets),
-    'plugins:setEnabled': ({ path, enabled }) =>
-      ctx.plugins.setEnabled(path, enabled),
-    'plugins:setTools': ({ path, enabled }) => ctx.plugins.setTools(path, enabled),
-    'plugins:reload': ({ path }) => ctx.plugins.reload(path),
-    'plugins:setSetting': ({ plugin, key, value }) =>
-      ctx.plugins.setSetting(plugin, key, value),
-    // The sender is part of the call's name, so two Helm pages relaying calls
-    // cannot cancel each other's.
-    'plugins:call': (request, event) => ctx.plugins.call(request, event.sender.id),
-    'plugins:session': (answer, event) => ctx.plugins.session(answer, event.sender.id),
-    'plugins:command': ({ plugin, id }) => ctx.plugins.command(plugin, id),
-    'plugins:metrics': () => ctx.plugins.metrics(),
-    'plugins:log': ({ path }) => ctx.plugins.log(path),
-    'plugins:ownSecrets': ({ path }) => ctx.plugins.ownSecrets(path),
-    'secrets:list': () => ctx.plugins.secrets.list(),
-    'secrets:save': (input) => ctx.plugins.secrets.save(input),
-    'secrets:remove': ({ key }) => ctx.plugins.secrets.remove(key),
 
     /*
      * The browser pane. Every handler is a one-line delegation on purpose:
@@ -929,33 +513,21 @@ export function registerIpc(ctx: IpcContext): void {
       }
     },
 
-    'session:input': ({ id, data }) => ctx.sessions.input(id, data),
-    'session:resize': ({ id, cols, rows }) => ctx.sessions.resize(id, cols, rows),
-    'session:focus': ({ ids }) => ctx.sessions.setFocus(ids),
-    'sessions:watch': ({ watching }) => ctx.resources.watch(watching),
-
-    'pterm:input': ({ id, data }) => pterm.input(id, data),
-    'pterm:resize': ({ id, cols, rows }) => pterm.resize(id, cols, rows),
-
     'browser:bounds': (payload) => ctx.browsers.bounds(payload),
 
-    'plugins:cancel': ({ callId }, event) => ctx.plugins.cancel(callId, event.sender.id),
-    'plugins:answer': ({ requestId }) => ctx.plugins.answer(requestId),
     // A remote host's report goes to that host's plugins only.
     'plugins:backgroundState': ({ plugin, revision, state, error, host }) =>
       host !== undefined
-        ? ctx.remotePlugins?.forHost(host)?.backgroundState(plugin, revision, state, error)
-        : ctx.hostPlugins !== undefined
-          ? ctx.hostPlugins.backgroundState(plugin, revision, state, error)
-          : ctx.plugins.backgroundState(plugin, revision, state, error),
+        ? ctx.remotePlugins.forHost(host)?.backgroundState(plugin, revision, state, error)
+        : ctx.hostPlugins.backgroundState(plugin, revision, state, error),
     // A background page's ask that only the window can draw, from the hidden
     // window, and the window's word that a secret dialog it asked for closed.
     'pluginWindow:ask': (request, event) => {
-      if (ctx.pluginBackground?.()?.id === event.sender.id) emit(ctx.window(), 'pluginWindow:asked', request)
+      if (ctx.pluginBackground()?.id === event.sender.id) emit(ctx.window(), 'pluginWindow:asked', request)
     },
     'pluginWindow:answer': (answer, event) => {
       const win = ctx.window()
-      const hidden = ctx.pluginBackground?.() ?? null
+      const hidden = ctx.pluginBackground()
       if (win === null || win.webContents.id !== event.sender.id || hidden === null || hidden.isDestroyed()) return
       hidden.send('pluginWindow:answered', answer)
     },
@@ -969,7 +541,6 @@ export function registerIpc(ctx: IpcContext): void {
     'probe:res': () => undefined,
     // Same shape: the real listener is the one `sessions.ts` registers at
     // module scope, which is the side holding the promise this answers.
-    'session:confirmed': () => undefined,
     'windowSessions:quitConfirmed': () => undefined,
     // The host judged nobody saw this exit, from what the window said was on
     // screen; only main can show the OS notification.
@@ -984,8 +555,8 @@ export function registerIpc(ctx: IpcContext): void {
   for (const [channel, handler] of Object.entries(requests) as Array<
     [string, (payload: unknown, event: Electron.IpcMainInvokeEvent) => unknown]
   >) {
-    const handles = mainHandles(channel, inHost)
-    if (handles === 'never') continue
+    const handles = mainHandles(channel)
+    if (handles === 'never') throw new Error(`${channel} is the host's; main has no handler for it.`)
     ipcMain.handle(channel, (event, payload: unknown) => {
       if (handles === 'fromPluginWindow' && !fromPluginWindow(event.sender)) {
         return Promise.reject(new Error(`${channel} is taken only from the hidden plugin window.`))
@@ -1015,8 +586,8 @@ export function registerIpc(ctx: IpcContext): void {
   for (const [channel, handler] of Object.entries(sends) as Array<
     [string, (payload: unknown, event: Electron.IpcMainEvent) => void]
   >) {
-    const handles = mainHandles(channel, inHost)
-    if (handles === 'never') continue
+    const handles = mainHandles(channel)
+    if (handles === 'never') throw new Error(`${channel} is the host's; main has no handler for it.`)
     ipcMain.on(channel, (event, payload: unknown) => {
       if (handles === 'fromPluginWindow' && !fromPluginWindow(event.sender)) return
       try {

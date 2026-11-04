@@ -46,7 +46,7 @@ import type { HostAdapter } from './router'
  *   closed comes back the same way, to be answered on this connection.
  *
  * What concerns only the page on screen is answered in the page that draws
- * it, with the checks main makes with the setting off (`client-calls.ts`):
+ * it, with the checks in `client-calls.ts`:
  * opening one of the plugin's tabs, and opening a link in the Browser tab,
  * which the window opens through `browser:open` and the reach rule. A call the
  * host cannot be reached for settles in the page as unavailable, with the

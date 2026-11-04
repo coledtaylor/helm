@@ -23,16 +23,11 @@ import {
 } from './helm'
 
 /**
- * With "Run sessions in the local host" on: sessions and terminals run in a
- * `floti host` Helm starts in its own data directory, reached through
- * `floti bridge` from Helm's client folder. `pnpm test:e2e` builds both.
+ * Sessions and terminals run in a `floti host` Helm starts in its own data
+ * directory, reached through `floti bridge` from Helm's client folder.
+ * `pnpm test:e2e` builds both.
  */
-const test = base.extend({
-  world: async ({ world }, use) => {
-    seedSettings(world, { sessionsInHost: true })
-    await use(world)
-  }
-})
+const test = base
 
 /**
  * A harness the first scan finds, `hub`, whose `repos/tools` has a skill to
@@ -838,7 +833,7 @@ test('when the host Helm started dies, Helm starts a new host and reconnects, an
 /** With "Always resume without asking" ticked before the app starts. */
 const withoutAsking = test.extend({
   world: async ({ world }, use) => {
-    seedSettings(world, { sessionsInHost: true, restoreWithoutAsking: true })
+    seedSettings(world, { restoreWithoutAsking: true })
     await use(world)
   }
 })

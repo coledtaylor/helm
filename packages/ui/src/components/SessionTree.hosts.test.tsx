@@ -220,51 +220,41 @@ describe('SessionTree with hosts on other computers', () => {
     expect(screen.queryByRole('menuitem', { name: 'Add a host…' })).toBeNull()
   })
 
-  it('S21: with the setting off (no menu handler given), the list’s right-click menu has no Add a host… item', () => {
+  it('S21: with no menu handler given, the list’s right-click menu has no Add a host… item', () => {
     renderTree({ hosts: [] })
     fireEvent.contextMenu(screen.getByRole('navigation', { name: 'Projects and sessions' }), { clientX: 40, clientY: 80 })
     expect(screen.queryByRole('menuitem', { name: 'Add a host…' })).toBeNull()
   })
 })
 
-describe('S21: what the window gives the tree about hosts, from Run sessions in the local host', () => {
-  const hostProps = (sessionsInHost: boolean, hosts: readonly TreeHost[], onAddHost = vi.fn()) => ({
+describe('S1: what the window gives the tree about hosts', () => {
+  const hostProps = (hosts: readonly TreeHost[], onAddHost = vi.fn()) => ({
     onAddHost,
-    // The window always gives the tree its host actions and this PC's name;
-    // what the setting decides is which hosts it lists and the menu.
+    // The window always gives the tree its host actions and this PC's name.
     props: {
       hostActions: actions(),
       localName: 'This PC',
       localKey: 'local',
-      ...sessionTreeHostProps({ sessionsInHost, hosts, onAddHost })
+      ...sessionTreeHostProps({ hosts, onAddHost })
     }
   })
   const rightClickList = () =>
     fireEvent.contextMenu(screen.getByRole('navigation', { name: 'Projects and sessions' }), { clientX: 40, clientY: 80 })
 
-  it('S21: with the setting on and this PC the only host, right-clicking the list offers Add a host…, which opens the dialog', async () => {
-    const { onAddHost, props } = hostProps(true, [])
+  it('S1: with this PC the only host, right-clicking the list offers Add a host…, which opens the dialog', async () => {
+    const { onAddHost, props } = hostProps([])
     renderTree(props)
     rightClickList()
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Add a host…' }))
     expect(onAddHost).toHaveBeenCalledOnce()
   })
 
-  it('S21: with the setting off, right-clicking the list shows no Add a host… item and no Add a host line', () => {
-    const { onAddHost, props } = hostProps(false, [buildBox()])
-    expect(sessionTreeHostProps({ sessionsInHost: false, hosts: [buildBox()], onAddHost })).toEqual({})
-    renderTree(props)
-    rightClickList()
-    expect(screen.queryByRole('menuitem', { name: 'Add a host…' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Add a host' })).toBeNull()
-    expect(onAddHost).not.toHaveBeenCalled()
-  })
-
-  it('S20, S21: with the setting on and another host added, the list ends with Add a host and its right-click menu has none', () => {
-    const { props } = hostProps(true, [buildBox()])
+  it('S1: with another host added, the list shows it, ends with Add a host and its right-click menu has none', () => {
+    const { props } = hostProps([buildBox()])
     renderTree(props)
     rightClickList()
     expect(screen.queryByRole('menuitem', { name: 'Add a host…' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Add a host' })).toBeTruthy()
+    expect(screen.getAllByText('build-box').length).toBeGreaterThan(0)
   })
 })

@@ -10,15 +10,13 @@ import { createRouter } from '../app/host/router'
  * The hidden plugin host window's own bridges: one per host whose background
  * pages it runs.
  *
- * With "Run sessions in the local host" on, this window reaches each host over
- * a connection of its own, which says it can draw plugin pages and nothing
- * else, and only a background adapter is built on it: no terminal, files or
- * sessions. This PC's host is reached as it always was; a host on another
- * computer is reached once main says it is connected (`backgrounds.ts`), over
- * its own page link. Each host's background pages' calls and deliveries go
- * over that host's connection only; the theme and the tool calls main hands a
- * background page stay on the preload's bridge. With the setting off This
- * PC's is the preload's bridge.
+ * This window reaches each host over a connection of its own, which says it
+ * can draw plugin pages and nothing else, and only a background adapter is
+ * built on it: no terminal, files or sessions. A host on another computer is
+ * reached once main says it is connected (`backgrounds.ts`), over its own page
+ * link. Each host's background pages' calls and deliveries go over that
+ * host's connection only; the theme and the tool calls main hands a
+ * background page stay on the preload's bridge.
  *
  * A background page is an iframe on its host's origin for its plugin, with no
  * preload, so it reaches none of this, and this window holds no key: main
@@ -50,7 +48,6 @@ export function createBackgroundBridge(own: HelmBridge, host: string): Backgroun
   const background = createBackgroundAdapter({ link, own: adapterOwn, host, log })
   const helm = createRouter({
     own,
-    inHost: local ? () => link.inHost() : true,
     adapters: [background],
     clientOnly: isClientOnly,
     hostInternal: isHostInternal,

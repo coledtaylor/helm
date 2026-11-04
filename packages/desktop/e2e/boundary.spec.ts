@@ -21,8 +21,7 @@ function inBackground<T>(helm: Helm, script: string): Promise<T> {
 }
 
 /**
- * With "Run sessions in the local host" on, Electron IPC carries only what
- * `boundary.rs` lists as client-only: the browser pane, clipboard, window,
+ * Electron IPC carries only what `boundary.rs` lists as client-only: the browser pane, clipboard, window,
  * theme, dialogs and each Helm page's own connection to the host. Everything
  * else reaches the host over that connection, in the protocol's types.
  *
@@ -30,12 +29,11 @@ function inBackground<T>(helm: Helm, script: string): Promise<T> {
  * after each workflow the test fails naming any channel the generated
  * client-only list does not cover. A host-internal channel passes only on the
  * hidden window plugins' background pages run in, where API v1 runs them
- * inside the desktop. Main registers nothing else with the setting on, so a
- * channel it does not list could only show up here as one main answered.
+ * inside the desktop. Main registers nothing else, so a channel it does not
+ * list could only show up here as one main answered.
  */
 
 const test = base.extend<{ sample: SampleFixture }>({
-  sessionsInHost: true,
   sample: [
     // eslint-disable-next-line no-empty-pattern
     async ({}, use) => {

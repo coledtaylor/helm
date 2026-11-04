@@ -106,14 +106,10 @@ export const devices: Devices = createDevices({ log })
 /** The window's own connection to this PC's host, for Settings > Devices. */
 export const localHostConnection = (): ReturnType<typeof link.connection> => link.connection()
 
-/** Whether sessions run in the local host this run: main says once, when the window first asks. */
-export const sessionsInHost = (): Promise<boolean> => link.inHost()
-
 /**
- * With sessions in the local host, which of a host's sessions have a tab in
- * this window: the layout is this device's own, so the window tells that
- * host's connection which terminals to carry. This PC's by default. Unused
- * with the setting off.
+ * Which of a host's sessions have a tab in this window: the layout is this
+ * device's own, so the window tells that host's connection which terminals to
+ * carry. This PC's by default.
  */
 export const hostSessionTabs = {
   show: (ids: readonly number[], host: string = LOCAL_HOST_KEY): void => hostBridges.hostBridge(host).sessions.show(ids),
@@ -130,10 +126,8 @@ export const hostAdapters: readonly HostAdapter[] = local.adapters
  * `ipcRenderer` here to reach for, and a feature that wants a new capability
  * has to add a channel to `shared/ipc.ts`, where both ends are checked.
  *
- * With "Run sessions in the local host" off it is the preload's bridge. With
- * it on, each channel `boundary.rs` lists as client-only stays on the preload's
+ * Each channel `boundary.rs` lists as client-only stays on the preload's
  * bridge, each a host adapter takes goes to the host over this window's own
- * connection, and any other is refused (`host/router.ts`); hooks see the same
- * shape either way.
+ * connection, and any other is refused (`host/router.ts`).
  */
 export const helm: HelmBridge = local.helm

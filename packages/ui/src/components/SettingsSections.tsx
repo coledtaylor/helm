@@ -69,16 +69,7 @@ export interface SettingsSectionsProps {
   current: SettingsSectionId
   onSelect: (id: SettingsSectionId) => void
   plugins?: readonly SettingsPluginLink[] | undefined
-  /**
-   * Whether Hosts and Devices are listed: only while "Run sessions in the
-   * local host" is on, since a host on another computer is reached only
-   * beside this PC's.
-   */
-  showHosts?: boolean | undefined
 }
-
-/** The sections listed only while sessions run in the local host. */
-const HOST_SECTIONS: ReadonlySet<SettingsSectionId> = new Set(['hosts', 'devices'])
 
 export const pluginSection = (path: string): SettingsSectionId => `plugin:${path}`
 
@@ -86,12 +77,11 @@ export const pluginSection = (path: string): SettingsSectionId => `plugin:${path
 export function SettingsSections({
   current,
   onSelect,
-  plugins = [],
-  showHosts = false
+  plugins = []
 }: SettingsSectionsProps): JSX.Element {
   return (
     <nav aria-label="Settings sections" className="flex flex-col gap-px px-1.5 pb-1.5">
-      {SETTINGS_SECTIONS.filter((section) => showHosts || !HOST_SECTIONS.has(section.id)).map((section) => {
+      {SETTINGS_SECTIONS.map((section) => {
         const selected = section.id === current
         const link = (
           <button

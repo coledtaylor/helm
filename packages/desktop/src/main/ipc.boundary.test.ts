@@ -31,16 +31,12 @@ function anything(): unknown {
   return proxy
 }
 
-async function registerWith(sessionsInHost: boolean): Promise<string[]> {
+async function register(): Promise<string[]> {
   registered.handle.length = 0
   registered.on.length = 0
   vi.resetModules()
   const { registerIpc } = await import('./ipc')
-  const ctx = new Proxy(
-    { sessionsInHost },
-    { get: (target, key) => (key in target ? (target as Record<string | symbol, unknown>)[key] : anything()) }
-  )
-  registerIpc(ctx as never)
+  registerIpc(anything() as never)
   return [...registered.handle, ...registered.on]
 }
 
@@ -49,22 +45,25 @@ describe('what main handles over Electron IPC', () => {
     vi.resetModules()
   })
 
-  it('with sessions in the local host, registers no channel boundary.rs does not list as client-only or host-internal', async () => {
-    const channels = await registerWith(true)
+  it('S6: registers no channel boundary.rs does not list as client-only or host-internal', async () => {
+    const channels = await register()
     expect(channels.length).toBeGreaterThan(0)
     expect(channels.filter((channel) => !isClientOnly(channel) && !isHostInternal(channel)).sort()).toEqual([])
     // The window's answer to a session's close is the host's, never main's.
     expect(channels).not.toContain('session:confirmed')
+    expect(channels).not.toContain('session:start')
+    expect(channels).not.toContain('pterm:open')
     expect(channels).toContain('windowSessions:quitConfirmed')
     expect(channels).toContain('hostLink:open')
   })
 
-  it('with the setting off, registers every channel as today', async () => {
-    const channels = new Set(await registerWith(false))
+  it('S6: registers every client-only and host-internal request and send the desktop declares', async () => {
+    const channels = new Set(await register())
     const declared = [...REQUEST_CHANNELS, ...SEND_CHANNELS]
-    const missing = declared.filter((channel) => !channels.has(channel))
+    const missing = declared.filter(
+      (channel) => (isClientOnly(channel) || isHostInternal(channel)) && !channels.has(channel)
+    )
     expect(missing).toEqual([])
-    expect(channels.has('session:confirmed')).toBe(true)
     // Main's pushes are not registrations.
     expect(EVENT_CHANNELS.filter((channel) => channels.has(channel) && !declared.includes(channel as never))).toEqual([])
   })

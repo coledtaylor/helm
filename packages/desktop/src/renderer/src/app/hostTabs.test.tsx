@@ -76,7 +76,7 @@ function world(first: FakeConnection) {
   const link = reconnectingReach(first)
   const bridges = createHostBridges({
     own: bridge,
-    localLink: { ...fakeReach(here), inHost: () => Promise.resolve(true) } as unknown as PageLink,
+    localLink: fakeReach(here) as unknown as PageLink,
     remoteLink: (id) => {
       if (id !== BUILD) throw new Error(`no host ${id} in this test`)
       return link as unknown as PageLink
@@ -147,7 +147,7 @@ describe('a build-box session’s tab', () => {
     w.tell({ [BUILD]: { state: 'connected' } })
     await settle()
     let layout: PaneLayout = openTab(EMPTY_LAYOUT, sessionRef(7, BUILD))
-    const shownTabs = renderHook(({ at }) => useShownSessionTabs(at, true, [BUILD], w.show), {
+    const shownTabs = renderHook(({ at }) => useShownSessionTabs(at, [BUILD], w.show), {
       initialProps: { at: layout }
     })
     await settle()
@@ -223,7 +223,7 @@ describe('a build-box session’s tab', () => {
     w.tell({ [BUILD]: { state: 'connected' } })
     await settle()
     const layout: PaneLayout = openTab(EMPTY_LAYOUT, sessionRef(7, BUILD))
-    const shownTabs = renderHook(({ connected }) => useShownSessionTabs(layout, true, connected, w.show), {
+    const shownTabs = renderHook(({ connected }) => useShownSessionTabs(layout, connected, w.show), {
       initialProps: { connected: [BUILD] as readonly string[] }
     })
     await settle()

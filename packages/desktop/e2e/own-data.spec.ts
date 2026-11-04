@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import {
@@ -18,9 +18,8 @@ import { expect, test as base } from './helm'
 /**
  * What only Helm's own database holds - a conversation it archived whose
  * transcript Claude Code has since deleted, the name given to it in History,
- * its usage and a saved version of a CLAUDE.md - reads the same with
- * "Run sessions in the local host" on, where it was copied into the host, as
- * with it off, where it is read from helm.db.
+ * its usage and a saved version of a CLAUDE.md - is copied into the local
+ * host, and reads there as it did from helm.db.
  */
 
 const KEPT = sessionUuid(0x11)
@@ -67,7 +66,7 @@ function archive(world: World, sessionId: string, texts: readonly string[], at: 
 }
 
 /**
- * Helm's database as the switch-off path left it. The conversation's prompts
+ * Helm's database as an earlier version left it. The conversation's prompts
  * stay in history.jsonl; its transcript file was never written, as after
  * Claude Code reaped it.
  */
@@ -153,7 +152,7 @@ async function chooseScope(window: Page, name: string): Promise<void> {
   await expect(scope).toHaveValue(value!)
 }
 
-/** The version saved with the switch off is listed, and restoring it puts its bytes back. */
+/** The version helm.db saved is listed, and restoring it puts its bytes back. */
 async function restoresTheSavedVersion(window: Page, world: World): Promise<void> {
   const file = join(world.projects.alpha, 'CLAUDE.md')
   await window.getByRole('button', { name: 'Config', exact: true }).click()
@@ -166,26 +165,19 @@ async function restoresTheSavedVersion(window: Page, world: World): Promise<void
   await expect(window.getByRole('button', { name: '2 versions', exact: true })).toBeVisible()
 }
 
-test('History, the archived conversation and the config console show what only helm.db held, wherever sessions run', async ({
+test('History, the archived conversation and the config console show what only helm.db held, once copied into the host', async ({
   world,
-  helm,
-  sessionsInHost
+  helm
 }) => {
   const before = readFileSync(helmDb(world))
-  if (sessionsInHost) await expect.poll(async () => (await copyState(helm.window)).state).toBe('finished')
+  await expect.poll(async () => (await copyState(helm.window)).state).toBe('finished')
 
   await showsTheArchivedConversation(helm.window)
   await restoresTheSavedVersion(helm.window, world)
 
   await expect(helm.window.locator('[data-own-data-banner]')).toHaveCount(0)
-  if (!sessionsInHost) {
-    // Nothing is copied: no host was started and no floti.db written.
-    expect(await copyState(helm.window)).toEqual({ state: 'idle' })
-    expect(existsSync(join(world.dataDir, 'host', 'data', 'floti.db'))).toBe(false)
-  } else {
-    // The config console's restore wrote the host's database, never Helm's.
-    expect(readFileSync(helmDb(world)).equals(before)).toBe(true)
-  }
+  // The config console's restore wrote the host's database, never Helm's.
+  expect(readFileSync(helmDb(world)).equals(before)).toBe(true)
 })
 
 /**
@@ -210,12 +202,9 @@ const refused = test.extend({
 
 refused('a copy that did not finish says so, and the next start finishes it without copying anything twice', async ({
   world,
-  sessionsInHost,
   helm,
   relaunch
 }, testInfo) => {
-  test.skip(!sessionsInHost, 'the copy runs only with sessions in the local host')
-
   await expect.poll(async () => (await copyState(helm.window)).state).toBe('unfinished')
   // The conversation with a message past one frame went, cut short, before the refusal.
   expect(await copyState(helm.window)).toMatchObject({

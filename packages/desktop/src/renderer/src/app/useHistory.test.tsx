@@ -214,7 +214,7 @@ describe('the history pane over the session index', () => {
   })
 
   it('says Helm could not reach the local host when its reads fail, rather than listing nothing as if there were nothing', async () => {
-    const unreachable = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+    const unreachable = 'No local host answered on its socket.'
     const refuse = (channel: string) => () => {
       throw new Error(`Error invoking remote method '${channel}': Error: ${unreachable}`)
     }

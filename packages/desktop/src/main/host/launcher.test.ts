@@ -17,7 +17,8 @@ import {
   type LauncherDeps
 } from './launcher'
 
-const TURN_OFF = '; turn off “Run sessions in the local host” in Settings to use Helm’s own sessions.'
+/** The local-host failure sentences end at their cause. */
+const END = '.'
 
 const WIN_PLACES: HostPlaces = {
   appMode: 'dev',
@@ -363,7 +364,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
   it('only connects when asked to, and starts no host when none answers', async () => {
     const world = new World({ bridges: [exits(3)], hosts: [] })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps(), { startHost: false }))).toBe(
-      `No local host answered on its socket${TURN_OFF}`
+      `No local host answered on its socket${END}`
     )
     expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`])
   })
@@ -421,7 +422,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       world.timers[waited * 2 - 1]!()
     }
     expect(await starting).toBe(
-      `Another local host still had Helm's host folders after ${HOST_START_DEADLINE_MS / 1000} seconds${TURN_OFF}`
+      `Another local host still had Helm's host folders after ${HOST_START_DEADLINE_MS / 1000} seconds${END}`
     )
     expect(world.programs()).toHaveLength(1 + tries)
   })
@@ -475,7 +476,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       hosts: [foldersHeld]
     })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `Helm has no key pinned for the local host, and no local host has started on this computer yet${TURN_OFF}`
+      `Helm has no key pinned for the local host, and no local host has started on this computer yet${END}`
     )
     expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, HOST_PROGRAM])
   })
@@ -483,7 +484,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
   it('says Helm has nothing pinned when the host it started still has no key to learn, and ends that host', async () => {
     const world = new World({ bridges: [exits(4), exits(4)] })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `Helm has no key pinned for the local host, and no local host has started on this computer yet${TURN_OFF}`
+      `Helm has no key pinned for the local host, and no local host has started on this computer yet${END}`
     )
     expect(world.spawned[1]!.killed).toBe(true)
   })
@@ -496,7 +497,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     'refuses with one sentence of its own when the bridge exits with status %i, starting no host',
     async (code, sentence) => {
       const world = new World({ bridges: [exits(code)] })
-      expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(`${sentence}${TURN_OFF}`)
+      expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(`${sentence}${END}`)
       expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`])
     }
   )
@@ -504,7 +505,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
   it('says the local host program could not be found, and runs nothing', async () => {
     const world = new World({}, false)
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `Helm could not find the local host program at C:\\src\\my helm\\target\\debug\\floti.exe${TURN_OFF}`
+      `Helm could not find the local host program at C:\\src\\my helm\\target\\debug\\floti.exe${END}`
     )
     expect(world.spawned).toEqual([])
   })
@@ -521,14 +522,14 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       ]
     })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `Helm could not run the local host program at C:\\src\\my helm\\target\\debug\\floti.exe (EACCES)${TURN_OFF}`
+      `Helm could not run the local host program at C:\\src\\my helm\\target\\debug\\floti.exe (EACCES)${END}`
     )
   })
 
   it('says the host it started did not answer, and stops it, when the bridge still finds no host', async () => {
     const world = new World({ bridges: [exits(3), exits(3)] })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `The local host Helm started did not answer on its socket${TURN_OFF}`
+      `The local host Helm started did not answer on its socket${END}`
     )
     expect(world.spawned[1]!.killed).toBe(true)
     expect(world.spawned[1]!.running).toBe(false)
@@ -540,7 +541,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       hosts: [(child) => queueMicrotask(() => child.exit(1))]
     })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `The local host stopped before it was ready, with status 1${TURN_OFF}`
+      `The local host stopped before it was ready, with status 1${END}`
     )
     expect(world.programs()).toHaveLength(2)
   })
@@ -548,7 +549,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
   it('says the host’s own reason when the host it started did not start, even when the reason arrives after its exit', async () => {
     const world = new World({ bridges: [exits(3)], hosts: [saysWhyItDidNotStart(SOCKET_TOO_LONG)] })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `The local host did not start: ${SOCKET_TOO_LONG}${TURN_OFF}`
+      `The local host did not start: ${SOCKET_TOO_LONG}${END}`
     )
   })
 
@@ -558,7 +559,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       hosts: [saysWhyItDidNotStart(FROM_SSH)]
     })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `The local host did not start: ${FROM_SSH.replace(/\.$/, '')}${TURN_OFF}`
+      `The local host did not start: ${FROM_SSH.replace(/\.$/, '')}${END}`
     )
     expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, HOST_PROGRAM])
   })
@@ -569,7 +570,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       hosts: [(child) => queueMicrotask(() => child.exit(1))]
     })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `The local host stopped before it was ready, with status 1${TURN_OFF}`
+      `The local host stopped before it was ready, with status 1${END}`
     )
   })
 
@@ -579,7 +580,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     await expect.poll(() => world.timers.length, { timeout: PATIENCE }).toBe(1)
     world.timers[0]!()
     expect(await starting).toBe(
-      `The local host did not say it was listening within ${HOST_START_DEADLINE_MS / 1000} seconds${TURN_OFF}`
+      `The local host did not say it was listening within ${HOST_START_DEADLINE_MS / 1000} seconds${END}`
     )
     expect(world.spawned[1]!.killed).toBe(true)
   })
@@ -601,7 +602,7 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     }
     const world = new World({ bridges: [refuses] })
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
-      `This host speaks protocol 2.0 and Helm speaks 1.0: update Helm${TURN_OFF}`
+      `This host speaks protocol 2.0 and Helm speaks 1.0: update Helm${END}`
     )
   })
 

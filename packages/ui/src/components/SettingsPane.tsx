@@ -237,17 +237,9 @@ export interface SettingsPaneProps {
   /** Reopen what a crash took without asking. Also ticked from the offer itself. */
   restoreWithoutAsking: boolean
   onRestoreWithoutAskingChange: (next: boolean) => void
-  /** Run sessions and terminals in the local host. Read when Helm starts, so a change waits for the next start. */
-  sessionsInHost: boolean
-  onSessionsInHostChange: (next: boolean) => void
-  /**
-   * What quitting Helm does to the sessions it started on this PC's host,
-   * kept on this device. Shown while `sessionsInHost` is on.
-   */
+  /** What quitting Helm does to the sessions it started on this PC's host, kept on this device. */
   quitSessions: QuitSessions
   onQuitSessionsChange: (next: QuitSessions) => void
-  /** Whether sessions run in this PC's host this run, so there is a host to stop. */
-  hostRunning: boolean
   /** Asks how many sessions stopping ends, and stops this PC's host on a yes. */
   onStopHost: () => void
   /** The log file this PC's host writes its standard error and panics to, as the host names it; null when there is none to name. */
@@ -376,11 +368,8 @@ export function SettingsPane({
   onSessionMcpChange,
   restoreWithoutAsking,
   onRestoreWithoutAskingChange,
-  sessionsInHost,
-  onSessionsInHostChange,
   quitSessions,
   onQuitSessionsChange,
-  hostRunning,
   onStopHost,
   hostLogFile,
   hosts,
@@ -683,11 +672,8 @@ export function SettingsPane({
               onMcpChange={onSessionMcpChange}
               restore={restoreWithoutAsking}
               onRestoreChange={onRestoreWithoutAskingChange}
-              inHost={sessionsInHost}
-              onInHostChange={onSessionsInHostChange}
               quit={quitSessions}
               onQuitChange={onQuitSessionsChange}
-              hostRunning={hostRunning}
               onStopHost={onStopHost}
               hostLogFile={hostLogFile}
             />
@@ -1566,11 +1552,8 @@ function SessionsGroup({
   onMcpChange,
   restore,
   onRestoreChange,
-  inHost,
-  onInHostChange,
   quit,
   onQuitChange,
-  hostRunning,
   onStopHost,
   hostLogFile
 }: {
@@ -1578,11 +1561,8 @@ function SessionsGroup({
   onMcpChange: (next: boolean) => void
   restore: boolean
   onRestoreChange: (next: boolean) => void
-  inHost: boolean
-  onInHostChange: (next: boolean) => void
   quit: QuitSessions
   onQuitChange: (next: QuitSessions) => void
-  hostRunning: boolean
   onStopHost: () => void
   hostLogFile: string | null
 }): JSX.Element {
@@ -1624,70 +1604,46 @@ function SessionsGroup({
           />
         </span>
       </Row>
+      {/* Only this PC's host: the one a desktop runs its sessions in. */}
       <Row
-        label="Run sessions in the local host"
+        label="When you quit Helm"
         hint={
-          inHost
-            ? 'Sessions and terminals run in the local host program, which Helm starts and which can outlive it. Takes effect the next time Helm starts.'
-            : 'Sessions and terminals run in Helm itself. Takes effect the next time Helm starts.'
+          quit === 'end'
+            ? 'For this PC’s host. Quitting ends the sessions Helm started there, after asking when any are running. Kept on this device.'
+            : 'For this PC’s host. Quitting leaves the sessions Helm started running there, and they are back in their tabs when Helm opens again. Kept on this device.'
         }
       >
-        <span data-settings-sessions-in-host={String(inHost)}>
-          <Checkbox
-            checked={inHost}
-            onChange={() => onInHostChange(!inHost)}
-            label="Run sessions in the local host"
-          />
-        </span>
+        <Select
+          value={quit}
+          label="When you quit Helm"
+          data-settings-quit-sessions={quit}
+          onChange={(value) => onQuitChange(value === 'keep' ? 'keep' : 'end')}
+        >
+          <option value="end">End the sessions it started</option>
+          <option value="keep">Keep them running</option>
+        </Select>
       </Row>
-      {/* Only this PC's host: the one a desktop runs its sessions in. */}
-      {inHost && (
-        <>
-          <Row
-            label="When you quit Helm"
-            hint={
-              quit === 'end'
-                ? 'For this PC’s host. Quitting ends the sessions Helm started there, after asking when any are running. Kept on this device.'
-                : 'For this PC’s host. Quitting leaves the sessions Helm started running there, and they are back in their tabs when Helm opens again. Kept on this device.'
-            }
+      <Row
+        label="This PC’s host"
+        hint="Stopping it ends every session running in it, whichever device started it, after asking. Helm starts it again when it next needs it."
+      >
+        <Action data-settings-stop-host onClick={onStopHost}>
+          Stop host
+        </Action>
+      </Row>
+      {hostLogFile !== null && (
+        <Row
+          label="Log file"
+          hint="Where this PC’s host writes what it says about itself, a crash included. It holds no key, code, prompt or session output."
+        >
+          <span
+            data-settings-host-log
+            className="block max-w-[22rem] truncate font-mono text-[11px] text-fg-muted select-text"
+            title={hostLogFile}
           >
-            <Select
-              value={quit}
-              label="When you quit Helm"
-              data-settings-quit-sessions={quit}
-              onChange={(value) => onQuitChange(value === 'keep' ? 'keep' : 'end')}
-            >
-              <option value="end">End the sessions it started</option>
-              <option value="keep">Keep them running</option>
-            </Select>
-          </Row>
-          <Row
-            label="This PC’s host"
-            hint={
-              hostRunning
-                ? 'Stopping it ends every session running in it, whichever device started it, after asking. Helm starts it again when it next needs it.'
-                : 'Sessions run in Helm itself until it starts again, so there is no host to stop.'
-            }
-          >
-            <Action data-settings-stop-host onClick={onStopHost} disabled={!hostRunning}>
-              Stop host
-            </Action>
-          </Row>
-          {hostRunning && hostLogFile !== null && (
-            <Row
-              label="Log file"
-              hint="Where this PC’s host writes what it says about itself, a crash included. It holds no key, code, prompt or session output."
-            >
-              <span
-                data-settings-host-log
-                className="block max-w-[22rem] truncate font-mono text-[11px] text-fg-muted select-text"
-                title={hostLogFile}
-              >
-                {hostLogFile}
-              </span>
-            </Row>
-          )}
-        </>
+            {hostLogFile}
+          </span>
+        </Row>
       )}
     </Group>
   )

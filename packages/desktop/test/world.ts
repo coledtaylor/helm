@@ -192,14 +192,12 @@ export const hostDataOf = (world: World): string => join(world.dataDir, 'host', 
  * The settings a world starts with: its projects folder scanned, its fake
  * `claude` chosen, first run done, and the update check off so nothing goes to
  * the network. Written through the app's own store, before the app opens it.
- * With "Run sessions in the local host" on, the host's data folder is marked
- * to seal inside itself, so no host a test starts reaches a credential store.
+ * The host's data folder is marked to seal inside itself, so no host a test
+ * starts reaches a credential store.
  */
 export function seedSettings(world: World, patch: Partial<AppSettings> = {}): void {
-  if (patch.sessionsInHost === true) {
-    mkdirSync(hostDataOf(world), { recursive: true })
-    writeFileSync(join(hostDataOf(world), HOST_TEST_SEAL_MARKER), 'key-file')
-  }
+  mkdirSync(hostDataOf(world), { recursive: true })
+  writeFileSync(join(hostDataOf(world), HOST_TEST_SEAL_MARKER), 'key-file')
   const store = openStore({ file: join(world.dataDir, 'helm.db') })
   try {
     writeSettings(store, {

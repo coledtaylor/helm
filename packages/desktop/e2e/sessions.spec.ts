@@ -1,12 +1,10 @@
 import type { Locator, Page } from '@playwright/test'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fakeClaudeLogs } from '../test/world'
 import {
   claudeRunIn,
   expect,
-  flotiChildren,
-  mainPid,
   processAlive,
   startSession,
   terminalText,
@@ -65,62 +63,7 @@ test('quitting Helm ends every session and everything a session started', async 
   await expect.poll(() => pids.filter(processAlive)).toEqual([])
 })
 
-test('with the local host setting never changed, sessions run in Helm itself: no host process starts and no host folder is made', async ({
-  sessionsInHost,
-  helm,
-  world
-}) => {
-  test.skip(
-    sessionsInHost,
-    'its subject is the setting left at its default, off: host-sessions covers a session with it on in "a session in the host takes input, takes the pane’s size, is drawn again after a reload, and closes with confirmation"'
-  )
-  const { window } = helm
-  const settings = await window.evaluate(() =>
-    (window as unknown as { helm: { invoke: (channel: string) => Promise<{ sessionsInHost: boolean }> } }).helm.invoke(
-      'settings:read'
-    )
-  )
-  expect(settings.sessionsInHost).toBe(false)
-
-  const id = await startSession(window, 'alpha')
-  const pane = window.getByRole('region', { name: 'First pane' })
-  await typeLine(pane, 'hello there')
-  await expect.poll(() => terminalText(window, id)).toContain('You said: hello there')
-  await pane.getByRole('tab', { name: 'alpha, ready' }).dblclick()
-  const field = pane.getByRole('textbox', { name: 'Rename this tab' })
-  await field.pressSequentially('review')
-  await field.press('Enter')
-  await expect(pane.getByRole('tab', { name: 'review, ready' })).toBeVisible()
-
-  // The agent is a child of Helm's main process, and nothing Helm started is `floti`.
-  const main = await mainPid(helm)
-  const run = await claudeRunIn(world, world.projects.alpha)
-  expect(processAlive(run.pid)).toBe(true)
-  expect(flotiChildren(main)).toEqual([])
-
-  // As before the host: no tab menu to keep a session running, no host in the
-  // status bar, and nothing in the sessions pane is not open here.
-  await pane.getByRole('tab', { name: 'review, ready' }).click({ button: 'right' })
-  await expect(window.getByRole('menu')).toHaveCount(0)
-  await expect(window.getByRole('contentinfo').locator('[data-status-host]')).toHaveCount(0)
-  await window.locator('[data-open-sessions]').click()
-  await expect(window.getByRole('region', { name: 'In Helm' })).toBeVisible()
-  await expect(window.getByRole('region', { name: 'Not open here' })).toHaveCount(0)
-  await pane.getByRole('tab', { name: 'review, ready' }).click()
-
-  await pane.getByRole('button', { name: 'Close review' }).click()
-  await window
-    .getByRole('alertdialog', { name: '“review” is still running.' })
-    .getByRole('button', { name: 'End session' })
-    .click()
-  await expect.poll(() => processAlive(run.pid)).toBe(false)
-
-  await helm.app.close()
-  expect(existsSync(join(world.dataDir, 'host'))).toBe(false)
-  expect(existsSync(join(world.dataDir, 'host-client'))).toBe(false)
-})
-
-test('a session tab is renamed, then closed with confirmation', async ({ sessionsInHost, helm, world }) => {
+test('a session tab is renamed, then closed with confirmation', async ({ helm, world }) => {
   const { window } = helm
   await startSession(window, 'alpha')
   const pane = window.getByRole('region', { name: 'First pane' })
@@ -147,10 +90,8 @@ test('a session tab is renamed, then closed with confirmation', async ({ session
   await expect.poll(received).toEqual(['before', 'after'])
 
   // Closing the live tab asks first, by its new name, and names the host it
-  // runs on when that is the local host; Cancel keeps the tab and the process.
-  const dialog = window.getByRole('alertdialog', {
-    name: sessionsInHost ? '“review” is still running on this PC’s host.' : '“review” is still running.'
-  })
+  // runs on; Cancel keeps the tab and the process.
+  const dialog = window.getByRole('alertdialog', { name: '“review” is still running on this PC’s host.' })
   await pane.getByRole('button', { name: 'Close review' }).click()
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: 'Cancel' }).click()

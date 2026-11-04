@@ -1,26 +1,24 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { harnessIn, plantHarness, removeShims } from '../test/overlay-world'
+import { harnessIn, plantHarness } from '../test/overlay-world'
 import { claudeRunIn, expect, sessionIdOf, shimFolderOf, terminalText, test as base } from './helm'
 
 /**
  * The world gets a harness before the app starts, so the first scan finds it:
  * `hub`, whose `repos/tools` has a skill to compose. The shims a launch builds
- * hold junctions into it, so they are unlinked before the world is removed:
- * Helm's here, and the local host's by `test` in `helm.ts`.
+ * hold junctions into it, so they are unlinked before the world is removed,
+ * by `test` in `helm.ts`.
  */
 const test = base.extend({
   world: async ({ world }, use) => {
     plantHarness(world)
     await use(world)
-    removeShims(join(world.dataDir, 'overlays'))
   }
 })
 
 test('a profile made in the New profile dialog starts its composition when it is saved', async ({
   helm,
-  world,
-  sessionsInHost
+  world
 }) => {
   const { window } = helm
   const hub = harnessIn(world)
@@ -50,7 +48,7 @@ test('a profile made in the New profile dialog starts its composition when it is
   // directory the app built under its own data directory, and the form's flags.
   const run = await claudeRunIn(world, hub.root)
   const pluginDir = after(run.argv, '--plugin-dir') ?? ''
-  expect(pluginDir.toLowerCase().startsWith(shimFolderOf(world, sessionsInHost).toLowerCase())).toBe(true)
+  expect(pluginDir.toLowerCase().startsWith(shimFolderOf(world).toLowerCase())).toBe(true)
   expect(existsSync(join(pluginDir, 'skills', hub.skill, 'SKILL.md'))).toBe(true)
   expect(after(run.argv, '--add-dir')).toBe(hub.overlay)
   expect(after(run.argv, '--model')).toBe('sonnet')

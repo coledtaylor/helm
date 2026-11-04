@@ -104,8 +104,7 @@ export function useLauncher(): LauncherState {
       helm.on('settings:changed', adopt)
     ]
 
-    // Apart from the settings: with sessions in the local host the app info
-    // waits on the host's reading of the CLI, and nothing that needs the
+    // Apart from the settings: the app info waits on the host's reading of the CLI, and nothing that needs the
     // settings (the scan roots a new harness is offered) should wait on it.
     void helm.invoke('app:info').then(setInfo, () => undefined)
 

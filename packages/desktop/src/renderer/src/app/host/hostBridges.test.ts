@@ -33,16 +33,13 @@ function host(): FakeConnection {
     );
 }
 
-/** A page link to `connection`, with main's answer on whether sessions run in the local host. */
-function linkTo(connection: FakeConnection, inHost = true): PageLink {
-  return {
-    ...fakeReach(connection),
-    inHost: () => Promise.resolve(inHost),
-  } as unknown as PageLink;
+/** A page link to `connection`. */
+function linkTo(connection: FakeConnection): PageLink {
+  return fakeReach(connection) as unknown as PageLink;
 }
 
 /** This PC's host and two hosts on other computers, each reached over a link of its own. */
-function world(inHost = true) {
+function world() {
   bridge.reset();
   bridge.answer("ownSettings:read", () => DEFAULT_SETTINGS);
   bridge.answer("ownSettings:write", (patch) => ({
@@ -58,7 +55,7 @@ function world(inHost = true) {
   const storage = new Map<string, string>();
   const bridges = createHostBridges({
     own: bridge,
-    localLink: linkTo(connections[LOCAL_HOST_KEY]!, inHost),
+    localLink: linkTo(connections[LOCAL_HOST_KEY]!),
     remoteLink: (id) => {
       linked.push(id);
       const connection = connections[id];
@@ -158,13 +155,11 @@ describe("one bridge per host", () => {
     expect(w.asked("h-build")).not.toContain("clipboard:read");
   });
 
-  it("with only this PC and sessions in Helm, every call goes where it goes today: the preload’s bridge", async () => {
-    const w = world(false);
-    bridge.answer("roots:suggest", () => []);
+  it("with only this PC, a host call reaches this PC’s host and never main, and no remote link is made", async () => {
+    const w = world();
     await w.bridges.bridgeFor(LOCAL_HOST_KEY).invoke("roots:suggest");
-    expect(bridge.invoked("roots:suggest")).toHaveLength(1);
-    expect(w.asked(LOCAL_HOST_KEY)).toEqual([]);
-    // No remote link is made unless a host is asked for.
+    expect(bridge.invoked("roots:suggest")).toEqual([]);
+    expect(w.asked(LOCAL_HOST_KEY)).toContain("roots:suggest");
     expect(w.linked).toEqual([]);
   });
 

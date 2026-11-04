@@ -86,7 +86,7 @@ const reading = (backend: string, percent: number): P.UsageSnapshot => ({
   spend: null
 })
 
-const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+const UNREACHABLE = 'No local host answered on its socket.'
 
 /** The host side: one conversation in its index and archive, and a usage reading per backend. */
 function world(connection: FakeConnection | null = new FakeConnection()) {

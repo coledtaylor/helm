@@ -1672,17 +1672,6 @@ export interface AppSettings {
   sessionMcp: boolean
 
   /**
-   * Whether sessions and terminals run in the local host (the `floti` program)
-   * rather than in Helm's own main process.
-   *
-   * Off by default: the main process is the path every user has, and the host
-   * is the switch being made one slice at a time. Read once, when Helm starts,
-   * because the sessions running under one implementation cannot move to the
-   * other; a change takes effect the next time Helm starts, and the row says
-   * so. Off is Helm exactly as it was: no host started, no host folder made.
-   */
-  sessionsInHost: boolean
-  /**
    * What quitting Helm does to the sessions it started on a host, by host:
    * `end` them or `keep` them running there. This PC's host is keyed
    * `LOCAL_HOST_KEY` and ends them when it has no entry; a remote host is keyed
@@ -1690,9 +1679,7 @@ export interface AppSettings {
    * (`quitEndsSessions`).
    *
    * Kept on this device, never in the host: each client decides for itself
-   * what its quitting does. Read only with `sessionsInHost` on; with it off,
-   * sessions live in Helm's own process and end with it whatever this says.
-   * The quit question's "Keep running and quit" applies to that one quit and
+   * what its quitting does. The quit question's "Keep running and quit" applies to that one quit and
    * never writes here; only Settings does.
    */
   quitSessions: Readonly<Record<string, QuitSessions>>
@@ -1702,7 +1689,7 @@ export interface AppSettings {
    * typed, or a command). Empty by default: this PC's own host is not in it.
    *
    * Kept on this device, never in a host, like `quitSessions`, which keys each
-   * by its id. Read only with `sessionsInHost` on. It holds nothing secret: no
+   * by its id. It holds nothing secret: no
    * ssh key, password or passphrase, and no ssh option (`hosts.ts`).
    */
   hosts: readonly RemoteHost[]
@@ -1711,10 +1698,10 @@ export interface AppSettings {
    * null while they never have been.
    *
    * Internal state, like `lastUpdateCheckAt`, and not in the settings pane.
-   * With `sessionsInHost` on, profiles live in the host; the first time Helm
-   * connects to one it copies its own into it, once, and this is what keeps a
-   * profile deleted in the host afterwards from being copied back on the next
-   * start. Helm's own profiles are never changed by the copy.
+   * Profiles live in the host; the first time Helm connects to one it copies
+   * the ones an earlier version kept in helm.db into it, once, and this is
+   * what keeps a profile deleted in the host afterwards from being copied back
+   * on the next start. Helm's own profiles are never changed by the copy.
    */
   profilesCopiedToHostAt: string | null
   /**
@@ -1722,9 +1709,9 @@ export interface AppSettings {
    * null while they never have been.
    *
    * Internal state, like `profilesCopiedToHostAt`, and not in the settings
-   * pane. With `sessionsInHost` on, plugins are registered in the host; the
-   * first time Helm connects to one it copies its folders, their on/off and
-   * tools switches and their setting values into it, once (never a secret),
+   * pane. Plugins are registered in the host; the first time Helm connects to
+   * one it copies its folders, their on/off and tools switches and their
+   * setting values into it, once (never a secret),
    * and this keeps a plugin removed in the host afterwards from coming back on
    * the next start. Helm's own plugin records are never changed by the copy.
    */
@@ -1819,7 +1806,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // and because what it serves is a strictly smaller grant than the tick above
   // it. See the field for what is not in it, which is what makes that true.
   sessionMcp: true,
-  sessionsInHost: false,
   // Empty: this PC's host then ends the sessions Helm started when it quits,
   // which is what a session on your own computer usually wants, and a host on
   // another computer keeps them running (`quitChoice`).

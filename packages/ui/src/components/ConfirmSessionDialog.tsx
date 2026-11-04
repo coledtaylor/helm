@@ -15,8 +15,8 @@ export interface ConfirmSessionDialogProps {
   /** What the agreeing button says; main decides, because it counts them. */
   confirmLabel: string
   /**
-   * The quit question's third answer, with sessions in the local host: quit
-   * and leave them running there. No button without it.
+   * The quit question's third answer: quit and leave them running in the
+   * host. No button without it.
    */
   keepLabel?: string | undefined
   /** The sessions this ends. Listed unless the message already names the only one. */

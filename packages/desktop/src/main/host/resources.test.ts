@@ -5,7 +5,7 @@ import type { HostLink } from './link'
 import type * as P from './protocol'
 import { createHostResources } from './resources'
 
-const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+const UNREACHABLE = 'No local host answered on its socket.'
 
 /** A session the host looked at: its program and one child, the child listening on 5173. */
 const LOOKED: P.SessionResources = {

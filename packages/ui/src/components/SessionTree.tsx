@@ -393,20 +393,15 @@ const ADD_HOST_MENU: readonly MenuEntry[] = [
 export type SessionTreeHostProps = Pick<SessionTreeProps, 'hosts' | 'onAddHostMenu'>
 
 /**
- * Which hosts the tree lists, and whether its right-click menu adds one.
- * Hosts on other computers exist only while sessions run in the local host,
- * so with the setting off the tree is this PC's alone and offers no way to
- * add one. With it on and this PC the only host, the list's right-click menu
- * has Add a host… (`onAddHost`); once there are others, each has its group
- * and the list ends with an Add a host line, which `hostActions.onAddHost`
- * answers.
+ * Which hosts the tree lists, and whether its right-click menu adds one. With
+ * this PC the only host, the list's right-click menu has Add a host…
+ * (`onAddHost`); once there are others, each has its group and the list ends
+ * with an Add a host line, which `hostActions.onAddHost` answers.
  */
 export function sessionTreeHostProps(options: {
-  sessionsInHost: boolean
   hosts: readonly TreeHost[]
   onAddHost: () => void
 }): SessionTreeHostProps {
-  if (!options.sessionsInHost) return {}
   if (options.hosts.length === 0) return { onAddHostMenu: options.onAddHost }
   return { hosts: options.hosts }
 }

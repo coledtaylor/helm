@@ -9,7 +9,7 @@ const ROOT = resolve('/work dir/alpha')
 const NOTE = resolve('/work dir/alpha/notes/a.md')
 const PAGE = resolve('/work dir/alpha/pages/report.html')
 
-const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+const UNREACHABLE = 'No local host answered on its socket.'
 
 const HOST_URL = 'floti-artifact://tok123/report.html'
 const WINDOW_URL = 'helm-content://artifact/tok123/report.html'

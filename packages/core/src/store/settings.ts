@@ -576,9 +576,6 @@ export const SETTING_VALIDATORS: SettingValidators = {
    */
   sessionMcp: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
 
-  /** Strict for the same reason: `'false'` would start the host. */
-  sessionsInHost: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
-
   /**
    * What quitting does, by host: a plain object of host keys to `end` or
    * `keep`. A value that is neither would read as `end` and end sessions the

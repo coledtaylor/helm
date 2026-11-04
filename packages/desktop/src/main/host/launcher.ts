@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { posix, win32 } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
 import { RECONNECT_FIRST_MS } from '../../shared/host/reconnect'
-import { TURN_OFF } from '../../shared/host/sentences'
+import { unreachable } from '../../shared/host/sentences'
 import type { AppMode } from '../../shared/ipc'
 import { HostRefusedError, connectHost, type HostConnection } from './client'
 
@@ -286,7 +286,7 @@ export function exitOf(child: HostChild): Promise<Exit> {
 }
 
 function failure(sentence: string): LocalHostError {
-  return new LocalHostError(`${sentence}; ${TURN_OFF}`)
+  return new LocalHostError(unreachable(sentence))
 }
 
 /** The sentence for a bridge that ended without connecting. */
@@ -646,13 +646,13 @@ async function startHostOnce(
   if (outcome.code === HOST_ALREADY_RUNNING_EXIT) throw new HostFoldersHeld()
   deps.log(`host: the local host Helm started stopped before it was ready (${describeExit(outcome)})`)
   const why = reason as string | null
-  if (why !== null) throw new HostEndedEarly(`The local host did not start: ${clause(why)}; ${TURN_OFF}`)
+  if (why !== null) throw new HostEndedEarly(unreachable(`The local host did not start: ${clause(why)}`))
   throw new HostEndedEarly(
-    `${
+    unreachable(
       outcome.code === null
         ? `The local host stopped before it was ready, stopped by ${outcome.signal ?? 'a signal'}`
         : `The local host stopped before it was ready, with status ${outcome.code}`
-    }; ${TURN_OFF}`
+    )
   )
 }
 
@@ -693,6 +693,6 @@ class HostEndedEarly extends LocalHostError {}
 /** A host Helm started that found another host still holding its folders or socket. */
 class HostFoldersHeld extends HostEndedEarly {
   constructor() {
-    super(`Another local host is running on Helm's host folders; ${TURN_OFF}`)
+    super("Another local host is running on Helm's host folders.")
   }
 }

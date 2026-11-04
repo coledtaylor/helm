@@ -72,15 +72,14 @@ export type ShowSessionTabs = (ids: readonly number[], host: string) => void
 /**
  * Which sessions each host's connection carries: those with a tab here.
  *
- * This PC's is told while sessions run in the local host. Each host on
- * another computer is told while the window is connected to it, and told
+ * This PC's is told each time the layout changes. Each host on another
+ * computer is told while the window is connected to it, and told
  * again each time it is connected again: a tab whose host dropped kept its
  * last screen, and reattaches here on a new stream that starts with the
  * session's screen as it is now.
  */
 export function useShownSessionTabs(
   layout: PaneLayout,
-  localInHost: boolean,
   connected: readonly string[],
   show: ShowSessionTabs
 ): void {
@@ -90,9 +89,9 @@ export function useShownSessionTabs(
   }, [show])
   const local = useMemo(() => tabbedIds(layout, LOCAL_HOST_KEY), [layout])
   useEffect(() => {
-    if (!localInHost || local === '') return
+    if (local === '') return
     showRef.current(local.split(',').map(Number), LOCAL_HOST_KEY)
-  }, [localInHost, local])
+  }, [local])
   const remote = useMemo(
     () => connected.map((host) => `${host}=${tabbedIds(layout, host)}`).join('\n'),
     [connected, layout]

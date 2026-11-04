@@ -11,7 +11,7 @@ const ALPHA = resolve('/work dir/hub/repos/alpha')
 const ELSEWHERE = resolve('/work dir/elsewhere')
 const PICKED = resolve('/tools dir/claude.exe')
 
-const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+const UNREACHABLE = 'No local host answered on its socket.'
 
 const hostSettings = (patch: Partial<P.HostSettings> = {}): P.HostSettings => ({
   scanRoots: [],

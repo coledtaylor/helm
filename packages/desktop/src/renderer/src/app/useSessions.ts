@@ -16,9 +16,8 @@ import { disposeTerminal, estimateGrid } from './terminals'
 
 export interface SessionsState {
   /**
-   * Helm's sessions, in tab-strip order: every one main hosts, or with
-   * sessions in the local host every one the host runs, and those this
-   * window started. Which have a tab is the layout's.
+   * Helm's sessions, in tab-strip order: every one this PC's host runs, and
+   * those this window started. Which have a tab is the layout's.
    */
   sessions: SessionRecord[]
   /**

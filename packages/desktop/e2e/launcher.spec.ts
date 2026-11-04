@@ -50,8 +50,7 @@ const after = (argv: readonly string[], flag: string): string | undefined => arg
 
 test('Ctrl+N starts a session in a folder found by typing, with the profile and mode picked there', async ({
   helm,
-  world,
-  sessionsInHost
+  world
 }) => {
   const { window } = helm
   await expect(window.getByRole('button', { name: 'Start a session in alpha' })).toBeAttached()
@@ -83,9 +82,7 @@ test('Ctrl+N starts a session in a folder found by typing, with the profile and 
   expect(after(run.argv, '-n')).toBe('alpha')
   expect(after(run.argv, '--model')).toBe('sonnet')
   expect(after(run.argv, '--permission-mode')).toBe('plan')
-  expect((after(run.argv, '--plugin-dir') ?? '').toLowerCase()).toContain(
-    shimFolderOf(world, sessionsInHost).toLowerCase()
-  )
+  expect((after(run.argv, '--plugin-dir') ?? '').toLowerCase()).toContain(shimFolderOf(world).toLowerCase())
 })
 
 test('a conversation that ended reopens from the launcher, in the pane beside', async ({ helm, world }) => {
@@ -150,8 +147,8 @@ test('coming back to the window shows the branch and changes made in a terminal 
   git('switch', '-q', '-c', 'work/terminal')
   writeFileSync(join(world.projects.alpha, 'notes from the terminal.md'), '# scratch\n')
 
-  // Coming back to the front is the window's `focus`, which main hears and,
-  // with sessions in the local host, the page itself does. A focus the launch
+  // Coming back to the front is the window's `focus`, which the page itself
+  // hears. A focus the launch
   // itself caused may still be reading git, and a focus during that one is
   // dropped, so it is given again until the fresh reading arrives.
   const browserWindow = await app.browserWindow(window)

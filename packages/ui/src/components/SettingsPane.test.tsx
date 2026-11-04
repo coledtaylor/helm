@@ -127,11 +127,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onSessionMcpChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
-    sessionsInHost: false,
-    onSessionsInHostChange: vi.fn(),
     quitSessions: 'end',
     onQuitSessionsChange: vi.fn(),
-    hostRunning: false,
     onStopHost: vi.fn(),
     hostLogFile: null,
     hosts: [],
@@ -214,7 +211,8 @@ describe('SettingsPane', () => {
       Sessions: [
         ['checkbox', 'Let Claude see the other sessions'],
         ['checkbox', 'Resume after a crash without asking'],
-        ['checkbox', 'Run sessions in the local host']
+        ['combobox', 'When you quit Helm'],
+        ['button', 'Stop host']
       ],
       Updates: [
         ['checkbox', 'Check for new releases on launch'],
@@ -559,32 +557,11 @@ describe('SettingsPane', () => {
     expect(group('Sessions').textContent).toContain('reopens every session it was running, in the tab it had')
   })
 
-  it('turns running sessions in the local host on and off, and says each change takes effect the next time Helm starts', async () => {
-    const { props, rerender } = renderPane({ section: 'sessions', sessionsInHost: false })
-    const tick = (): HTMLElement =>
-      within(group('Sessions')).getByRole('checkbox', { name: 'Run sessions in the local host' })
-    const sessions = (): string => group('Sessions').textContent ?? ''
-    expect(tick()).toHaveProperty('checked', false)
-    expect(sessions()).toContain('Sessions and terminals run in Helm itself. Takes effect the next time Helm starts.')
-
-    await userEvent.click(tick())
-    expect(props.onSessionsInHostChange).toHaveBeenLastCalledWith(true)
-    rerender({ section: 'sessions', sessionsInHost: true })
-    expect(tick()).toHaveProperty('checked', true)
-    expect(sessions()).toContain(
-      'Sessions and terminals run in the local host program, which Helm starts and which can outlive it. Takes effect the next time Helm starts.'
-    )
-
-    await userEvent.click(tick())
-    expect(props.onSessionsInHostChange).toHaveBeenLastCalledWith(false)
-  })
-
-  it('offers what quitting does on this PC’s host while sessions run in the local host, End by default', async () => {
-    const { props, rerender } = renderPane({ section: 'sessions', sessionsInHost: false })
-    expect(within(group('Sessions')).queryByRole('combobox', { name: 'When you quit Helm' })).toBeNull()
-    expect(within(group('Sessions')).queryByRole('button', { name: 'Stop host' })).toBeNull()
-
-    rerender({ section: 'sessions', sessionsInHost: true, hostRunning: true })
+  it('S1: has no Run sessions in the local host switch, and always offers what quitting does on this PC’s host, End by default, and Stop host', async () => {
+    const { props, rerender } = renderPane({ section: 'sessions' })
+    expect(within(group('Sessions')).queryByRole('checkbox', { name: 'Run sessions in the local host' })).toBeNull()
+    expect(group('Sessions').textContent).not.toContain('Run sessions in the local host')
+    expect(within(group('Sessions')).getByRole('button', { name: 'Stop host' })).toHaveProperty('disabled', false)
     const quit = within(group('Sessions')).getByRole<HTMLSelectElement>('combobox', { name: 'When you quit Helm' })
     expect(quit.value).toBe('end')
     expect([...quit.options].map((option) => option.textContent)).toEqual([
@@ -595,7 +572,7 @@ describe('SettingsPane', () => {
 
     await userEvent.selectOptions(quit, 'keep')
     expect(props.onQuitSessionsChange).toHaveBeenLastCalledWith('keep')
-    rerender({ section: 'sessions', sessionsInHost: true, hostRunning: true, quitSessions: 'keep' })
+    rerender({ section: 'sessions', quitSessions: 'keep' })
     expect(within(group('Sessions')).getByRole<HTMLSelectElement>('combobox', { name: 'When you quit Helm' }).value).toBe(
       'keep'
     )
@@ -615,7 +592,7 @@ describe('SettingsPane', () => {
         connection: null
       }
     ]
-    const { props, rerender } = renderPane({ section: 'hosts', sessionsInHost: true, hosts })
+    const { props, rerender } = renderPane({ section: 'hosts', hosts })
     const build = screen.getByRole('group', { name: 'build-box' })
     const lab = screen.getByRole('group', { name: 'lab' })
     // How each is reached, in mono.
@@ -640,14 +617,13 @@ describe('SettingsPane', () => {
 
     await userEvent.click(within(lab).getByRole('button', { name: 'Remove' }))
     expect(props.onRemoveHost).toHaveBeenCalledWith('h-lab')
-    rerender({ section: 'hosts', sessionsInHost: true, hosts: [] })
+    rerender({ section: 'hosts', hosts: [] })
     expect(screen.queryByRole('group', { name: 'lab' })).toBeNull()
   })
 
   it('S1: each row shows its name, how it is reached, floti’s version and the OS there, its state, quit choice and Remove; Add a host… opens the dialog', async () => {
     const { props } = renderPane({
       section: 'hosts',
-      sessionsInHost: true,
       hosts: [
         {
           host: {
@@ -673,7 +649,7 @@ describe('SettingsPane', () => {
   })
 
   it('S1: with no host the page says so and offers Add a host…', async () => {
-    const { props } = renderPane({ section: 'hosts', sessionsInHost: true, hosts: [] })
+    const { props } = renderPane({ section: 'hosts', hosts: [] })
     const empty = document.querySelector('[data-settings-hosts-empty]') as HTMLElement
     expect(empty.textContent).toContain('No other hosts yet.')
     await userEvent.click(within(empty).getByRole('button', { name: 'Add a host…' }))
@@ -688,7 +664,6 @@ describe('SettingsPane', () => {
     })
     renderPane({
       section: 'hosts',
-      sessionsInHost: true,
       hosts: [
         host('up', { state: 'connected' }),
         host('down', { state: 'retrying' }),
@@ -720,7 +695,6 @@ describe('SettingsPane', () => {
     for (const lastLine of lines) {
       const { props, rerender } = renderPane({
         section: 'hosts',
-        sessionsInHost: true,
         hosts: [
           {
             host: { id: 'h-build', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } },
@@ -736,14 +710,13 @@ describe('SettingsPane', () => {
       expect(row.querySelector('input')).toBeNull()
       await userEvent.click(within(row).getByRole('button', { name: 'Reconnect now' }))
       expect(props.onReconnectHost).toHaveBeenCalledWith('h-build')
-      rerender({ section: 'hosts', sessionsInHost: true, hosts: [] })
+      rerender({ section: 'hosts', hosts: [] })
     }
   })
 
   it('S5: a command host with no floti there shows what its shell said and the command followed by floti connect', () => {
     renderPane({
       section: 'hosts',
-      sessionsInHost: true,
       hosts: [
         {
           host: { id: 'h-lab', name: 'lab', transport: { kind: 'command', program: 'wsl.exe', args: ['-d', 'Ubuntu', '--'] } },
@@ -767,7 +740,6 @@ describe('SettingsPane', () => {
   it('S4: a WSL host’s row says it is reached through wsl.exe, here or through its Windows host, with floti’s version and the OS, keeping its sessions by default', () => {
     renderPane({
       section: 'hosts',
-      sessionsInHost: true,
       hosts: [
         {
           host: {
@@ -809,7 +781,6 @@ describe('SettingsPane', () => {
     const transport = { kind: 'ssh' as const, target: 'you@lab' }
     renderPane({
       section: 'hosts',
-      sessionsInHost: true,
       hosts: [
         {
           host: { id: 'up', name: 'lab', transport },
@@ -830,7 +801,6 @@ describe('SettingsPane', () => {
     const transport = { kind: 'ssh' as const, target: 'build-box' }
     renderPane({
       section: 'hosts',
-      sessionsInHost: true,
       hosts: [
         {
           host: { id: 'b', name: 'build-box', transport },
@@ -852,7 +822,6 @@ describe('SettingsPane', () => {
     const transport = { kind: 'ssh' as const, target: 'build-box' }
     const { props } = renderPane({
       section: 'hosts',
-      sessionsInHost: true,
       hosts: [
         {
           host: { id: 'b', name: 'build-box', transport },
@@ -868,36 +837,21 @@ describe('SettingsPane', () => {
     expect(props.onRemoveHost).toHaveBeenCalledWith('b')
   })
 
-  it('stops this PC’s host from Settings through the question, and only while there is one', async () => {
-    const { props, rerender } = renderPane({ section: 'sessions', sessionsInHost: true, hostRunning: true })
+  it('stops this PC’s host from Settings through the question', async () => {
+    const { props } = renderPane({ section: 'sessions' })
     await userEvent.click(within(group('Sessions')).getByRole('button', { name: 'Stop host' }))
     expect(props.onStopHost).toHaveBeenCalledTimes(1)
-
-    // Turned on, but sessions run in Helm itself until it starts again.
-    rerender({ section: 'sessions', sessionsInHost: true, hostRunning: false })
-    expect(within(group('Sessions')).getByRole('button', { name: 'Stop host' })).toHaveProperty('disabled', true)
   })
 
-  it('names this PC’s host’s log file by its full path while sessions run there', () => {
+  it('names this PC’s host’s log file by its full path, and nothing while the host names none', () => {
     const path = 'C:\\Users\\me\\AppData\\Local\\Floti\\logs\\host.log'
-    const { rerender } = renderPane({
-      section: 'sessions',
-      sessionsInHost: true,
-      hostRunning: true,
-      hostLogFile: path
-    })
+    const { rerender } = renderPane({ section: 'sessions', hostLogFile: path })
     const row = within(group('Sessions')).getByText(path)
     expect(row.className).toContain('font-mono')
     expect(row.getAttribute('title')).toBe(path)
     expect(group('Sessions').textContent).toContain('Log file')
 
-    // Sessions in Helm itself: no host, no log file.
-    rerender({
-      section: 'sessions',
-      sessionsInHost: true,
-      hostRunning: false,
-      hostLogFile: null
-    })
+    rerender({ section: 'sessions', hostLogFile: null })
     expect(group('Sessions').textContent).not.toContain('Log file')
   })
 })

@@ -10,12 +10,9 @@ import {
 } from 'electron'
 import {
   addPluginFolder,
-  claudeHome,
   describePluginSessions,
   pluginThemeOf,
   quitEndsSessions,
-  readSessionRegistry,
-  sessionRegistryDir,
   writeSetting,
   type AppliedTheme,
   type AppSettings,
@@ -29,29 +26,13 @@ import { emit, emitToContents, pushTheme, registerIpc } from './ipc'
 import { createClipboardText } from './clipboard'
 import { appMode, dataDir, initDataDir, mcpConfigDir, templatesDir, themesDir } from './paths'
 import { createThemeService } from './themes'
-import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
-import {
-  adoptExistingProfile,
-  createServices,
-  refreshGit,
-  runScan,
-  updateSettings,
-  type Services
-} from './services'
-import { createConfigService } from './config'
-import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
-import { createTemplateService } from './templates'
+import { activePty, killPty, spawnPty, windowsBuildNumber } from './pty'
+import { adoptExistingProfile, createServices, updateSettings, type Services } from './services'
 import { createFilesService, filesRoots } from './files'
-import {
-  attachArtifactConsole,
-  CONTENT_SCHEME,
-  createContentService,
-  registerContentProtocol,
-  serveArtifactsFrom
-} from './content'
+import { attachArtifactConsole, CONTENT_SCHEME, registerContentProtocol, serveArtifactsFrom } from './content'
 import { PLUGIN_SCHEME } from '../shared/ipc'
 import { createPluginHost } from './plugins/host'
-import { registerHostPluginProtocol, registerPluginProtocol } from './plugins/protocol'
+import { registerHostPluginProtocol } from './plugins/protocol'
 import { createBackgroundHost } from './plugins/background'
 import { guardPluginFrames, installPluginPermissions } from './plugins/guards'
 // The plugin runtime: served to every plugin page under `/__helm/`, so no
@@ -65,20 +46,9 @@ import {
   type BrowserHost
 } from './browser'
 import { createBrowserMcp, type BrowserMcpHost } from './browser-mcp'
-import { sessionToolsWorld, type SessionToolsWorld } from './session-tools'
-import { createHistoryIndex, type HistoryIndex } from './history'
-import { refusedHistoryReads, type HistoryReads } from './history-reads'
 import { installIpcRecorder } from './ipc-recorder'
-import { createUsageService, type UsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
-import {
-  createSessionHost,
-  quitConfirm,
-  sessionConfirm,
-  type Confirm,
-  type SessionHost,
-  type SessionObserver
-} from './sessions'
+import { quitConfirm, sessionConfirm, type Confirm, type SessionHost } from './sessions'
 import {
   createDesktopHost,
   createDesktopRemoteAdder,
@@ -91,28 +61,17 @@ import {
 } from './host/desktop'
 import { routePageLinks } from './host/page-link'
 import type { RemoteHostLinks } from './host/remote'
-import { createPortForwards, type PortForwards } from './host/forwards'
-import { createActivityService } from './activity'
-import { createRestoreService, type RestoreService } from './restore'
-import { createResourcesService } from './resources'
+import { createPortForwards } from './host/forwards'
 import { createCollector, type CheckContext } from './checkkit'
 import { applicationMenuTemplate, windowChromeFor } from './chrome'
 import { createQuitGate, quitEnds } from './quit'
 import { requestSmallCorners } from './corners'
-import { createPtermHost, type PtermHost } from './pterm'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
 import { findClaudeExecutable, setClaudeOverride } from './claude-cli'
 import { pickerAnswer, runPackagingChecks } from './packagingcheck'
 import { screenshot } from './bridge'
-
-/** Helm's own history index, archive and usage reader, when they run in this process. */
-interface LocalHistory {
-  kind: 'local'
-  index: HistoryIndex
-  usage: UsageService
-}
 
 /**
  * Two products in one binary.
@@ -326,8 +285,6 @@ function writeReport(name: string, report: unknown): string {
 // ---------------------------------------------------------------------------
 
 export interface AppOptions {
-  /** Taps for the check drivers; the app itself passes none. */
-  observer?: SessionObserver | undefined
   /** Answers the "this session is still running" question. Defaults to a dialog. */
   confirm?: Confirm | undefined
   /** Called once the renderer has mounted and the first scan is under way. */
@@ -425,35 +382,26 @@ function startApp(options: AppOptions = {}): void {
     }
   }
   /**
-   * Helm's own MCP endpoint, reached through a getter.
-   *
-   * It cannot be created here: it drives the browser host, which is created
-   * further down because it needs the window. And the session host cannot be
-   * created after it, because the browser host's `writeSettings` and this
-   * file's shutdown order both already depend on the order these three are in.
-   * So the session host is handed a *function*, which is the shape it already
-   * uses for the window for the same reason - and so is the plugin host, whose
-   * tools the endpoint serves.
+   * The answer to the browser calls the host relays, reached through a getter:
+   * it drives the browser host, which is created further down because it needs
+   * the window.
    */
   let browserMcp: BrowserMcpHost | null = null
   /**
-   * Helm's sessions as plugins see them, which needs the session host and the
-   * activity service made below. Until then there are none, which was true a
-   * moment ago; the first `sessions` event corrects a page that asked early.
+   * Helm's sessions as plugins see them, which needs the desktop host made
+   * below. Until then there are none, which was true a moment ago; the first
+   * `sessions` event corrects a page that asked early.
    */
   let pluginSessionList = (): PluginSession[] => []
   /*
-   * With sessions in the local host, the host keeps the plugin registry - the
-   * folders, their switches, settings, services and page files - and Helm keeps
-   * what concerns its own pages: the runtime, the theme, the frames, and the
-   * hidden window background pages run in, which the host's list opens.
+   * The host keeps the plugin registry - the folders, their switches,
+   * settings, services and page files - and Helm keeps what concerns its own
+   * pages: the runtime, the theme, the frames, and the hidden window
+   * background pages run in, which the host's list opens.
    */
-  const pluginsInHost = services.settings.sessionsInHost
   /** What hears that the background host's renderer died; the host's plugins, once they exist. */
   let pluginBackgroundGone = (_reason: string): void => undefined
-  const pluginBackground = pluginsInHost
-    ? createBackgroundHost({ onGone: (reason) => pluginBackgroundGone(reason) })
-    : undefined
+  const pluginBackground = createBackgroundHost({ onGone: (reason) => pluginBackgroundGone(reason) })
 
   const plugins = createPluginHost({
     store: services.store,
@@ -461,90 +409,67 @@ function startApp(options: AppOptions = {}): void {
     theme: () => pluginThemeOf(windowTheme(), services.settings),
     bridge: pluginBridge,
     stylesheet: pluginStylesheet,
-    // A plugin's tools coming or going can be the difference between a
-    // listener and none. With sessions in the local host, the host's list
-    // says which plugins offer tools (`host/plugins.ts`).
+    // The host's list says which plugins offer tools (`host/plugins.ts`).
     onToolsChanged: () => {
       void browserMcp?.sync()
     },
     // Called only once the user has agreed in the window, which is long after
-    // the session host below exists.
+    // the desktop host below exists.
     startSession: (request) => sessions.startWithPrompt(request),
     sessionList: () => pluginSessionList(),
-    registry: !pluginsInHost,
+    registry: false,
     background: pluginBackground
   })
   plugins.start()
-  if (pluginsInHost) {
-    // Asked only once a page loads, which is after the desktop host below exists.
-    // Each origin from its own host's files: This PC's from the local host,
-    // a remote host's (`helm-plugin://<id>.<label>/`) from that host only.
-    registerHostPluginProtocol((label) => {
-      if (desktopHost === null) return null
-      const hosted = label === null ? desktopHost.plugins : desktopHost.remotePlugins.byLabel(label)
-      if (hosted === null) return null
-      return {
-        // The local host is the one Helm started, on this computer; a remote host's is not.
-        onHostComputer: label === null,
-        serves: (id) => hosted.serves(id),
-        file: (id, path) => hosted.file(id, path)
-      }
-    }, plugins.runtime)
-  } else {
-    registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
-  }
+  // Asked only once a page loads, which is after the desktop host below exists.
+  // Each origin from its own host's files: This PC's from the local host, a
+  // remote host's (`helm-plugin://<id>.<label>/`) from that host only.
+  registerHostPluginProtocol((label) => {
+    const hosted = label === null ? desktopHost.plugins : desktopHost.remotePlugins.byLabel(label)
+    if (hosted === null) return null
+    return {
+      // The local host is the one Helm started, on this computer; a remote host's is not.
+      onHostComputer: label === null,
+      serves: (id) => hosted.serves(id),
+      file: (id, path) => hosted.file(id, path)
+    }
+  }, plugins.runtime)
   installPluginPermissions()
   pluginFrameHosts = (id) => plugins.framesPlugins(id)
 
   win = createWindow('index', services.settings.windowBounds ?? null, windowTheme())
 
-  /**
-   * And what the session-awareness tools read, reached the same way.
-   *
-   * Null until the activity poller and the resource service exist, which is
-   * after the endpoint for the reason above. A tool called in that window says
-   * "still starting up" rather than throwing - see `session-tools.ts`.
-   */
-  let sessionTools: SessionToolsWorld | null = null
-
   /*
-   * Where sessions and terminals run, decided once, here: in Helm's own main
-   * process, or - behind "Run sessions in the local host" - in the local host,
-   * which Helm connects to now and starts when none answers. A change to the
-   * setting takes effect the next time Helm starts.
+   * Sessions and terminals run in the local host, which Helm connects to now
+   * and starts when none answers.
    */
   const checkConfirm = options.confirm
-  // `pluginBackground` exists exactly when the setting is on.
-  const desktopHost: DesktopHost | null = pluginBackground !== undefined
-    ? createDesktopHost({
-        services,
-        window: () => win,
-        // The window's own `session:confirm` is the host's; main's quit question has its own channel.
-        confirm: options.confirm ?? sessionConfirm(() => win),
-        // A check's collector answers yes or no, which never keeps the sessions.
-        confirmQuit:
-          checkConfirm !== undefined
-            ? async (request) => ((await checkConfirm(request)) ? 'end' : 'cancel')
-            : quitConfirm(() => win),
-        onActivityChange: () => plugins.sessionsChanged(),
-        browserTools: () => browserMcp,
-        runPluginTool: (request, signal) => plugins.runTool(request, signal),
-        pluginBackground
-      })
-    : null
-  if (desktopHost !== null) {
-    pluginBackgroundGone = (reason) => {
-      desktopHost.plugins.backgroundGone(reason)
-      desktopHost.remotePlugins.backgroundGone(reason)
-    }
-    // An artifact frame keeps the window's scheme, answered from the host's bytes.
-    serveArtifactsFrom((url) => desktopHost.files.artifactBytes(url))
-    void desktopHost.link.connection().catch((err: unknown) => {
-      console.warn(err instanceof Error ? err.message : String(err))
-    })
-    // The window carries its terminals, says what it shows and hears the
-    // host's notifications over its own connection (`renderer/src/app/host/sessions.ts`).
+  const desktopHost: DesktopHost = createDesktopHost({
+    services,
+    window: () => win,
+    // The window's own `session:confirm` is the host's; main's quit question has its own channel.
+    confirm: options.confirm ?? sessionConfirm(() => win),
+    // A check's collector answers yes or no, which never keeps the sessions.
+    confirmQuit:
+      checkConfirm !== undefined
+        ? async (request) => ((await checkConfirm(request)) ? 'end' : 'cancel')
+        : quitConfirm(() => win),
+    onActivityChange: () => plugins.sessionsChanged(),
+    browserTools: () => browserMcp,
+    runPluginTool: (request, signal) => plugins.runTool(request, signal),
+    pluginBackground
+  })
+  pluginBackgroundGone = (reason) => {
+    desktopHost.plugins.backgroundGone(reason)
+    desktopHost.remotePlugins.backgroundGone(reason)
   }
+  // An artifact frame keeps the window's scheme, answered from the host's bytes.
+  serveArtifactsFrom((url) => desktopHost.files.artifactBytes(url))
+  void desktopHost.link.connection().catch((err: unknown) => {
+    console.warn(err instanceof Error ? err.message : String(err))
+  })
+  // The window carries its terminals, says what it shows and hears the host's
+  // notifications over its own connection (`renderer/src/app/host/sessions.ts`).
 
   /*
    * Each Helm page's own connection to the local host: the window, and the
@@ -552,12 +477,12 @@ function startApp(options: AppOptions = {}): void {
    * frame, an artifact frame, a page in the Browser tab - may open one.
    */
   const isHelmPage = (id: number): boolean =>
-    (win !== null && !win.isDestroyed() && win.webContents.id === id) || pluginBackground?.contents()?.id === id
+    (win !== null && !win.isDestroyed() && win.webContents.id === id) || pluginBackground.contents()?.id === id
   // One counter for every host's page connections, so a number names one.
   let nextPageConnection = 1
   const nextConnection = (): number => nextPageConnection++
   const localPageLinks = createLocalPageLinks(
-    desktopHost?.link ?? null,
+    desktopHost.link,
     isHelmPage,
     (line) => console.log(line),
     nextConnection
@@ -565,58 +490,41 @@ function startApp(options: AppOptions = {}): void {
 
   /*
    * The hosts on other computers this device added, each over its own link,
-   * beside this PC's: only with sessions in the local host. Each connects now
-   * and tries again by itself; a settings write that adds or removes one
-   * starts or ends its link (`ipc.ts`).
+   * beside this PC's. Each connects now and tries again by itself; a settings
+   * write that adds or removes one starts or ends its link (`ipc.ts`).
    */
-  /** The ports of remote sessions forwarded to this PC's loopback, only with sessions in the local host. */
-  const forwards: PortForwards | null =
-    desktopHost !== null
-      ? createPortForwards({
-          changed: (list) => emit(win, 'forwards:changed', list),
-          log: (line) => console.log(line)
-        })
-      : null
-  const remoteHosts: RemoteHostLinks | null =
-    desktopHost !== null && forwards !== null
-      ? createDesktopRemoteHosts({
-          isHelmPage,
-          nextConnection,
-          // The hidden plugin window hears it too: it runs each connected host's background pages.
-          changed: (states) => {
-            emit(win, 'remoteHosts:changed', states)
-            emitToContents(pluginBackground?.contents(), 'remoteHosts:changed', states)
-          },
-          plugins: desktopHost.remotePlugins,
-          forwards,
-          localLink: desktopHost.link,
-          log: (line) => console.log(line)
-        })
-      : null
-  remoteHosts?.sync(services.settings.hosts)
+  /** The ports of remote sessions forwarded to this PC's loopback. */
+  const forwards = createPortForwards({
+    changed: (list) => emit(win, 'forwards:changed', list),
+    log: (line) => console.log(line)
+  })
+  const remoteHosts: RemoteHostLinks = createDesktopRemoteHosts({
+    isHelmPage,
+    nextConnection,
+    // The hidden plugin window hears it too: it runs each connected host's background pages.
+    changed: (states) => {
+      emit(win, 'remoteHosts:changed', states)
+      emitToContents(pluginBackground.contents(), 'remoteHosts:changed', states)
+    },
+    plugins: desktopHost.remotePlugins,
+    forwards,
+    localLink: desktopHost.link,
+    log: (line) => console.log(line)
+  })
+  remoteHosts.sync(services.settings.hosts)
   const pageLinks = routePageLinks(localPageLinks, remoteHosts)
 
-  const sessions: SessionHost =
-    desktopHost?.sessions ??
-    createSessionHost({
-      services,
-      window: () => win,
-      browserMcp: () => browserMcp,
-      observer: options.observer,
-      confirm: options.confirm
-    })
+  const sessions: SessionHost = desktopHost.sessions
 
   /*
-   * Whether quitting ends what this device started: always with the setting
-   * off, where sessions live in Helm's own process; with it on, as the quit
-   * setting for each host says (End for this PC's when unset, Keep them
-   * running for a remote one), read at the quit so a change in Settings
-   * counts at once.
+   * Whether quitting ends what this device started, as the quit setting for
+   * each host says (End for this PC's when unset, Keep them running for a
+   * remote one), read at the quit so a change in Settings counts at once.
    */
-  const settingEnds = (): boolean => desktopHost === null || quitEndsSessions(services.settings)
+  const settingEnds = (): boolean => quitEndsSessions(services.settings)
   const remoteEnds = (id: string): boolean => quitEndsSessions(services.settings, id)
   /** What the quit question names on the hosts on other computers whose setting ends them. */
-  const remoteQuitParts = (): ReturnType<RemoteHostLinks['quitParts']> => remoteHosts?.quitParts(remoteEnds) ?? []
+  const remoteQuitParts = (): ReturnType<RemoteHostLinks['quitParts']> => remoteHosts.quitParts(remoteEnds)
 
   // One question about running sessions, shared by the menu's Quit Helm and
   // the window's close, asked before anything ends (quit.ts). With the setting
@@ -634,100 +542,29 @@ function startApp(options: AppOptions = {}): void {
         win.show()
         win.focus()
       }
-      if (desktopHost !== null) return desktopHost.askQuit({ local: settingEnds(), remote: remoteQuitParts() })
-      return sessions.confirmCloseAll().then((agreed) => (agreed ? 'end' : 'cancel'))
+      return desktopHost.askQuit({ local: settingEnds(), remote: remoteQuitParts() })
     },
     quit: () => app.quit()
   })
   quitFromMenu = () => quitGate.requestQuit()
 
-  // The setting is read through a function rather than passed by value: the
-  // default shell has to be able to change while the app is running, and a
-  // captured value would make it a property of when Helm started.
-  // With sessions in the local host the window opens its terminals in the
-  // host over its own connection, and main runs none.
-  const pterm: PtermHost | undefined =
-    desktopHost === null
-      ? createPtermHost({
-          window: () => win,
-          defaultShell: () => services.settings.terminalShell
-        })
-      : undefined
+  /** The saved profiles, which live in the host; every reader of them in main reads this one. */
+  const profileList = (): Profile[] => desktopHost.profiles.current()
 
-  /*
-   * Session history, the transcript archive and usage, from the one place
-   * they are kept this run. With sessions in the local host, the host indexes,
-   * archives into its own database and reads usage, and Helm builds none of
-   * its own: no pass, no watch, nothing written to `helm.db`, whose own index
-   * and archive stay as they were for when the setting is off again.
-   *
-   * Otherwise Helm's own: the archive and the session index that feeds it
-   * (`createHistoryIndex` wires the one to the other; `main/history.ts` says
-   * how), and the usage reader.
-   */
-  const historyHome: LocalHistory | { kind: 'host'; reads: HistoryReads } =
-    desktopHost !== null
-      ? // The window reads the host's over its own connection; main answers none.
-        { kind: 'host', reads: refusedHistoryReads() }
-      : {
-          kind: 'local',
-          index: createHistoryIndex({
-            store: services.store,
-            home: options.claudeHome,
-            maxBytes: () => services.settings.transcriptArchiveMaxBytes,
-            onHistoryChange: (summary) => emit(win, 'history:changed', summary),
-            onArchiveChange: (stats) => emit(win, 'archive:changed', stats)
-          }),
-          usage: createUsageService({
-            store: services.store,
-            ...(options.claudeHome !== undefined ? { home: options.claudeHome } : {}),
-            onChange: (snapshot) => emit(win, 'usage:changed', snapshot)
-          })
-        }
-  const localHistory = historyHome.kind === 'local' ? historyHome : null
-
-  /*
-   * The saved profiles, from the one place they live this run: the local host
-   * when sessions run there, Helm's own database otherwise. Every reader of
-   * them in main reads this one.
-   */
-  const profileService: ProfileService =
-    desktopHost?.profiles ??
-    createLocalProfiles(services, nativeProfileDialogs(() => win), (channel, payload) => emit(win, channel, payload))
-  const profileList = (): Profile[] => profileService.current()
-
-  /*
-   * The config console and the Files view's notes and artifacts, Helm's own.
-   * With sessions in the local host the window reads and writes both in the
-   * host over its own connection, and main builds neither: no watch on the
-   * agent's config, no reads of a project's files.
-   */
-  const config =
-    desktopHost === null
-      ? createConfigService({
-          services,
-          profiles: profileList,
-          ...(options.claudeHome !== undefined ? { userHome: options.claudeHome } : {}),
-          onExternalChange: (change) => emit(win, 'config:externalChange', change)
-        })
-      : undefined
-
-  const content = desktopHost === null ? createContentService({ services, profiles: profileList }) : undefined
   attachArtifactConsole(win, (entry) => emit(win, 'content:artifactConsole', entry))
 
   /**
-   * The Files view, and with sessions in the local host its hand-off to VS
-   * Code alone (the host reads the files then). Its roots are every project,
-   * harness and profile folder, and the folder each hosted session is working
-   * in, because "the files of the session in front of me" is the question it
-   * answers and a profile's session can run somewhere no scan reached. With
-   * sessions in the local host, the scan, the profiles and the sessions are all
-   * the host's: Helm's own scan never runs then.
+   * The Files view's hand-off to an editor; the host reads the files. Its
+   * roots are every project, harness and profile folder, and the folder each
+   * hosted session is working in, because "the files of the session in front
+   * of me" is the question it answers and a profile's session can run
+   * somewhere no scan reached. The scan, the profiles and the sessions are all
+   * the host's.
    */
   const files = createFilesService({
     roots: () =>
       filesRoots({
-        scan: desktopHost === null ? services.lastScan : desktopHost.workspace.lastScan(),
+        scan: desktopHost.workspace.lastScan(),
         profiles: profileList(),
         sessions: sessions.list()
       }),
@@ -752,10 +589,9 @@ function startApp(options: AppOptions = {}): void {
     settings: () => services.settings,
     writeSettings: (patch) => {
       const next = updateSettings(services, patch)
-      // With sessions in the local host the window lays the host's half over
-      // Helm's own itself, which it hears on its own channel.
-      if (desktopHost !== null) emit(win, 'ownSettings:changed', next)
-      else emit(win, 'settings:changed', next)
+      // The window lays the host's half over Helm's own itself, which it hears
+      // on its own channel.
+      emit(win, 'ownSettings:changed', next)
     },
     onChanged: (state) => emit(win, 'browser:changed', state),
     onOpened: (opened) => emit(win, 'browser:opened', opened),
@@ -768,242 +604,87 @@ function startApp(options: AppOptions = {}): void {
   })
 
   /**
-   * And the endpoint that lets a session drive those views.
-   *
-   * Started here rather than lazily at the first launch, because "there is no
-   * listener when `browserMcp` is off" has to be true of the *app* rather than
-   * of a code path nobody has taken yet - a port that appears the first time
-   * somebody starts a session is a port whose absence proves nothing.
-   *
-   * `start()` answers rather than throws: a machine where the loopback bind
-   * fails is a machine where Helm still works, with no browser tools and a line
-   * on the console saying so.
-   *
-   * With sessions in the local host it never listens: the host serves their
-   * tools, and this only answers the browser calls the host relays.
+   * The answers to the browser calls the host relays for its sessions
+   * (`host/browser-tools.ts`). It never listens: the host serves its
+   * sessions' tools.
    */
   browserMcp = createBrowserMcp({
     browsers,
     settings: () => services.settings,
     dir: mcpConfigDir,
-    sessions: () => sessionTools,
     plugins: {
       servers: () => plugins.toolServers(),
       call: (request, signal) => plugins.callTool(request, signal)
     },
-    listen: desktopHost === null
+    listen: false
   })
-  void browserMcp.start().then(({ started, problem }) => {
-    if (started) {
-      const bound = browserMcp?.address()
-      console.log(
-        `${(browserMcp?.servedNames() ?? []).join(' and ')} on http://${bound?.address ?? '?'}:${String(
-          bound?.port ?? 0
-        )} (loopback, token-gated)`
-      )
-    } else if (
-      desktopHost === null &&
-      (services.settings.browserMcp || services.settings.sessionMcp || plugins.toolServers().length > 0)
-    ) {
-      console.warn(`Helm's tools are not available: ${problem ?? 'unknown'}`)
-    }
-  })
+  void browserMcp.start()
 
-  /*
-   * What each hosted session is doing, out of Claude Code's own registry.
-   *
-   * After the session host because it reads from it, and pointed at the same
-   * `.claude` tree everything else that reads one is - so a check that hands
-   * over a fixture home gets a registry from that home rather than the user's.
-   */
-  const activity =
-    desktopHost?.activity ??
-    createActivityService({
-      sessions,
-      window: () => win,
-      ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
-      onChange: () => plugins.sessionsChanged()
-    })
-  // A pass after every spawn, exit, close and rename, and the plugins told
-  // after it whatever it found: a session that started is listed even before
-  // the registry knows what it is doing.
+  // What each session is doing, from the host. The plugins are told after
+  // every spawn, exit, close and rename, whatever the host found: a session
+  // that started is listed even before the registry knows what it is doing.
+  const activity = desktopHost.activity
   sessions.onChanged(() => {
     activity.refresh()
     plugins.sessionsChanged()
   })
   pluginSessionList = () => describePluginSessions(sessions.pluginSessions(), activity.overview().sessions)
 
-  const restore: RestoreService =
-    desktopHost?.restore ??
-    createRestoreService({
-      lost: services.lost,
-      store: services.store,
-      sessions,
-      refreshHistory: () => {
-        localHistory?.index.history.refresh()
-      },
-      // Read here rather than from the activity poller's last pass, which only
-      // starts once the window is up and would answer "nothing is running" to
-      // a window that asked first.
-      liveConversations: () =>
-        new Set(
-          readSessionRegistry(sessionRegistryDir(options.claudeHome ?? claudeHome())).flatMap((entry) =>
-            entry.sessionId === null ? [] : [entry.sessionId]
-          )
-        )
-    })
-
-  /*
-   * What each hosted session is *holding* - its process tree and its ports.
-   *
-   * A separate service from the one above because it is a separate budget. The
-   * registry poll costs 0.15ms and runs always; a process enumeration costs
-   * 400ms of a child process and runs only while somebody is looking at it.
-   * Wiring one off the other's timer is the change `resources.ts` exists to
-   * argue against.
-   *
-   * With sessions in the local host, the host runs the pass over its own
-   * sessions' processes and this reads it.
-   */
-  const resources = desktopHost?.resources ?? createResourcesService({ sessions, window: () => win })
-  // A session ending is a tree that has gone with it, so the pass is re-run at
-  // once rather than leaving a dead session's children on screen for an
-  // interval. A no-op when nothing is watching.
+  // What each session is holding, from the host's pass. A session ending is a
+  // tree that has gone with it, so the pass is re-run at once. A no-op when
+  // nothing is watching.
+  const resources = desktopHost.resources
   sessions.onChanged(() => void resources.refresh())
-
-  // What a session may be told about the other sessions: `sessionToolsWorld`
-  // says why it is these three and nothing else.
-  sessionTools = sessionToolsWorld({ store: services.store, sessions, activity, resources })
-
-  // Built on the config service rather than beside it: the import picker's
-  // sources are the console's own scopes, and what a skill *is* is the
-  // console's own answer.
-  const templates = config !== undefined ? createTemplateService(services, config) : undefined
 
   registerIpc({
     services,
     pageLinks,
-    sessions,
-    profiles: profileService,
-    restore,
-    activity,
-    resources,
-    ...(pterm !== undefined ? { pterm } : {}),
     browsers,
     browserMcp,
-    ...(historyHome.kind === 'local'
-      ? { history: historyHome.index.history, archive: historyHome.index.archive, usage: historyHome.usage }
-      : { historyReads: historyHome.reads }),
-    ...(config !== undefined ? { config } : {}),
-    // And discovery, the scan roots, setup, harnesses and templates are the
-    // host's; Helm's own scan and templates folder are left alone.
-    ...(desktopHost !== null ? { workspace: desktopHost.workspace } : {}),
-    // And the Files view, notes and artifacts: Helm's own content and files
-    // services then read and watch nothing; opening an editor stays Helm's.
-    ...(desktopHost !== null ? { filesReads: desktopHost.files } : {}),
-    ...(content !== undefined ? { content } : {}),
+    // The folders the window's picker chose go to the host's scan roots.
+    workspace: desktopHost.workspace,
+    // Opening an editor stays Helm's; the host reads the files.
     files,
-    ...(templates !== undefined ? { templates } : {}),
     themes,
     plugins,
-    ...(desktopHost !== null
-      ? { hostPlugins: desktopHost.plugins, remotePlugins: desktopHost.remotePlugins, ownData: desktopHost.ownData }
-      : {}),
-    ...(pluginBackground !== undefined ? { pluginBackground: () => pluginBackground.contents() } : {}),
-    sessionsInHost: desktopHost !== null,
-    ...(desktopHost !== null
-      ? {
-          localHost: {
-            sessionCount: async () => {
-              const rows = await (await desktopHost.link.connection()).request('session:list', null)
-              return rows.filter((row) => row.status === 'running').length
-            },
-            stop: () => desktopHost.link.stopHost()
-          }
-        }
-      : {}),
+    hostPlugins: desktopHost.plugins,
+    remotePlugins: desktopHost.remotePlugins,
+    ownData: desktopHost.ownData,
+    pluginBackground: () => pluginBackground.contents(),
+    localHost: {
+      sessionCount: async () => {
+        const rows = await (await desktopHost.link.connection()).request('session:list', null)
+        return rows.filter((row) => row.status === 'running').length
+      },
+      stop: () => desktopHost.link.stopHost()
+    },
     window: () => win,
-    ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
-    ...(desktopHost !== null ? { hostSettingsChanged: () => desktopHost.link.writeSettings() } : {}),
-    ...(remoteHosts !== null
-      ? {
-          remoteHosts,
-          remoteInstall: createDesktopRemoteInstaller((line) => console.log(line)),
-          remoteAdd: createDesktopRemoteAdder({
-            hosts: () => services.settings.hosts,
-            log: (line) => console.log(line)
-          }),
-          sshHosts: readDesktopSshHosts,
-          wslDistros: () => readDesktopWslDistros(() => services.settings.hosts, remoteHosts)
-        }
-      : {}),
-    ...(forwards !== null ? { forwards } : {}),
+    hostSettingsChanged: () => desktopHost.link.writeSettings(),
+    remoteHosts,
+    remoteInstall: createDesktopRemoteInstaller((line) => console.log(line)),
+    remoteAdd: createDesktopRemoteAdder({
+      hosts: () => services.settings.hosts,
+      log: (line) => console.log(line)
+    }),
+    sshHosts: readDesktopSshHosts,
+    wslDistros: () => readDesktopWslDistros(() => services.settings.hosts, remoteHosts),
+    forwards,
     rendererReady: () => {
       pushTheme({ services, themes, plugins, window: () => win })
-      // With sessions in the local host the window reads its settings and
-      // starts its first scan over its own connection (`renderer/src/app/host/workspace.ts`).
-      if (desktopHost === null) {
-        emit(win, 'settings:changed', services.settings)
-        // The first scan is kicked off by the main process rather than waited on
-        // by the renderer: the launcher paints from the cache immediately and
-        // this replaces it when it lands.
-        void runScan(services, { includeGit: true })
-        .then((result) => {
-          emit(win, 'discovery:updated', result)
-          // The first scan is also what adopts the default roots on a fresh
-          // profile, so settings can be different now than they were a moment
-          // ago when the renderer was handed them.
-          emit(win, 'settings:changed', services.settings)
-          emit(win, 'scan:status', { running: false })
-        })
-        .catch((err: unknown) => {
-          emit(win, 'scan:status', {
-            running: false,
-            error: err instanceof Error ? err.message : String(err)
-          })
-        })
-        emit(win, 'scan:status', { running: true })
-      }
+      // The window reads its settings and starts its first scan over its own
+      // connection (`renderer/src/app/host/workspace.ts`).
 
-      // Off the renderer's critical path: the first pass reads 875 KB and
-      // writes 3,470 rows, which is ~30ms the launcher should not spend
-      // before it paints. The window gets `history:changed` when it lands.
-      setImmediate(() => {
-        // Helm's own index and usage reader only: with sessions in the local
-        // host, the host keeps both and the window has them from it.
-        if (localHistory !== null) {
-          // The first pass, which the archive rides, and then the watches.
-          try {
-            emit(win, 'history:changed', localHistory.index.start())
-          } catch (err) {
-            console.warn(`history index could not be built: ${String(err)}`)
-          }
-
-          // Cheap by comparison - one 134 KB file, parsed - but it is on the
-          // same "after the first paint" footing: the status bar has
-          // everything else it needs before this lands, and gets
-          // `usage:changed` when it does.
-          try {
-            emit(win, 'usage:changed', localHistory.usage.refresh())
-          } catch (err) {
-            console.warn(`usage figures could not be read: ${String(err)}`)
-          }
-          localHistory.usage.start()
-        }
-
-        // And the one request Helm's own process makes. Here rather than at
-        // startup for the reason everything else in this block is: it is worth
-        // nothing before the window has painted, and it must not be in front of
-        // anything that is.
-        //
-        // Failure is silent on purpose, unlike the two above. Offline is the
-        // ordinary case for this one, the answer is a line in the status bar
-        // that simply does not appear, and there is nothing a user would do
-        // with a warning that Helm could not reach GitHub while they work.
-        void maybeCheckForUpdate(services, win)
-      })
+      // The one request Helm's own process makes, after the first paint: it
+      // is worth nothing before the window has painted, and it must not be in
+      // front of anything that is.
+      //
+      // Failure is silent on purpose. Offline is the ordinary case, the answer
+      // is a line in the status bar that simply does not appear, and there is
+      // nothing a user would do with a warning that Helm could not reach
+      // GitHub while they work.
+      setImmediate(() => void maybeCheckForUpdate(services, win))
 
       if (win) {
         options.onReady?.({ win, services, sessions, browsers, browserMcp })
@@ -1045,30 +726,6 @@ function startApp(options: AppOptions = {}): void {
   win.on('move', scheduleBoundsPersist)
 
   /**
-   * SPEC 4.1 wants git state "at a glance", which only holds if it is current.
-   * Someone commits in a terminal and comes back to Helm - regaining focus is
-   * exactly that moment, and re-reading git is far cheaper than rescanning
-   * every `.claude` tree.
-   *
-   * Guarded rather than debounced: alt-tabbing quickly should not stack up
-   * `git status` runs across every repo, and the answer from the one already in
-   * flight is current enough.
-   */
-  let gitRefreshInFlight = false
-  win.on('focus', () => {
-    // With sessions in the local host the window asks the host itself, which
-    // reads git on its own machine and pushes it on `git:updated`.
-    if (desktopHost !== null || gitRefreshInFlight || services.lastScan === null) return
-    gitRefreshInFlight = true
-    void refreshGit(services)
-      .then((states) => emit(win, 'git:updated', states))
-      .catch(() => undefined)
-      .finally(() => {
-        gitRefreshInFlight = false
-      })
-  })
-
-  /**
    * Closing the window ends every hosted session, so it asks first - once, for
    * all of them, rather than a dialog per tab - through the quit gate, so a
    * quit already agreed to from the menu is not asked about again.
@@ -1101,8 +758,7 @@ function startApp(options: AppOptions = {}): void {
   })
 
   /*
-   * With sessions in the local host, the host owns their lifetime and outlives
-   * Helm. A deliberate quit tells it what becomes of what this device started,
+   * The host owns the sessions' lifetime and outlives Helm. A deliberate quit tells it what becomes of what this device started,
    * which takes a round trip: the first `before-quit` is held while every
    * page's connection closes, the host is told whether the sessions end
    * (`host:quit`: as the quit question was answered, or as the quit setting
@@ -1116,9 +772,9 @@ function startApp(options: AppOptions = {}): void {
    * ends any other way tells no host anything, so nothing ends and the next
    * start reattaches.
    */
-  let hostStop: 'running' | 'stopping' | 'stopped' = desktopHost === null ? 'stopped' : 'running'
+  let hostStop: 'running' | 'stopping' | 'stopped' = 'running'
   app.on('before-quit', (event) => {
-    if (desktopHost !== null && hostStop !== 'stopped') {
+    if (hostStop !== 'stopped') {
       event.preventDefault()
       if (hostStop === 'running') {
         hostStop = 'stopping'
@@ -1136,7 +792,7 @@ function startApp(options: AppOptions = {}): void {
         const answer = quitGate.answer()
         void Promise.all([
           pageLinks.stop().then(() => desktopHost.link.quit({ end: quitEnds(answer, settingEnds()) })),
-          remoteHosts?.quit((id) => quitEnds(answer, remoteEnds(id)))
+          remoteHosts.quit((id) => quitEnds(answer, remoteEnds(id)))
         ])
           .finally(() => {
             hostStop = 'stopped'
@@ -1149,41 +805,18 @@ function startApp(options: AppOptions = {}): void {
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
     persistBounds()
-    // Before the store is let go of: a debounced index pass, or a config watch
-    // firing after `will-quit`, would write to a closed connection.
-    localHistory?.index.stop()
-    localHistory?.usage.stop()
-    config?.stop()
+    // Before the store is let go of: a watch firing after `will-quit` would
+    // write to a closed connection.
     files.stop()
-    // Plugins' services are processes like a session's, ended the same way:
-    // synchronously, the whole tree, while main is still guaranteed a turn.
+    // The hidden plugin window and the frames go with the window.
     plugins.shutdown()
-    /*
-     * The endpoint goes **before** the sessions, and the order is the point.
-     *
-     * A session being torn down can still be mid-tool-call, and a tool that
-     * ran after its session's process was gone would be an agent driving a
-     * browser on behalf of nothing. Stopping first revokes every token, so
-     * anything still in flight is answered with a 401 by a listener that is on
-     * its way out - and the ephemeral config files go with it, which is the
-     * only sweep that catches a session whose exit never got a turn.
-     *
-     * Not awaited: `before-quit` is synchronous, and the close is a formality
-     * once the tokens are gone.
-     */
+    // Not awaited: `before-quit` is synchronous.
     void browserMcp?.stop()
-    // The poller stops with them. Nothing is left reading a registry on behalf
-    // of sessions that are about to be gone.
     activity.stop()
-    resources.stop()
-    // Synchronously, because this is the last point the main process is
-    // guaranteed a turn. Anything deferred here is a process left behind.
-    sessions.shutdown()
     /*
      * The browser views die here too, and it is the same argument.
      *
-     * A `WebContentsView` is a render process - the same kind of thing a pty
-     * is, from this file's point of view - and it belongs to the main process
+     * A `WebContentsView` is a render process, and it belongs to the main process
      * rather than to the window. Destroying it in the window's `closed`
      * handler would be too late in one direction (a quit that never closed the
      * window) and too early in the other (`before-quit` runs first, and a view
@@ -1415,7 +1048,6 @@ app.whenReady().then(() => {
     const onlyArg = arg('only')
 
     startApp({
-      observer: collector,
       confirm: collector.confirm,
       ...(claudeHome !== undefined ? { claudeHome } : {}),
       // Answered by the driver, and rewritten by it before each step that
@@ -1471,13 +1103,5 @@ app.on('window-all-closed', () => {
   killPty()
   app.quit()
 })
-
-/**
- * The backstop. `before-quit` does the orderly teardown - rows first, then the
- * processes - but it does not run for every way a process can end, and a
- * hosted `claude` outliving the app it was launched from is the one failure
- * this milestone is not allowed to have.
- */
-app.on('will-quit', () => killAllSessionsSync())
 
 

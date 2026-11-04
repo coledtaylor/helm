@@ -31,9 +31,8 @@ const test = base.extend<{ sample: SampleFixture; sampleRegistered: boolean }>({
     },
     { scope: 'test' }
   ],
-  // Registered before the app starts, as a folder added in an earlier run is.
-  // With "Run sessions in the local host" on, the first connect copies it to
-  // the host, as it does a folder Helm had registered before the switch.
+  // Registered before the app starts, as a folder added in an earlier run is:
+  // the first connect copies it to the host.
   world: async ({ world, sample, sampleRegistered }, use) => {
     sample.dir = installSample(world, sample.server, 'sample plugin', sampleRegistered)
     await use(world)
@@ -71,8 +70,7 @@ async function storeToken(ui: Page, url: string): Promise<void> {
 test('a plugin: its background page, a secret it asks for, its panel, badge, status and a tab of its own', async ({
   helm,
   sample,
-  world,
-  sessionsInHost
+  world
 }) => {
   const ui = helm.window
 
@@ -106,9 +104,9 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
   await expect(ui.locator('[data-rail-badge]')).toHaveText('2')
   await expect(panel.locator('[data-sample-service]')).toContainText('Hello from the service')
 
-  // With sessions in the local host, the host sealed the value with the key
-  // file its test data folder names, never this user's credential store.
-  expect(existsSync(join(hostDataOf(world), `${HOST_TEST_SEAL_MARKER}.key`))).toBe(sessionsInHost)
+  // The host sealed the value with the key file its test data folder names,
+  // never this user's credential store.
+  expect(existsSync(join(hostDataOf(world), `${HOST_TEST_SEAL_MARKER}.key`))).toBe(true)
 
   // The value went to the server in place of the placeholder, and nothing
   // else ever arrived in that header.

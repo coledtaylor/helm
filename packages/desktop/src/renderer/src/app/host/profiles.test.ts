@@ -12,7 +12,7 @@ import type {
 import { createProfilesAdapter } from './profiles'
 import type { HostAdapter } from './router'
 
-const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+const UNREACHABLE = 'No local host answered on its socket.'
 
 const profile = (id: number, name: string, patch: Partial<P.Profile> = {}): P.Profile => ({
   id,

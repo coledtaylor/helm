@@ -48,7 +48,6 @@ import {
   sessionTabIds,
   splitWith,
   toSaved,
-  unplacedSessionTabs,
   withProjectPinned,
   isPluginRailId,
   pluginRailId,
@@ -228,7 +227,6 @@ import {
   hostState,
   localHostConnection,
   remoteHosts as remoteHostLinks,
-  sessionsInHost,
 } from "./bridge";
 import { useDevicesSettings } from "./useDevicesSettings";
 import { useForwardedPorts } from "./useForwardedPorts";
@@ -671,16 +669,8 @@ export function App(): JSX.Element {
     remoteHostLinks.subscribe,
     remoteHostLinks.get,
   );
-  /**
-   * The hosts on other computers this device has added, kept in its own
-   * settings. They are reached only beside this PC's host, so with "Run
-   * sessions in the local host" off there are none: Settings > Hosts is not
-   * listed and nothing names them.
-   */
-  const listedHosts = useMemo(
-    () => (settings?.sessionsInHost === true ? settings.hosts : []),
-    [settings],
-  );
+  /** The hosts on other computers this device has added, kept in its own settings. */
+  const listedHosts = useMemo(() => settings?.hosts ?? NO_HOSTS, [settings]);
   const listedHostIds = useMemo(
     () => listedHosts.map((host) => host.id),
     [listedHosts],
@@ -963,24 +953,6 @@ export function App(): JSX.Element {
     listed: sessionsListed,
   } = sessionState;
 
-  /**
-   * Whether sessions run in this PC's host this run, which the switch alone
-   * does not say: it takes effect the next time Helm starts. Null until known.
-   * With it on, the sessions outlive this window and every device sees them,
-   * so which have a tab here is this device's own layout.
-   */
-  const [hostRunning, setHostRunning] = useState<boolean | null>(null);
-  useEffect(() => {
-    let live = true;
-    void sessionsInHost().then(
-      (inHost) => live && setHostRunning(inHost),
-      () => live && setHostRunning(false),
-    );
-    return () => {
-      live = false;
-    };
-  }, []);
-
   const sessionsById = useMemo(() => {
     const map = new Map<number, SessionRecord>();
     for (const session of sessions) map.set(session.id, session);
@@ -1093,23 +1065,17 @@ export function App(): JSX.Element {
   );
 
   /**
-   * What must have a tab whether or not anything placed it: every session main
-   * is hosting, and the Browser tab while main holds a page. After a renderer
-   * reload the processes outlive the panes that were showing them, and an agent
-   * opens pages nothing in this window asked for.
+   * What must have a tab whether or not anything placed it: the Browser tab
+   * while main holds a page, since an agent opens pages nothing in this window
+   * asked for.
    *
-   * Sessions in the local host are not among them: they outlive this window
-   * and every device sees them, so one has a tab here only where this device
-   * put one (`unplacedSessionTabs`). Until the window knows which it is, none
-   * is given one unasked, and the derivation adds them once it knows.
+   * Sessions are not among them: they outlive this window and every device
+   * sees them, so one has a tab here only where this device put one.
    */
   const hasPages = browserViews.size > 0;
   const extra = useMemo<PaneRef[]>(
-    () => [
-      ...unplacedSessionTabs(sessions, hostRunning !== false),
-      ...(hasPages ? [BROWSER_TAB] : []),
-    ],
-    [sessions, hostRunning, hasPages],
+    () => (hasPages ? [BROWSER_TAB] : []),
+    [hasPages],
   );
 
   const open = useMemo(
@@ -1137,11 +1103,8 @@ export function App(): JSX.Element {
     });
   }, []);
 
-  /** With sessions in the local host, the running ones this device has no tab for. */
-  const notOpen = useMemo(
-    () => (hostRunning === true ? notOpenHere(open, sessions) : []),
-    [hostRunning, open, sessions],
-  );
+  /** The running sessions this device has no tab for. */
+  const notOpen = useMemo(() => notOpenHere(open, sessions), [open, sessions]);
   /**
    * The window's connection carries the terminals of the sessions with a tab
    * here, and only those: one opened from the sessions pane starts on a new
@@ -1152,7 +1115,6 @@ export function App(): JSX.Element {
   // screen, and reattaches here.
   useShownSessionTabs(
     open,
-    hostRunning === true,
     connectedHostIds,
     hostSessionTabs.show,
   );
@@ -1238,13 +1200,11 @@ export function App(): JSX.Element {
   /** The secrets of the host whose plugin asks for one, whichever host Settings shows. */
   const secretAsk = secretAsks[0] ?? null;
   const askSecrets = usePluginSettings(null, secretAsk?.host ?? LOCAL_HOST_KEY);
-  /** Settings > Devices, read only while it is on screen with sessions in the local host. */
+  /** Settings > Devices, read only while it is on screen. */
   const devicesSettings = useDevicesSettings(
     DEVICES_DEPS,
-    settingsOnScreen &&
-      settingsSection === "devices" &&
-      settings?.sessionsInHost === true,
-    settings?.sessionsInHost === true ? settings.hosts : NO_HOSTS,
+    settingsOnScreen && settingsSection === "devices",
+    listedHosts,
     remoteView,
   );
 
@@ -2098,7 +2058,7 @@ export function App(): JSX.Element {
       });
       const result = await restoreLost(picks, {
         unasked,
-        ...(hostRunning === true ? { lostWith: LOCAL_HOST_NAME } : {}),
+        lostWith: LOCAL_HOST_NAME,
       });
       if (result === null) return;
       for (const { launched } of result.restored)
@@ -2128,7 +2088,7 @@ export function App(): JSX.Element {
         return placed;
       });
     },
-    [restoreOffer, restoreLost, sessionState, commit, open, hostRunning],
+    [restoreOffer, restoreLost, sessionState, commit, open],
   );
 
   /*
@@ -2263,8 +2223,7 @@ export function App(): JSX.Element {
   );
 
   /**
-   * Close tab, keep running: with sessions in the local host, the tab goes and
-   * the session runs on, listed in the sessions pane as not open here. Nothing
+   * Close tab, keep running: the tab goes and the session runs on, listed in the sessions pane as not open here. Nothing
    * is asked, because nothing ends.
    */
   /**
@@ -2305,10 +2264,10 @@ export function App(): JSX.Element {
     },
     [open],
   );
-  /** A tab's menu: a running session's offers Close tab, keep running, with sessions in a host only. */
+  /** A tab's menu: a running session's offers Close tab, keep running. */
   const tabMenuFor = useCallback(
     (tab: string): MenuEntry[] => {
-      const ref = hostRunning === true ? sessionTabRef(tab) : null;
+      const ref = sessionTabRef(tab);
       if (ref === null) return [];
       const record =
         ref.host === LOCAL_HOST_KEY
@@ -2318,7 +2277,7 @@ export function App(): JSX.Element {
         ? [{ kind: "item", id: KEEP_RUNNING, label: "Close tab, keep running" }]
         : [];
     },
-    [hostRunning, sessionTabRef, sessionsById, remoteSessionOf],
+    [sessionTabRef, sessionsById, remoteSessionOf],
   );
   const onTabMenu = useCallback(
     (tab: string, item: string) => {
@@ -3436,10 +3395,7 @@ export function App(): JSX.Element {
               {
                 id: paneId(ref),
                 title: "Restore sessions",
-                hint:
-                  hostRunning === true
-                    ? `What ${LOCAL_HOST_NAME} was running when it stopped`
-                    : "What Helm was running when it closed",
+                hint: `What ${LOCAL_HOST_NAME} was running when it stopped`,
                 icon: <HistoryIcon width={13} height={13} />,
               },
             ];
@@ -3859,26 +3815,11 @@ export function App(): JSX.Element {
     );
   };
 
-  /**
-   * The hosts on other computers this device has added, kept in its own
-   * settings. They are reached only beside this PC's host, so with "Run
-   * sessions in the local host" off there are none: Settings > Hosts is not
-   * listed and nothing names them.
-   */
   const currentSettings = settings ?? DEFAULT_SETTINGS;
   const remoteHosts = listedHosts;
   const tabbedThere = (host: string): Set<number> => sessionTabIds(open, host);
-  // Hosts and Devices are listed only with that setting on; a page left open
-  // on one when the setting goes off shows Sessions, where the setting is.
-  const shownSettingsSection: SettingsSectionId =
-    (settingsSection === "hosts" || settingsSection === "devices") &&
-    !currentSettings.sessionsInHost
-      ? "sessions"
-      : settingsSection;
   /** What the status bar says about each host, this PC first: what quitting does there, and the setting that decides. */
-  const statusHosts =
-    hostRunning === true
-      ? [
+  const statusHosts = [
           {
             id: LOCAL_HOST_KEY,
             name: LOCAL_HOST_LABEL,
@@ -3903,8 +3844,7 @@ export function App(): JSX.Element {
               onOpen: () => openSettings("hosts"),
             };
           }),
-        ]
-      : [];
+        ];
   /** The sessions pane's group for each remote host, in the order they were added; none with no remote host. */
   const sessionsPaneHosts = remoteHosts.map((host) => {
     const connection = remoteView[host.id]?.connection ?? null;
@@ -4022,7 +3962,7 @@ export function App(): JSX.Element {
 
   const renderHelmSettings = (): JSX.Element => (
     <SettingsPane
-      section={shownSettingsSection}
+      section={settingsSection}
       status={setup.status}
       checking={setup.checking}
       onRecheck={setup.recheck}
@@ -4115,12 +4055,6 @@ export function App(): JSX.Element {
       onRestoreWithoutAskingChange={(restoreWithoutAsking) =>
         writeSettings({ restoreWithoutAsking })
       }
-      sessionsInHost={
-        settings?.sessionsInHost ?? DEFAULT_SETTINGS.sessionsInHost
-      }
-      onSessionsInHostChange={(sessionsInHost) =>
-        writeSettings({ sessionsInHost })
-      }
       quitSessions={
         quitEndsSessions(settings ?? DEFAULT_SETTINGS) ? "end" : "keep"
       }
@@ -4133,7 +4067,6 @@ export function App(): JSX.Element {
           },
         })
       }
-      hostRunning={hostRunning === true}
       onStopHost={askStopHost}
       hostLogFile={info?.hostLogFile ?? null}
       // Each host's own quit choice, Keep them running until set, and where
@@ -4551,7 +4484,7 @@ export function App(): JSX.Element {
             // Opened again with what a lost tab asked for ticked.
             key={restoreChosen === null ? "every" : restoreChosen.join(",")}
             {...(restoreChosen === null ? {} : { preselected: restoreChosen })}
-            {...(hostRunning === true ? { lostWith: LOCAL_HOST_NAME } : {})}
+            lostWith={LOCAL_HOST_NAME}
             offer={restoreOffer}
             withoutAsking={
               settings?.restoreWithoutAsking ??
@@ -4806,8 +4739,8 @@ export function App(): JSX.Element {
                 active={isFront}
                 windowsBuild={info?.windowsBuild ?? null}
                 onClose={closeSession}
-                hostGone={hostRunning === true && hostLink.lost !== null}
-                {...(session.status === "lost" && hostRunning === true
+                hostGone={hostLink.lost !== null}
+                {...(session.status === "lost"
                   ? {
                       lost: {
                         hostName: LOCAL_HOST_NAME,
@@ -5204,7 +5137,6 @@ export function App(): JSX.Element {
             localName={LOCAL_HOST_LABEL}
             localKey={LOCAL_HOST_KEY}
             {...sessionTreeHostProps({
-              sessionsInHost: settings?.sessionsInHost === true,
               hosts: treeHosts,
               onAddHost: () => setAddingHost(true),
             })}
@@ -5310,8 +5242,7 @@ export function App(): JSX.Element {
       {sidebarView === "settings" && (
         <Sidebar title="Settings">
           <SettingsSections
-            current={shownSettingsSection}
-            showHosts={currentSettings.sessionsInHost}
+            current={settingsSection}
             plugins={(pluginState.list ?? []).map((plugin) => ({
               path: plugin.path,
               name: plugin.name,
@@ -5535,7 +5466,7 @@ export function App(): JSX.Element {
               onDismiss={ownData.dismiss}
             />
           ) : null}
-          {hostRunning === true && hostLink.lost !== null ? (
+          {hostLink.lost !== null ? (
             <HostStoppedBanner
               hostName={LOCAL_HOST_NAME}
               restarting={hostLink.lost.restarts}
@@ -5604,7 +5535,7 @@ export function App(): JSX.Element {
         {templateDialogs}
         {confirmDialog}
         {configEntryDialog}
-        {addingHost && settings?.sessionsInHost === true && (
+        {addingHost && (
           <AddHostDialog
             actions={addHostActions}
             hosts={currentSettings.hosts}

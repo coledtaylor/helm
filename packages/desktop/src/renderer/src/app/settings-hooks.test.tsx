@@ -175,8 +175,7 @@ describe('useLauncher', () => {
   })
 
   it('takes the settings as soon as they are read, without waiting on the app info', async () => {
-    // app:info stays unanswered: with sessions in the local host it waits on
-    // the host's reading of the CLI, which the scan roots do not need.
+    // app:info stays unanswered: it waits on the host's reading of the CLI, which the scan roots do not need.
     bridge.answer('settings:read', () => settings({ scanRoots: ['C:\\one'] }))
     const { result } = renderHook(() => useLauncher())
     await vi.waitFor(() => expect(result.current.settings?.scanRoots).toEqual(['C:\\one']), { timeout: PATIENCE })

@@ -166,7 +166,6 @@ describe('the links to hosts on other computers', () => {
     // Each page reaches each host over a connection of its own, numbered from one counter.
     const window = page()
     const local = createPageLinks({
-      inHost: true,
       appVersion: '2.4.0',
       isHelmPage: () => true,
       ready: () => Promise.resolve(),
@@ -176,9 +175,9 @@ describe('the links to hosts on other computers', () => {
       log: () => undefined
     })
     const routed = routePageLinks(local, w.links)
-    await expect(routed.open(window, 'h-build')).resolves.toEqual({ inHost: true, connection: 1, appVersion: '2.4.0' })
-    await expect(routed.open(window, 'h-far')).resolves.toEqual({ inHost: true, unreachable: 'far-away is not connected.' })
-    await expect(routed.open(window, null)).resolves.toEqual({ inHost: true, connection: 100, appVersion: '2.4.0' })
+    await expect(routed.open(window, 'h-build')).resolves.toEqual({ connection: 1, appVersion: '2.4.0' })
+    await expect(routed.open(window, 'h-far')).resolves.toEqual({ unreachable: 'far-away is not connected.' })
+    await expect(routed.open(window, null)).resolves.toEqual({ connection: 100, appVersion: '2.4.0' })
     expect(w.bridges.map((bridge) => bridge.host.name)).toEqual(['build-box'])
 
     // Bytes go to the one bridge whose connection they name.

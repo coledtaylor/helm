@@ -144,28 +144,22 @@ export function connectLocalHost(log: (line: string) => void, startHost = true):
 }
 
 /**
- * Each Helm page's own connection to the local host: with sessions in the
- * host, a bridge per page once main's own `link` has connected; without, an
- * answer saying so and nothing opened.
+ * Each Helm page's own connection to the local host: a bridge per page once
+ * main's own `link` has connected.
  */
 export function createLocalPageLinks(
-  link: HostLink | null,
+  link: HostLink,
   isHelmPage: (id: number) => boolean,
   log: (line: string) => void,
   nextConnection?: () => number
 ): PageLinks {
   return createPageLinks({
     ...(nextConnection !== undefined ? { nextConnection } : {}),
-    inHost: link !== null,
     appVersion: app.getVersion(),
     deviceName: hostname(),
     isHelmPage,
-    ready: () =>
-      link === null ? Promise.reject(new Error('Sessions do not run in the local host.')) : link.connection(),
-    howEnded: () => ({
-      planned: link?.endedOnPurpose() ?? false,
-      restarts: link?.restartsHost() ?? false
-    }),
+    ready: () => link.connection(),
+    howEnded: () => ({ planned: link.endedOnPurpose(), restarts: link.restartsHost() }),
     openBridge: (data) => openPageBridge(places(), programs, data),
     log
   })

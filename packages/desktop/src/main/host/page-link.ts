@@ -33,8 +33,6 @@ export interface HelmPage {
 }
 
 export interface PageLinksDeps {
-  /** Whether sessions run in the local host this run. */
-  inHost: boolean
   /** Helm's version, for the page's `hello`. */
   appVersion: string
   /** The computer's name, for the page's `hello`, as main's gives it. */
@@ -101,7 +99,6 @@ export function createPageLinks(deps: PageLinksDeps): PageLinks {
   return {
     async open(page) {
       if (!deps.isHelmPage(page.id)) throw new Error(FOREIGN_PAGE)
-      if (!deps.inHost) return { inHost: false }
       if (!watched.has(page.id)) {
         watched.add(page.id)
         page.onGone(() => pageGone(page.id))
@@ -114,12 +111,12 @@ export function createPageLinks(deps: PageLinksDeps): PageLinks {
         await deps.ready()
       } catch (error) {
         if (byPage.get(page.id) === connection) byPage.delete(page.id)
-        return { inHost: true, unreachable: (error as Error).message }
+        return { unreachable: (error as Error).message }
       }
-      if (stopped) return { inHost: true, unreachable: 'Helm is quitting.' }
+      if (stopped) return { unreachable: 'Helm is quitting.' }
       // The page went, or opened again, while main's link connected.
       if (byPage.get(page.id) !== connection) {
-        return { inHost: true, unreachable: 'The page that asked for this connection has gone.' }
+        return { unreachable: 'The page that asked for this connection has gone.' }
       }
       const bridge = deps.openBridge((bytes) => {
         if (open.has(connection)) page.send('hostLink:data', { connection, bytes })
@@ -133,7 +130,6 @@ export function createPageLinks(deps: PageLinksDeps): PageLinks {
         page.send('hostLink:ended', { connection, why, ...deps.howEnded() })
       })
       return {
-        inHost: true,
         connection,
         appVersion: deps.appVersion,
         ...(deps.deviceName !== undefined ? { deviceName: deps.deviceName } : {})
@@ -187,7 +183,7 @@ export function routePageLinks(
     open(page, host) {
       if (host === null || host === LOCAL_HOST_KEY) return local.open(page)
       const links = remote?.pageLinks(host) ?? null
-      if (links === null) return Promise.resolve({ inHost: true, unreachable: 'This PC has no such host.' })
+      if (links === null) return Promise.resolve({ unreachable: 'This PC has no such host.' })
       return links.open(page)
     },
     send(pageId, connection, bytes) {

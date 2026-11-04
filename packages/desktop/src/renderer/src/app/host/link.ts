@@ -10,8 +10,7 @@ import { unreachable } from '../../../../shared/host/sentences'
 import type { HelmBridge, HostLinkOpened } from '../../../../shared/ipc'
 
 /**
- * This page's own protocol connection to the local host, while sessions run
- * there.
+ * This page's own protocol connection to a host.
  *
  * Main starts a `floti bridge` for the page and pipes its frames over
  * `hostLink:*` without reading them (`main/host/page-link.ts`); the page
@@ -21,7 +20,7 @@ import type { HelmBridge, HostLinkOpened } from '../../../../shared/ipc'
  * Every caller joins one connect attempt, so a read asked before the first
  * connect has settled waits for it rather than answering that there is
  * nothing there. When the host cannot be reached it rejects with the sentence
- * saying why, naming the setting to turn off.
+ * saying why.
  *
  * When the host's side ends the connection, main says whether it ended the
  * host on purpose (Stop host, or a quit) and whether Helm starts a new one,
@@ -45,8 +44,6 @@ export interface HostEnd {
 }
 
 export interface PageLink {
-  /** Whether sessions run in the local host this run: main's answer to the first open. */
-  inHost(): Promise<boolean>
   /** The connection, connecting first when there is none. Rejects with the sentence to show. */
   connection(): Promise<HostConnection>
   /**
@@ -84,9 +81,6 @@ export interface PageLinkDeps {
    */
   retries?: boolean
 }
-
-/** The sentence when sessions do not run in the host this run, which no host adapter is asked in. */
-export const NOT_IN_HOST = 'Sessions do not run in the local host this run.'
 
 /**
  * A byte transport over this page's `hostLink:*` channels, for one
@@ -135,9 +129,6 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
   const endListeners: Array<(end: HostEnd) => void> = []
   const setTimer = deps.setTimeout ?? ((run: () => void, ms: number): unknown => setTimeout(run, ms))
   const clearTimer = deps.clearTimeout ?? ((timer: unknown): void => clearTimeout(timer as ReturnType<typeof setTimeout>))
-  let placement: Promise<boolean> | null = null
-  /** The first open, which answered the placement, until a connect takes it. */
-  let untaken: Promise<HostLinkOpened> | null = null
   let attempt: Promise<HostConnection> | null = null
   let retryTimer: unknown = null
   let retryWait = RECONNECT_FIRST_MS
@@ -167,20 +158,12 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
     if (!end.planned && deps.retries !== false) scheduleRetry()
   }
 
-  const open = (): Promise<HostLinkOpened> => {
-    const opened = deps.bridge.invoke('hostLink:open', deps.host === undefined ? undefined : { host: deps.host })
-    placement ??= opened.then(
-      (answer) => answer.inHost,
-      () => false
-    )
-    return opened
-  }
+  const open = (): Promise<HostLinkOpened> =>
+    deps.bridge.invoke('hostLink:open', deps.host === undefined ? undefined : { host: deps.host })
 
   /** Connects once; `ended` hears how the host's side ended this connection, if it does. */
   const connect = async (ended: (end: HostEnd) => void): Promise<HostConnection> => {
-    const opened = await (untaken ?? open())
-    untaken = null
-    if (!opened.inHost) throw new Error(NOT_IN_HOST)
+    const opened = await open()
     if ('unreachable' in opened) throw new Error(opened.unreachable)
     let connection: HostConnection
     try {
@@ -209,11 +192,6 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
   }
 
   const link: PageLink = {
-    inHost() {
-      if (placement === null) untaken = open()
-      return placement as Promise<boolean>
-    },
-
     connection() {
       if (attempt !== null) return attempt
       let end: HostEnd | null = null

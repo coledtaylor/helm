@@ -33,12 +33,8 @@ export async function launchHelm(world: World): Promise<Helm> {
   return { app, window }
 }
 
-/**
- * Where a launch's overlay shims are built: Helm's data folder, or the local
- * host's launch folders inside it while sessions run there.
- */
-export const shimFolderOf = (world: World, sessionsInHost: boolean): string =>
-  sessionsInHost ? join(world.dataDir, 'host', 'data', 'launches') : join(world.dataDir, 'overlays')
+/** Where a launch's overlay shims are built: the local host's launch folders. */
+export const shimFolderOf = (world: World): string => join(world.dataDir, 'host', 'data', 'launches')
 
 /**
  * Unlinks the overlay shims the local host's launches built in a world: they
@@ -54,23 +50,18 @@ export function removeHostShims(world: World): void {
 /**
  * A test with a fresh world, seeded and torn down around it. `helm` is the app,
  * launched once; a test that restarts it calls `relaunch`.
- *
- * `sessionsInHost` seeds "Run sessions in the local host" on: the
- * `in the local host` project in `playwright.config.ts` runs every spec again
- * that way.
  */
 export const test = base.extend<{
-  sessionsInHost: boolean
   world: World
   helm: Helm
   relaunch: () => Promise<Helm>
 }>({
-  sessionsInHost: [false, { option: true }],
-  world: async ({ sessionsInHost }, use) => {
+  // eslint-disable-next-line no-empty-pattern
+  world: async ({}, use) => {
     const world = createWorld()
-    seedSettings(world, sessionsInHost ? { sessionsInHost: true } : {})
+    seedSettings(world)
     await use(world)
-    if (sessionsInHost) removeHostShims(world)
+    removeHostShims(world)
     disposeWorld(world)
   },
   helm: async ({ world }, use) => {
