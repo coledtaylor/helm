@@ -138,10 +138,13 @@ export function PaneCrumb({ place, branch, profile, status, hint }: PaneCrumbPro
         </>
       )}
       <span className="flex-1" />
+      {/* The status gives way to the place: a program's error message can be
+          200 characters, so it ends in an ellipsis and its hover text has it whole. */}
       {status !== undefined && (
         <span
           data-crumb="status"
-          className={cn('shrink-0 font-sans tabular-nums', CRUMB_TONE[status.tone])}
+          title={status.text}
+          className={cn('min-w-0 truncate font-sans tabular-nums', CRUMB_TONE[status.tone])}
         >
           {status.text}
         </span>
