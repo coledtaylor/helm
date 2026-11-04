@@ -17,7 +17,11 @@
 //   `system` theme from ever following macOS into dark mode;
 // - its native modules are unpacked beside the asar, as on Windows: a module
 //   inside the archive cannot be loaded, and node-pty's spawn-helper cannot be
-//   executed - nor can it outside the archive without its execute bit.
+//   executed - nor can it outside the archive without its execute bit;
+// - its `floti` is `dist-host/floti`, the one staged for it, byte for byte, and
+//   carries a signature of its own that verifies. Signing the app must not
+//   touch it: in a release the staged file is the release's, and the app's
+//   floti has to be the one the release's SHA-256 list gives.
 //
 //   node scripts/verify-mac-artifact.mjs               # the dmg and zip in dist-app
 //   node scripts/verify-mac-artifact.mjs a.dmg b.zip   # named artefacts
@@ -35,6 +39,7 @@ import { fileURLToPath } from 'node:url'
 const desktopDir = resolve(import.meta.dirname, '..')
 const distDir = join(desktopDir, 'dist-app')
 const committedIcon = join(desktopDir, 'build', 'icon.icns')
+const stagedFloti = join(desktopDir, 'dist-host', 'floti')
 
 /**
  * The images the icon must carry, as [type, pixels]: the iconset `iconutil`
@@ -208,6 +213,12 @@ function appProblems(app, origin) {
     } catch {
       fail('Contents/Resources/floti is not executable, so sessions cannot run in the local host')
     }
+    if (!existsSync(stagedFloti)) fail('dist-host/floti, the floti staged for the app, is missing, so the one inside cannot be checked against it')
+    else if (!readFileSync(floti).equals(readFileSync(stagedFloti))) {
+      fail('Contents/Resources/floti is not dist-host/floti byte for byte: signing the app changed it, so it is not the floti the release lists')
+    }
+    const own = tool('codesign', ['--verify', '--strict', floti])
+    if (!own.ok) fail(`Contents/Resources/floti carries no signature of its own that verifies, so macOS will not run it: ${own.said}`)
   }
   // The pinned Node the local host runs plugin services on, staged beside it.
   const node = join(resources, 'node', 'bin', 'node')

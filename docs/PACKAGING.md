@@ -71,7 +71,11 @@ platform's or whose SHA-256 the list does not give, and stages the list as
 `dist-host/floti-SHA256SUMS`, which electron-builder carries as
 `resources\floti-SHA256SUMS` on Windows and
 `Contents/Resources/floti-SHA256SUMS` on macOS. The floti inside the app is
-therefore byte for byte the one the release lists.
+therefore byte for byte the one the release lists. On macOS that holds only
+because signing the app leaves floti alone (`signIgnore` in
+`electron-builder.yml`): signing a binary rewrites its signature, and so its
+SHA-256. The linker has already signed it ad-hoc, which is all Apple Silicon
+needs to run it.
 
 ### Installing floti on a host's computer
 
@@ -141,8 +145,10 @@ around it in the Dock.
 `pnpm verify:mac-artifact` opens the dmg and the zip a person downloads and
 checks the Helm.app in each: an arm64 executable, a signature that verifies and
 is ad-hoc, `CFBundleIconFile` naming a file identical to `build/icon.icns`, no
-`NSRequiresAquaSystemAppearance`, and better-sqlite3, node-pty (with an
-executable `spawn-helper`) and koffi unpacked beside the asar. It needs macOS;
+`NSRequiresAquaSystemAppearance`, better-sqlite3, node-pty (with an
+executable `spawn-helper`) and koffi unpacked beside the asar, and a `floti`
+identical to `dist-host/floti` with a signature of its own that verifies. It
+needs macOS;
 `--icon` checks only the .icns, anywhere.
 
 ## Where the data goes

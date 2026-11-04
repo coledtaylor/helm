@@ -145,9 +145,8 @@ nsis:
 # and an Intel build would double the release's size for machines Helm is not
 # looked at on.
 mac:
-  # The local host, as for `win`: `Contents/Resources/floti`, signed with the
-  # rest of the bundle, with the pinned Node beside it (`node/bin/node`) and,
-  # in a release, `floti-SHA256SUMS`.
+  # The local host, as for `win`: `Contents/Resources/floti`, with the pinned
+  # Node beside it (`node/bin/node`) and, in a release, `floti-SHA256SUMS`.
   extraResources:
     - from: dist-host/floti
       to: floti
@@ -175,6 +174,14 @@ mac:
   # Settings > Privacy & Security; docs/PACKAGING.md says so. Developer ID signing and
   # notarization come with an Apple Developer account.
   identity: '-'
+  # floti is left as it was staged, byte for byte the release's file and the
+  # SHA-256 its list gives: signing it again rewrites its signature, so the app
+  # would carry a floti the release does not list. The linker already signed
+  # it ad-hoc, which is all Apple Silicon needs to run it, and the app's own
+  # signature seals it with the bundle's other resources. Matched against the
+  # full path; verify-mac-artifact.mjs checks both.
+  signIgnore:
+    - /Contents/Resources/floti$
   # The hardened runtime only matters to notarization, and with an ad-hoc
   # signature it turns on library validation, which refuses to load the native
   # modules (better-sqlite3, node-pty, koffi) - they carry no Team ID to match.
