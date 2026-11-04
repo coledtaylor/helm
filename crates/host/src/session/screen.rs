@@ -5,7 +5,8 @@
 //! ([`Screen::redraw`]) rather than a blank terminal until the next repaint.
 //! The host keeps the screen and reads nothing in it: it answers no query
 //! (its event listener drops every reply) and draws no conclusion from what
-//! is on it.
+//! is on it. A session's status comes from the output stream instead, from
+//! the OSC 7501 reports its program writes ([`super::report`]).
 
 use std::time::Duration;
 

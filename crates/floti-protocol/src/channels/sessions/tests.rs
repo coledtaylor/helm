@@ -506,12 +506,22 @@ fn session_requests_and_answers_round_trip_over_cbor() {
 
 #[test]
 fn session_events_and_state_round_trip_over_cbor() {
-    state::<SessionActivityChanged>(vec![SessionActivityState {
-        id: 12,
-        activity: Some(SessionActivity::Waiting),
-        waiting_for: Some("permission prompt".into()),
-        conversation_id: Some("0b9c".into()),
-    }]);
+    state::<SessionActivityChanged>(vec![
+        SessionActivityState {
+            id: 12,
+            activity: Some(SessionActivity::Waiting),
+            waiting_for: Some("permission prompt".into()),
+            message: None,
+            conversation_id: Some("0b9c".into()),
+        },
+        SessionActivityState {
+            id: 13,
+            activity: Some(SessionActivity::Error),
+            waiting_for: None,
+            message: Some("build failed".into()),
+            conversation_id: None,
+        },
+    ]);
     state::<SessionsOverviewChanged>(SessionsOverview {
         sessions: vec![
             LiveSession {
@@ -523,6 +533,7 @@ fn session_events_and_state_round_trip_over_cbor() {
                 name: Some("api".into()),
                 activity: Some(SessionActivity::Busy),
                 waiting_for: None,
+                message: None,
                 status_since_ms: Some(1_761_560_000_000),
                 version: Some("2.1.238".into()),
                 entrypoint: Some("cli".into()),
@@ -536,8 +547,9 @@ fn session_events_and_state_round_trip_over_cbor() {
                 registered: false,
                 cwd: None,
                 name: None,
-                activity: None,
+                activity: Some(SessionActivity::Error),
                 waiting_for: None,
+                message: Some("build failed".into()),
                 status_since_ms: None,
                 version: None,
                 entrypoint: None,

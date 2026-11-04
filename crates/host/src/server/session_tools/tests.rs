@@ -27,6 +27,7 @@ impl World {
             name: Some("alpha".into()),
             activity: Some(SessionActivity::Idle),
             waiting_for: None,
+            message: None,
             status_since_ms: Some(1_000),
             version: Some("2.1.300".into()),
             entrypoint: Some("cli".into()),

@@ -267,6 +267,9 @@ fn describe_status(session: &LiveSession, read_at_ms: u64) -> String {
         Some(SessionActivity::Idle) => {
             format!("idle - handed back to the user, nothing running{held}")
         }
+        // Only a program's own report says this. Its message is the
+        // program's output, so it is never repeated here.
+        Some(SessionActivity::Error) => format!("error - its program reports an error{held}"),
     }
 }
 

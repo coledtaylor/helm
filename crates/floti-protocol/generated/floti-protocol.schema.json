@@ -4719,7 +4719,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "From the backend's record, or else the program's OSC 7501 reports."
         },
         "backend": {
           "$ref": "#/$defs/BackendId",
@@ -4753,6 +4754,13 @@
             "null"
           ]
         },
+        "message": {
+          "description": "The program's own message for an `error`, at most 200 characters.\nNull otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "type": [
             "string",
@@ -4778,7 +4786,7 @@
           ]
         },
         "statusSinceMs": {
-          "description": "When the status was last published, epoch ms.",
+          "description": "When the status was last published, epoch ms: for a report, when its\nstate last changed.",
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -8194,17 +8202,26 @@
       "type": "object"
     },
     "SessionActivity": {
-      "description": "What a live session says it is doing, in its backend's own records.",
-      "enum": [
-        "busy",
-        "shell",
-        "idle",
-        "waiting"
-      ],
-      "type": "string"
+      "description": "What a live session says it is doing: in its backend's own records where\nit keeps them, or else in the OSC 7501 reports its program writes.",
+      "oneOf": [
+        {
+          "enum": [
+            "busy",
+            "shell",
+            "idle",
+            "waiting"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "Running, and its program reports an error. Only a program's OSC 7501\nreport says this.",
+          "type": "string"
+        }
+      ]
     },
     "SessionActivityState": {
-      "description": "What one hosted session is doing. Null activity is ordinary: no record\nyet, a process not proved alive, or a status the host does not know.",
+      "description": "What one hosted session is doing, from its backend's own records, or\nelse its program's OSC 7501 reports. Null activity is ordinary: no record\nor report yet, a process not proved alive, or a status the host does not\nknow.",
       "properties": {
         "activity": {
           "anyOf": [
@@ -8229,8 +8246,15 @@
           "minimum": 0,
           "type": "integer"
         },
+        "message": {
+          "description": "The program's own message for an `error`, at most 200 characters.\nNull otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "waitingFor": {
-          "description": "The agent's own sentence for a `waiting` session. Null otherwise.",
+          "description": "What a `waiting` session waits on: the agent's own sentence, or for a\nreported block its kind in words (`permission prompt`, `question`,\n`sign-in`), or the program's message when it gave no kind. Null\notherwise.",
           "type": [
             "string",
             "null"

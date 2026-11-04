@@ -1510,6 +1510,145 @@ async fn a_session_whose_agent_keeps_no_records_is_listed_with_its_activity_unkn
     host.stop(HostStopReason::Stop).await;
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn b64(text: &str) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(text)
+}
+
+/// Whether `bytes` hold `part` as one unbroken run.
+fn holds(bytes: &[u8], part: &[u8]) -> bool {
+    bytes.windows(part.len()).any(|window| window == part)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_program_with_no_records_reports_its_status_in_osc_7501_and_its_bytes_reach_clients_untouched()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let trigger = dirs.folder("trigger").join("second half");
+    // One report in two writes: the first half at start, the rest once the
+    // trigger file is there.
+    let working = b"\x1b]7501;state=working:app=build\x1b\\";
+    let (first, second) = working.split_at(15);
+    let print_first = format!("--fake-print={}", hex(first));
+    let print_on = format!("--fake-print-on={}", text(&trigger));
+    let host = RunningHost::start(fake_config(
+        &dirs,
+        &endpoint,
+        &agent,
+        &[&print_first, &print_on],
+    ));
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    client.subscribe_on(8, "session:activity").await;
+    let session = client
+        .request::<SessionStart>(&start_request(&dirs.folder("a project")))
+        .await
+        .unwrap();
+    let id = session.id;
+    let activity = |states: &Vec<SessionActivityState>| activity_of(states, id).cloned();
+
+    // Attached, and the screen drawn, before the rest of the report comes.
+    client.attach(1, id).await;
+    client.read_stream_until(1, |bytes| !bytes.is_empty()).await;
+    let partial = trigger.with_extension("partial");
+    std::fs::write(&partial, hex(second)).unwrap();
+    std::fs::rename(&partial, &trigger).unwrap();
+    let states = next_on(&mut client, 8, |states: &Vec<SessionActivityState>| {
+        activity(states).is_some_and(|state| state.activity == Some(SessionActivity::Busy))
+    })
+    .await;
+    assert_eq!(activity(&states).unwrap().message, None);
+
+    let blocked = format!(
+        "\x1b]7501;state=blocked:kind=permission:msg={}\x07",
+        b64("Apply the patch?")
+    );
+    client
+        .type_into(
+            1,
+            format!("/print {}\r", hex(blocked.as_bytes())).as_bytes(),
+        )
+        .await;
+    let states = next_on(&mut client, 8, |states: &Vec<SessionActivityState>| {
+        activity(states).is_some_and(|state| state.activity == Some(SessionActivity::Waiting))
+    })
+    .await;
+    assert_eq!(
+        activity(&states).unwrap().waiting_for.as_deref(),
+        Some("permission prompt")
+    );
+
+    // Screen text that looks like a status, a state the protocol does not
+    // have and a malformed report change nothing; the error after them does.
+    let noise: [&[u8]; 3] = [
+        b"working | Waiting for permission | error | ",
+        b"\x1b]7501;state=sleeping\x1b\\",
+        b"\x1b]7501;state=idle:broken\x07",
+    ];
+    for bytes in noise {
+        client
+            .type_into(1, format!("/print {}\r", hex(bytes)).as_bytes())
+            .await;
+    }
+    let long = "e".repeat(260);
+    let error = format!("\x1b]7501;state=error:msg={}\x1b\\", b64(&long));
+    client
+        .type_into(1, format!("/print {}\r", hex(error.as_bytes())).as_bytes())
+        .await;
+    let states = next_on(&mut client, 8, |states: &Vec<SessionActivityState>| {
+        let now = activity(states).and_then(|state| state.activity);
+        assert!(
+            matches!(now, Some(SessionActivity::Waiting | SessionActivity::Error)),
+            "only the error moves it: {states:?}"
+        );
+        now == Some(SessionActivity::Error)
+    })
+    .await;
+    assert_eq!(
+        activity(&states).unwrap().message,
+        Some("e".repeat(200)),
+        "the program's message, cut to 200 characters"
+    );
+
+    let clear = b"\x1b]7501;state=clear\x07";
+    client
+        .type_into(1, format!("/print {}\r", hex(clear)).as_bytes())
+        .await;
+    let _ = next_on(&mut client, 8, |states: &Vec<SessionActivityState>| {
+        activity(states).is_some_and(|state| state.activity.is_none())
+    })
+    .await;
+
+    // The terminal carried every report as the program wrote it. Plain
+    // text is left out: a Windows pseudoconsole draws text again its own
+    // way, before the host reads anything.
+    let bytes = client
+        .read_stream_until(1, |bytes| holds(bytes, clear))
+        .await;
+    for part in [working.as_slice(), blocked.as_bytes(), error.as_bytes()]
+        .into_iter()
+        .chain(noise.into_iter().skip(1))
+    {
+        assert!(
+            holds(&bytes, part),
+            "{:?} did not reach the client whole",
+            String::from_utf8_lossy(part)
+        );
+    }
+
+    client.type_into(1, b"/exit\r").await;
+    let _ = next_on(&mut client, 8, |states: &Vec<SessionActivityState>| {
+        activity(states).is_none()
+    })
+    .await;
+    host.stop(HostStopReason::Stop).await;
+}
+
 /// Where `needle` first occurs in `bytes`, after `from`.
 fn find(bytes: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     bytes

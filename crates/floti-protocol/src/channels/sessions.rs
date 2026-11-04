@@ -506,7 +506,8 @@ pub struct SessionPortOpen {
     pub port: u16,
 }
 
-/// What a live session says it is doing, in its backend's own records.
+/// What a live session says it is doing: in its backend's own records where
+/// it keeps them, or else in the OSC 7501 reports its program writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionActivity {
@@ -514,10 +515,15 @@ pub enum SessionActivity {
     Shell,
     Idle,
     Waiting,
+    /// Running, and its program reports an error. Only a program's OSC 7501
+    /// report says this.
+    Error,
 }
 
-/// What one hosted session is doing. Null activity is ordinary: no record
-/// yet, a process not proved alive, or a status the host does not know.
+/// What one hosted session is doing, from its backend's own records, or
+/// else its program's OSC 7501 reports. Null activity is ordinary: no record
+/// or report yet, a process not proved alive, or a status the host does not
+/// know.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionActivityState {
@@ -525,8 +531,14 @@ pub struct SessionActivityState {
     #[ts(type = "number")]
     pub id: u64,
     pub activity: Option<SessionActivity>,
-    /// The agent's own sentence for a `waiting` session. Null otherwise.
+    /// What a `waiting` session waits on: the agent's own sentence, or for a
+    /// reported block its kind in words (`permission prompt`, `question`,
+    /// `sign-in`), or the program's message when it gave no kind. Null
+    /// otherwise.
     pub waiting_for: Option<String>,
+    /// The program's own message for an `error`, at most 200 characters.
+    /// Null otherwise.
+    pub message: Option<String>,
     /// The conversation id the agent reports now. Not necessarily the
     /// record's: a cleared conversation gets a new one in the same process.
     pub conversation_id: Option<String>,
@@ -550,9 +562,14 @@ pub struct LiveSession {
     pub registered: bool,
     pub cwd: Option<String>,
     pub name: Option<String>,
+    /// From the backend's record, or else the program's OSC 7501 reports.
     pub activity: Option<SessionActivity>,
     pub waiting_for: Option<String>,
-    /// When the status was last published, epoch ms.
+    /// The program's own message for an `error`, at most 200 characters.
+    /// Null otherwise.
+    pub message: Option<String>,
+    /// When the status was last published, epoch ms: for a report, when its
+    /// state last changed.
     #[ts(type = "number | null")]
     pub status_since_ms: Option<u64>,
     /// The agent version that wrote the record.

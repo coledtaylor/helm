@@ -30,6 +30,7 @@ fn live() -> LiveSession {
         name: Some("api".to_owned()),
         activity: Some(SessionActivity::Idle),
         waiting_for: None,
+        message: None,
         status_since_ms: Some(READ_AT - 90_000),
         version: Some("2.1.238".to_owned()),
         entrypoint: Some("cli".to_owned()),
@@ -44,6 +45,24 @@ fn hosted_live(pid: u32, id: u64, name: &str) -> LiveSession {
         host_session_id: Some(id),
         name: Some(name.to_owned()),
         ..live()
+    }
+}
+
+#[test]
+fn a_session_whose_program_reports_an_error_is_listed_in_error_and_never_with_its_message() {
+    let failing = LiveSession {
+        registered: false,
+        activity: Some(SessionActivity::Error),
+        message: Some("disk full at /srv/private/ledger.db".to_owned()),
+        ..hosted_live(300, 9, "build")
+    };
+    let text = describe_session_listing(&overview(vec![failing]), None);
+    assert!(
+        text.contains("error - its program reports an error"),
+        "{text}"
+    );
+    for part in ["disk full", "/srv/private", "ledger.db"] {
+        assert!(!text.contains(part), "{part} reached the listing: {text}");
     }
 }
 

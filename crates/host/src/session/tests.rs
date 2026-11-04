@@ -834,3 +834,158 @@ fn a_session_outlives_its_clients() {
     session.end_now().unwrap();
     b.wait_for("the exit", |w| w.exit().is_some());
 }
+
+// ---------------------------------------------------------------------------
+// What a program reports about itself (OSC 7501)
+// ---------------------------------------------------------------------------
+
+fn b64(text: &str) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(text)
+}
+
+/// Whether `bytes` hold `part` as one unbroken run.
+fn holds(bytes: &[u8], part: &[u8]) -> bool {
+    bytes.windows(part.len()).any(|window| window == part)
+}
+
+#[test]
+fn a_programs_reports_are_kept_as_sent_and_every_byte_reaches_the_clients_untouched() {
+    let fx = Fixture::new();
+    let folder = fx.dirs.folder("project");
+    let trigger = fx.dirs.folder("trigger").join("second half");
+    let size = TermSize::new(120, 30);
+    let changes = Arc::new(Mutex::new(0_u32));
+    let counted = Arc::clone(&changes);
+    fx.host
+        .on_status_change(move || *counted.lock().unwrap() += 1);
+
+    // One report written in two writes: the first half at start, the rest
+    // once the trigger file is there.
+    let report = b"\x1b]7501;state=working:app=build:progress=40\x1b\\";
+    let (first, second) = report.split_at(17);
+    let print_first = format!("--fake-print={}", hex(first));
+    let print_on = format!("--fake-print-on={}", trigger.display());
+    let launch_folder = LaunchFolder::create(&fx.dirs.data).expect("create a launch folder");
+    let backend = fx.agent.backend([print_first.as_str(), print_on.as_str()]);
+    let spec = backend
+        .launch(
+            &LaunchRequest {
+                folder: folder.clone(),
+                ..LaunchRequest::default()
+            },
+            &launch_folder,
+        )
+        .unwrap()
+        .spec;
+    let (session, attachment) = fx
+        .host
+        .start_attached(
+            StartSession {
+                spec,
+                name: "reports".into(),
+                size,
+                client: Some(A),
+                conversation_id: None,
+                backend: backend.id().clone(),
+                origin: Default::default(),
+                opened_by: None,
+            },
+            A,
+        )
+        .expect("start the session");
+    let mut client = Watcher {
+        redraw: attachment.redraw,
+        output: attachment.output,
+        data: Vec::new(),
+        events: Vec::new(),
+        closed: false,
+    };
+    assert_eq!(session.reported_status(), None);
+    let partial = trigger.with_extension("partial");
+    std::fs::write(&partial, hex(second)).unwrap();
+    std::fs::rename(&partial, &trigger).unwrap();
+    wait_until("the split report", || session.reported_status().is_some());
+    let kept = session.reported_status().unwrap();
+    assert_eq!(kept.report.state, ReportState::Working);
+    assert_eq!(kept.report.app, "build");
+    assert_eq!(kept.report.progress, Some(40));
+
+    // Screen text that looks like a status, a report with a state the
+    // protocol does not have, a malformed one, a child's, and then the
+    // latest root report, with a message longer than is kept.
+    let long = "m".repeat(MAX_MESSAGE_CHARS + 40);
+    let error = format!(
+        "\x1b]7501;state=error:kind=permission:msg={}\x07",
+        b64(&long)
+    );
+    let noise: [&[u8]; 4] = [
+        b"working | Waiting for permission | error | ",
+        b"\x1b]7501;state=sleeping\x1b\\",
+        b"\x1b]7501;state=idle:broken\x07",
+        b"\x1b]7501;state=idle:id=child/1\x07",
+    ];
+    for bytes in noise {
+        session
+            .input(A, format!("/print {}\r", hex(bytes)).as_bytes())
+            .unwrap();
+    }
+    settle(&session, &mut [&mut client]);
+    assert_eq!(
+        session.reported_status().map(|kept| kept.report.state),
+        Some(ReportState::Working),
+        "screen text, an unknown state, a malformed report and a child's change nothing"
+    );
+    session
+        .input(A, format!("/print {}\r", hex(error.as_bytes())).as_bytes())
+        .unwrap();
+    wait_until("the error", || {
+        session
+            .reported_status()
+            .is_some_and(|kept| kept.report.state == ReportState::Error)
+    });
+    let kept = session.reported_status().unwrap();
+    assert_eq!(
+        kept.report.kind,
+        Some(BlockedKind::Permission),
+        "as the program sent it"
+    );
+    assert_eq!(kept.report.message, "m".repeat(MAX_MESSAGE_CHARS));
+    assert_eq!(kept.report.app, "", "the latest report's alone");
+
+    let clear = b"\x1b]7501;state=clear\x1b\\";
+    session
+        .input(A, format!("/print {}\r", hex(clear)).as_bytes())
+        .unwrap();
+    wait_until("the clear", || session.reported_status().is_none());
+    assert_eq!(
+        *changes.lock().unwrap(),
+        3,
+        "each change was told, and only those"
+    );
+
+    // Every report reached the client as the program wrote it. Plain text
+    // is left out: a Windows pseudoconsole draws text again its own way,
+    // before the host reads anything.
+    client.wait_for("the clear", |client| holds(&client.data, clear));
+    assert!(
+        holds(&client.data, report),
+        "the split report, whole and in order"
+    );
+    assert!(holds(&client.data, error.as_bytes()));
+    for bytes in noise.into_iter().skip(1) {
+        assert!(
+            holds(&client.data, bytes),
+            "{:?}",
+            String::from_utf8_lossy(bytes)
+        );
+    }
+
+    session
+        .input(A, format!("/print {}\r", hex(error.as_bytes())).as_bytes())
+        .unwrap();
+    wait_until("the error again", || session.reported_status().is_some());
+    session.input(A, b"/exit 0\r").unwrap();
+    assert!(session.wait_exit(PATIENCE).is_some());
+    assert_eq!(session.reported_status(), None, "it goes with the program");
+}

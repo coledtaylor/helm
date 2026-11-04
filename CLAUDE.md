@@ -182,8 +182,11 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   tab asks first, naming its host, which the window names; Close tab, keep
   running in the tab's menu ends nothing.
 - Do not use `@anthropic-ai/claude-agent-sdk`.
-- Helm renders nothing for a live session: it parses no session output,
-  answers no permission prompt and puts nothing between the user and the TUI.
+- Helm renders nothing for a live session and answers no permission
+  prompt. The host reads one thing in a session's output, OSC 7501 status
+  reports, kept as the program said them, and draws no conclusion from
+  screen text. It passes every byte on untouched and puts nothing between
+  the user and the TUI.
   Rendering an archived transcript (read-only, after the fact) is allowed.
   This holds for every agent: no RPC or JSON mode in place of its own TUI.
 - Windows, macOS and Linux: links are junctions (`mklink /J`) on Windows and
@@ -516,10 +519,11 @@ app's folder, on any OS.
   counts, never a message. What a launch needs (agent
   tools, settings, composed instructions, overlays) is a per-launch file under
   the data directory, never a write into the agent's config.
-- Session state comes from each backend's own signals, read only; an agent
-  with none shows the plain tab. For Claude Code that is
-  `~/.claude/sessions/<pid>.json`. Stale records are filtered by liveness at
-  read time, and anything that cannot be interpreted degrades to the plain tab.
+- Session state comes from each backend's own signals, read only, then from
+  OSC 7501 reports; a session with neither shows the plain tab. For Claude
+  Code that is `~/.claude/sessions/<pid>.json`. Stale records are filtered by
+  liveness at read time, and anything that cannot be interpreted degrades to
+  the plain tab.
 - The process-and-ports pass costs about half a second, so it runs only while
   the sessions pane is on screen or a `session_detail` call is waiting, every
   4s, in the host (`server/features/resources.rs`). Passes never overlap.

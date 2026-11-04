@@ -92,13 +92,15 @@ impl Known {
     }
 }
 
-/// The word a plugin is given for what a session is doing.
-fn word(activity: SessionActivity) -> PluginSessionActivity {
+/// The word a plugin is given for what a session is doing. A reported error
+/// has none: the plugin SDK's four words stay as they were published.
+fn word(activity: SessionActivity) -> Option<PluginSessionActivity> {
     match activity {
-        SessionActivity::Busy => PluginSessionActivity::Busy,
-        SessionActivity::Idle => PluginSessionActivity::Idle,
-        SessionActivity::Waiting => PluginSessionActivity::Waiting,
-        SessionActivity::Shell => PluginSessionActivity::Shell,
+        SessionActivity::Busy => Some(PluginSessionActivity::Busy),
+        SessionActivity::Idle => Some(PluginSessionActivity::Idle),
+        SessionActivity::Waiting => Some(PluginSessionActivity::Waiting),
+        SessionActivity::Shell => Some(PluginSessionActivity::Shell),
+        SessionActivity::Error => None,
     }
 }
 
@@ -174,7 +176,7 @@ impl PluginSessions {
                     moved = true;
                 }
             }
-            let activity = state.activity.map(word);
+            let activity = state.activity.and_then(word);
             if session.activity != activity {
                 session.activity = activity;
                 session.since = activity.map(|_| now);
@@ -261,6 +263,7 @@ mod tests {
             id,
             activity,
             waiting_for: Some("Allow Bash?".to_owned()),
+            message: None,
             conversation_id: Some("a-conversation".to_owned()),
         }
     }

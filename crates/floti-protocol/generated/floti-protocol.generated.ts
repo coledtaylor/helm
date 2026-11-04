@@ -1686,9 +1686,19 @@ pid: number,
 /**
  * Whether the backend's record for it was found.
  */
-registered: boolean, cwd: string | null, name: string | null, activity: SessionActivity | null, waitingFor: string | null, 
+registered: boolean, cwd: string | null, name: string | null, 
 /**
- * When the status was last published, epoch ms.
+ * From the backend's record, or else the program's OSC 7501 reports.
+ */
+activity: SessionActivity | null, waitingFor: string | null, 
+/**
+ * The program's own message for an `error`, at most 200 characters.
+ * Null otherwise.
+ */
+message: string | null, 
+/**
+ * When the status was last published, epoch ms: for a report, when its
+ * state last changed.
  */
 statusSinceMs: number | null, 
 /**
@@ -2645,13 +2655,16 @@ available: boolean, secrets: Array<SecretInfo>, };
 export type SessionActivation = { id: number, };
 
 /**
- * What a live session says it is doing, in its backend's own records.
+ * What a live session says it is doing: in its backend's own records where
+ * it keeps them, or else in the OSC 7501 reports its program writes.
  */
-export type SessionActivity = "busy" | "shell" | "idle" | "waiting";
+export type SessionActivity = "busy" | "shell" | "idle" | "waiting" | "error";
 
 /**
- * What one hosted session is doing. Null activity is ordinary: no record
- * yet, a process not proved alive, or a status the host does not know.
+ * What one hosted session is doing, from its backend's own records, or
+ * else its program's OSC 7501 reports. Null activity is ordinary: no record
+ * or report yet, a process not proved alive, or a status the host does not
+ * know.
  */
 export type SessionActivityState = { 
 /**
@@ -2659,9 +2672,17 @@ export type SessionActivityState = {
  */
 id: number, activity: SessionActivity | null, 
 /**
- * The agent's own sentence for a `waiting` session. Null otherwise.
+ * What a `waiting` session waits on: the agent's own sentence, or for a
+ * reported block its kind in words (`permission prompt`, `question`,
+ * `sign-in`), or the program's message when it gave no kind. Null
+ * otherwise.
  */
 waitingFor: string | null, 
+/**
+ * The program's own message for an `error`, at most 200 characters.
+ * Null otherwise.
+ */
+message: string | null, 
 /**
  * The conversation id the agent reports now. Not necessarily the
  * record's: a cleared conversation gets a new one in the same process.

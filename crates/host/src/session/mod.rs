@@ -1,6 +1,8 @@
 //! Sessions: each one a program in a pty, launched through its agent backend,
 //! with its screen kept by an off-screen terminal so a client attaching late
 //! draws it as it is. The host keeps the screen and reads nothing in it.
+//! The one thing it reads in the output stream is OSC 7501, the status a
+//! program reports about itself, and it passes those bytes on untouched.
 //!
 //! - [`SessionHost`] starts sessions and holds the running ones. A session
 //!   outlives its clients: it ends when its program exits or the host ends
@@ -12,8 +14,11 @@
 //! - [`session_env`] is the environment every session gets.
 //! - [`SessionLedger`] is where a session's row is written, on spawn and
 //!   when it ends.
+//! - [`ProgramStatus`] reads a session's output for its program's OSC 7501
+//!   reports and keeps the latest, as the program sent it.
 //! - [`ActivityTracker`] joins the host's sessions to their backends' own
-//!   records, for what each is doing and every live session on the machine.
+//!   records, or else their programs' reports, for what each is doing and
+//!   every live session on the machine.
 //! - [`Terminals`] are plain terminals: a shell in a folder, run the same way
 //!   with no row, from the shells [`detect_shells`] finds.
 //! - [`describe`] says, in words, what one session may be told about the
@@ -25,6 +30,7 @@ pub(crate) mod env;
 mod ledger;
 mod live;
 mod redraw;
+mod report;
 mod screen;
 mod shells;
 mod terminals;
@@ -37,6 +43,9 @@ pub use env::{STRIPPED_ENV, TERMINAL_ENV, session_env};
 pub use ledger::{NewSessionRow, SessionId, SessionLedger, SessionOrigin};
 pub use live::{
     Attachment, ClientId, GRACE, Session, SessionExit, SessionHost, SessionOutput, StartSession,
+};
+pub use report::{
+    BlockedKind, MAX_MESSAGE_CHARS, ProgramStatus, ReportState, ReportedStatus, StatusReport,
 };
 pub use screen::{SCROLLBACK_LINES, Screen, TermSize};
 pub use shells::{detect_shells, shell_args};

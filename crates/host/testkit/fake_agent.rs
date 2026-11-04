@@ -11,6 +11,9 @@
 //! is only recorded, so a backend can pass its own flags:
 //!
 //! - `--fake-print=<hex>`: writes these bytes to stdout at start.
+//! - `--fake-print-on=<file>`: once `file` exists, writes the bytes the hex
+//!   in it spells, once: output a test sends without typing, so nothing the
+//!   terminal echoes comes between it and what the program wrote before.
 //! - `--fake-child` or `--fake-child=<ms>`: starts a child of its own that
 //!   lives `<ms>` milliseconds (ten minutes by default), recorded by pid.
 //! - `--fake-gui-child` or `--fake-gui-child=<ms>`: the same with
@@ -218,6 +221,18 @@ fn main() {
                 thread::sleep(Duration::from_millis(20));
             }
             std::process::exit(0);
+        });
+    }
+    if let Some(file) = flag_value(&argv, "--fake-print-on") {
+        let file = PathBuf::from(file);
+        thread::spawn(move || {
+            while !file.exists() {
+                thread::sleep(Duration::from_millis(20));
+            }
+            match std::fs::read_to_string(&file) {
+                Ok(hex) => print_hex(hex.trim()),
+                Err(err) => eprintln!("floti-fake-agent: could not read {}: {err}", file.display()),
+            }
         });
     }
     if let Some(ms) = flag_value(&argv, "--fake-tick") {

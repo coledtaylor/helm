@@ -12,9 +12,10 @@
 //! `session:activate`, `pterm:exit`, and
 //! two that carry state: `session:activity`, what each hosted session is
 //! doing, and `sessions:overview`, every live agent session on the machine.
-//! Both come only from each backend's own records, read every
-//! [`ACTIVITY_POLL`] and again at once after a launch, a rename or an exit,
-//! and are sent whole only when they changed.
+//! Both come from each backend's own records, read every [`ACTIVITY_POLL`]
+//! and again at once after a launch, a rename or an exit, or else from the
+//! OSC 7501 reports a session's program writes, read again at once when one
+//! changes; they are sent whole only when they changed.
 //!
 //! Streams: each session's terminal (`session:data`) and each plain
 //! terminal's (`pterm:data`).
@@ -142,6 +143,12 @@ impl Sessions {
         events.serve_state::<SessionsOverviewChanged, _>(&first.overview)?;
 
         let (nudge, nudged) = mpsc::channel();
+        // A new report is read at once, not at the next poll.
+        let reported = nudge.clone();
+        hosted.sessions().on_status_change(move || {
+            // A reader that has stopped is a host that is stopping.
+            let _ = reported.send(());
+        });
         let focus = Arc::new(Mutex::new(Focus::default()));
         tokio::spawn(publish_exits(
             hosted.ledger().exits(),

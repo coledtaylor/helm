@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use floti_protocol::BackendId;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -31,6 +31,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::env::session_env;
 use super::ledger::{NewSessionRow, SessionId, SessionLedger, SessionOrigin};
+use super::report::{ProgramStatus, ReportedStatus};
 use super::screen::{Screen, TermSize};
 use crate::agent::LaunchSpec;
 use crate::agent::launch_folder::remove_launch_folder;
@@ -145,6 +146,18 @@ struct Shared {
     ledger: Arc<dyn SessionLedger>,
     spawner: Spawner,
     sessions: Mutex<BTreeMap<SessionId, Arc<Session>>>,
+    /// Told whenever a session's reported status changes.
+    status_watchers: Mutex<Vec<StatusWatcher>>,
+}
+
+type StatusWatcher = Box<dyn Fn() + Send + Sync>;
+
+impl Shared {
+    fn status_changed(&self) {
+        for watcher in lock(&self.status_watchers).iter() {
+            watcher();
+        }
+    }
 }
 
 /// Where a host's programs run.
@@ -186,8 +199,15 @@ impl SessionHost {
                 ledger,
                 spawner,
                 sessions: Mutex::new(BTreeMap::new()),
+                status_watchers: Mutex::new(Vec::new()),
             }),
         }
+    }
+
+    /// Calls `watcher` each time a session's reported status changes, from
+    /// the thread that read the report. It must not block.
+    pub fn on_status_change(&self, watcher: impl Fn() + Send + Sync + 'static) {
+        lock(&self.shared.status_watchers).push(Box::new(watcher));
     }
 
     /// Starts a session: its program in a new pty in its folder, its row
@@ -248,6 +268,7 @@ impl SessionHost {
                 size: held.size,
                 typist: None,
                 exit: None,
+                status: ProgramStatus::default(),
                 opening: None,
             }),
             ended: Condvar::new(),
@@ -339,6 +360,7 @@ impl SessionHost {
                 size,
                 typist: client,
                 exit: None,
+                status: ProgramStatus::default(),
                 opening: Some(Vec::new()),
             }),
             ended: Condvar::new(),
@@ -442,6 +464,7 @@ impl SessionHost {
                 size,
                 typist: client,
                 exit: None,
+                status: ProgramStatus::default(),
                 // The keeper answers a request that opens the output.
                 opening: None,
             }),
@@ -586,6 +609,8 @@ struct State {
     /// The client that typed last, whose size the session has.
     typist: Option<ClientId>,
     exit: Option<SessionExit>,
+    /// What the program last reported about itself; cleared when it exits.
+    status: ProgramStatus,
     /// The output so far, until it is known whether it opens with a cursor
     /// position request ([`Session::opening_request`]).
     opening: Option<Vec<u8>>,
@@ -618,6 +643,13 @@ impl Session {
     /// How the program ended, once it has.
     pub fn exit(&self) -> Option<SessionExit> {
         lock(&self.state).exit.clone()
+    }
+
+    /// The status its program last reported (OSC 7501), while it runs and
+    /// until it clears it. A session taken back after a host restart has
+    /// none until the program reports again.
+    pub fn reported_status(&self) -> Option<ReportedStatus> {
+        lock(&self.state).status.current().cloned()
     }
 
     /// Whether the session has let go of its pty and its screen.
@@ -818,7 +850,13 @@ impl Session {
             return;
         };
         screen.feed(&bytes);
+        // Read only: the bytes the clients get are the ones the screen got.
+        let reported = state.status.feed(&bytes, now_ms());
         broadcast(&mut state, SessionOutput::Data(Arc::from(bytes)));
+        drop(state);
+        if reported && let Some(shared) = self.host.upgrade() {
+            shared.status_changed();
+        }
     }
 
     /// Answers a cursor position request that opens the output, and takes it
@@ -877,6 +915,7 @@ impl Session {
                 broadcast(&mut state, SessionOutput::Data(Arc::from(opening)));
             }
             state.screen = None;
+            state.status = ProgramStatus::default();
             state.exit = Some(exit.clone());
             broadcast(&mut state, SessionOutput::Exited(exit));
             state.clients.clear();
@@ -932,6 +971,14 @@ fn spawn_thread(name: String, run: impl FnOnce() + Send + 'static) -> Result<()>
         .spawn(run)
         .map(drop)
         .map_err(|err| Error::io("start a session thread", err))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

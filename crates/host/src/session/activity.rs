@@ -1,12 +1,15 @@
 //! What the host's sessions are doing, and every live agent session on the
-//! machine, from each backend's own records.
+//! machine, from each backend's own records, or else from the OSC 7501
+//! reports a session's program writes.
 //!
 //! One pass joins each hosted session to its backend's records
 //! ([`join_record`]) and lists every record nobody claimed as a session the
-//! host does not run. A hosted session with no record is still listed, with
-//! no activity: it is running, the host holds its pid, and it may simply not
-//! have registered yet. Its activity is never a stale answer: no record means
-//! none.
+//! host does not run. A backend's own record wins wherever it says what the
+//! session is doing. A hosted session with no record, or a record with no
+//! status, takes the latest report its program wrote, as the program sent
+//! it; with neither it is still listed, with no activity: it is running, the
+//! host holds its pid, and it may simply not have registered yet. Its
+//! activity is never a stale answer: no record and no report means none.
 //!
 //! The process a session's records came from is pinned once found and
 //! followed after, so a cleared conversation, which gets a new id in the same
@@ -18,6 +21,9 @@ use std::collections::{HashMap, HashSet};
 use floti_protocol::channels::sessions::{LiveSession, SessionActivityState, SessionsOverview};
 use floti_protocol::{BackendId, Knowable};
 
+use floti_protocol::channels::sessions::SessionActivity;
+
+use super::report::{ReportState, ReportedStatus};
 use crate::agent::{LiveRecord, RecordJoin, RecordPin, join_record};
 
 /// One hosted session, as a pass sees it.
@@ -34,6 +40,66 @@ pub struct HostedView {
     /// What its tab says.
     pub label: String,
     pub started_at_ms: Option<u64>,
+    /// What its program last reported about itself (OSC 7501).
+    pub report: Option<ReportedStatus>,
+}
+
+/// What a session is doing, from whichever source says.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Status {
+    activity: Option<SessionActivity>,
+    waiting_for: Option<String>,
+    message: Option<String>,
+    since_ms: Option<u64>,
+}
+
+impl Status {
+    /// What a backend's record says, when it says anything.
+    fn of_record(record: &LiveRecord) -> Option<Self> {
+        record.activity.map(|activity| Self {
+            activity: Some(activity),
+            waiting_for: record.waiting_for.clone(),
+            message: None,
+            since_ms: record.status_since_ms,
+        })
+    }
+
+    /// What a program's report says: working is busy, idle and done are
+    /// idle, blocked is waiting on its kind (or on what its message says
+    /// when it gave none), and error is error, with its message.
+    fn of_report(status: &ReportedStatus) -> Self {
+        let report = &status.report;
+        let said = || Some(report.message.clone()).filter(|message| !message.is_empty());
+        let (activity, waiting_for, message) = match report.state {
+            ReportState::Working => (SessionActivity::Busy, None, None),
+            ReportState::Idle | ReportState::Done => (SessionActivity::Idle, None, None),
+            ReportState::Blocked => (
+                SessionActivity::Waiting,
+                report
+                    .kind
+                    .map(|kind| kind.words().to_owned())
+                    .or_else(said),
+                None,
+            ),
+            ReportState::Error => (SessionActivity::Error, None, said()),
+            // A clear is never kept.
+            ReportState::Clear => return Self::default(),
+        };
+        Self {
+            activity: Some(activity),
+            waiting_for,
+            message,
+            since_ms: Some(status.since_ms),
+        }
+    }
+
+    /// The record's status where it has one, or else the report's.
+    fn of(record: Option<&LiveRecord>, report: Option<&ReportedStatus>) -> Self {
+        record
+            .and_then(Self::of_record)
+            .or_else(|| report.map(Self::of_report))
+            .unwrap_or_default()
+    }
 }
 
 /// What one pass found.
@@ -91,10 +157,12 @@ impl ActivityTracker {
                 },
             );
             let Some(found) = found else {
+                let status = Status::of(None, session.report.as_ref());
                 states.push(SessionActivityState {
                     id: session.id,
-                    activity: None,
-                    waiting_for: None,
+                    activity: status.activity,
+                    waiting_for: status.waiting_for.clone(),
+                    message: status.message.clone(),
                     conversation_id: None,
                 });
                 listed.push(LiveSession {
@@ -104,10 +172,11 @@ impl ActivityTracker {
                     registered: false,
                     cwd: Some(session.cwd.clone()),
                     name: Some(session.label.clone()),
-                    activity: None,
-                    waiting_for: None,
-                    // No record, so no status to time from.
-                    status_since_ms: None,
+                    activity: status.activity,
+                    waiting_for: status.waiting_for,
+                    message: status.message,
+                    // No record: only a report has a status to time from.
+                    status_since_ms: status.since_ms,
                     version: None,
                     entrypoint: None,
                     started_at_ms: session.started_at_ms,
@@ -128,10 +197,12 @@ impl ActivityTracker {
             {
                 moved.push((session.id, conversation.clone()));
             }
+            let status = Status::of(Some(found), session.report.as_ref());
             states.push(SessionActivityState {
                 id: session.id,
-                activity: found.activity,
-                waiting_for: found.waiting_for.clone(),
+                activity: status.activity,
+                waiting_for: status.waiting_for.clone(),
+                message: status.message.clone(),
                 conversation_id: found.conversation_id.clone(),
             });
             listed.push(LiveSession {
@@ -143,9 +214,10 @@ impl ActivityTracker {
                 // and the name the tab has are what a user acts on.
                 cwd: Some(session.cwd.clone()),
                 name: Some(session.label.clone()),
-                activity: found.activity,
-                waiting_for: found.waiting_for.clone(),
-                status_since_ms: found.status_since_ms,
+                activity: status.activity,
+                waiting_for: status.waiting_for,
+                message: status.message,
+                status_since_ms: status.since_ms.or(found.status_since_ms),
                 version: found.version.clone(),
                 entrypoint: found.entrypoint.clone(),
                 started_at_ms: found.started_at_ms.or(session.started_at_ms),
@@ -170,6 +242,7 @@ impl ActivityTracker {
                     name: record.name.clone(),
                     activity: record.activity,
                     waiting_for: record.waiting_for.clone(),
+                    message: None,
                     status_since_ms: record.status_since_ms,
                     version: record.version.clone(),
                     entrypoint: record.entrypoint.clone(),
@@ -203,8 +276,7 @@ impl ActivityTracker {
 
 #[cfg(test)]
 mod tests {
-    use floti_protocol::channels::sessions::SessionActivity;
-
+    use super::super::report::{BlockedKind, MAX_MESSAGE_CHARS, ProgramStatus, StatusReport};
     use super::*;
 
     fn claude() -> BackendId {
@@ -242,7 +314,143 @@ mod tests {
             cwd: format!("C:/work/{id}"),
             label: format!("tab {id}"),
             started_at_ms: Some(1),
+            report: None,
         }
+    }
+
+    fn reported(state: ReportState, kind: Option<BlockedKind>, message: &str) -> ReportedStatus {
+        ReportedStatus {
+            report: StatusReport {
+                state,
+                kind,
+                progress: None,
+                id: String::new(),
+                app: "tool".into(),
+                title: String::new(),
+                message: message.into(),
+            },
+            since_ms: 42,
+        }
+    }
+
+    /// A hosted session no backend keeps records for, whose program reported.
+    fn plain(id: u64, report: ReportedStatus) -> HostedView {
+        HostedView {
+            backend: BackendId::new("plain-cli"),
+            report: Some(report),
+            ..hosted(id, 700, "c-none")
+        }
+    }
+
+    #[test]
+    fn a_backends_own_record_wins_over_what_its_program_reports() {
+        let mut tracker = ActivityTracker::default();
+        let session = HostedView {
+            report: Some(reported(ReportState::Error, None, "it broke")),
+            ..hosted(7, 4068, "c-1")
+        };
+        let busy = record("4068.json", 4068, "c-1", Some(SessionActivity::Busy));
+        let pass = tracker.pass(&[session], &[(claude(), Knowable::Known(vec![busy]))], 1);
+        assert_eq!(pass.states[0].activity, Some(SessionActivity::Busy));
+        assert_eq!(pass.states[0].message, None);
+        let listed = &pass.overview.sessions[0];
+        assert_eq!(listed.activity, Some(SessionActivity::Busy));
+        assert_eq!(listed.message, None);
+        assert_eq!(listed.status_since_ms, Some(5), "the record's time");
+    }
+
+    #[test]
+    fn a_report_is_used_where_the_record_has_no_status() {
+        let mut tracker = ActivityTracker::default();
+        let session = HostedView {
+            report: Some(reported(ReportState::Working, None, "")),
+            ..hosted(7, 4068, "c-1")
+        };
+        let silent = record("4068.json", 4068, "c-1", None);
+        let pass = tracker.pass(&[session], &[(claude(), Knowable::Known(vec![silent]))], 1);
+        assert_eq!(pass.states[0].activity, Some(SessionActivity::Busy));
+        assert!(pass.overview.sessions[0].registered);
+        assert_eq!(pass.overview.sessions[0].status_since_ms, Some(42));
+    }
+
+    #[test]
+    fn with_no_record_a_report_says_working_idle_needs_you_or_error() {
+        use SessionActivity::{Busy, Error, Idle, Waiting};
+        let cases = [
+            (reported(ReportState::Working, None, ""), Busy, None, None),
+            (reported(ReportState::Idle, None, ""), Idle, None, None),
+            (
+                reported(ReportState::Done, None, "all done"),
+                Idle,
+                None,
+                None,
+            ),
+            (
+                reported(
+                    ReportState::Blocked,
+                    Some(BlockedKind::Permission),
+                    "Apply?",
+                ),
+                Waiting,
+                Some("permission prompt"),
+                None,
+            ),
+            (
+                reported(ReportState::Blocked, Some(BlockedKind::Question), ""),
+                Waiting,
+                Some("question"),
+                None,
+            ),
+            (
+                reported(ReportState::Blocked, Some(BlockedKind::Auth), ""),
+                Waiting,
+                Some("sign-in"),
+                None,
+            ),
+            (
+                reported(ReportState::Blocked, None, "Pick a branch"),
+                Waiting,
+                Some("Pick a branch"),
+                None,
+            ),
+            (
+                reported(ReportState::Error, None, "build failed"),
+                Error,
+                None,
+                Some("build failed"),
+            ),
+            (reported(ReportState::Error, None, ""), Error, None, None),
+        ];
+        for (report, activity, waiting_for, message) in cases {
+            let mut tracker = ActivityTracker::default();
+            let pass = tracker.pass(&[plain(3, report.clone())], &[], 9);
+            let state = &pass.states[0];
+            assert_eq!(state.activity, Some(activity), "{report:?}");
+            assert_eq!(state.waiting_for.as_deref(), waiting_for, "{report:?}");
+            assert_eq!(state.message.as_deref(), message, "{report:?}");
+            let listed = &pass.overview.sessions[0];
+            assert!(!listed.registered);
+            assert_eq!(listed.activity, Some(activity));
+            assert_eq!(listed.message.as_deref(), message);
+            assert_eq!(listed.status_since_ms, Some(42));
+        }
+    }
+
+    #[test]
+    fn a_reported_message_reaches_the_pass_cut_to_two_hundred_characters() {
+        use base64::Engine;
+        let long = "x".repeat(MAX_MESSAGE_CHARS * 2);
+        let bytes = format!(
+            "\x1b]7501;state=error:msg={}\x07",
+            base64::engine::general_purpose::STANDARD.encode(&long)
+        );
+        let mut status = ProgramStatus::default();
+        status.feed(bytes.as_bytes(), 1);
+        let report = status.current().cloned().unwrap();
+        let mut tracker = ActivityTracker::default();
+        let pass = tracker.pass(&[plain(3, report)], &[], 9);
+        let message = pass.states[0].message.clone().unwrap();
+        assert_eq!(message, "x".repeat(MAX_MESSAGE_CHARS));
     }
 
     #[test]
@@ -265,6 +473,7 @@ mod tests {
                 id: 7,
                 activity: Some(SessionActivity::Busy),
                 waiting_for: None,
+                message: None,
                 conversation_id: Some("c-1".into()),
             }]
         );

@@ -1,8 +1,10 @@
 //! A plain command: any CLI, given as a name and a command line, run as a
 //! plain tab. It runs in a pty like any session and outlives its clients, and
-//! it declares nothing beyond running: no status, history, resume or agent
-//! tools, because Floti cannot know where an unknown CLI keeps them. Of a
-//! harness it takes the folder only.
+//! it declares nothing beyond running: no status records, history, resume or
+//! agent tools, because Floti cannot know where an unknown CLI keeps them.
+//! Its status comes only from its program's own OSC 7501 reports, which the
+//! host reads from every session's output. Of a harness it takes the folder
+//! only.
 
 use std::ffi::OsString;
 

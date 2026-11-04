@@ -920,6 +920,7 @@ impl Hosted {
                     started_at_ms: parse_instant(&record.started_at),
                     label: label_of(&record),
                     cwd: record.cwd,
+                    report: session.reported_status(),
                 })
             })
             .collect()
