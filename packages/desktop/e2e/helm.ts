@@ -7,7 +7,7 @@ import {
   type Page
 } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { removeShims } from '../test/overlay-world'
 import { createWorld, disposeWorld, fakeClaudeLogs, repoRoot, seedSettings, type FakeClaudeLog, type World } from '../test/world'
@@ -47,9 +47,38 @@ export function removeHostShims(world: World): void {
   for (const launch of readdirSync(launches)) removeShims(join(launches, launch, 'overlays'))
 }
 
+/** A host log line naming a process the host ran: its own start, or a session keeper it started or took back. */
+const HOST_LOG_PID = /floti host \S+ started at .*, process (\d+)|session keeper, process (\d+)\b/
+
+/**
+ * Every process a world's hosts ran, by pid, and every fake `claude` run in
+ * it: what the world's files stay open in while it runs. Each host writes its
+ * own pid, and each keeper's, into the host logs inside the world.
+ */
+export function worldProcesses(world: World): number[] {
+  const pids = new Set(fakeClaudeLogs(world).map((log) => log.pid))
+  const hostFolder = join(world.dataDir, 'host')
+  if (existsSync(hostFolder)) {
+    for (const entry of readdirSync(hostFolder, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !/^host\.log(\.\d+)?$/.test(entry.name)) continue
+      for (const line of readFileSync(join(entry.parentPath, entry.name), 'utf8').split(/\r?\n/)) {
+        const match = HOST_LOG_PID.exec(line)
+        const pid = Number(match?.[1] ?? match?.[2])
+        if (pid > 0) pids.add(pid)
+      }
+    }
+  }
+  return [...pids]
+}
+
 /**
  * A test with a fresh world, seeded and torn down around it. `helm` is the app,
  * launched once; a test that restarts it calls `relaunch`.
+ *
+ * The world goes only once nothing it ran is still running: the app's quit
+ * ends the sessions, then the keeper and the host exit by themselves, and
+ * until they have, Windows refuses to delete the files they hold. A test that
+ * leaves something running fails here, naming its pids.
  */
 export const test = base.extend<{
   world: World
@@ -61,6 +90,9 @@ export const test = base.extend<{
     const world = createWorld()
     seedSettings(world)
     await use(world)
+    await expect
+      .poll(() => worldProcesses(world).filter(processAlive), { message: 'what the world ran has exited' })
+      .toEqual([])
     removeHostShims(world)
     disposeWorld(world)
   },
