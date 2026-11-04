@@ -19,6 +19,8 @@ on:
       - "packages/desktop/src/shared/ipc.ts"
       # The agent backends' tests run these fake CLIs.
       - "test/fake-agents/**"
+      # The remote and WSL tests run these fake transports.
+      - "test/fake-ssh/**"
       # The step after the tests runs this.
       - "scripts/test-leftovers.mjs"
       - ".github/workflows/host.yml"
@@ -32,6 +34,7 @@ on:
       - "packages/core/drizzle/**"
       - "packages/desktop/src/shared/ipc.ts"
       - "test/fake-agents/**"
+      - "test/fake-ssh/**"
       - "scripts/test-leftovers.mjs"
       - ".github/workflows/host.yml"
       - ".config/nextest.toml"

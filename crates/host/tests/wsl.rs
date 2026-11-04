@@ -21,11 +21,15 @@ use floti_host::bridge::{decode_output, last_line_of};
 use floti_host::fake_agent;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use floti_host::platform::wsl::{NO_WSL_LINE, WslProgram};
+use std::time::Duration;
+
+use floti_host::server::idle::until_idle;
 use floti_host::server::{HostConfig, HostRun, Occupancy, local_endpoint};
 use floti_host::testkit::{FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs};
+use floti_protocol::channels::common::SessionStatus;
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, SessionClose, SessionStart, StartSessionRequest,
+    CloseSessionRequest, SessionClose, SessionList, SessionStart, StartSessionRequest,
 };
 use floti_protocol::channels::wsl::{WslKeepAwake, WslKeepAwakeRequest};
 use serde_json::Value;
@@ -261,6 +265,102 @@ async fn s7_s8_a_windows_host_holds_one_wsl_per_distro_while_its_host_runs_a_ses
     assert_eq!(wsl_runs(&pair.windows_dirs).len(), 2);
 
     drop(desktop);
+    drop(in_distro);
+    pair.windows.stop(HostStopReason::Stop).await;
+    pair.distro.stop(HostStopReason::Stop).await;
+    drop(pair.agent);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s7_the_held_wsl_outlives_every_client_and_a_client_that_comes_back_finds_the_session_and_opens_no_second()
+ {
+    let mut pair = Pair::start();
+    let mut in_distro = TestClient::connect(&pair.distro_endpoint(), &["terminal"]).await;
+    let session = in_distro
+        .request::<SessionStart>(&start_request(&pair.distro_dirs.folder("project")))
+        .await
+        .expect("start a session in the distro");
+    let mut desktop = TestClient::connect(&pair.windows_endpoint(), &[]).await;
+    desktop
+        .request::<WslKeepAwake>(&keep(DISTRO))
+        .await
+        .expect("keep the distro awake");
+    until(&mut pair.distro_now, "floti keep-awake attached", |now| {
+        now.clients == 2
+    })
+    .await;
+    until(
+        &mut pair.windows_now,
+        "the Windows host holds the distro",
+        |now| now.distros == 1,
+    )
+    .await;
+
+    // A host a desktop started ends once it is idle; watched from here, with
+    // the desktop attached and the distro held, it is not.
+    let idle = tokio::spawn(until_idle(pair.windows_now.clone(), Duration::ZERO));
+
+    // Every window closes and Helm quits keeping its sessions: both of its
+    // connections end.
+    drop(desktop);
+    drop(in_distro);
+    until(&mut pair.windows_now, "the desktop left", |now| {
+        now.clients == 0
+    })
+    .await;
+    until(
+        &mut pair.distro_now,
+        "only floti keep-awake is attached",
+        |now| now.clients == 1,
+    )
+    .await;
+    // Still held: one wsl.exe, the session running, and the Windows host not
+    // idle with no client attached.
+    assert_eq!(pair.windows_now.borrow().distros, 1);
+    assert_eq!(pair.distro_now.borrow().sessions, 1);
+    assert!(
+        !idle.is_finished(),
+        "the Windows host judged itself idle while it held a distro"
+    );
+
+    // Helm opens again: the session is there, and its ask for the same
+    // distro opens no second wsl.exe.
+    let mut in_distro = TestClient::connect(&pair.distro_endpoint(), &["terminal"]).await;
+    let listed = in_distro
+        .request::<SessionList>(&())
+        .await
+        .expect("list the distro's sessions");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].id, session.id);
+    assert_eq!(listed[0].status, SessionStatus::Running);
+    let mut desktop = TestClient::connect(&pair.windows_endpoint(), &[]).await;
+    desktop
+        .request::<WslKeepAwake>(&keep(DISTRO))
+        .await
+        .expect("ask again after coming back");
+    assert_eq!(pair.windows_now.borrow().distros, 1);
+    let runs = wsl_runs(&pair.windows_dirs);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+
+    // Once the session ends and every client is gone again, the Windows host
+    // is idle.
+    in_distro
+        .request::<SessionClose>(&CloseSessionRequest {
+            id: session.id,
+            force: true,
+        })
+        .await
+        .expect("end the session");
+    until(&mut pair.windows_now, "the Windows host let go", |now| {
+        now.distros == 0
+    })
+    .await;
+    drop(desktop);
+    tokio::time::timeout(PATIENCE, idle)
+        .await
+        .expect("idle once nothing is held and nobody is attached")
+        .expect("the idle watch ran");
+
     drop(in_distro);
     pair.windows.stop(HostStopReason::Stop).await;
     pair.distro.stop(HostStopReason::Stop).await;

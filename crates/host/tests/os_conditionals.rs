@@ -9,7 +9,8 @@
 //! (`launcher`), files only the user can open (`private_files`), sealing
 //! plugin secrets (`secret_seal`), the Node runtime's layout
 //! (`node_runtime`), the notification area (`tray`), the log's standard
-//! error (`standard_error`) and a terminal's size (`terminal_size`). A compile-time OS
+//! error (`standard_error`), a terminal's size (`terminal_size`) and WSL
+//! distros (`wsl`). A compile-time OS
 //! conditional (`cfg`, `cfg!` or `cfg_attr` naming `windows`, `unix`, `target_os`,
 //! `target_family`, `target_vendor` or `target_env`) may appear only in
 //! those folders, and in `src/platform/mod.rs`, which refuses any other OS.
@@ -33,6 +34,7 @@ const CONCERNS: &[&str] = &[
     "tray",
     "standard_error",
     "terminal_size",
+    "wsl",
 ];
 
 /// The words that make a `cfg` depend on the OS.
