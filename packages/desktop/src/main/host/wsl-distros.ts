@@ -35,6 +35,24 @@ export function parseWslList(text: string): string[] {
     .filter((line) => line !== '')
 }
 
+/**
+ * Distros another program keeps for its own engine: Docker Desktop's and
+ * Rancher Desktop's. Their program replaces them when it updates, taking
+ * anything installed there with it, so the dialog never offers them. WSL
+ * compares distro names without case.
+ */
+const ENGINE_DISTROS: ReadonlySet<string> = new Set([
+  'docker-desktop',
+  'docker-desktop-data',
+  'rancher-desktop',
+  'rancher-desktop-data'
+])
+
+/** The distros a host can be added in: every one named but an engine's own. */
+export function offeredDistros(names: readonly string[]): string[] {
+  return names.filter((name) => !ENGINE_DISTROS.has(name.toLowerCase()))
+}
+
 /** A Windows host this device reaches with its own ssh: its OS, as its floti said it, names Windows. */
 function windowsHostTarget(host: RemoteHost): string | null {
   if (host.transport.kind !== 'ssh') return null
@@ -50,12 +68,14 @@ async function listOn(
   // This PC's wsl.exe runs as written, which gives it WSL_UTF8=1 like every
   // wsl.exe Helm starts; `--quiet`, its last word, needs no quoting.
   const run = through === null ? await deps.run(argv, null, undefined, { asWritten: true }) : await deps.run(argv, null)
-  const distros = run.code === 0 ? parseWslList(run.stdout) : []
+  const named = run.code === 0 ? parseWslList(run.stdout) : []
   return {
     through,
     pcName,
-    distros,
-    said: distros.length > 0 ? null : lastLineOf(run)
+    distros: offeredDistros(named),
+    // A PC whose only distros are an engine's has nothing to add, and wsl.exe
+    // said nothing wrong: there is no line of its to show.
+    said: named.length > 0 ? null : lastLineOf(run)
   }
 }
 

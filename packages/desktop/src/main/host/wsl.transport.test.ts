@@ -190,6 +190,17 @@ describe('the WSL distros Add a host lists', () => {
     // Through ssh wsl.exe writes UTF-16LE; it is read as text either way.
     for (const list of empty) expect(list.said).toBe("and 'wsl.exe --install <Distro>' to install.")
   })
+
+  it('leaves out the distros Docker Desktop and Rancher Desktop keep for their engines', async () => {
+    const lists = await lister(
+      { ...process.env, FAKE_WSL_DISTROS: 'Ubuntu,docker-desktop,Docker-Desktop-Data,rancher-desktop' },
+      [],
+      {}
+    )
+    expect(lists).toEqual([{ through: null, pcName: 'this PC', distros: ['Ubuntu'], said: null }])
+    const onlyEngines = await lister({ ...process.env, FAKE_WSL_DISTROS: 'docker-desktop,docker-desktop-data' }, [], {})
+    expect(onlyEngines).toEqual([{ through: null, pcName: 'this PC', distros: [], said: null }])
+  })
 })
 
 describe('checking a WSL distro through wsl.exe', () => {
