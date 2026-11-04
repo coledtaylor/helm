@@ -233,34 +233,21 @@ impl World {
     /// folders are handed back, for the test to drop once it has seen what
     /// the services started end: a process still exiting may hold its folder.
     ///
-    /// A service's change is sent to the list from a task of its own, which
-    /// holds the registry, and with it the store, while it runs; one may
-    /// still be running when the test's last handle goes. So the store is
-    /// taken once nothing else holds it, as the host waits for it, for at
-    /// most [`PATIENCE`].
+    /// A service's change is sent to the list from a task the registry
+    /// started, which holds it, and with it the store, while it runs. The
+    /// registry's shutdown returns only once every such task has let go, so
+    /// the store is taken back as soon as it does.
     async fn stop(self) -> TestDirs {
         let Self {
             registry,
-            mut store,
+            store,
             dirs,
             ..
         } = self;
-        registry.shutdown();
+        registry.shutdown().await;
         drop(registry);
-        let deadline = tokio::time::Instant::now() + PATIENCE;
-        let store = loop {
-            match Arc::try_unwrap(store) {
-                Ok(only) => break only,
-                Err(held) => {
-                    assert!(
-                        tokio::time::Instant::now() < deadline,
-                        "the store was still held {PATIENCE:?} after the registry was dropped"
-                    );
-                    store = held;
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            }
-        };
+        let store =
+            Arc::try_unwrap(store).unwrap_or_else(|_| panic!("nothing else holds the store"));
         store.into_inner().unwrap().close().unwrap();
         dirs
     }

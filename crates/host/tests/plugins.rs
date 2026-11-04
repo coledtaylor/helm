@@ -10,12 +10,15 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
 use floti_host::platform::socket::Endpoint;
 use floti_host::plugins::background::{
-    BackgroundEvent, BackgroundLaunch, BackgroundRuntime, NoBackground, ToolCall, ToolFuture,
+    BackgroundEvent, BackgroundLaunch, BackgroundReporter, BackgroundRuntime, NoBackground,
+    ToolCall, ToolFuture,
 };
 use floti_host::plugins::call::CallOrigin;
 use floti_host::plugins::call::{CancelToken, PluginCallError};
@@ -1116,10 +1119,13 @@ struct Recorder {
     started: Mutex<Vec<(String, u64, String)>>,
     stopped: Mutex<Vec<String>>,
     delivered: Mutex<Vec<(String, BackgroundEvent)>>,
+    /// What each background it was asked to start was given to report with.
+    reporters: Mutex<Vec<BackgroundReporter>>,
 }
 
 impl BackgroundRuntime for Recorder {
     fn start(&self, launch: BackgroundLaunch) -> PluginBackgroundState {
+        self.reporters.lock().unwrap().push(launch.reporter.clone());
         self.started
             .lock()
             .unwrap()
@@ -1292,7 +1298,7 @@ async fn a_read_starts_the_background_of_a_plugin_that_loaded_and_of_nothing_els
 
     world.registry.set_enabled(&text(&good), false).unwrap();
     assert_eq!(*world.background.stopped.lock().unwrap(), ["good"]);
-    world.registry.shutdown();
+    world.registry.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1337,7 +1343,7 @@ async fn settings_get_answers_every_declared_setting_with_the_users_value_or_its
             if plugin == "factory" && sent["interval"] == PluginSettingValue::Number(90.0)),
         "{delivered:?}"
     );
-    world.registry.shutdown();
+    world.registry.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1421,5 +1427,164 @@ async fn status_and_badge_are_painted_while_the_plugin_is_on_and_checked_as_toda
         world.call("factory", "settings.get", vec![]).await,
         refused(PluginErrorCode::Unavailable, "the plugin is not enabled")
     );
-    world.registry.shutdown();
+    world.registry.shutdown().await;
+}
+
+/// A registry over a store the test keeps, whose publish, while it is armed,
+/// says it started and then waits for the test to release it: a push the
+/// registry's own task is making, caught in the middle.
+struct HeldPublishWorld {
+    registry: Registry,
+    store: Arc<Mutex<Store>>,
+    background: Arc<Recorder>,
+    armed: Arc<AtomicBool>,
+    publishing: tokio::sync::mpsc::UnboundedReceiver<()>,
+    release: std::sync::mpsc::Sender<()>,
+    /// Last: the store is closed before its folder goes.
+    dirs: TestDirs,
+}
+
+impl HeldPublishWorld {
+    fn new() -> Self {
+        let dirs = TestDirs::new();
+        let store = Arc::new(Mutex::new(Store::open(&dirs.data).unwrap()));
+        let background = Arc::new(Recorder::default());
+        let armed = Arc::new(AtomicBool::new(false));
+        let (started, publishing) = tokio::sync::mpsc::unbounded_channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let arming = Arc::clone(&armed);
+        let registry = Registry::new(RegistryParts {
+            store: Arc::clone(&store),
+            background: Arc::clone(&background) as Arc<dyn BackgroundRuntime>,
+            secrets: Arc::new(NoSecrets),
+            services: Arc::new(floti_host::plugins::net::service::NoServices),
+            logs: Default::default(),
+            publish: Box::new(move |_| {
+                if arming.swap(false, Ordering::SeqCst) {
+                    let _ = started.send(());
+                    // Bounded, so a test that never releases it fails
+                    // rather than hangs.
+                    let _ = released.lock().unwrap().recv_timeout(PATIENCE);
+                }
+            }),
+            deliver: Box::new(|_| ()),
+        });
+        registry.start().unwrap();
+        Self {
+            registry,
+            store,
+            background,
+            armed,
+            publishing,
+            release,
+            dirs,
+        }
+    }
+
+    /// Drops the test's own handle and takes the store back at once,
+    /// closing it: nothing the registry started may still hold it.
+    fn take_store_back(self) {
+        drop(self.registry);
+        drop(self.background);
+        let store = Arc::try_unwrap(self.store)
+            .unwrap_or_else(|_| panic!("nothing else holds the store"))
+            .into_inner()
+            .unwrap();
+        store.close().unwrap();
+        drop(self.dirs);
+    }
+}
+
+/// Polls `future` once, waking nothing: whether it is done already.
+fn done_at_once<F: Future>(future: &mut std::pin::Pin<Box<F>>) -> bool {
+    let mut context = Context::from_waker(Waker::noop());
+    matches!(future.as_mut().poll(&mut context), Poll::Ready(_))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_finishes_only_once_a_push_the_registry_started_lets_go_and_then_the_store_comes_back()
+ {
+    let mut world = HeldPublishWorld::new();
+    world.armed.store(true, Ordering::SeqCst);
+    world.registry.secrets_changed();
+    tokio::time::timeout(PATIENCE, world.publishing.recv())
+        .await
+        .expect("the push started")
+        .unwrap();
+
+    let mut shutdown = Box::pin(world.registry.shutdown());
+    assert!(
+        !done_at_once(&mut shutdown),
+        "shutdown finished while a push it started still held the registry"
+    );
+    world.release.send(()).unwrap();
+    tokio::time::timeout(PATIENCE, shutdown)
+        .await
+        .expect("shutdown finished once the push let go");
+    world.take_store_back();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn after_shutdown_what_the_registry_started_is_refused_takes_no_hold_and_keeps_nothing_waiting()
+ {
+    let world = HeldPublishWorld::new();
+    let folder = world.dirs.plugin_folder(
+        "sample",
+        &manifest("sample", "Sample", r#""background": "bg.mjs""#),
+        &[("bg.mjs", "export {}")],
+    );
+    let added = world.registry.add(&text(&folder)).unwrap();
+    let revision = added.plugins[0].revision;
+    let reporter = world.background.reporters.lock().unwrap()[0].clone();
+    let weak = world.registry.downgrade();
+    tokio::time::timeout(PATIENCE, world.registry.shutdown())
+        .await
+        .expect("nothing was in flight");
+
+    // A paint or a state report asks for a push, and a background reports;
+    // the push would block here, armed, if one were made.
+    world.armed.store(true, Ordering::SeqCst);
+    world.registry.secrets_changed();
+    world
+        .registry
+        .background_state("sample", revision, PluginBackgroundState::Running, None);
+    reporter.report(PluginBackgroundState::Crashed, None);
+    // A background script's batch and its call arrive.
+    let held = world.registry.hold_pushes();
+    assert!(weak.upgrade().is_none(), "the registry was handed out");
+    assert_eq!(
+        world
+            .registry
+            .call(PluginCall {
+                plugin: "sample".into(),
+                surface: PluginSurfaceKind::Background,
+                origin: CallOrigin::Host,
+                method: "settings.get".into(),
+                args: vec![],
+                cancel: CancelToken::new(),
+            })
+            .await,
+        Err(PluginCallError::new(
+            PluginErrorCode::Unavailable,
+            "the host is shutting down"
+        ))
+    );
+
+    let mut again = Box::pin(world.registry.shutdown());
+    assert!(
+        done_at_once(&mut again),
+        "something asked for after shutdown kept it waiting"
+    );
+    drop(held);
+    drop(reporter);
+    world.take_store_back();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_with_nothing_in_flight_finishes_at_once_and_the_store_comes_back() {
+    let world = HeldPublishWorld::new();
+    let mut shutdown = Box::pin(world.registry.shutdown());
+    assert!(done_at_once(&mut shutdown), "shutdown waited on nothing");
+    world.take_store_back();
 }

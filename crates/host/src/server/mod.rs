@@ -155,8 +155,8 @@ fn test_deadline(data: &Path) -> Option<Duration> {
     None
 }
 
-/// How long a stop waits, once the sessions have ended, for the store to be
-/// let go before it releases the data folder anyway.
+/// How long a stop waits, once the sessions have ended, for the plugin
+/// registry to be let go, and then for the store, before it goes on anyway.
 const RELEASE_WAIT: Duration = Duration::from_secs(10);
 
 /// The public half of the host key kept in the data folder `data`, or
@@ -520,6 +520,14 @@ impl Host {
             _lock: lock,
             ..
         } = self;
+        // Every background, service and plugin call ends, and the registry's
+        // own tasks let go of it, and of the store, before the features go.
+        let plugins = features.plugins().shutdown();
+        if tokio::time::timeout(RELEASE_WAIT, plugins).await.is_err() {
+            log_line!(
+                "floti host: the plugin registry was still in use {RELEASE_WAIT:?} after it was shut down"
+            );
+        }
         drop(features);
         drop(hosted);
         // Connections close on the shutdown, and the history and activity

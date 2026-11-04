@@ -511,8 +511,10 @@ impl World {
             .unwrap()
     }
 
-    fn stop(self) {
-        self.registry.shutdown();
+    /// Shuts the registry down, which returns once nothing it started holds
+    /// it, then takes the store back at once and closes it.
+    async fn stop(self) {
+        self.registry.shutdown().await;
         drop(self.registry);
         let store = Arc::try_unwrap(self.store)
             .unwrap_or_else(|_| panic!("nothing else holds the store"))
@@ -618,7 +620,7 @@ async fn a_request_to_a_listed_origin_is_sent_with_its_method_headers_and_body_w
     for each in &seen {
         assert_eq!(each.header("cookie"), None, "no cookie is sent or kept");
     }
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -738,7 +740,7 @@ async fn a_request_to_an_unlisted_origin_with_credentials_a_refused_method_or_a_
         listed.targets()
     );
     assert!(unlisted.seen().is_empty());
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -773,7 +775,7 @@ async fn headers_the_transport_owns_stay_its_own() {
     }
     assert_ne!(seen.header("connection"), Some("upgrade"));
     assert_eq!(seen.header("x-kept"), Some("yes"));
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -819,7 +821,7 @@ async fn a_response_over_32_mb_a_transport_failure_and_the_time_limit_fail_as_ne
         down.message.starts_with(&format!("{nothing}: ")),
         "{down:?}"
     );
-    world.stop();
+    world.stop().await;
 
     // The time limit, shortened from 120 s for the test.
     let world = World::with(|secrets| {
@@ -835,7 +837,7 @@ async fn a_response_over_32_mb_a_transport_failure_and_the_time_limit_fail_as_ne
     );
     assert!(started.elapsed() < PATIENCE);
     server.hung_up("/slow").await;
-    world.stop();
+    world.stop().await;
 }
 
 #[test]
@@ -864,7 +866,7 @@ async fn service_path_is_not_declared_without_a_service_and_fails_as_service_whe
 
     let cannot = refused(world.fetch("served", &get("service:/api/items")).await);
     assert_eq!(cannot.code, PluginErrorCode::Service, "{cannot:?}");
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -905,7 +907,7 @@ async fn a_service_path_goes_to_the_services_loopback_origin_with_its_token_and_
     );
     assert_eq!(secret.code, PluginErrorCode::Secret);
     assert_eq!(server.seen().len(), 1);
-    world.stop();
+    world.stop().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -946,7 +948,7 @@ async fn each_redirect_hop_is_checked_against_the_network_a_hop_inside_is_follow
         elsewhere.seen().is_empty(),
         "the hop leaving the list was sent"
     );
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -992,7 +994,7 @@ async fn more_than_20_hops_and_a_redirect_to_something_that_is_not_a_url_fail_as
             server.origin()
         )
     );
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1025,7 +1027,7 @@ async fn a_303_turns_a_post_into_a_get_with_no_body_and_a_307_keeps_the_post_and
     assert_eq!(kept.method, "POST");
     assert_eq!(kept.body, b"the body");
     assert_eq!(kept.header("content-type"), Some("text/plain"));
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1062,7 +1064,7 @@ async fn redirect_manual_answers_with_the_redirect_itself_and_redirect_error_ref
         ["/moved", "/moved"],
         "neither followed it"
     );
-    world.stop();
+    world.stop().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,7 +1138,7 @@ async fn a_secret_placeholder_is_filled_in_the_path_query_a_header_and_a_text_bo
         String::from_utf8_lossy(&seen[2].body),
         format!("token {AWKWARD}")
     );
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1196,7 +1198,7 @@ async fn a_secret_for_an_origin_the_user_did_not_allow_an_undeclared_key_or_one_
     }
     assert!(allowed.seen().is_empty());
     assert!(other.seen().is_empty());
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1218,7 +1220,7 @@ async fn a_url_the_server_supplied_is_never_searched_for_placeholders() {
     let landed = &server.targets()[1];
     assert!(!landed.contains("the-secret"), "{landed}");
     assert_eq!(landed, "/landing/%7B%7Bkey%7D%7D");
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1299,7 +1301,7 @@ async fn a_redirect_to_another_origin_drops_authorization_cookie_and_proxy_autho
     assert_eq!(same.header("cookie"), Some("c=1"));
     assert_eq!(same.header("proxy-authorization"), Some("Basic p"));
     assert_eq!(same.header("x-key"), Some("f"));
-    world.stop();
+    world.stop().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1324,9 +1326,9 @@ async fn aborting_switching_the_plugin_off_or_stopping_the_host_ends_the_request
     })
     .await;
     registry.set_enabled(&folder, true).unwrap();
-    ended_by(&world, &server, "/host-stopped", |_| registry.shutdown()).await;
+    ended_by(&world, &server, "/host-stopped", |_| registry.stop()).await;
     drop(registry);
-    world.stop();
+    world.stop().await;
 }
 
 /// Sends a request to `path`, which the server never answers, waits for it
@@ -1362,7 +1364,7 @@ async fn a_self_signed_certificate_is_accepted_from_a_loopback_address() {
     let response = world.fetch("local", &get(&server.url("/"))).await.unwrap();
     assert_eq!(response.body, b"over tls");
     assert_eq!(server.targets(), ["/"]);
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

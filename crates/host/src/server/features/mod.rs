@@ -228,6 +228,9 @@ pub(crate) struct Features {
     settings: Arc<SettingsService>,
     browser: Arc<BrowserRelay>,
     plugin_tools: Arc<PluginRelay>,
+    /// The plugin registry the plugins feature keeps: the host waits on its
+    /// shutdown before it lets go of the store.
+    plugins: crate::plugins::Registry,
 }
 
 impl Features {
@@ -259,7 +262,7 @@ impl Features {
         let history = history::History::new(&context)?;
         let carry = carry::Carry::new(&context, history.handle());
         let forwards = forwards::Forwards::new(&context, handle.clone());
-        let features: Vec<Box<dyn Feature>> = vec![
+        let mut features: Vec<Box<dyn Feature>> = vec![
             Box::new(sessions),
             Box::new(forwards),
             Box::new(history),
@@ -272,16 +275,18 @@ impl Features {
             Box::new(templates::Templates::new(&context)?),
             Box::new(content::Content::new(&context)?),
             Box::new(files::Files::new(&context)?),
-            Box::new(plugins::Plugins::new(
-                &context,
-                activity.clone(),
-                plugin_sessions,
-                Arc::clone(&plugin_tools),
-            )?),
-            Box::new(Arc::clone(&browser)),
-            Box::new(Arc::clone(&plugin_tools)),
-            Box::new(wsl::Wsl::new(&context, wsl_program)),
         ];
+        let plugins = plugins::Plugins::new(
+            &context,
+            activity.clone(),
+            plugin_sessions,
+            Arc::clone(&plugin_tools),
+        )?;
+        let plugin_registry = plugins.registry().clone();
+        features.push(Box::new(plugins));
+        features.push(Box::new(Arc::clone(&browser)));
+        features.push(Box::new(Arc::clone(&plugin_tools)));
+        features.push(Box::new(wsl::Wsl::new(&context, wsl_program)));
         Ok(Self {
             features,
             events: context.events,
@@ -291,7 +296,13 @@ impl Features {
             settings: Arc::clone(&context.workspace.settings),
             browser,
             plugin_tools,
+            plugins: plugin_registry,
         })
+    }
+
+    /// The plugin registry, for the host to shut down as it stops.
+    pub fn plugins(&self) -> &crate::plugins::Registry {
+        &self.plugins
     }
 
     pub fn events(&self) -> &Events {

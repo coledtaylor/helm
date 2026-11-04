@@ -39,6 +39,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
+use tokio::sync::watch;
+
 use floti_protocol::Payload;
 use floti_protocol::channels::plugins::{
     PLUGIN_CHANNEL_POST, PluginAddResult, PluginBackgroundState, PluginChannelMessage,
@@ -112,21 +114,107 @@ pub struct PluginCall {
 }
 
 /// The plugin registry. Cloning it is cheap; every clone is the same one.
+///
+/// The owner's handle is [`Registry::new`]'s and its clones. A handle that
+/// something the registry started took ([`WeakRegistry::upgrade`], a task
+/// or a callback of its own) is counted as held until it is dropped, and
+/// [`Registry::shutdown`] waits for every one of those.
 #[derive(Clone)]
 pub struct Registry {
+    // Declared before `hand`, so a counted handle lets go of the registry,
+    // and the store with it, before shutdown hears that it did.
     inner: Arc<Inner>,
+    hand: Option<Hand>,
 }
 
 /// A registry that does not keep it alive: what the background runtime
 /// holds, since the registry holds the runtime.
 #[derive(Clone)]
 pub struct WeakRegistry {
-    inner: Weak<Inner>,
+    reach: Reach,
 }
 
 impl WeakRegistry {
+    /// The registry, held until the answer is dropped; `None` once it is
+    /// shutting down or gone.
     pub fn upgrade(&self) -> Option<Registry> {
-        self.inner.upgrade().map(|inner| Registry { inner })
+        self.reach.hold()
+    }
+}
+
+/// How many counted handles are out, and whether the registry stopped. The
+/// two change under the one lock the channel keeps, so no handle is taken
+/// once a stop has set `stopped`, and the last one let go wakes shutdown.
+#[derive(Default)]
+struct Hands {
+    held: usize,
+    stopped: bool,
+}
+
+/// One counted handle on the registry: shutdown waits while it is alive.
+struct Hand {
+    hands: Arc<watch::Sender<Hands>>,
+}
+
+impl Hand {
+    /// A hand, unless the registry stopped.
+    fn take(hands: &Arc<watch::Sender<Hands>>) -> Option<Self> {
+        let mut taken = false;
+        hands.send_if_modified(|now| {
+            if !now.stopped {
+                now.held += 1;
+                taken = true;
+            }
+            false
+        });
+        taken.then(|| Self {
+            hands: Arc::clone(hands),
+        })
+    }
+}
+
+impl Clone for Hand {
+    /// A copy of a hand that is out: the registry is held already, so it is
+    /// counted even after a stop.
+    fn clone(&self) -> Self {
+        self.hands.send_if_modified(|now| {
+            now.held += 1;
+            false
+        });
+        Self {
+            hands: Arc::clone(&self.hands),
+        }
+    }
+}
+
+impl Drop for Hand {
+    fn drop(&mut self) {
+        self.hands.send_if_modified(|now| {
+            now.held -= 1;
+            now.stopped && now.held == 0
+        });
+    }
+}
+
+/// The registry, not kept alive: how everything it starts reaches it again,
+/// through [`Reach::hold`] and nothing else.
+#[derive(Clone)]
+struct Reach {
+    inner: Weak<Inner>,
+    hands: Arc<watch::Sender<Hands>>,
+}
+
+impl Reach {
+    /// The registry, counted as held until the answer is dropped. Refused
+    /// once it stopped, before it is reached at all, so a refusal never
+    /// holds the registry or the store, even for a moment.
+    fn hold(&self) -> Option<Registry> {
+        let hand = Hand::take(&self.hands)?;
+        let inner = self.inner.upgrade()?;
+        Some(Registry {
+            inner,
+            hand: Some(hand),
+        })
     }
 }
 
@@ -149,8 +237,9 @@ struct Inner {
     pending: AtomicBool,
     /// Taken after `publishing`, never before it.
     held: Mutex<Held>,
-    stopped: AtomicBool,
-    myself: Weak<Inner>,
+    /// How the registry's own tasks and callbacks reach it; it also keeps
+    /// whether it stopped.
+    myself: Reach,
 }
 
 /// The batches of calls being started ([`Registry::hold_pushes`]), and
@@ -162,20 +251,24 @@ struct Held {
 }
 
 /// Holds back what plugins paint until it is dropped; then one push carries
-/// all of it.
+/// all of it. It holds the registry, counted, and holds nothing once the
+/// registry stopped.
 pub struct PushesHeld {
-    inner: Arc<Inner>,
+    registry: Option<Registry>,
 }
 
 impl Drop for PushesHeld {
     fn drop(&mut self) {
+        let Some(registry) = self.registry.take() else {
+            return;
+        };
         let waiting = {
-            let mut held = lock(&self.inner.held);
+            let mut held = lock(&registry.inner.held);
             held.batches -= 1;
             held.batches == 0 && std::mem::take(&mut held.waiting)
         };
         if waiting {
-            self.inner.changed_soon();
+            registry.inner.changed_soon();
         }
     }
 }
@@ -288,6 +381,7 @@ impl Registry {
     /// A registry with nothing read yet; [`start`](Self::start) reads the
     /// registered folders.
     pub fn new(parts: RegistryParts) -> Self {
+        let hands = Arc::new(watch::Sender::new(Hands::default()));
         let inner = Arc::new_cyclic(|myself: &Weak<Inner>| Inner {
             store: parts.store,
             background: parts.background,
@@ -302,16 +396,18 @@ impl Registry {
             publishing: Mutex::new(()),
             pending: AtomicBool::new(false),
             held: Mutex::new(Held::default()),
-            stopped: AtomicBool::new(false),
-            myself: myself.clone(),
+            myself: Reach {
+                inner: myself.clone(),
+                hands,
+            },
         });
         register_standard(&inner.methods, &inner.myself);
-        Self { inner }
+        Self { inner, hand: None }
     }
 
     pub fn downgrade(&self) -> WeakRegistry {
         WeakRegistry {
-            inner: Arc::downgrade(&self.inner),
+            reach: self.inner.myself.clone(),
         }
     }
 
@@ -325,10 +421,13 @@ impl Registry {
     /// a status and a badge set together reach clients in one push. A push
     /// already being made finishes first, and holds nothing of the batch.
     pub fn hold_pushes(&self) -> PushesHeld {
+        let Some(registry) = self.inner.myself.hold() else {
+            return PushesHeld { registry: None };
+        };
         let _publishing = lock(&self.inner.publishing);
         lock(&self.inner.held).batches += 1;
         PushesHeld {
-            inner: Arc::clone(&self.inner),
+            registry: Some(registry),
         }
     }
 
@@ -666,7 +765,7 @@ impl Registry {
     /// Answers a bridge call: the plugin must be enabled and loaded, and the
     /// method one the host serves.
     pub async fn call(&self, call: PluginCall) -> CallResult {
-        if self.inner.stopped.load(Ordering::SeqCst) {
+        if self.inner.stopped() {
             return Err(PluginCallError::unavailable("the host is shutting down"));
         }
         let (context, bridge) = {
@@ -708,7 +807,7 @@ impl Registry {
     /// declare, is refused here, before anything reaches the script; the
     /// answer is the sentence the session reads.
     pub async fn call_tool(&self, call: ToolCall, cancel: CancelToken) -> ToolAnswer {
-        if self.inner.stopped.load(Ordering::SeqCst) {
+        if self.inner.stopped() {
             return Err("The host is shutting down.".to_owned());
         }
         {
@@ -852,10 +951,37 @@ impl Registry {
         }
     }
 
-    /// Stops everything every plugin has running, and refuses calls from now
-    /// on.
-    pub fn shutdown(&self) {
-        self.inner.stopped.store(true, Ordering::SeqCst);
+    /// Stops everything every plugin has running, refuses calls from now on,
+    /// and finishes once nothing the registry started still holds it: every
+    /// task, callback and call of its own has let go, and with them the
+    /// store. The stop happens when this is called; the answer only waits,
+    /// woken by the last holder to let go. Called on the owner's handle: a
+    /// handle the registry's own work holds would wait for itself.
+    pub fn shutdown(&self) -> impl Future<Output = ()> + Send + 'static {
+        debug_assert!(
+            self.hand.is_none(),
+            "shutdown is the owner's: a held handle would wait for itself"
+        );
+        self.stop();
+        let mut released = self.inner.myself.hands.subscribe();
+        async move {
+            // An error is the registry gone, which holds nothing either.
+            let _ = released.wait_for(|now| now.held == 0).await;
+        }
+    }
+
+    /// What [`shutdown`](Self::shutdown) does without waiting for anything:
+    /// for a `Drop` that cannot wait. Only the first stop stops anything.
+    pub fn stop(&self) {
+        let mut first = false;
+        self.inner.myself.hands.send_if_modified(|now| {
+            first = !now.stopped;
+            now.stopped = true;
+            now.held == 0
+        });
+        if !first {
+            return;
+        }
         let effects = {
             let mut state = lock(&self.inner.state);
             let mut effects = Vec::new();
@@ -959,8 +1085,8 @@ impl Inner {
                 // A read runs the manifest validator and walks the folder:
                 // off the runtime's workers.
                 settling.spawn_blocking(move || {
-                    if let Some(inner) = myself.upgrade() {
-                        inner.read_changed(&path, revision, &changed);
+                    if let Some(registry) = myself.hold() {
+                        registry.inner.read_changed(&path, revision, &changed);
                     }
                 });
             }),
@@ -1004,7 +1130,7 @@ impl Inner {
 
     /// Sends the list once this turn is over, however many changes it made.
     fn changed_soon(&self) {
-        if self.pending.swap(true, Ordering::SeqCst) {
+        if self.stopped() || self.pending.swap(true, Ordering::SeqCst) {
             return;
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -1015,15 +1141,21 @@ impl Inner {
         let myself = self.myself.clone();
         runtime.spawn(async move {
             tokio::task::yield_now().await;
-            if let Some(inner) = myself.upgrade() {
-                inner.pending.store(false, Ordering::SeqCst);
-                inner.publish_now();
+            if let Some(registry) = myself.hold() {
+                registry.inner.pending.store(false, Ordering::SeqCst);
+                registry.inner.publish_now();
             }
         });
     }
 
+    /// The registry was stopped: nothing new starts, and nothing it started
+    /// can reach it again.
+    fn stopped(&self) -> bool {
+        self.myself.hands.borrow().stopped
+    }
+
     fn publish_now(&self) {
-        if self.stopped.load(Ordering::SeqCst) {
+        if self.stopped() {
             return;
         }
         let _publishing = lock(&self.publishing);
@@ -1125,8 +1257,8 @@ impl Inner {
                 spec,
                 secrets: plugin.manifest.secrets.clone(),
                 changed: Arc::new(move || {
-                    if let Some(inner) = myself.upgrade() {
-                        inner.changed_soon();
+                    if let Some(registry) = myself.hold() {
+                        registry.inner.changed_soon();
                     }
                 }),
             }));
@@ -1138,8 +1270,10 @@ impl Inner {
         let myself = self.myself.clone();
         let plugin = plugin.to_owned();
         BackgroundReporter::new(move |state, error| {
-            if let Some(inner) = myself.upgrade() {
-                inner.background_state(&plugin, revision, state, error);
+            if let Some(registry) = myself.hold() {
+                registry
+                    .inner
+                    .background_state(&plugin, revision, state, error);
             }
         })
     }
@@ -1222,28 +1356,28 @@ impl Inner {
 
 /// `settings.get`, `status.set` and `badge.set`: the methods that read and
 /// paint the plugin's own state.
-fn register_standard(methods: &Methods, registry: &Weak<Inner>) {
+fn register_standard(methods: &Methods, registry: &Reach) {
     let gone = || PluginCallError::unavailable("the host is shutting down");
 
     let weak = registry.clone();
     methods.register_sync("settings.get", move |context, _args| {
-        let inner = weak.upgrade().ok_or_else(gone)?;
-        answer(&inner.setting_values(&context.manifest))
+        let registry = weak.hold().ok_or_else(gone)?;
+        answer(&registry.inner.setting_values(&context.manifest))
     });
 
     let weak = registry.clone();
     methods.register_sync("status.set", move |context, args| {
-        let inner = weak.upgrade().ok_or_else(gone)?;
+        let registry = weak.hold().ok_or_else(gone)?;
         let item = read_status(args)?;
-        inner.painted(context, |entry| entry.status = item);
+        registry.inner.painted(context, |entry| entry.status = item);
         Ok(nothing())
     });
 
     let weak = registry.clone();
     methods.register_sync("badge.set", move |context, args| {
-        let inner = weak.upgrade().ok_or_else(gone)?;
+        let registry = weak.hold().ok_or_else(gone)?;
         let badge = read_badge(args)?;
-        inner.painted(context, |entry| entry.badge = badge);
+        registry.inner.painted(context, |entry| entry.badge = badge);
         Ok(nothing())
     });
 
@@ -1252,7 +1386,8 @@ fn register_standard(methods: &Methods, registry: &Weak<Inner>) {
     // one. The bridge's own method, not one a plugin calls.
     let weak = registry.clone();
     methods.register_sync(PLUGIN_CHANNEL_POST, move |context, args| {
-        let inner = weak.upgrade().ok_or_else(gone)?;
+        let registry = weak.hold().ok_or_else(gone)?;
+        let inner = &registry.inner;
         let name: String = argument(args, 0, "a channel post names its channel")?;
         let token: String = argument(args, 2, "a channel post carries its channel's token")?;
         let message = args.get(1).cloned().unwrap_or(Payload::Null);

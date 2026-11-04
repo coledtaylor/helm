@@ -204,9 +204,18 @@ pub(crate) fn tool_caller(
     move |row| sessions.upgrade()?.caller(row)
 }
 
+impl Plugins {
+    /// The registry, for the host to wait on its shutdown as it stops.
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+}
+
+/// A backstop for a host that did not wait on the registry's shutdown: it
+/// stops everything, without waiting.
 impl Drop for Plugins {
     fn drop(&mut self) {
-        self.registry.shutdown();
+        self.registry.stop();
     }
 }
 

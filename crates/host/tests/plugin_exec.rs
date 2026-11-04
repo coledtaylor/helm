@@ -207,8 +207,10 @@ impl World {
             .unwrap()
     }
 
-    fn stop(self) {
-        self.registry.shutdown();
+    /// Shuts the registry down, which returns once nothing it started holds
+    /// it, then takes the store back at once and closes it.
+    async fn stop(self) {
+        self.registry.shutdown().await;
         drop(self.registry);
         let store = Arc::try_unwrap(self.store)
             .unwrap_or_else(|_| panic!("nothing else holds the store"))
@@ -368,7 +370,7 @@ async fn a_declared_program_runs_in_its_folder_with_no_shell_declared_args_first
             "{hosts_own} reached the program"
         );
     }
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -411,7 +413,7 @@ async fn a_program_on_path_and_a_script_inside_the_plugin_folder_a_batch_file_on
     expected.extend(call_args);
     assert_eq!(report(&wrapped)["args"], json!(expected));
     assert!(same_folder(&report(&wrapped)["cwd"], &scripts));
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -431,7 +433,7 @@ async fn a_non_zero_exit_is_an_answer_not_a_failure() {
     assert!(!result.timed_out);
     assert_eq!(result.stderr, "xxxxx");
     assert!(result.stdout.starts_with('{'), "{result:?}");
-    world.stop();
+    world.stop().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +558,7 @@ async fn an_undeclared_name_a_missing_program_a_path_leaving_the_folder_or_argum
         assert_eq!(invalid.message, message);
     }
     assert!(!marker.exists(), "a refused call started the program");
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -605,7 +607,7 @@ async fn a_plugin_with_eight_programs_running_is_refused_a_ninth_as_unavailable_
     // A place is free again once a program has ended.
     let again = world.exec("busy", "tool", &[], Value::Null).await.unwrap();
     assert_eq!(again.exit_code, Some(0));
-    world.stop();
+    world.stop().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -651,7 +653,7 @@ async fn a_timeout_ends_the_whole_tree_and_resolves_timed_out_with_no_exit_code(
         "what it wrote comes back"
     );
     ended(&[pid, child.unwrap()]).await;
-    world.stop();
+    world.stop().await;
 }
 
 /// Starts a program that starts a child and sleeps, waits until both run,
@@ -701,11 +703,11 @@ async fn a_cancelled_call_a_plugin_switched_off_or_the_host_stopping_ends_the_wh
 
     registry.set_enabled(&path, true).unwrap();
     ended_by(&world, "ending", &file("host stopped.json"), |_| {
-        registry.shutdown();
+        registry.stop();
     })
     .await;
     drop(registry);
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -726,5 +728,5 @@ async fn writing_more_than_16_mb_on_stdout_or_stderr_ends_the_tree_and_rejects_s
         let (pid, child) = pids(Path::new(&file)).await;
         ended(&[pid, child.unwrap()]).await;
     }
-    world.stop();
+    world.stop().await;
 }

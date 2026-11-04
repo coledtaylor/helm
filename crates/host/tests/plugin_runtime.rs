@@ -251,21 +251,12 @@ other: {:#?}",
         }
     }
 
-    /// Stops every script and waits until nothing holds the registry, so the
-    /// store is let go before the test's folders are removed.
+    /// Stops every script; the registry's shutdown returns once nothing it
+    /// started holds it, so the store is let go before the test's folders are
+    /// removed.
     async fn stop(mut self) {
         let registry = self.registry.take().expect("a world stops once");
-        registry.shutdown();
-        let weak = registry.downgrade();
-        drop(registry);
-        let deadline = Instant::now() + PATIENCE;
-        while weak.upgrade().is_some() {
-            assert!(
-                Instant::now() < deadline,
-                "the registry was still held after {PATIENCE:?}"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        registry.shutdown().await;
     }
 }
 
@@ -281,7 +272,7 @@ impl Drop for Ended {
 impl Drop for World {
     fn drop(&mut self) {
         if let Some(registry) = self.registry.take() {
-            registry.shutdown();
+            registry.stop();
         }
     }
 }
@@ -868,7 +859,7 @@ async fn switching_off_reloading_or_stopping_ends_every_timer() {
         "one count after a reload: {after_reload:#?}"
     );
 
-    world.registry().shutdown();
+    world.registry().shutdown().await;
     still(&world);
     world.stop().await;
 }
@@ -1250,7 +1241,7 @@ async fn switching_off_reloading_removing_or_stopping_ends_the_calls_in_flight()
     let other = world.plugin("other", IN_FLIGHT, r#""network": ["https://example.com"]"#);
     world.add(&other);
     world.fetched("started", 4).await;
-    world.registry().shutdown();
+    world.registry().shutdown().await;
     world.fetched("ended", 4).await;
     assert!(!world.runtime.is_running("other"));
     world.stop().await;
@@ -1765,7 +1756,7 @@ async fn cancelling_a_tool_call_aborts_the_handlers_signal_and_stopping_the_plug
         Err("The plugin is not offering tools any more: it was turned off or removed.".into())
     );
 
-    world.registry().shutdown();
+    world.registry().shutdown().await;
     assert_eq!(
         world
             .call_tool("cards", "echo", serde_json::json!({}))

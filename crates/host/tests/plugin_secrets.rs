@@ -655,8 +655,10 @@ impl RegistryWorld {
             .map(|answer| answer.deserialized::<String>().unwrap())
     }
 
-    fn stop(self) {
-        self.registry.shutdown();
+    /// Shuts the registry down, which returns once nothing it started holds
+    /// it, then takes the store back at once and closes it.
+    async fn stop(self) {
+        self.registry.shutdown().await;
         drop(self.registry);
         drop(self.secrets);
         let store = Arc::try_unwrap(self.store)
@@ -724,7 +726,7 @@ async fn secrets_state_is_ready_when_stored_and_allowed_missing_otherwise_and_re
         world.secrets.state("sample", "theirs"),
         PluginSecretState::NotAllowed
     );
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -752,7 +754,7 @@ async fn a_change_tells_each_background_that_declares_secrets_where_its_keys_sta
             ]))
         )]
     );
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -846,7 +848,7 @@ async fn a_value_is_revealed_only_to_a_plugin_and_origin_the_user_allowed_with_e
         )),
         "the secret \"token\" may not be sent to https://evil.example.com"
     );
-    world.stop();
+    world.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -881,7 +883,7 @@ async fn a_stored_value_that_cannot_be_unsealed_on_this_computer_fails_the_call_
         error.message,
         "the secret \"token\" could not be decrypted on this computer"
     );
-    world.stop();
+    world.stop().await;
 }
 
 // ---------------------------------------------------------------------------
