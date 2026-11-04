@@ -203,32 +203,39 @@ host's key at the first connection and refuses a host that proves another.
 Disconnect beside each; to keep a lost device out, take its SSH key away as you
 would for any machine.
 
-Helm does **listen**, on `127.0.0.1` only, and it is worth saying out loud where.
-A Claude session Helm hosts can reach two sets of tools - one that
-drives the browser pane (open a page, read it, screenshot it, click and type),
-and one that answers what the *other* Claude Code sessions on this machine are
-doing, so an agent can stay out of a working tree somebody else is in. Both
-arrive through one small server bound to `127.0.0.1`, on a port picked fresh for
-each run of the app. Nothing outside this machine can reach it, and every
-request needs a token Helm mints for one session and destroys when that session
+**Helm listens only on this machine.** Its windows reach the local host over
+the host's local socket, which only your OS account can open. The local host
+listens on `127.0.0.1` for its sessions' agent tools, behind a token minted
+for each session and revoked when it ends, and holds no port while no tool
+family is on. Helm's own process listens on `127.0.0.1` only for a port you
+forwarded from a session on another computer, and closes it when that session
 ends.
+
+A Claude session the local host runs can reach two sets of tools - one that
+drives Helm's browser pane (open a page, read it, screenshot it, click and
+type), and one that answers what the *other* Claude Code sessions on this
+machine are doing, so an agent can stay out of a working tree somebody else is
+in - and the tools of a plugin you added that offers them. All of them arrive
+through one small server the host binds to `127.0.0.1`, on a port the OS picks.
+Nothing outside this machine can reach it, and every request needs the token
+of the session making it. The host has no browser of its own: it hands each
+browser call to Helm's window, which answers it in the pane.
 
 Each set has its own tick - **Settings → Browser** and **Settings → Sessions** -
 and either one off means those tools are not registered with a session at all.
-With both off no port is opened. The browser settings also decide how far those
-tools may go: they can never reach further than the pane itself may, and can be
-held to this machine while the pane is not. The session tools are read-only:
-they say what is running and give an agent no way to affect it, and they never
-return any part of another session's conversation.
+The browser settings also decide how far those tools may go: they can never
+reach further than the pane itself may, and can be held to this machine while
+the pane is not. The session tools are read-only: they say what is running and
+give an agent no way to affect it, and they never return any part of another
+session's conversation.
 
-Helm also listens for a **forwarded port**, and only when you ask for one. A
-session on a host on another computer that runs a dev server lists its port in
-the sessions pane, and **Open in browser** forwards it: Helm listens on
-`127.0.0.1` on this PC, on the same port number when it is free here and on
-another free one when not, and carries each connection made to it over its own
-link to that host, which connects only to its own loopback and only for a port
-that session's processes listen on. Nothing outside this machine can reach the
-forwarded port, and it closes when the session ends.
+A **forwarded port** is opened only when you ask for one. A session on a host
+on another computer that runs a dev server lists its port in the sessions
+pane, and **Open in browser** forwards it: Helm listens on `127.0.0.1` on this
+PC, on the same port number when it is free here and on another free one when
+not, and carries each connection made to it over its own link to that host,
+which connects only to its own loopback and only for a port that session's
+processes listen on.
 
 A **plugin** you add reaches the network on the terms its manifest states.
 Its pages have none of their own: every request goes through Helm, to the
@@ -236,8 +243,8 @@ hosts the manifest names and nowhere else, with every redirect checked against
 the same list. A plugin can do that on its own schedule - that is what its
 background page is for - so "because you asked" means you added it. When it
 needs a token, you type it into **Settings → Secrets** and say which hosts and
-plugins may use it; Helm stores it encrypted with Windows' per-user
-encryption, refuses to store it at all when that is unavailable, fills it into
+plugins may use it; the local host stores it sealed by your OS's own store
+for your account, refuses to store it at all when that is unavailable, fills it into
 a request at the last moment and never hands the value back to any page. The
 programs and the background service a plugin declares are a different thing:
 they are ordinary programs running as you, and Helm does not limit what they

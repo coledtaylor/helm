@@ -1032,47 +1032,37 @@ export interface IpcRequests {
    * reaches the hosts its manifest names, and a host you added on another
    * computer is reached through your own ssh, or the command you gave.**
    *
+   * **Helm listens only on this machine.** Its windows reach the local host
+   * over the host's local socket, which only your OS account can open. The
+   * local host listens on `127.0.0.1` for its sessions' agent tools, behind a
+   * token minted for each session and revoked when it ends, and holds no port
+   * while no tool family is on. Helm's own process listens on `127.0.0.1` only
+   * for a port you forwarded from a session on another computer, and closes it
+   * when that session ends.
+   *
    * That is the whole network posture, and it is written identically here, in
    * the README, in docs/PACKAGING.md and in SPEC 5. If it moves again, all four
    * move together - CLAUDE.md says so, and the reason is that four copies of a
    * claim about what an app does to the network is four chances to ship a lie.
-   * It replaced "the only outbound connection Helm's own process opens" when
-   * the browser pane landed, because a browser makes that false.
+   * The first sentence replaced "the only outbound connection Helm's own
+   * process opens" when the browser pane landed, because a browser makes that
+   * false.
    *
-   * The endpoint Helm serves to its own sessions did **not** move it, and the
-   * reasoning is worth keeping: that sentence is about what Helm *contacts*,
-   * and an MCP endpoint bound to `127.0.0.1` for the sessions Helm hosts
-   * contacts nothing. What it does do is **listen**, which the app had never
-   * done before, so that fact is stated separately - in the same four places,
-   * and in `main/browser-mcp.ts` where the rules are.
+   * What Helm *contacts* and where it *listens* are stated apart. A listener
+   * on loopback contacts nothing, so the agent tools' endpoint (the host's,
+   * `crates/host/src/agent_tools`, serving the browser tools, the
+   * session-awareness tools and each plugin's on one port) and a forwarded port
+   * (`forwards:open`, `main/host/forwards.ts`, carried over main's own link to
+   * a host the user added) are said in the second paragraph and leave the
+   * first alone.
    *
-   * That separate statement has moved once since, and the outbound sentence
-   * still did not: the listener now serves **two** named servers rather than
-   * one - the browser tools and the session-awareness tools - on one port,
-   * behind one token, with a tick each. Two families of tools is not two
-   * sockets and is not an outbound connection, so what changed is the listening
-   * paragraph in those four places and nothing here.
-   *
-   * Forwarded ports moved the listening paragraph again and not this
-   * sentence: a session on a host on another computer can have a port
-   * forwarded to this PC (`forwards:open`, `main/host/forwards.ts`), which
-   * main listens for on `127.0.0.1`, on the same number when it is free and
-   * another free one when not, only when the user chooses Open in browser,
-   * carrying each connection over its own link to that host - a host the
-   * user added - and closing it when the session ends. That is a listener,
-   * on loopback, and contacts nothing new.
-   *
-   * Plugins did move the sentence, by its last clause: a plugin's background
-   * page can fetch with nobody pressing anything, so the sentence says whose
-   * initiative that is - the plugin the user added - and how far it reaches:
-   * the origins in its manifest, through `helm.fetch` (`main/plugins/net.ts`),
-   * every redirect hop checked again. A plugin's programs and service run with
-   * the user's rights and are not confined, and a service listens on loopback
-   * for its own plugin; the four places say both.
-   *
-   * The pull-request surface left Helm for a plugin, and took its clause with
-   * it: it reached GitHub through the user's own `gh` on a timer, which is now
-   * a plugin's business and covered by the clause above.
+   * Plugins did move the first sentence, by its last clause: a plugin's
+   * background page can fetch with nobody pressing anything, so the sentence
+   * says whose initiative that is - the plugin the user added - and how far it
+   * reaches: the origins in its manifest, through `helm.fetch` (the host's
+   * `plugins/net`), every redirect hop checked again. A plugin's programs and
+   * service run with the user's rights and are not confined, and a service
+   * listens on loopback for its own plugin; the four places say both.
    *
    * The app asks on its own too: once per launch, at most once a day, when
    * `updateCheck` is on - see `maybeCheckForUpdate`. Neither path downloads

@@ -73,8 +73,8 @@ publish: null
 
 win:
   # The local host, built and staged by scripts/stage-floti.mjs. Lands at
-  # `process.resourcesPath/floti.exe`, where `flotiBinary` looks for it when
-  # "Run sessions in the local host" is on. electron-builder adds these to the
+  # `process.resourcesPath/floti.exe`, where `flotiBinary` looks for it.
+  # electron-builder adds these to the
   # top-level extraResources rather than replacing them. Beside it, the pinned
   # Node runtime it runs plugin services on (`node/node.exe`) and Node's LICENSE.
   # In a release, also the SHA-256 list of every floti the release carries

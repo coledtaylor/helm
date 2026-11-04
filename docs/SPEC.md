@@ -1170,14 +1170,15 @@ about the user's own `gh`: Helm no longer runs it.
   typed into it.
 - **A plugin you added reaches the hosts its manifest names**, and its pages
   reach nothing else. A plugin page has no network of its own
-  (`connect-src 'none'`); `helm.fetch` sends its requests from the main
-  process, only to an origin the manifest lists, taking redirects one hop at a
+  (`connect-src 'none'`); `helm.fetch` sends its requests from the local
+  host, only to an origin the manifest lists, taking redirects one hop at a
   time so each hop is checked against the same list, and a URL a server
   supplied is never searched for placeholders. A plugin never holds a secret:
-  it writes `{{key}}`, and main fills in a value the user typed into Settings >
-  Secrets, only for a host and a plugin the user allowed. The store is
-  `safeStorage` (DPAPI), and it refuses to store anything when encryption is
-  unavailable rather than fall back to plaintext. The programs (`exec`) and
+  it writes `{{key}}`, and the host fills in a value the user typed into
+  Settings > Secrets, only for an origin and a plugin the user allowed. Each
+  value is sealed by this OS's store for the user (DPAPI on Windows, the
+  Keychain on macOS, the Secret Service on Linux), and it refuses to store
+  anything where none answers rather than fall back to plaintext. The programs (`exec`) and
   service a plugin declares run with the user's rights and their network is
   not confined - Settings > Plugins names them per plugin, and turning a plugin
   off ends them. A service listens on `127.0.0.1`, on a port Helm hands it,
@@ -1192,32 +1193,34 @@ about the user's own `gh`: Helm no longer runs it.
   never hands anything to a search engine, downloads are refused and handed to
   the system browser, and every permission the partition is asked for is denied.
   `browserReach` can confine the whole pane to `localhost`.
-- **Helm listens on loopback, for the sessions it hosts, and nowhere else.**
-  A Claude session Helm starts can drive that pane - open a page, read it,
-  screenshot it, click, type and evaluate - and can ask what the other Claude
-  Code sessions on this machine are doing. Both reach it through **one** MCP
-  endpoint bound to `127.0.0.1` on a port the kernel picks for the run, serving
-  two named servers (`helm-browser`, `helm-sessions`) on two routes. Beside it
-  the app listens only for a **forwarded port**, opened when the user chooses
-  Open in browser on a port a session on a host on another computer listens
-  on: bound to `127.0.0.1`, on the same number when it is free here and another
-  free one when not, each connection carried over main's own link to that host,
-  which connects only to its own loopback and only for a port that session's
-  process tree listens on, and closed when the session ends. Every request needs a bearer token minted for
-  one session and revoked when that session ends; there is no unauthenticated
-  route; and each family has its own tick - `browserMcp` and `sessionMcp` - each
-  of which means no route, no name in the launch's `--mcp-config` document and
-  no tool in any list, with no bind and no token at all when both are off. An
-  agent navigation is allowed only where `browserReach` **and**
-  `browserMcpLocalOnly` both allow it - the narrower wins, so an agent can never
-  reach further than the pane it is driving. The session tools are read-only and
-  return **no part of any session's conversation**: no transcript, no prompt, no
-  output, and not the argv a session was launched with, which carries both a
-  session's opening prompt and the path to that session's own bearer token. See
-  4.7 and CLAUDE.md's rules. With "Run sessions in the local host" on, Helm
-  binds nothing at all: the local host serves the same families, each plugin's
-  tools among them, on the same terms and on loopback, to the sessions it runs,
-  and carries each browser and plugin call to Helm's window to answer.
+- **Helm listens only on this machine.** Its windows reach the local host over
+  the host's local socket, which only your OS account can open. The local host
+  listens on `127.0.0.1` for its sessions' agent tools, behind a token minted
+  for each session and revoked when it ends, and holds no port while no tool
+  family is on. Helm's own process listens on `127.0.0.1` only for a port you
+  forwarded from a session on another computer, and closes it when that session
+  ends.
+  A Claude session the host runs can drive the browser pane - open a page,
+  read it, screenshot it, click, type and evaluate - and can ask what the
+  other Claude Code sessions on this machine are doing. Both reach it through
+  **one** MCP endpoint the host binds to `127.0.0.1` on a port the kernel
+  picks, serving named servers (`helm-browser`, `helm-sessions`, and each
+  plugin's tools) on their own routes; the host hands each browser call to
+  Helm's window to answer in the pane. Every request needs a bearer token
+  minted for one session and revoked when that session ends; there is no
+  unauthenticated route; and each family has its own tick - `browserMcp` and
+  `sessionMcp` - each of which means no route, no name in the launch's
+  `--mcp-config` document and no tool in any list. An agent navigation is
+  allowed only where `browserReach` **and** `browserMcpLocalOnly` both allow
+  it - the narrower wins, so an agent can never reach further than the pane it
+  is driving. The session tools are read-only and return **no part of any
+  session's conversation**: no transcript, no prompt, no output, and not the
+  argv a session was launched with, which carries both a session's opening
+  prompt and the path to that session's tool registration. A forwarded port
+  is bound to `127.0.0.1`, on the same number when it is free here and
+  another free one when not, each connection carried over main's own link to
+  that host, which connects only to its own loopback and only for a port that
+  session's process tree listens on. See 4.7 and CLAUDE.md's rules.
 - **The browser partition holds credentials, and Helm reads none of them.**
   It holds whatever cookies the sites you visit set, exactly as a browser
   profile does: nothing in the app opens that cookie jar, and the only thing

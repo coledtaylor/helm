@@ -109,20 +109,19 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   it in.
 - A value import into the browser bundle comes from `@helm/core/types`, never
   the package root. This fails at rollup, not at typecheck.
-- Every renderer-to-main channel is declared in `shared/ipc.ts`. The preload
+- Every channel a Helm page uses is declared in `shared/ipc.ts`. The preload
   exposes three generic functions; a feature adds a channel, not a bridge
-  method. `term:*` (the spike page's single pty) and `session:*` (the app's
+  method. `term:*` (the spike page's single pty) and `session:*` (the host's
   sessions) never mix.
-- With "Run sessions in the local host" on, each Helm page (the window, and
-  the hidden plugin host window) reaches the host over its own protocol
-  connection, which main pipes to a bridge unread (`hostLink:*`); the bridge
-  holds the device key, never a window. Electron IPC then carries only what
-  `channels/boundary.rs` lists as client-only, and its host-internal channels
-  from the hidden plugin window: `registerIpc` registers nothing else, and a
-  page's router (`app/host/router.ts`) refuses any other channel rather than
-  asking main. `e2e/boundary.spec.ts` fails naming any channel that crossed.
-  Main then builds no terminal, config console, content or template service
-  and runs no scan of its own; those are the host's.
+- Each Helm page (the window, and the hidden plugin host window) reaches the
+  host over its own protocol connection, which main pipes to a bridge unread
+  (`hostLink:*`); the bridge holds the device key, never a window. Electron
+  IPC carries only what `channels/boundary.rs` lists as client-only, and its
+  host-internal channels from the hidden plugin window: `registerIpc`
+  registers nothing else, and a page's router (`app/host/router.ts`) refuses
+  any other channel at once. `e2e/boundary.spec.ts` fails naming any channel
+  that crossed. Main runs no session, terminal, config console, content,
+  template or scan service of its own; those are the host's.
 - The host never opens `helm.db` or learns Helm's data folder. What only
   `helm.db` holds (archived conversations whose transcript is gone, their
   usage, History's names, config versions) main reads through core's
@@ -135,11 +134,9 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   with a reason (`channels/boundary.rs`), and the generated files are
   rewritten with `cargo run -p floti-protocol --bin generate`. A crate test
   reads `shared/ipc.ts` and fails naming any channel that is neither.
-- The main process owns process lifetime. Session rows are written on spawn,
-  `before-quit` ends sessions, `will-quit` releases the database, and nothing
-  else closes the store.
-- With "Run sessions in the local host" on, the host owns process lifetime.
-  Every session's and plain terminal's pty and process tree is held by the
+- Main owns the window's lifetime and `helm.db`: `will-quit` releases the
+  database, and nothing else closes the store.
+- The host owns process lifetime. Every session's and plain terminal's pty and process tree is held by the
   session keeper (`floti keeper`, `crates/host/src/keeper`), a process the
   host starts outside its own tie, which holds nothing else: a host that
   crashes, panics or is killed takes no session with it, and the next host
@@ -175,8 +172,7 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   nothing is approved or typed on the host. The link never
   starts that host and a drop ends nothing there; Remove ends the link and
   removes the host's client folder, and ends nothing on the host.
-- With "Run sessions in the local host" on, every client sees every session
-  in the host, and tabs, panes and splits are kept per device: `paneLayout`
+- Every client sees every session in the host, and tabs, panes and splits are kept per device: `paneLayout`
   stays in `helm.db` and never reaches the host. A window gives a tab only to
   a session its saved layout names or that it opened (`unplacedSessionTabs`
   in `core/layout/panes.ts`), and its connection carries only those
@@ -184,8 +180,7 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   as not open here, with Open (a tab whose screen comes through the host's
   attach, never a second restore path) and End. Closing a running session's
   tab asks first, naming its host, which the window names; Close tab, keep
-  running in the tab's menu ends nothing. With the setting off, every session
-  Helm hosts has a tab, and there is no tab menu.
+  running in the tab's menu ends nothing.
 - Do not use `@anthropic-ai/claude-agent-sdk`.
 - Helm renders nothing for a live session: it parses no session output,
   answers no permission prompt and puts nothing between the user and the TUI.
@@ -193,9 +188,10 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   This holds for every agent: no RPC or JSON mode in place of its own TUI.
 - Windows, macOS and Linux: links are junctions (`mklink /J`) on Windows and
   symlinks on macOS and Linux; nothing needs elevation; tests use paths with
-  spaces. What differs by OS sits behind one interface per concern (overlay
-  links in `linkKind`, processes and ports in `processTableReader`, ending a
-  process tree in `treeKill`, data directories in `isolate.mjs`), with one
+  spaces. What differs by OS sits behind one interface per concern (in the
+  host, each a folder under `crates/host/src/platform`: links, the process
+  table, process trees, the local socket and the rest; in the desktop, ending
+  a process tree in `treeKill` and data directories in `isolate.mjs`), with one
   implementation per OS, and nothing outside it branches on the OS. An OS with
   no implementation yet reports Unknown and the feature around it keeps working.
 
@@ -212,8 +208,8 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   in" is a sentence naming the agent's login command (`claude` for Claude
   Code).
 - `~/.claude/sessions` keeps a `<pid>.<sha256>.key` credential beside every
-  `<pid>.json`. `readSessionRegistry`, and the host's Claude Code status
-  reader, read `.json` files only; never widen either.
+  `<pid>.json`. The host's Claude Code status reader
+  (`agent/claude_code/status.rs`) reads `.json` files only; never widen it.
 - The `persist:helm-browser` partition holds the user's cookies and logins.
   Nothing reads it; the only call against it is `clearStorageData`.
 - The plugin secret store (`crates/host/src/plugins/secrets`) is the one
@@ -247,11 +243,14 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   crypto.
 - The network posture is stated identically in README, docs/PACKAGING.md, the
   `update:check` comment in `shared/ipc.ts` and SPEC 5; change all four
-  together. Helm contacts nothing on its own except the update check, and it
-  listens only on loopback: for the sessions it hosts, and for a port of a
+  together. Helm contacts nothing on its own initiative except the update
+  check. Its windows reach the local host over the host's local socket, which
+  only the user's OS account can open. The local host listens on loopback for
+  its sessions' agent tools, behind a token per session, and holds no port
+  while no tool family is on. Main listens on loopback only for a port of a
   session on another computer the user forwarded, which closes with that
-  session (`main/host/forwards.ts`). A plugin's pages reach
-  only the origins its manifest lists.
+  session (`main/host/forwards.ts`). A plugin's pages reach only the origins
+  its manifest lists.
 
 ## Browser pane
 
@@ -292,70 +291,69 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   address bar searches, on Enter, with the engine in `browserSearch` (`off`
   refuses); nothing is sent while typing.
 
-## Agent tools - the one inbound listener
+## Agent tools - the host's listener
 
-`main/browser-mcp.ts` serves MCP over HTTP: `helm-browser` at `/mcp`,
-`helm-sessions` at `/mcp/sessions`, on one port.
+The host serves its sessions' agent tools as MCP over HTTP
+(`crates/host/src/agent_tools`): `helm-browser` at `/mcp`, `helm-sessions` at
+`/mcp/sessions` and each plugin's tools at `/mcp/plugin/<id>`, on one port. It
+is the one inbound listener the host has besides its local socket. Main binds
+no listener for them, mints no token and writes no `--mcp-config`.
 
-- `listen(0, '127.0.0.1')` only. Every request carries `Authorization: Bearer`
-  or gets 401 before parsing. There is no unauthenticated route, not even a
-  health check.
+- `127.0.0.1` on port 0 only. A request announcing a non-loopback `Origin`
+  gets 403, and one without `Authorization: Bearer` gets 401 before its body
+  is read. There is no unauthenticated route, not even a health check.
 - One token per session, minted at launch and revoked when it ends. The token
-  is the identity. `before-quit` stops the endpoint before sessions end.
+  is the identity.
 - A tool family switched off has no route (404), no entry in `--mcp-config` and
-  no tool. Every family off means no bind, no token and no `--mcp-config`.
-- Each plugin offering tools is a family: `helm-plugin-<id>` at
-  `/mcp/plugin/<id>`, on while the plugin is on and its tools are not switched
-  off in Settings. Helm checks the token, then hands the plugin the call with an
-  id minted for the session, its name and its working directory - never the
-  token, never anything of the conversation. Turning them on reaches sessions
-  started after; turning them off reaches running ones at once.
+  no tool. With no session holding a token and nothing a launch could be
+  given, the host holds no port.
+- `helm-browser` and `helm-sessions` take name, route, instructions and tools
+  from `crates/host/src/server/browser_tools.json` and `session_tools.json`.
+  Main reads the browser table too, for the tools it answers.
+- Main tells the host `browserMcp`, `browserMcpLocalOnly` and `sessionMcp`
+  on each connect and each change (`hostSettingsFor`).
+- Each plugin offering tools is a family, `helm-plugin-<id>`, on while the
+  plugin is on and its tools are not switched off in Settings. The host
+  checks the token, then hands the call on with its caller: an id it minted
+  when the session launched (random, never the browser key or the host's row
+  id, and the id the plugin's `sessions.list` shows), its name and its
+  working directory - never the token, never anything of the conversation.
+  Turning them on reaches sessions started after; turning them off reaches
+  running ones at once.
 - Agent tools are registered per launch for every backend, never through an
   agent's own add command or global config. For Claude Code that is a
-  per-session `--mcp-config` file under the data directory, never
-  `claude mcp add-json`. Leftover files are removed only when their owning
-  pid is provably dead.
+  `--mcp-config` file in the session's launch folder under the host's data
+  folder (`crates/host/src/agent/launch_folder.rs`), never
+  `claude mcp add-json`. A launch folder a crash left is swept at host start,
+  and only when every owner is provably gone. At its own start main removes
+  the per-session `--mcp-config` files an earlier Helm wrote in its data
+  folder (`cleanStaleMcpConfigs`), on the same terms.
 - An agent navigation must pass both `browserReach` and `browserMcpLocalOnly`.
+- The host has no browser, so each browser call goes over `agentBrowser:call`
+  to the attached client that declared `browser`, naming the caller's
+  session, and that client's answer is the tool's. In Helm, main runs it
+  against the browser pane (`runBrowserTool` in `main/browser-mcp.ts`,
+  reached through `main/host/browser-tools.ts`). A launch is given
+  `helm-browser` only while such a client is attached, and each token reaches
+  only the families its launch was given (404 otherwise). A call made with
+  none attached, or waiting on a client that leaves, fails at once saying no
+  browser is attached. Nothing there waits on a timer.
 - A tool drives the tabs its own session opened and a tab the user shared with
   it from the Share button, and only while the page is within `agentReach`. A
   share is one session per tab, made by session id (the window never sees a
-  token), never inherited by a page the shared one opens, and revoked with the
-  session's token. `browser_tabs` lists all; `browser_close` closes only the
+  token), never inherited by a page the shared one opens, and revoked when
+  the session ends. `browser_tabs` lists all; `browser_close` closes only the
   session's own.
-- `sessions_list` and `session_detail` (`main/session-tools.ts`, shaped by
-  `core/registry/describe.ts`) never return any part of another session's
-  conversation: no transcript, prompt, output, argv, conversation id or child
-  command line. The shaping types have no field for them. The sessions pane may
-  show command lines to the user.
-- Listing is machine-wide; detail exists only for sessions Helm spawned. A
-  status Helm could not read is "unknown", never omitted. No tool takes a
+- `sessions_list` and `session_detail` (`crates/host/src/server/session_tools.rs`,
+  shaped by `crates/host/src/session/describe.rs`) never return any part of
+  another session's conversation: no transcript, prompt, output, argv,
+  conversation id or child command line. The shaping types have no field for
+  them. The sessions pane may show command lines to the user.
+- Listing is machine-wide; detail exists only for sessions the host spawned.
+  A status it could not read is "unknown", never omitted. No tool takes a
   session id.
 - These tools are awareness only. Nothing sends a session anything, waits on
   one or hands one work.
-- With "Run sessions in the local host" on, this listener never binds, mints
-  a token or writes a `--mcp-config` (`listen: false`); the host serves its
-  sessions' tools. Main tells the host `browserMcp`, `browserMcpLocalOnly`
-  and `sessionMcp` (`hostSettingsFor`), answers its browser calls through
-  `runBrowserTool` (`host/browser-tools.ts`), and offers it the tool servers
-  of the plugins the host lists as offering tools, on each connect and each
-  change (`host/plugin-tools.ts`). A relayed plugin call carries its caller:
-  an id the host minted when the session launched (random, never the browser
-  key or the host's row id, and the id the plugin's `sessions.list` shows),
-  its name and folder. Main hands it to the plugin's background page in the
-  hidden plugin host window (`host/plugins.ts` `callTool`) and answers with
-  the same tool result as this listener's route.
-- The Floti host serves its own sessions' agent tools on its own listener
-  (`crates/host/src/agent_tools`), with the same rules and today's names.
-  `helm-browser` and `helm-sessions` take name, route, instructions and
-  tools from `crates/host/src/server/browser_tools.json` and
-  `session_tools.json`, the tables both listeners read. The host has no
-  browser, so each browser call goes over `agentBrowser:call` to the
-  attached client that declared `browser`, naming the caller's session, and
-  that client's answer is the tool's. A launch is given `helm-browser` only
-  while such a client is attached, and each token reaches only the families
-  its launch was given (404 otherwise). A call made with none attached, or
-  waiting on a client that leaves, fails at once saying no browser is
-  attached. Nothing there waits on a timer.
 - A session's row keeps what its launch was granted (`agent_tools`: the
   port, the token's SHA-256 and the families), never the token. A host that
   takes back sessions from the keeper binds that port again and accepts each
@@ -371,8 +369,11 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   A server left out of an offer answers 404 at once; a call is withdrawn
   (`agentPlugin:cancel`) when the session cancels it, its request goes away
   or the session ends; with its client gone, a call fails at once saying
-  Helm's window is not connected. With no session holding a token and
-  nothing a launch could be given, the host holds no port.
+  Helm's window is not connected. Main offers the host the servers of the
+  plugins it lists as offering tools, on each connect and each change
+  (`main/host/plugin-tools.ts`), hands each call to the plugin's background
+  page in the hidden plugin host window (`main/host/plugins.ts` `callTool`)
+  and answers with its tool result.
 - A host serves an offered server only for a plugin it has itself, on,
   error-free and with its tools on (`PluginRelay::installed`), whatever a
   client offers: a plugin only another host has is given to no launch here,
@@ -384,7 +385,11 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 
 ## Plugins
 
-`main/plugins/` hosts them. `packages/plugin-sdk` holds the manifest validator
+The host runs them (`crates/host/src/plugins`): their registry, settings,
+secrets, programs, services and `helm.fetch`. Main keeps the
+`helm-plugin://` scheme (`main/plugins/protocol.ts`), the hidden plugin host
+window and the tool relay (`main/host/plugins.ts`); the window draws their
+pages. `packages/plugin-sdk` holds the manifest validator
 Helm loads with, so a manifest change starts there. `apiVersion` 1 is the only
 one; anything else is an error in Settings, never a crash.
 
@@ -400,19 +405,15 @@ folder: run through npx, that folder is a cache.
   `helm-plugin://<id>.<label>/` (`shared/plugins/origin.ts`), served from that
   host's files only, so no storage or navigation is shared between hosts;
   This PC's stays `helm-plugin://<id>/`.
-- Its CSP has `connect-src 'none'`: `helm.fetch` (`net.ts`) is its only way
+- Its CSP has `connect-src 'none'`: `helm.fetch` (the host's `plugins/net`) is its only way
   out, to origins the manifest lists, checked again on every redirect hop.
 - `guards.ts`: `will-frame-navigate` keeps a plugin frame on its own origin,
   and plugin origins get `clipboard-sanitized-write` and no other permission.
-- With sessions in the local host, the host keeps the registry, settings,
-  secrets and services and answers a page's calls, `BroadcastChannel` posts
-  included. The window and the hidden plugin window each ask it over their own
+- The host answers a page's calls, `BroadcastChannel` posts included. The window and the hidden plugin window each ask it over their own
   connection (`app/host/plugins.ts`), and each draws or answers what concerns
   only its own pages: opening a tab and a link (`shared/plugins/client-calls.ts`),
   the theme. What a background page asks that only the window can draw goes
-  between the two windows through main (`pluginWindow:*`). Main keeps the
-  `helm-plugin://` scheme, the hidden window and the tool relay
-  (`main/host/plugins.ts`). A remote host's pages call that host only, over
+  between the two windows through main (`pluginWindow:*`). A remote host's pages call that host only, over
   its own connection (`bridgeFor(host)` in the window, a page link per host
   in the hidden window, whose background frames are keyed by host and
   plugin).
@@ -434,8 +435,9 @@ folder: run through npx, that folder is a cache.
   site, and a top-level page would share nothing with the plugin's panels.
 - A plugin's tools (`agent` in its manifest) are answered by its background
   page, through `main/plugins/tools.ts`, and served by the host as one more
-  family on its agent tools listener. A plugin sends no notifications and never sends a running
-  session anything: a session calls it, not the other way round.
+  family on its agent tools listener. A plugin sends no notifications and
+  never sends a running session anything: a session calls it, not the other
+  way round.
 - A tool its manifest marks `readOnly` is listed with `readOnlyHint` and
   passed as `--allowedTools mcp__helm-plugin-<id>__<tool>` to the sessions
   Helm starts, fixed at launch; Settings marks it. Every other tool asks, and
@@ -443,14 +445,15 @@ folder: run through npx, that folder is a cache.
 - A plugin whose `sessions` lists `start` may ask to start one (`sessions.start`): only from
   a click in its page (the relay checks the window's user activation), and
   only once the user agrees in Helm's dialog, which shows the folder, name,
-  first message and command. Main, or the host with sessions in the local
-  host, composes the launch from what it checked and holds; the window answers
+  first message and command. The host composes the launch from what it
+  checked and holds; the window answers
   yes or no, on the connection it was asked on, and never says what to run.
 - A plugin whose `sessions` lists `list` sees Helm's sessions since it opened
-  (`sessions.list`, the `sessions` event), shaped by `describePluginSessions`
-  in core, whose input has no field for anything of a conversation: no argv,
-  conversation id or `waitingFor`. A session's id there is the one its tool
-  calls carry, minted at launch by the session host, never its row id.
+  (`sessions.list`, the `sessions` event), shaped by the host
+  (`server/features/plugins/sessions.rs`), whose shape has no field for
+  anything of a conversation: no argv, conversation id or `waitingFor`. A
+  session's id there is the one its tool calls carry, minted by the host,
+  never its row id.
 - Any plugin may open an `https` link in the Browser tab (`open`), from a
   click only (the same relay check), one a second. The page that draws it
   checks it is an `https` address (`client-calls.ts`); the window opens it through `browser:open`, so it meets
@@ -459,16 +462,21 @@ folder: run through npx, that folder is a cache.
 
 ## Overlays and templates
 
-- Overlay shims live under the app data directory, never `%TEMP%`: they hold
-  junctions into real repositories.
-- Anything removing a shim or walking a template unlinks links (junctions on
-  Windows, symlinks on macOS and Linux) and never walks into one. `fs.rm` with
-  `recursive: true` has been seen to leave a junction in place.
-- Shims are swept only at app start (`createServices`), and only where every
-  owning pid is provably dead. `EPERM` counts as alive; unknown means keep.
-- Templates live in `templatesDir` (`paths.ts`). The shipped README and example
-  are written only when the directory is absent, and nothing there is ever
-  overwritten. There is no in-app template editor.
+- The host composes overlays in each session's launch folder under its own
+  data folder, never `%TEMP%`: they hold junctions into real repositories.
+- Anything removing an overlay or a shim or walking a template unlinks links
+  (junctions on Windows, symlinks on macOS and Linux) and never walks into
+  one. `fs.rm` with `recursive: true` has been seen to leave a junction in
+  place.
+- Launch folders are swept only at host start, and the overlay shims an
+  earlier Helm left in its data folder only at Helm's start
+  (`createServices`), each only where every owning process is provably dead.
+  `EPERM` counts as alive; unknown means keep.
+- Templates live in `~/.config/helm/templates` (`helm-data/templates` when
+  portable), which the host reads and Helm's start seeds (`templatesDir` in
+  `paths.ts`). The shipped README and example are written only when the
+  directory is absent, and nothing there is ever overwritten. There is no
+  in-app template editor.
 
 ## Where the data lives
 
@@ -490,8 +498,9 @@ app's folder, on any OS.
 
 ## Surfaces
 
-- `renderer/src/terminal.ts` and `ptyEnv` (`main/pty.ts`) are tuned for TUI
-  fidelity (SPEC 8.3). Terminal preferences are passed into `createTerminal`;
+- `renderer/src/terminal.ts` and the host's session environment
+  (`crates/host/src/session/env.rs`) are tuned for TUI fidelity (SPEC 8.3);
+  `ptyEnv` (`main/pty.ts`) is the spike page's single pty, kept to match. Terminal preferences are passed into `createTerminal`;
   never route a setting through `term:*`. The palette and contrast options are
   fixed. `estimateGrid` must keep measuring the way xterm does.
 - Usage figures paint nothing rather than a wrong number. A stale reading of a
@@ -499,10 +508,10 @@ app's folder, on any OS.
   age. Dollar figures are estimates and say so.
 - Every agent's config directory (`~/.claude` for Claude Code) is read-only to
   Helm and Floti, except config console writes and hooks the user installs
-  from it, each through `writeConfigFile` (or its host equivalent), which
-  snapshots the file first and aborts if it cannot. The transcript archive
-  copies into `helm.db`, or the host's `floti.db` with "Run sessions in the
-  local host" on, and never writes there. Copying `helm.db`'s archive into
+  from it, each through the host's one config writer
+  (`config_console/writer.rs`), which snapshots the file first and aborts if
+  it cannot. The transcript archive copies into the host's `floti.db`, and
+  never writes there. Copying `helm.db`'s archive into
   `floti.db` writes neither the agent's config nor `helm.db`, and logs
   counts, never a message. What a launch needs (agent
   tools, settings, composed instructions, overlays) is a per-launch file under
@@ -513,15 +522,16 @@ app's folder, on any OS.
   read time, and anything that cannot be interpreted degrades to the plain tab.
 - The process-and-ports pass costs about half a second, so it runs only while
   the sessions pane is on screen or a `session_detail` call is waiting, every
-  4s, through `execFile`. Passes never overlap.
+  4s, in the host (`server/features/resources.rs`). Passes never overlap.
 - "Could not look" (`null`, painted "Unknown") and "nothing there" (`[]`) are
   never merged.
 - The Files view writes one thing: a markdown note in its Edit mode, through
   `content:write` - snapshotted first, refused on a hash conflict, scoped to
   the deepest folder Helm knows that holds the note (`assertContentWritable`
   refuses `repos/` under a harness). Everything else in it is read-only, and
-  every `files:*` call names a root main checks it knows (a scanned project, a
-  profile's folder, a hosted session's working directory). Changed lines are the working tree against `HEAD`, said
+  every `files:*` call names a root the host checks it knows
+  (`workspace/roots.rs`: a scanned project, a profile's folder, a hosted
+  session's working directory). Changed lines are the working tree against `HEAD`, said
   as that and never attributed to a session: git does not know who made a
   change. Only what is on screen is watched, and main is told the whole set.
 - Every backend resumes in the directory history recorded; for Claude Code,

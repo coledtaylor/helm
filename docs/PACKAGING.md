@@ -23,8 +23,8 @@ electron-builder makes a dmg only there:
 Every build comes out of the same code. No node module is compiled:
 `npmRebuild: false` and the native modules ship N-API prebuilds for each
 platform, so a clean checkout needs no C compiler, no Python and no build tools.
-The one thing compiled is the `floti` host, which runs sessions when "Run
-sessions in the local host" is on: both commands first run
+The one thing compiled is the `floti` host, which runs every session: both
+commands first run
 `scripts/stage-floti.mjs`, which builds it in release with the Rust toolchain
 `rust-toolchain.toml` names and copies it to `packages/desktop/dist-host/`.
 electron-builder carries it beside the app, at `resources\floti.exe` on Windows
@@ -198,9 +198,9 @@ untouched one; deleting the directory is what puts the originals back.
   the start-menu shortcut and the uninstall registry entry are gone and that the
   data directory is not.
 - **No desktop shortcut.** A start-menu entry is enough.
-- **It stops this PC's local host first, after saying what that ends.** With
-  "Run sessions in the local host" on, `floti.exe` outlives Helm and runs the
-  sessions, and a running `floti.exe` cannot be replaced. electron-builder's
+- **It stops this PC's local host first, after saying what that ends.**
+  `floti.exe` runs the sessions and can outlive Helm, and a running
+  `floti.exe` cannot be replaced. electron-builder's
   own check would force-stop every process under the install folder, the host
   included, ending its sessions without a word. So `build/installer.nsh`
   (`nsis.include`) defines `customCheckAppRunning`, which, when a Helm with a
@@ -358,9 +358,9 @@ be enough:
 2. **It could only cover half the users.** The portable exe has no install
    location to replace, so electron-updater applies to the NSIS build alone.
 3. **The app hosts long-lived sessions.** A background updater that restarts
-   Helm ends somebody's `claude` session, possibly mid-turn. With sessions in
-   the local host, an update stops the host only once the user has agreed to
-   the count of sessions it ends (see what the installer does, above).
+   the local host ends somebody's `claude` session, possibly mid-turn. An
+   update stops the host only once the user has agreed to the count of
+   sessions it ends (see what the installer does, above).
 
 Code-signing the build would retire reason 1. It would not touch 2 or 3.
 
@@ -376,34 +376,43 @@ There is no telemetry, no crash reporting, no fonts and no CDN. With
 `updateCheck` off, Helm asks nothing by itself at all; the one remaining route
 is a person pressing Check now, so nothing leaves the machine unasked for.
 
-**Inbound is loopback only.** A Claude session Helm hosts can
-drive the browser pane, and can ask what the other Claude Code sessions on this
-machine are doing; both sets of tools arrive over one MCP endpoint bound to
-`127.0.0.1` on a port chosen per app run - two named servers on two routes, one
-socket. Nothing off this machine can reach it; every request carries a bearer
-token minted for one session and revoked when that session ends; and each set
-has its own setting (`browserMcp`, `sessionMcp`) that removes it from every
-launch, with no port bound at all when both are off. The one other listener is
-a forwarded port, opened only when the user chooses Open in browser on a port a
-session on a host on another computer listens on: main binds `127.0.0.1`, on
-the same number when it is free and another free one when not, carries each
-connection over its own link to that host, which connects only to its own
-loopback and only for a port that session's process tree listens on, and closes
-it when the session ends. Worth knowing for a packaged build in particular: an
+**Helm listens only on this machine.** Its windows reach the local host over
+the host's local socket, which only your OS account can open. The local host
+listens on `127.0.0.1` for its sessions' agent tools, behind a token minted
+for each session and revoked when it ends, and holds no port while no tool
+family is on. Helm's own process listens on `127.0.0.1` only for a port you
+forwarded from a session on another computer, and closes it when that session
+ends.
+
+The tools are the browser pane's (`helm-browser`), the session-awareness tools
+(`helm-sessions`) and each plugin's that offers them, served as named MCP
+servers on routes of one endpoint (`crates/host/src/agent_tools`). Every
+request carries a bearer token minted for one session and revoked when that
+session ends; a request with a non-loopback `Origin` is refused before its
+token is compared; and each built-in set has its own setting (`browserMcp`,
+`sessionMcp`) that removes it from every launch. The host has no browser, so
+it hands each browser call to the attached Helm window, whose main process
+answers it in the pane. A forwarded port is opened only when the user chooses
+Open in browser on a port a session on a host on another computer listens on:
+main binds `127.0.0.1`, on the same number when it is free and another free
+one when not, and carries each connection over its own link to that host,
+which connects only to its own loopback and only for a port that session's
+process tree listens on. Worth knowing for a packaged build in particular: an
 installer that a firewall prompt follows is a bad first impression, and a
 loopback bind produces no prompt on Windows.
 
 **Plugins reach the hosts their manifests name.** A plugin page has no network
 of its own (`connect-src 'none'`); `helm.fetch` sends its requests from the
-main process, only to an origin the manifest lists, following redirects one
+local host, only to an origin the manifest lists, following redirects one
 hop at a time so that every hop is checked against the same list. A plugin's
 background page may fetch on its own schedule, which is the plugin's doing
 rather than Helm's - the user added it - and is why the sentence above says
-so. A plugin never holds a secret: it writes `{{key}}`, and main fills in a
-value the user typed into Settings > Secrets, only for a host and a plugin the
-user allowed. The store is `safeStorage` (DPAPI, bound to the signed-in user),
-and with encryption unavailable it refuses to store anything rather than fall
-back to plaintext. The programs (`exec`) and the service a plugin declares are
+so. A plugin never holds a secret: it writes `{{key}}`, and the host fills in
+a value the user typed into Settings > Secrets, only for an origin and a
+plugin the user allowed. Each value is sealed by this OS's store for the user
+(DPAPI on Windows, the Keychain on macOS, the Secret Service on Linux), and
+where none answers it refuses to store anything rather than fall back to
+plaintext. The programs (`exec`) and the service a plugin declares are
 ordinary processes with the user's rights, and their network is not confined;
 Settings > Plugins names them per plugin, and turning the plugin off ends
 them. A service listens on `127.0.0.1` on a port Helm gives it and is reached
