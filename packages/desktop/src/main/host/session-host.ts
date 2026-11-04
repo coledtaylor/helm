@@ -1,5 +1,4 @@
 import type {
-  LostSession,
   RestoreOffer,
   SessionActivityState,
   SessionRecord,
@@ -90,11 +89,6 @@ export interface SessionHost {
   launchProfile: (req: LaunchProfileRequest) => Promise<LaunchedProfile>
   /** Reopens a conversation from the history index in a new tab. */
   resume: (req: ResumeSessionRequest) => Promise<ResumedSession>
-  /**
-   * Reopens a conversation a crash took, as it was: in its own folder, with its
-   * own profile and permission mode, under the name its tab had.
-   */
-  restore: (lost: LostSession, grid: { cols: number; rows: number }) => Promise<LaunchedSession>
   close: (req: CloseSessionRequest) => Promise<CloseSessionResult>
   /** Helm's own label for a tab. Never rewrites the `-n` name. */
   rename: (req: RenameSessionRequest) => SessionRecord
@@ -112,34 +106,13 @@ export interface SessionHost {
   /** OS process id, for asserting a session is really gone. */
   pid: (id: number) => number | null
   /**
-   * The conversation a running session is in, as Claude Code's registry says,
-   * written to its row when it moves - which a `/clear` does. What a restore
-   * after a crash reopens.
-   */
-  noteConversation: (id: number, conversationId: string) => void
-  /**
-   * The session a bearer token was minted for, or null.
-   *
-   * **The whole of attribution at Helm's endpoint**, and it is answered from
-   * this map rather than from bookkeeping of its own because this map is what
-   * owns a token's lifetime: the same entry that hands the token out is the one
-   * that revokes it when the session ends, so an answer here cannot outlive the
-   * session it names. A caller never says which session it is; the token that
-   * arrived does, and this is where that becomes a row.
-   *
-   * Null for an unknown token, for a session that has ended, and for a session
-   * whose tools were never registered - all three are "Helm has no session for
-   * this", which is the only honest answer to a token it does not know.
-   */
-  tokenHolder: (token: string) => SessionRecord | null
-  /**
    * A running session's identity at the browser endpoint, for the user to
    * share a page with - or null for one that has ended or was started without
    * the browser tools.
    *
-   * The other direction from `tokenHolder`, and the token goes no further than
-   * the browser host it is handed to: the window names a session by its id,
-   * and this is where an id becomes the identity the tools check.
+   * The key goes no further than the browser host it is handed to: the window
+   * names a session by its id, and this is where an id becomes the identity
+   * the tools check.
    */
   browserOpener: (id: number) => BrowserOpener | null
   /** Every session `browserOpener` answers for, by id and label: the share menu. */

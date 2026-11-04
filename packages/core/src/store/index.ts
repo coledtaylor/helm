@@ -88,18 +88,7 @@ export {
   updateProfile,
   uniqueProfileName
 } from './profiles'
-export {
-  finishSession,
-  noteConversation,
-  readSessions,
-  reconcileRunningSessions,
-  renameSession,
-  runningSessionNames,
-  startSession,
-  type LostSession,
-  type NewSession,
-  type SessionQuery
-} from './sessions'
+export { reconcileRunningSessions, type LostSession } from './sessions'
 export { deleteSecret, readSecret, readSecrets, writeSecret, type SecretRow } from './secrets'
 export {
   readSettings,

@@ -18,15 +18,8 @@ import {
 import { openStore, type Store } from './db'
 import { knownMigrations } from './migrate'
 import { cacheProjects, forgetProjects, readCachedProjects } from './projects'
-import {
-  finishSession,
-  noteConversation,
-  readSessions,
-  reconcileRunningSessions,
-  renameSession,
-  runningSessionNames,
-  startSession
-} from './sessions'
+import { sessions } from './schema'
+import { reconcileRunningSessions } from './sessions'
 import {
   readSettings,
   validateSetting,
@@ -1248,81 +1241,49 @@ describe('project cache', () => {
   })
 })
 
-describe('session log', () => {
-  const started = (name = 'alpha'): ReturnType<typeof startSession> =>
-    startSession(store, {
-      name,
-      cwd: join(dir, 'repos', 'alpha'),
-      projectPath: join(dir, 'repos', 'alpha'),
-      argv: ['-n', name]
-    })
+/**
+ * The session log an earlier version of Helm wrote while it ran sessions in its
+ * own process. Nothing writes it now; a row it left claiming to be running is
+ * marked lost once, at the next start, and the rest stay as they were.
+ */
+describe('session log left by an earlier version', () => {
+  const row = (values: Partial<typeof sessions.$inferInsert> & { name: string }): number =>
+    store.db
+      .insert(sessions)
+      .values({ cwd: dir, argv: [], status: 'running', ...values })
+      .returning({ id: sessions.id })
+      .get().id
+  interface Outcome {
+    status: string
+    endedAt: string | null
+    durationMs: number | null
+    exitCode: number | null
+  }
+  const outcome = (id: number): Outcome =>
+    store.raw
+      .prepare(
+        'SELECT status, ended_at AS endedAt, duration_ms AS durationMs, exit_code AS exitCode FROM sessions WHERE id = ?'
+      )
+      .get(id) as Outcome
 
-  it('records a session as running from the moment it is spawned', () => {
-    const session = started()
+  it('marks sessions left running as lost, with no guessed end, and leaves an ended one as it was', () => {
+    const alive = row({ name: 'alpha' })
+    const ended = row({ name: 'beta', status: 'exited', exitCode: 0 })
 
-    expect(session).toMatchObject({
-      name: 'alpha',
-      status: 'running',
-      argv: ['-n', 'alpha'],
-      endedAt: null,
-      durationMs: null,
-      exitCode: null
-    })
-    expect(session.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(reconcileRunningSessions(store).map((lost) => lost.record.id)).toEqual([alive])
+    expect(outcome(alive)).toEqual({ status: 'lost', endedAt: null, durationMs: null, exitCode: null })
+    expect(outcome(ended)).toMatchObject({ status: 'exited', exitCode: 0 })
   })
 
-  it('records the exit code and a measured duration when it ends', () => {
-    const session = started()
-    const ended = finishSession(store, session.id, { exitCode: 0 })
-
-    expect(ended).toMatchObject({ id: session.id, status: 'exited', exitCode: 0 })
-    expect(ended?.endedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
-    // Measured, not guessed: a real duration is small here but never negative,
-    // which is the failure mode of subtracting two different clocks.
-    expect(ended?.durationMs).toBeGreaterThanOrEqual(0)
-    expect(ended?.durationMs).toBeLessThan(60_000)
-  })
-
-  it('keeps a non-zero exit code rather than flattening it to a failure flag', () => {
-    const session = started()
-    expect(finishSession(store, session.id, { exitCode: 130 })?.exitCode).toBe(130)
-  })
-
-  it('ignores a second finish, so a shutdown sweep cannot overwrite a real exit', () => {
-    const session = started()
-    finishSession(store, session.id, { exitCode: 0 })
-
-    expect(finishSession(store, session.id, { exitCode: null })).toBeNull()
-    expect(readSessions(store)[0]?.exitCode).toBe(0)
-  })
-
-  it('reconciles sessions left running by a host that did not survive them', () => {
-    const alive = started('alpha')
-    const ended = started('beta')
-    finishSession(store, ended.id, { exitCode: 0 })
-
-    expect(reconcileRunningSessions(store).map((lost) => lost.record.id)).toEqual([alive.id])
-
-    const rows = readSessions(store)
-    expect(rows.find((r) => r.id === alive.id)).toMatchObject({
-      status: 'lost',
-      endedAt: null,
-      durationMs: null
-    })
-    // The one that ended cleanly keeps its outcome.
-    expect(rows.find((r) => r.id === ended.id)).toMatchObject({ status: 'exited', exitCode: 0 })
-  })
-
-  it('hands back what it reconciled, with the conversation each was last in and its mode', () => {
-    startSession(store, { name: 'plain', cwd: dir, claudeSessionId: 'c-plain' })
-    const cleared = startSession(store, {
+  it('hands back what it reconciled, with the conversation each was last in and its mode, once', () => {
+    row({ name: 'plain', claudeSessionId: 'c-plain' })
+    const cleared = row({
       name: 'cleared',
-      cwd: dir,
       claudeSessionId: 'c-first',
+      lastClaudeSessionId: 'c-after-clear',
       permissionMode: 'plan'
     })
-    startSession(store, { name: 'old row', cwd: dir })
-    noteConversation(store, cleared.id, 'c-after-clear')
+    row({ name: 'old row' })
 
     const lost = reconcileRunningSessions(store)
     expect(lost.map((l) => [l.record.name, l.conversationId, l.permissionMode])).toEqual([
@@ -1330,138 +1291,20 @@ describe('session log', () => {
       ['cleared', 'c-after-clear', 'plan'],
       ['old row', null, null]
     ])
-    expect(lost[1]?.record).toMatchObject({ id: cleared.id, status: 'lost', claudeSessionId: 'c-first' })
+    expect(lost[1]?.record).toMatchObject({ id: cleared, status: 'lost', claudeSessionId: 'c-first' })
     // Once each: the next start finds nothing claiming to run.
     expect(reconcileRunningSessions(store)).toEqual([])
   })
 
-  it('notes a moved conversation only while running, and forgets it when it moves back', () => {
-    const session = startSession(store, { name: 'a', cwd: dir, claudeSessionId: 'c-1' })
-    const last = (): string | null =>
-      (
-        store.raw
-          .prepare('SELECT last_claude_session_id AS last FROM sessions WHERE id = ?')
-          .get(session.id) as { last: string | null }
-      ).last
-
-    noteConversation(store, session.id, 'c-1')
-    expect(last()).toBeNull()
-    noteConversation(store, session.id, 'c-2')
-    expect(last()).toBe('c-2')
-    noteConversation(store, session.id, 'c-1')
-    expect(last()).toBeNull()
-
-    noteConversation(store, session.id, 'c-3')
-    finishSession(store, session.id, { exitCode: 0 })
-    noteConversation(store, session.id, 'c-4')
-    expect(last()).toBe('c-3')
-    // An id that is not there is not a row to write.
-    expect(() => noteConversation(store, 9999, 'c-5')).not.toThrow()
-  })
-
   it('reads a permission mode it does not know as none', () => {
-    const session = startSession(store, { name: 'a', cwd: dir })
-    store.raw.prepare("UPDATE sessions SET permission_mode = 'yolo' WHERE id = ?").run(session.id)
+    row({ name: 'a', permissionMode: 'yolo' })
     expect(reconcileRunningSessions(store)[0]?.permissionMode).toBeNull()
   })
 
-  it('lists newest first and filters by status and project', () => {
-    const first = started('alpha')
-    const second = started('beta')
-    startSession(store, { name: 'gamma', cwd: dir, projectPath: null })
-    finishSession(store, first.id, { exitCode: 0 })
-
-    expect(readSessions(store).map((s) => s.id)).toEqual([
-      expect.any(Number),
-      second.id,
-      first.id
-    ])
-    expect(readSessions(store, { status: 'running' }).map((s) => s.name)).toEqual([
-      'gamma',
-      'beta'
-    ])
-    expect(
-      readSessions(store, { projectPath: join(dir, 'repos', 'alpha') }).map((s) => s.name)
-    ).toEqual(['beta', 'alpha'])
-  })
-
-  it('reports the names a new session has to be unique against', () => {
-    const one = started('alpha')
-    started('alpha 2')
-    finishSession(store, one.id, { exitCode: 0 })
-
-    expect(runningSessionNames(store)).toEqual(['alpha 2'])
-  })
-
-  it('records the branch the cwd was on, and null for a cwd that is not on one', () => {
-    const onBranch = startSession(store, { name: 'alpha', cwd: dir, branch: 'feat/tabs' })
-    const noBranch = startSession(store, { name: 'beta', cwd: dir })
-
-    expect(onBranch.branch).toBe('feat/tabs')
-    expect(noBranch.branch).toBeNull()
-  })
-
-  it('records the conversation id the launch assigned, and null for none', () => {
-    const uuid = '7b3d1c20-4a55-4f18-9c21-8e0c5a6d1f01'
-    const assigned = startSession(store, { name: 'alpha', cwd: dir, claudeSessionId: uuid })
-    // Null is a real answer, not a gap: a row from before this column, and a
-    // CLI with no `--session-id` flag, both land here.
-    const unassigned = startSession(store, { name: 'beta', cwd: dir })
-
-    expect(assigned.claudeSessionId).toBe(uuid)
-    expect(unassigned.claudeSessionId).toBeNull()
-    // In the row rather than only in the answer.
-    expect(readSessions(store).map((s) => s.claudeSessionId)).toContain(uuid)
-  })
-
-  it('starts with no label, so a session is called what the CLI was told', () => {
-    const session = started()
-    expect(session.label).toBeNull()
-    expect(sessionLabel(session)).toBe('alpha')
-  })
-
-  it('renames a session without touching the name that went to the CLI', () => {
-    const session = started()
-    const renamed = renameSession(store, session.id, 'PR review')
-
-    expect(renamed).toMatchObject({ id: session.id, label: 'PR review', name: 'alpha' })
-    expect(sessionLabel(renamed!)).toBe('PR review')
-    // And it is in the row, not only in the answer.
-    expect(readSessions(store)[0]).toMatchObject({ label: 'PR review', name: 'alpha' })
-  })
-
-  it('treats an empty or whitespace label as clearing it, not as an empty title', () => {
-    const session = started()
-    renameSession(store, session.id, 'PR review')
-
-    expect(renameSession(store, session.id, '   ')?.label).toBeNull()
-    expect(sessionLabel(readSessions(store)[0]!)).toBe('alpha')
-    expect(renameSession(store, session.id, null)?.label).toBeNull()
-  })
-
-  it('trims a label rather than storing the spaces around it', () => {
-    const session = started()
-    expect(renameSession(store, session.id, '  PR review  ')?.label).toBe('PR review')
-  })
-
-  it('answers null for a session id that is not in this database', () => {
-    expect(renameSession(store, 9999, 'nope')).toBeNull()
-  })
-
-  it('keeps the label through the session ending, so a dead tab stays named', () => {
-    const session = started()
-    renameSession(store, session.id, 'PR review')
-
-    expect(finishSession(store, session.id, { exitCode: 0 })?.label).toBe('PR review')
-  })
-
-  it('gives a new session none of a finished one’s label', () => {
-    const first = started('alpha')
-    renameSession(store, first.id, 'PR review')
-    finishSession(store, first.id, { exitCode: 0 })
-
-    // A label belongs to a row. Nothing recycles it onto the next session, which
-    // is the failure the `-n` counter had.
-    expect(started('alpha').label).toBeNull()
+  it('keeps the label a lost tab had, so it is still called what the user named it', () => {
+    row({ name: 'alpha', label: 'PR review' })
+    const [lost] = reconcileRunningSessions(store)
+    expect(lost?.record).toMatchObject({ name: 'alpha', label: 'PR review' })
+    expect(sessionLabel(lost!.record)).toBe('PR review')
   })
 })

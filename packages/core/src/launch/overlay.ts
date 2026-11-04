@@ -1,133 +1,43 @@
-import { createHash } from 'node:crypto'
 import {
-  cpSync,
-  existsSync,
   lstatSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
   rmdirSync,
   rmSync,
   statSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync
+  unlinkSync
 } from 'node:fs'
 import type { Dirent } from 'node:fs'
 import { uptime } from 'node:os'
-import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import { join } from 'node:path'
 import type { OverlayLinkMode } from '../types'
 
 /**
- * Turning a repo's `.claude/` directory into something `--plugin-dir` accepts.
- *
- * A plugin is a directory with a manifest and convention subdirectories beside
- * it, which is what a `.claude/` directory already almost is - it just lacks the
- * manifest. So Helm synthesises the missing shape around the real thing rather
- * than copying it (SPEC 2, proved by Spike A):
+ * The overlay shims an earlier version of Helm built under its data folder,
+ * when it ran sessions in its own process, and the sweep that clears them at
+ * start. The local host composes overlays in each session's own launch folder
+ * now, so nothing here builds a shim; what is left is collecting the ones an
+ * upgraded install still holds, without ever reaching the repositories they
+ * link to.
  *
  *     <shimRoot>/overlay-acme/
- *     ├── .claude-plugin/plugin.json      generated
- *     ├── .helm-overlay.json              generated: what this was built from
+ *     ├── .claude-plugin/plugin.json
+ *     ├── .helm-overlay.json              the stamp: who holds it
  *     ├── skills/     ──link──▶  repos/acme/.claude/skills
- *     ├── commands/   ──link──▶  repos/acme/.claude/commands
- *     ├── agents/     ──link──▶  repos/acme/.claude/agents
- *     └── workflows/  ──link──▶  repos/acme/.claude/workflows
+ *     └── ...
  *
- * The link is a junction on Windows, because a symlink there needs elevation
- * and a junction does not, and a directory symlink on macOS and Linux, which
- * need nothing (`linkKind`). A link rather than a copy because a link is the
- * source directory: editing a skill in the repo changes what the next session
- * loads without anything having to notice.
+ * The links are junctions on Windows and directory symlinks on macOS and
+ * Linux.
  */
 
-/**
- * The link a shim makes on this OS, and the name its stamp records for it.
- *
- * The one place overlays branch on the OS. Node ignores the `type` argument of
- * `symlinkSync` off Windows, so passing `'dir'` there is for the reader.
- */
-export function linkKind(platform: NodeJS.Platform = process.platform): {
-  type: 'junction' | 'dir'
-  mode: Exclude<OverlayLinkMode, 'copy'>
-} {
-  return platform === 'win32' ? { type: 'junction', mode: 'junction' } : { type: 'dir', mode: 'symlink' }
-}
-
-/**
- * What gets linked, and in what order.
- *
- * `hooks/` is deliberately absent even though a plugin may carry one. A hook is
- * executable configuration whose commands are written against the repo's own
- * working directory, and the whole point of an overlay is that the session's
- * cwd is somewhere else - so composing one would run commands against paths
- * that are not there. Skills, commands and agents are declarative and do not
- * have that problem. Workflows are scripts, but they run inside the session as
- * orchestration of its subagents rather than as shell commands against a path,
- * and a plugin's `workflows/` is one of the CLI's own default locations, so it
- * is composed the same way and namespaced the same way (`/acme:audit`).
- */
-export const OVERLAY_DIRS = ['skills', 'commands', 'agents', 'workflows'] as const
-
-/** Everything Helm generates inside a shim, so a rebuild knows what is its own. */
-const MANIFEST = join('.claude-plugin', 'plugin.json')
+/** The stamp in every shim Helm built, which marks it as Helm's to remove. */
 const STAMP = '.helm-overlay.json'
 
-/** Prefix on every shim directory; also what marks one as ours to clean up. */
+/** Prefix on every shim directory. */
 const SHIM_PREFIX = 'overlay-'
 
-/** Prefix on every composed instruction file, for the same reason. */
-export const MEMORY_PREFIX = 'memory-'
-
-/**
- * A plugin name becomes the namespace every skill from that overlay is invoked
- * under, so it is read by a person at a `/` prompt and should look like the repo
- * it came from. Spike A's throwaway `acme-overlay:` prefix is exactly what
- * this exists to avoid.
- *
- * Lowercased and reduced to the characters a namespace can safely use; a name
- * that reduces to nothing falls back to `overlay`, which is still addressable.
- */
-export function overlayPluginName(projectPath: string): string {
-  const clean = basename(resolve(projectPath))
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/^[-._]+|[-._]+$/g, '')
-  return clean.length > 0 ? clean : 'overlay'
-}
-
-/**
- * Plugin names within one launch, made distinct.
- *
- * Two projects can share a directory name - `repos/acme` in two different
- * harnesses - and the CLI namespaces skills by manifest name, so a collision
- * here would put two overlays' skills under one prefix. That is the one
- * collision Spike A's automatic namespacing does not solve, because it is
- * upstream of it.
- */
-export function overlayPluginNames(projectPaths: string[]): string[] {
-  const taken = new Set<string>()
-  return projectPaths.map((path) => {
-    const base = overlayPluginName(path)
-    let name = base
-    for (let n = 2; taken.has(name); n++) name = `${base}-${String(n)}`
-    taken.add(name)
-    return name
-  })
-}
-
-/** What a shim is to be built from, before anything touches the disk. */
-export interface OverlayPlan {
-  name: string
-  projectPath: string
-  /** Where the shim goes. */
-  dir: string
-  /** Convention directories the source actually has. */
-  links: string[]
-  /** The project's CLAUDE.md, if it has one. */
-  claudeMdPath: string | null
-}
+/** Prefix on every composed instruction file swept beside the shims. */
+const MEMORY_PREFIX = 'memory-'
 
 function isDir(path: string): boolean {
   try {
@@ -135,101 +45,6 @@ function isDir(path: string): boolean {
   } catch {
     return false
   }
-}
-
-/**
- * Whether `dir` is `path` or a directory above it - whether the CLI, started in
- * `path`, walks through `dir` on its way up looking for CLAUDE.md.
- *
- * `relative` rather than a string prefix, so `repos/acme` is not taken for an
- * ancestor of `repos/acme-ui`; on Windows it also compares without case.
- */
-export function isSameOrAncestor(dir: string, path: string): boolean {
-  const rel = relative(resolve(dir), resolve(path))
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
-}
-
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile()
-  } catch {
-    return false
-  }
-}
-
-export function planOverlays(projectPaths: string[], shimRoot: string): OverlayPlan[] {
-  const names = overlayPluginNames(projectPaths)
-  return projectPaths.map((projectPath, index) => {
-    const root = resolve(projectPath)
-    const claudeDir = join(root, '.claude')
-    const claudeMd = join(root, 'CLAUDE.md')
-    const name = names[index] ?? overlayPluginName(root)
-    return {
-      name,
-      projectPath: root,
-      dir: join(shimRoot, `${SHIM_PREFIX}${name}`),
-      links: OVERLAY_DIRS.filter((dir) => isDir(join(claudeDir, dir))),
-      claudeMdPath: isFile(claudeMd) ? claudeMd : null
-    }
-  })
-}
-
-/**
- * A cheap summary of what the source looks like right now.
- *
- * The scope calls for a hash check at launch rather than a watcher, and this is
- * what it compares. Size and mtime rather than content: the thing being
- * detected is "this tree is not what the shim was built from", a walk of every
- * skill's bytes would cost real time on a repo with forty of them, and a change
- * that keeps both the size and the timestamp is not a change a person made.
- *
- * CLAUDE.md is hashed by content, because that file is copied into the composed
- * memory rather than linked - a stale copy is invisible, where a stale junction
- * cannot happen.
- */
-function fingerprint(plan: OverlayPlan): string {
-  const hash = createHash('sha256')
-  hash.update(plan.name)
-  hash.update(plan.projectPath)
-
-  for (const dir of plan.links) {
-    hash.update(`dir:${dir}`)
-    const base = join(plan.projectPath, '.claude', dir)
-    const walk = (current: string, prefix: string): void => {
-      let entries: Dirent[]
-      try {
-        entries = readdirSync(current, { withFileTypes: true })
-      } catch {
-        return
-      }
-      // Sorted, because readdir order is the filesystem's and a reordering
-      // would read as a change.
-      for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
-        const child = join(current, entry.name)
-        const rel = `${prefix}/${entry.name}`
-        if (entry.isDirectory()) {
-          walk(child, rel)
-        } else if (entry.isFile()) {
-          try {
-            const stat = statSync(child)
-            hash.update(`${rel}:${String(stat.size)}:${String(Math.floor(stat.mtimeMs))}`)
-          } catch {
-            hash.update(`${rel}:missing`)
-          }
-        }
-      }
-    }
-    walk(base, dir)
-  }
-
-  if (plan.claudeMdPath) {
-    try {
-      hash.update(readFileSync(plan.claudeMdPath))
-    } catch {
-      hash.update('claude-md:unreadable')
-    }
-  }
-  return hash.digest('hex')
 }
 
 /**
@@ -279,32 +94,6 @@ function readStamp(dir: string): Stamp | null {
     return stamp as Stamp
   } catch {
     return null
-  }
-}
-
-/**
- * Writes the stamp.
- *
- * Failure is swallowed on purpose: the caller is either mid-rebuild, in which
- * case the missing stamp makes the shim unrecognisable and it is rebuilt next
- * time, or re-claiming a shim it is about to launch a session from - and a
- * launch is not worth failing because a claim could not be recorded. The cost
- * of the unrecorded claim is the shim being swept early, which the sweep's own
- * `unknown` rule then makes unlikely rather than certain.
- */
-function writeStamp(dir: string, stamp: Stamp): void {
-  try {
-    writeFileSync(join(dir, STAMP), `${JSON.stringify(stamp, null, 2)}\n`)
-  } catch {
-    // See above.
-  }
-}
-
-/** This process, as an owner entry. */
-function selfOwner(): ShimOwner {
-  return {
-    pid: process.pid,
-    startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString()
   }
 }
 
@@ -400,15 +189,6 @@ function livenessOf(owner: ShimOwner, world: ShimWorld): OwnerLiveness {
   return world.probe(owner.pid)
 }
 
-/** This process's claim, on top of whichever existing claims are still live. */
-function claimOwners(previous: readonly ShimOwner[] | undefined, world: ShimWorld): ShimOwner[] {
-  const self = selfOwner()
-  const kept = (previous ?? []).filter(
-    (owner) => owner.pid !== self.pid && livenessOf(owner, world) !== 'gone'
-  )
-  return [...kept, self]
-}
-
 /**
  * Removes a shim directory, unlinking its links (junctions on Windows,
  * symlinks on macOS and Linux) before anything recurses.
@@ -465,123 +245,10 @@ function removeShimDir(dir: string): void {
 }
 
 /**
- * Links one convention directory, falling back to a copy.
- *
- * The fallback exists because a link can fail for reasons that are not the
- * user's to fix - the shim root landing on a filesystem that has no reparse
- * points or symlinks, most plausibly a network share or a FAT-formatted stick,
- * which is a real case for an app whose whole premise is being portable.
- */
-function link(target: string, path: string): OverlayLinkMode {
-  const kind = linkKind()
-  try {
-    symlinkSync(target, path, kind.type)
-    return kind.mode
-  } catch {
-    cpSync(target, path, { recursive: true, dereference: true })
-    return 'copy'
-  }
-}
-
-export interface SyncedOverlay {
-  name: string
-  projectPath: string
-  dir: string
-  linked: string[]
-  mode: OverlayLinkMode
-  hasClaudeMd: boolean
-  rebuilt: boolean
-}
-
-/**
- * Brings one shim up to date, building it if it is not there.
- *
- * Rebuilds are whole-directory: the shim is removed and made again rather than
- * patched. Its entire contents are either generated or a link, so there is
- * nothing in it worth preserving, and "delete and rebuild" cannot leave a
- * junction pointing at a directory the source no longer has.
- *
- * Removing it is safe even though it contains links - `removeShimDir` unlinks
- * each one before anything recurses, so the source repo is never reachable from
- * here. That is load-bearing: the alternative deletes the user's skills.
- */
-export function syncOverlay(plan: OverlayPlan): SyncedOverlay {
-  const current = fingerprint(plan)
-  const stamp = readStamp(plan.dir)
-  const world = realWorld()
-
-  if (stamp && stamp.fingerprint === current && existsSync(join(plan.dir, MANIFEST))) {
-    // Reused, not rebuilt - and this process is now one of the things holding
-    // it, which the stamp has to say. Without this the shim would keep naming
-    // whichever Helm built it, and a sweep run after *that* one exited would
-    // remove a directory this session is reading.
-    writeStamp(plan.dir, { ...stamp, owners: claimOwners(stamp.owners, world) })
-    return {
-      name: plan.name,
-      projectPath: plan.projectPath,
-      dir: plan.dir,
-      linked: stamp.linked,
-      mode: stamp.mode,
-      hasClaudeMd: plan.claudeMdPath !== null,
-      rebuilt: false
-    }
-  }
-
-  removeShimDir(plan.dir)
-  mkdirSync(join(plan.dir, '.claude-plugin'), { recursive: true })
-
-  writeFileSync(
-    join(plan.dir, MANIFEST),
-    `${JSON.stringify(
-      {
-        name: plan.name,
-        version: '0.0.0',
-        description: `Helm overlay for ${plan.projectPath}`
-      },
-      null,
-      2
-    )}\n`
-  )
-
-  const linked: string[] = []
-  let mode: OverlayLinkMode = linkKind().mode
-  for (const dir of plan.links) {
-    const how = link(join(plan.projectPath, '.claude', dir), join(plan.dir, dir))
-    if (how === 'copy') mode = 'copy'
-    linked.push(dir)
-  }
-
-  const next: Stamp = {
-    name: plan.name,
-    projectPath: plan.projectPath,
-    mode,
-    linked,
-    fingerprint: current,
-    builtAt: new Date().toISOString(),
-    // A rebuild is a fresh directory, so the only claim on it is this one:
-    // whatever the removed shim's stamp said is about a directory that no
-    // longer exists.
-    owners: [selfOwner()]
-  }
-  writeStamp(plan.dir, next)
-
-  return {
-    name: plan.name,
-    projectPath: plan.projectPath,
-    dir: plan.dir,
-    linked,
-    mode,
-    hasClaudeMd: plan.claudeMdPath !== null,
-    rebuilt: true
-  }
-}
-
-/**
  * Removes shim directories nothing is using, and returns what it removed.
  *
- * Called at app start rather than at session end, because the case it exists
- * for is the one where there was no session end - a crash, or a kill from Task
- * Manager, leaves the shims of every profile that had been launched.
+ * Called at app start: the shims an upgraded install holds were left by an
+ * earlier version of Helm, which may still be running beside this one.
  *
  * "Nothing is using" used to mean "this process has only just started, so
  * nothing is". That reasoning holds for one Helm and is false for two: a second
@@ -645,55 +312,4 @@ export function cleanStaleShims(
     }
   }
   return removed
-}
-
-/**
- * The composed project-instructions document, or null if there is nothing to
- * compose.
- *
- * This is the answer to the gap the composition spike found: a plugin does
- * not carry the overlaid repo's CLAUDE.md, and `--add-dir` - whose help text
- * suggested it might - does not either. Measured on 2.1.225: a session launched
- * from the harness root with both flags reported only the user and cwd
- * instruction files, and could not answer a question whose answer is in
- * `repos/acme/CLAUDE.md`. Passing this file to
- * `--append-system-prompt-file` does carry it.
- *
- * A file rather than `--append-system-prompt` with the text inline: two repos
- * here total 34 KB, and Windows caps a command line at 32,767 characters, so
- * the inline form is not merely wasteful but breaks on the second overlay.
- *
- * An overlay that is the working directory or one of its ancestors is left
- * out: the CLI already loads every CLAUDE.md from the working directory up, so
- * composing it would put the same instructions in the session twice - the
- * second copy introduced as belonging to a project the session is not in.
- */
-export function composeOverlayMemory(plans: readonly OverlayPlan[], cwd: string): string | null {
-  const parts: string[] = []
-  for (const plan of plans) {
-    if (!plan.claudeMdPath) continue
-    if (isSameOrAncestor(plan.projectPath, cwd)) continue
-    let content: string
-    try {
-      content = readFileSync(plan.claudeMdPath, 'utf8')
-    } catch {
-      continue
-    }
-    // Attributed by path, because the instructions inside frequently say "this
-    // repo" and the session's cwd is a different one.
-    parts.push(
-      `## Project instructions: ${plan.projectPath}\n\n` +
-        `These apply to work in \`${plan.projectPath}\`, composed into this session as the ` +
-        `\`${plan.name}\` overlay.\n\n${content.trim()}`
-    )
-  }
-  if (parts.length === 0) return null
-
-  return (
-    '# Composed project instructions\n\n' +
-    'The following CLAUDE.md files belong to projects composed into this session as ' +
-    'overlays. The session\'s working directory is not theirs, so each block says which ' +
-    'project it governs.\n\n' +
-    `${parts.join('\n\n---\n\n')}\n`
-  )
 }

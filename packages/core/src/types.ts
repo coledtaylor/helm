@@ -1033,65 +1033,12 @@ export interface Profile {
 export type ProfileDraft = Omit<Profile, 'id' | 'createdAt' | 'updatedAt'>
 
 /**
- * One synthesised overlay plugin: the directory handed to `--plugin-dir`, and
- * what went into it.
- */
-/**
  * How an overlay shim carries a source folder: a junction on Windows, which
  * needs no elevation; a directory symlink on macOS and Linux; `copy` when the
- * filesystem under the shim can make neither.
+ * filesystem under the shim can make neither. Read from the stamp of a shim an
+ * earlier version of Helm built.
  */
 export type OverlayLinkMode = 'junction' | 'symlink' | 'copy'
-
-export interface OverlayShim {
-  /** The plugin manifest name, and therefore the prefix its skills appear
-   * under - `acme:think`, not `acme-overlay:think`. */
-  name: string
-  /** The project this overlay was synthesised from. */
-  projectPath: string
-  /** The shim directory itself. */
-  dir: string
-  /** Convention directories that were linked in, e.g. `['skills', 'agents']`. */
-  linked: string[]
-  mode: OverlayLinkMode
-  /** Whether the source project had a CLAUDE.md to carry. */
-  hasClaudeMd: boolean
-  /** True when this launch rebuilt the shim rather than reusing it. */
-  rebuilt: boolean
-}
-
-/** Everything a host needs to spawn a composed session. */
-export interface LaunchPlan {
-  cwd: string
-  name: string
-  /** Argv after the executable. */
-  argv: string[]
-  overlays: OverlayShim[]
-  /**
-   * The composed project-instructions file passed to
-   * `--append-system-prompt-file`, or null when no overlay had a CLAUDE.md.
-   */
-  memoryFile: string | null
-  /**
-   * The ephemeral `--mcp-config` document written for this session, or null.
-   *
-   * Returned so the host can delete it when the session ends: it carries a
-   * bearer token for Helm's own loopback endpoint, and a token file that
-   * outlives the run that minted it is a file nothing collects.
-   */
-  mcpConfigFile: string | null
-  /**
-   * The conversation id this launch assigned with `--session-id`, or null when
-   * it assigned none.
-   *
-   * Returned so the host can put it on the session row: the flag is in `argv`
-   * either way, but a row that had to re-parse its own argv to find out what it
-   * launched would be a second parser of a string this file wrote.
-   */
-  claudeSessionId: string | null
-  /** Things the user should know that did not stop the launch. */
-  warnings: string[]
-}
 
 export type ThemePreference = 'system' | 'light' | 'dark'
 

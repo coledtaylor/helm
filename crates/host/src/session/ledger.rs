@@ -1,10 +1,10 @@
 //! Where a session's row is written: on spawn, and again when it ends.
 //!
-//! The rows are today's `sessions` table (`packages/core/src/store/schema.ts`):
-//! a row is `running` from the spawn, naming the agent backend it runs on,
-//! and `exited` with its code, end time and duration once the program ends.
-//! The end is written only over a row still running, so an exit reported
-//! twice keeps the first code, as `finishSession` does today.
+//! The rows have the shape of helm.db's `sessions` table
+//! (`packages/core/src/store/schema.ts`): a row is `running` from the spawn,
+//! naming the agent backend it runs on, and `exited` with its code, end time
+//! and duration once the program ends. The end is written only over a row
+//! still running, so an exit reported twice keeps the first code.
 
 use std::io;
 use std::path::PathBuf;

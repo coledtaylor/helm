@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { planOverlays, syncOverlay, type SyncedOverlay } from '@helm/core'
+import { plantShim, type PlantedShim } from '@helm/core/overlay-testkit'
 import {
   claimShimFor,
   exitedPid,
@@ -51,16 +51,14 @@ describe('app start', () => {
     return services
   }
 
-  /** The shim a launch composing the harness's overlay would build. */
-  const buildShim = (): SyncedOverlay => {
-    const [plan] = planOverlays([harness.overlay], shimRoot)
-    if (plan === undefined) throw new Error('no overlay plan')
-    const shim = syncOverlay(plan)
+  /** The shim an earlier version of Helm built for a session composing the harness's overlay. */
+  const buildShim = (): PlantedShim => {
+    const shim = plantShim(harness.overlay, shimRoot)
     expect(isLink(join(shim.dir, 'skills'))).toBe(true)
     return shim
   }
 
-  const skillThroughShim = (shim: SyncedOverlay): string =>
+  const skillThroughShim = (shim: PlantedShim): string =>
     readFileSync(join(shim.dir, 'skills', harness.skill, 'SKILL.md'), 'utf8')
 
   it('sweeps a shim whose owner has exited, and leaves the repository it linked', () => {

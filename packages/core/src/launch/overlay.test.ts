@@ -7,24 +7,13 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   rmSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
-import {
-  cleanStaleShims,
-  composeOverlayMemory,
-  linkKind,
-  overlayPluginName,
-  overlayPluginNames,
-  planOverlays,
-  probeProcess,
-  syncOverlay,
-  type ShimOwner,
-  type ShimWorld
-} from './overlay'
+import { cleanStaleShims, probeProcess, type ShimOwner, type ShimWorld } from './overlay'
+import { plantShim } from './overlay.testkit'
 
 let root: string
 let shimRoot: string
@@ -41,11 +30,6 @@ const STAMP = '.helm-overlay.json'
  */
 function rebooted(): Partial<ShimWorld> {
   return { bootAtMs: Date.now() + 1000 }
-}
-
-function readOwners(dir: string): ShimOwner[] {
-  const stamp: unknown = JSON.parse(readFileSync(join(dir, STAMP), 'utf8'))
-  return (stamp as { owners?: ShimOwner[] }).owners ?? []
 }
 
 /** Rewrites a real shim's owner list, standing in for another Helm's claim. */
@@ -76,7 +60,7 @@ function otherHelm(pid: number): ShimOwner {
 /** A repo with a `.claude/` tree, the way the fixtures in `repos/` look. */
 function makeProject(
   name: string,
-  opts: { skills?: string[]; agents?: string[]; commands?: string[]; claudeMd?: string } = {}
+  opts: { skills?: string[]; agents?: string[]; commands?: string[] } = {}
 ): string {
   const dir = join(root, name)
   for (const skill of opts.skills ?? []) {
@@ -90,10 +74,6 @@ function makeProject(
   for (const command of opts.commands ?? []) {
     mkdirSync(join(dir, '.claude', 'commands'), { recursive: true })
     writeFileSync(join(dir, '.claude', 'commands', `${command}.md`), `# ${command}\n`)
-  }
-  if (opts.claudeMd !== undefined) {
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'CLAUDE.md'), opts.claudeMd)
   }
   mkdirSync(dir, { recursive: true })
   return dir
@@ -109,169 +89,12 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-describe('overlayPluginName', () => {
-  it('uses the repo name, which is what skills get prefixed with', () => {
-    expect(overlayPluginName('C:/repos/acme')).toBe('acme')
-    expect(overlayPluginName('/home/x/repos/acme-reporting')).toBe('acme-reporting')
-  })
-
-  it('reduces to something a namespace can carry', () => {
-    expect(overlayPluginName('/repos/Acme Project')).toBe('acme-project')
-    expect(overlayPluginName('/repos/my repo!!')).toBe('my-repo')
-  })
-
-  it('falls back rather than producing an empty prefix', () => {
-    expect(overlayPluginName('/repos/!!!')).toBe('overlay')
-  })
-
-  it('distinguishes same-named repos from different harnesses', () => {
-    expect(overlayPluginNames(['/a/repos/acme', '/b/repos/acme'])).toEqual([
-      'acme',
-      'acme-2'
-    ])
-  })
-})
-
-describe('linkKind', () => {
-  it('is a junction on Windows and a directory symlink on macOS and Linux', () => {
-    expect(linkKind('win32')).toEqual({ type: 'junction', mode: 'junction' })
-    expect(linkKind('darwin')).toEqual({ type: 'dir', mode: 'symlink' })
-    expect(linkKind('linux')).toEqual({ type: 'dir', mode: 'symlink' })
-  })
-})
-
-describe('syncOverlay', () => {
-  it('builds a plugin the CLI can load: manifest plus the convention dirs', () => {
-    const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
-    const [plan] = planOverlays([project], shimRoot)
-    const shim = syncOverlay(plan!)
-
-    expect(shim.name).toBe('acme')
-    expect(shim.rebuilt).toBe(true)
-    expect(shim.linked.sort()).toEqual(['agents', 'skills'])
-
-    const manifest: unknown = JSON.parse(
-      readFileSync(join(shim.dir, '.claude-plugin', 'plugin.json'), 'utf8')
-    )
-    expect(manifest).toMatchObject({ name: 'acme' })
-    // Read through the link, which is the thing that has to work.
-    expect(readFileSync(join(shim.dir, 'skills', 'think', 'SKILL.md'), 'utf8')).toBe('# think\n')
-  })
-
-  it('links workflows, which a plugin carries at its root like the others', () => {
-    const project = makeProject('acme', { skills: ['think'] })
-    mkdirSync(join(project, '.claude', 'workflows'), { recursive: true })
-    writeFileSync(join(project, '.claude', 'workflows', 'audit.js'), 'export const meta = {}\n')
-    const shim = syncOverlay(planOverlays([project], shimRoot)[0]!)
-
-    expect(shim.linked.sort()).toEqual(['skills', 'workflows'])
-    expect(readFileSync(join(shim.dir, 'workflows', 'audit.js'), 'utf8')).toBe('export const meta = {}\n')
-  })
-
-  it('only links the convention dirs the source actually has', () => {
-    const project = makeProject('bare', { skills: ['one'] })
-    const [plan] = planOverlays([project], shimRoot)
-    expect(syncOverlay(plan!).linked).toEqual(['skills'])
-    expect(existsSync(join(shimRoot, 'overlay-bare', 'agents'))).toBe(false)
-  })
-
-  it('reuses an unchanged shim instead of rebuilding it', () => {
-    const project = makeProject('acme', { skills: ['think'] })
-    const [plan] = planOverlays([project], shimRoot)
-    expect(syncOverlay(plan!).rebuilt).toBe(true)
-
-    const [again] = planOverlays([project], shimRoot)
-    expect(syncOverlay(again!).rebuilt).toBe(false)
-  })
-
-  it('rebuilds when the source .claude tree changes', () => {
-    const project = makeProject('acme', { skills: ['think'] })
-    syncOverlay(planOverlays([project], shimRoot)[0]!)
-
-    mkdirSync(join(project, '.claude', 'skills', 'newer'), { recursive: true })
-    writeFileSync(join(project, '.claude', 'skills', 'newer', 'SKILL.md'), '# newer\n')
-
-    expect(syncOverlay(planOverlays([project], shimRoot)[0]!).rebuilt).toBe(true)
-  })
-
-  it('rebuilds when a convention dir appears that was not there before', () => {
-    const project = makeProject('acme', { skills: ['think'] })
-    expect(syncOverlay(planOverlays([project], shimRoot)[0]!).linked).toEqual(['skills'])
-
-    mkdirSync(join(project, '.claude', 'agents'), { recursive: true })
-    writeFileSync(join(project, '.claude', 'agents', 'reviewer.md'), '# reviewer\n')
-
-    const shim = syncOverlay(planOverlays([project], shimRoot)[0]!)
-    expect(shim.rebuilt).toBe(true)
-    expect(shim.linked.sort()).toEqual(['agents', 'skills'])
-  })
-
-  it('rebuilds when only CLAUDE.md changed, since that one is copied not linked', () => {
-    const project = makeProject('acme', { skills: ['think'], claudeMd: '# first\n' })
-    syncOverlay(planOverlays([project], shimRoot)[0]!)
-
-    writeFileSync(join(project, 'CLAUDE.md'), '# second\n')
-    expect(syncOverlay(planOverlays([project], shimRoot)[0]!).rebuilt).toBe(true)
-  })
-
-  /**
-   * The rebuild path deletes the shim, and the shim's `skills` is a junction
-   * into the real repository. Observed for real during a profile check run: the
-   * source's skill directory was emptied by a rebuild, and the next session
-   * loaded a plugin pointing at nothing. Asserted on the source, not on the
-   * shim, because the shim being right is not the property that matters here.
-   */
-  it('a rebuild leaves the source repo untouched behind the link', () => {
-    const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
-    syncOverlay(planOverlays([project], shimRoot)[0]!)
-
-    // The edit that forces the rebuild.
-    writeFileSync(join(project, '.claude', 'skills', 'think', 'SKILL.md'), '# edited\n')
-    const shim = syncOverlay(planOverlays([project], shimRoot)[0]!)
-    expect(shim.rebuilt).toBe(true)
-
-    expect(readdirSync(join(project, '.claude', 'skills'))).toEqual(['think'])
-    expect(readFileSync(join(project, '.claude', 'skills', 'think', 'SKILL.md'), 'utf8')).toBe(
-      '# edited\n'
-    )
-    expect(existsSync(join(project, '.claude', 'agents', 'reviewer.md'))).toBe(true)
-    // And the rebuilt shim reaches it.
-    expect(readFileSync(join(shim.dir, 'skills', 'think', 'SKILL.md'), 'utf8')).toBe('# edited\n')
-  })
-
-  /**
-   * A junction on Windows, a directory symlink on macOS and Linux - and either
-   * way a link to the source folder itself, not a copy of it. Runs with real
-   * links on whichever OS runs the tests.
-   */
-  it("links each carried folder to the source folder with this OS's kind of link", () => {
-    const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
-    const shim = syncOverlay(planOverlays([project], shimRoot)[0]!)
-
-    expect(shim.mode).toBe(process.platform === 'win32' ? 'junction' : 'symlink')
-    const stamp = JSON.parse(readFileSync(join(shim.dir, STAMP), 'utf8')) as { mode: string }
-    expect(stamp.mode).toBe(shim.mode)
-    for (const dir of ['skills', 'agents']) {
-      expect(lstatSync(join(shim.dir, dir)).isSymbolicLink()).toBe(true)
-      expect(realpathSync(join(shim.dir, dir))).toBe(realpathSync(join(project, '.claude', dir)))
-    }
-  })
-
-  it('an edit to a skill is visible through the link without a rebuild', () => {
-    const project = makeProject('acme', { skills: ['think'] })
-    const shim = syncOverlay(planOverlays([project], shimRoot)[0]!)
-
-    writeFileSync(join(project, '.claude', 'skills', 'think', 'SKILL.md'), '# edited\n')
-    expect(readFileSync(join(shim.dir, 'skills', 'think', 'SKILL.md'), 'utf8')).toBe('# edited\n')
-  })
-})
-
 describe('cleanStaleShims', () => {
   it('removes shims nothing asked to keep', () => {
     const a = makeProject('alpha', { skills: ['one'] })
     const b = makeProject('beta', { skills: ['two'] })
-    syncOverlay(planOverlays([a], shimRoot)[0]!)
-    syncOverlay(planOverlays([b], shimRoot)[0]!)
+    plantShim(a, shimRoot)
+    plantShim(b, shimRoot)
 
     const removed = cleanStaleShims(shimRoot, ['alpha'], rebooted())
     expect(removed).toEqual([join(shimRoot, 'overlay-beta')])
@@ -281,7 +104,7 @@ describe('cleanStaleShims', () => {
 
   it('removes every shim when nothing is running', () => {
     const a = makeProject('alpha', { skills: ['one'] })
-    syncOverlay(planOverlays([a], shimRoot)[0]!)
+    plantShim(a, shimRoot)
     expect(cleanStaleShims(shimRoot, [], rebooted())).toHaveLength(1)
     expect(existsSync(join(shimRoot, 'overlay-alpha'))).toBe(false)
   })
@@ -293,7 +116,7 @@ describe('cleanStaleShims', () => {
    */
   it('unlinks the links rather than deleting the repo behind them', () => {
     const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
-    syncOverlay(planOverlays([project], shimRoot)[0]!)
+    plantShim(project, shimRoot)
 
     cleanStaleShims(shimRoot, [], rebooted())
 
@@ -305,25 +128,22 @@ describe('cleanStaleShims', () => {
   })
 
   /**
-   * Rebuilt, then swept: every file in the repository behind the links is
-   * still there, byte for byte, nested folders included. With real symlinks on
-   * macOS and Linux and real junctions on Windows.
+   * Swept: every file in the repository behind the links is still there, byte
+   * for byte, nested folders included. With real symlinks on macOS and Linux
+   * and real junctions on Windows.
    */
-  it('leaves every file in the repository behind the links through a rebuild and a sweep', () => {
+  it('leaves every file in the repository behind the links through a sweep', () => {
     const project = makeProject('acme', { skills: ['think', 'plan'], agents: ['reviewer'], commands: ['ship'] })
     mkdirSync(join(project, '.claude', 'skills', 'think', 'references', 'deep'), { recursive: true })
     writeFileSync(join(project, '.claude', 'skills', 'think', 'references', 'deep', 'notes.md'), 'nested\n')
-    syncOverlay(planOverlays([project], shimRoot)[0]!)
+    const shim = plantShim(project, shimRoot)
+    expect(shim.linked).toEqual(['skills', 'commands', 'agents'])
+    expect(lstatSync(join(shim.dir, 'skills')).isSymbolicLink()).toBe(true)
     const before = filesUnder(join(project, '.claude'))
     expect(before.length).toBeGreaterThanOrEqual(5)
 
-    writeFileSync(join(project, 'CLAUDE.md'), '# forces a rebuild\n')
-    const rebuilt = syncOverlay(planOverlays([project], shimRoot)[0]!)
-    expect(rebuilt.rebuilt).toBe(true)
-    expect(filesUnder(join(project, '.claude'))).toEqual(before)
-
-    expect(cleanStaleShims(shimRoot, [], rebooted())).toEqual([rebuilt.dir])
-    expect(existsSync(rebuilt.dir)).toBe(false)
+    expect(cleanStaleShims(shimRoot, [], rebooted())).toEqual([shim.dir])
+    expect(existsSync(shim.dir)).toBe(false)
     expect(filesUnder(join(project, '.claude'))).toEqual(before)
   })
 
@@ -364,16 +184,8 @@ describe('cleanStaleShims', () => {
 describe('cleanStaleShims and the process holding the shim', () => {
   /** Builds a real shim and returns where it landed. */
   function plant(name: string): string {
-    const project = makeProject(name, { skills: ['one'] })
-    return syncOverlay(planOverlays([project], shimRoot)[0]!).dir
+    return plantShim(makeProject(name, { skills: ['one'] }), shimRoot).dir
   }
-
-  it('records this process as the owner of a shim it just built', () => {
-    const dir = plant('alpha')
-    expect(readOwners(dir)).toEqual([
-      { pid: process.pid, startedAt: expect.any(String) as unknown as string }
-    ])
-  })
 
   it('leaves a shim whose owner is still running', () => {
     const dir = plant('alpha')
@@ -468,36 +280,6 @@ describe('cleanStaleShims and the process holding the shim', () => {
     expect(removed).toEqual([dir])
     expect(existsSync(dir)).toBe(false)
   })
-
-  /**
-   * Re-syncing an unchanged shim adds this process to the list rather than
-   * replacing it. Two Helms that launched the same profile both hold it, and a
-   * sweep after the first exits must still find the second.
-   */
-  it('adds a claim to an unchanged shim instead of taking it over', () => {
-    const project = makeProject('alpha', { skills: ['one'] })
-    const plan = planOverlays([project], shimRoot)[0]!
-    const dir = syncOverlay(plan).dir
-    setOwners(dir, [otherHelm(4321)])
-    // 4321 is nothing on this machine, and a claim that probes as gone would be
-    // pruned - which is a different behaviour from the one under test.
-    vi.spyOn(process, 'kill').mockReturnValue(true)
-
-    expect(syncOverlay(plan).rebuilt).toBe(false)
-    expect(readOwners(dir).map((owner) => owner.pid)).toEqual([4321, process.pid])
-    vi.restoreAllMocks()
-  })
-
-  it('prunes owners that have gone when it claims one', () => {
-    const project = makeProject('alpha', { skills: ['one'] })
-    const plan = planOverlays([project], shimRoot)[0]!
-    const dir = syncOverlay(plan).dir
-    // Stamped before this boot, so the claim is dead however the pid probes.
-    setOwners(dir, [{ pid: 4321, startedAt: new Date(0).toISOString() }])
-
-    syncOverlay(plan)
-    expect(readOwners(dir).map((owner) => owner.pid)).toEqual([process.pid])
-  })
 })
 
 /**
@@ -557,7 +339,7 @@ describe('cleanStaleShims against a pid it may not signal', () => {
 
   it('leaves the shim', () => {
     const project = makeProject('alpha', { skills: ['one'] })
-    const dir = syncOverlay(planOverlays([project], shimRoot)[0]!).dir
+    const dir = plantShim(project, shimRoot).dir
     setOwners(dir, [{ pid: 4321, startedAt: new Date().toISOString() }])
 
     vi.spyOn(process, 'kill').mockImplementation(() => {
@@ -568,40 +350,5 @@ describe('cleanStaleShims against a pid it may not signal', () => {
 
     expect(cleanStaleShims(shimRoot)).toEqual([])
     expect(existsSync(dir)).toBe(true)
-  })
-})
-
-describe('composeOverlayMemory', () => {
-  it('carries each overlay CLAUDE.md, attributed to the project it governs', () => {
-    const a = makeProject('acme', { skills: ['think'], claudeMd: '# Acme\nPyQt5 app.' })
-    const b = makeProject('reporting', { skills: ['think'], claudeMd: '# Reporting\ndotnet API.' })
-    const memory = composeOverlayMemory(planOverlays([a, b], shimRoot), join(root, 'workspace'))
-
-    expect(memory).not.toBeNull()
-    expect(memory).toContain('PyQt5 app.')
-    expect(memory).toContain('dotnet API.')
-    // Attribution, because the instructions inside say "this repo" and the
-    // session's cwd is neither of them.
-    expect(memory).toContain(a)
-    expect(memory).toContain(b)
-  })
-
-  it('is null when no overlay has one, so no flag gets emitted', () => {
-    const project = makeProject('acme', { skills: ['think'] })
-    expect(composeOverlayMemory(planOverlays([project], shimRoot), root)).toBeNull()
-  })
-
-  it('leaves out an overlay the CLI already loads from the working directory up', () => {
-    const harness = makeProject('harness', { skills: ['notes'], claudeMd: '# Harness rules' })
-    const repo = makeProject(join('harness', 'repos', 'acme'), { claudeMd: '# Acme' })
-    const sibling = makeProject('acme-ui', { skills: ['think'], claudeMd: '# Acme UI' })
-    const plans = planOverlays([harness, repo, sibling], shimRoot)
-
-    const memory = composeOverlayMemory(plans, repo)
-    expect(memory).not.toContain('Harness rules')
-    expect(memory).not.toContain('# Acme\n')
-    // A shared name prefix is not ancestry.
-    expect(memory).toContain('Acme UI')
-    expect(composeOverlayMemory(plans.slice(0, 2), join(repo, 'src'))).toBeNull()
   })
 })

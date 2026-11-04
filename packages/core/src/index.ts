@@ -34,17 +34,7 @@ export {
 } from './discovery/history'
 export { isInsideRoot } from './files/inside'
 export { cleanStaleMcpConfigs } from './launch/mcp'
-export {
-  cleanStaleShims,
-  linkKind,
-  planOverlays,
-  probeProcess,
-  syncOverlay,
-  type OverlayPlan,
-  type OwnerLiveness,
-  type ShimOwner,
-  type SyncedOverlay
-} from './launch/overlay'
+export { cleanStaleShims, probeProcess, type OwnerLiveness, type ShimOwner } from './launch/overlay'
 export * from './store'
 export {
   parseUsageLine,

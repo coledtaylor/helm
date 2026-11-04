@@ -9,7 +9,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
-    "./store": "./src/store/index.ts"
+    "./store": "./src/store/index.ts",
+    "./overlay-testkit": "./src/launch/overlay.testkit.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

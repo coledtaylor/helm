@@ -693,8 +693,6 @@ describe('sessions through the local host', () => {
         { session: 7, name: 'frontend' },
         { session: 8, name: 'api' }
       ])
-      // The host holds the token; no token answers here.
-      expect(w.host.sessions.tokenHolder(app?.key ?? '')).toBeNull()
     })
 
     it('answers for no session and offers none to share with while the browser tools are off', async () => {

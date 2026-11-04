@@ -57,8 +57,7 @@ import type { TerminalStreams } from './streams'
  * each call here (`browser-tools.ts`), where Helm's own tools answer it. A
  * running session's identity at those tools is a random key minted here, held
  * only in main and dropped when the session ends, which also ends every page
- * the user shared with it. The host holds the session's token, so no token
- * answers here (`tokenHolder`).
+ * the user shared with it. The host holds the session's token.
  *
  * The plugins' tools: the host serves each plugin's tool server and relays
  * each call here (`plugin-tools.ts`), naming the session as the plugin knows
@@ -490,9 +489,6 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
       return { session, history: historySessionFromHost(resumed.history) }
     },
 
-    // A crash's sessions are offered back by the host (`restore` below).
-    restore: () => Promise.reject(new Error('Sessions from before Helm closed are reopened through the local host.')),
-
     async close(req) {
       const entry = records.get(req.id)
       if (entry === undefined) return { closed: true }
@@ -564,12 +560,6 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
 
     // The host owns the process.
     pid: () => null,
-
-    // The host follows a session's conversation itself, from Claude Code's records.
-    noteConversation: () => undefined,
-
-    // The host holds each session's token and answers for it itself.
-    tokenHolder: () => null,
 
     browserOpener(id) {
       const record = records.get(id)

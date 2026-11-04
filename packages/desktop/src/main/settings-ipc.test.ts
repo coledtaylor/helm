@@ -2,7 +2,7 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BrowserWindow } from 'electron'
-import { readSettings, type ThemeListing, type ThemeState } from '@helm/core'
+import { readSettings, UPDATE_CHECK_EVERY_MS, writeSettings, type ThemeListing, type ThemeState } from '@helm/core'
 import { createWorld, disposeWorld, seedSettings, type World } from '../../test/world'
 import type { EventChannel, RequestChannel, RequestPayload, RequestResult } from '../shared/ipc'
 import type { Services } from './services'
@@ -354,6 +354,39 @@ describe('settings over IPC', () => {
       update.pointReleases(() => Promise.resolve('v9.9.9'))
       await update.maybeCheckForUpdate(services, null)
       expect(stored().lastUpdateCheckAt).not.toBeNull()
+    })
+
+    it('S9: asks GitHub at most once a day at start, keeps the time in helm.db and tells the window of a newer version', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const start = new Date('2026-11-03T08:00:00.000Z')
+        vi.setSystemTime(start)
+        writeSettings(services.store, { updateCheck: true, lastUpdateCheckAt: null })
+        services.settings = readSettings(services.store)
+        update.pointReleases(() => Promise.resolve('v9.9.9'))
+        const told = () => emitted<{ newer: boolean; latest: string | null }>('update:checked')
+        const toldBefore = told().length
+
+        await update.maybeCheckForUpdate(services, win as unknown as BrowserWindow)
+        expect(update.releasesAsked()).toBe(1)
+        expect(stored().lastUpdateCheckAt).toBe(start.toISOString())
+        expect(told().slice(toldBefore)).toEqual([expect.objectContaining({ newer: true, latest: '9.9.9' })])
+
+        // A second start within the day asks nothing and tells the window nothing.
+        vi.setSystemTime(start.getTime() + UPDATE_CHECK_EVERY_MS - 1)
+        await update.maybeCheckForUpdate(services, win as unknown as BrowserWindow)
+        expect(update.releasesAsked()).toBe(1)
+        expect(told().length).toBe(toldBefore + 1)
+
+        // A start once the day has passed asks again and keeps the new time.
+        const later = new Date(start.getTime() + UPDATE_CHECK_EVERY_MS)
+        vi.setSystemTime(later)
+        await update.maybeCheckForUpdate(services, win as unknown as BrowserWindow)
+        expect(update.releasesAsked()).toBe(2)
+        expect(stored().lastUpdateCheckAt).toBe(later.toISOString())
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 })
