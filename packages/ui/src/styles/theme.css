@@ -55,7 +55,7 @@
  * Tokens - "Nocturne Islands" v2 (docs/DESIGN.md)
  *
  * **No palette is declared here.** Colours are data: every theme - the three
- * built-ins and any the user writes - is a set of nineteen values in
+ * built-ins and any the user writes - is a set of twenty-seven values in
  * `core/theme/themes.ts` or a JSON file, and the renderer paints the one on
  * screen onto `<html>` as `--helm-*` custom properties before React's first
  * frame (`renderer/app/theme.ts`). A second copy of Nocturne in this file would
@@ -124,6 +124,19 @@
   --color-warn: var(--helm-warn);
   --color-danger: var(--helm-danger);
   --color-terminal: var(--helm-terminal);
+
+  /* The categorical palette (DESIGN.md "The categorical palette"): for telling
+   * apart things of one kind with no order or status, by name, never for a
+   * status, a selection or emphasis. A tag is `bg-hue-x/10 dark:bg-hue-x/14
+   * text-hue-x` (`ui/lib/hues.ts`). */
+  --color-hue-blue: var(--helm-hue-blue);
+  --color-hue-teal: var(--helm-hue-teal);
+  --color-hue-green: var(--helm-hue-green);
+  --color-hue-amber: var(--helm-hue-amber);
+  --color-hue-orange: var(--helm-hue-orange);
+  --color-hue-red: var(--helm-hue-red);
+  --color-hue-pink: var(--helm-hue-pink);
+  --color-hue-violet: var(--helm-hue-violet);
 
   --shadow-panel: var(--helm-shadow);
 

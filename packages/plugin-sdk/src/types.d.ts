@@ -262,6 +262,16 @@ export type ThemeTokenName =
   | 'success'
   | 'warn'
   | 'danger'
+  | `hue-${PaletteHue}`
+
+/**
+ * The categorical palette, by name: for telling apart things of one kind that
+ * have no order or status (projects, tags, chart series), never for status,
+ * selection or emphasis. Each is the token `hue-<name>`, on `<html>` as
+ * `--helm-hue-<name>` in the shade of the theme on screen, and the value a
+ * primitive's `data-hue` takes. Store the name, never the colour.
+ */
+export type PaletteHue = 'blue' | 'teal' | 'green' | 'amber' | 'orange' | 'red' | 'pink' | 'violet'
 
 /**
  * Helm's theme, as the page sees it. The same values are on the page's

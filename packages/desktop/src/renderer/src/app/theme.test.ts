@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BUILTIN_THEMES, type ThemeState } from '@helm/core/types'
+import { BUILTIN_THEMES, hueToken, PALETTE_HUES, type ThemeState } from '@helm/core/types'
 import { applyShape, applyTheme } from './theme'
 
 const stateOf = (id: string): ThemeState => {
@@ -30,6 +30,17 @@ describe('applyTheme', () => {
     expect(root.classList.contains('dark')).toBe(false)
     expect(root.style.colorScheme).toBe('light')
     expect(root.style.getPropertyValue('--helm-bg')).toBe('#e6e8ee')
+  })
+})
+
+describe('applyTheme: the categorical palette', () => {
+  it.each(BUILTIN_THEMES.map((t) => [t.id] as const))('paints every palette hue in %s’s own shade', (id) => {
+    const state = stateOf(id)
+    applyTheme(state)
+    const root = document.documentElement
+    for (const hue of PALETTE_HUES) {
+      expect(root.style.getPropertyValue(`--helm-hue-${hue}`), hue).toBe(state.applied.tokens[hueToken(hue)])
+    }
   })
 })
 

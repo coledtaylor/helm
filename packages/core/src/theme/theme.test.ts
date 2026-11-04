@@ -2,12 +2,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { contrastRatio, formatColor, parseColor } from './color'
+import { colorDistance, contrastRatio, formatColor, mix, parseColor } from './color'
 import { readUserThemes, seedThemesDir, THEMES_README, writeThemeCopy } from './load'
 import {
   ACCENT_SWATCHES,
   BUILTIN_THEMES,
   deriveAccent,
+  HUE_TINT_ALPHA,
+  hueForText,
+  hueToken,
+  PALETTE_HUES,
+  PALETTE_MIN_DISTANCE,
   parseThemeFile,
   resolveTheme,
   THEME_TOKENS,
@@ -86,6 +91,40 @@ describe('built-in themes', () => {
     expect(contrastRatio(c('accent'), c('surface')), 'accent mark').toBeGreaterThanOrEqual(3)
   })
 
+  it.each(BUILTIN_THEMES.map((t) => [t.id, t] as const))(
+    '%s gives every palette hue its own shade, readable as tag text on the island, the raised ground and its tint',
+    (_id, theme) => {
+      const c = (token: keyof ThemeDefinition['tokens']) => must(parseColor(theme.tokens[token]))
+      const surface = c('surface')
+      for (const hue of PALETTE_HUES) {
+        const shade = c(hueToken(hue))
+        const tint = mix(surface, shade, HUE_TINT_ALPHA[theme.kind])
+        expect(contrastRatio(shade, surface), `${hue} on surface`).toBeGreaterThanOrEqual(4.5)
+        expect(contrastRatio(shade, c('surface-raised')), `${hue} on surface-raised`).toBeGreaterThanOrEqual(4.5)
+        expect(contrastRatio(shade, tint), `${hue} on its tag tint`).toBeGreaterThanOrEqual(4.5)
+      }
+      const shades = PALETTE_HUES.map((hue) => theme.tokens[hueToken(hue)])
+      expect(new Set(shades).size, 'one shade per hue').toBe(PALETTE_HUES.length)
+    }
+  )
+
+  it.each(BUILTIN_THEMES.map((t) => [t.id, t] as const))('%s keeps every two palette hues apart', (_id, theme) => {
+    for (const [i, first] of PALETTE_HUES.entries()) {
+      for (const second of PALETTE_HUES.slice(i + 1)) {
+        const distance = colorDistance(
+          must(parseColor(theme.tokens[hueToken(first)])),
+          must(parseColor(theme.tokens[hueToken(second)]))
+        )
+        expect(distance, `${first} and ${second}`).toBeGreaterThanOrEqual(PALETTE_MIN_DISTANCE)
+      }
+    }
+  })
+
+  it('gives each built-in its own palette', () => {
+    const palettes = BUILTIN_THEMES.map((t) => PALETTE_HUES.map((hue) => t.tokens[hueToken(hue)]).join())
+    expect(new Set(palettes).size).toBe(BUILTIN_THEMES.length)
+  })
+
   it('keeps Nocturne on the v1 dark values, so the default look does not move', () => {
     const nocturne = must(BUILTIN_THEMES.find((t) => t.id === 'nocturne'))
     expect(nocturne.tokens).toMatchObject({
@@ -157,6 +196,36 @@ describe('parseThemeFile', () => {
     expect(parsed.theme.problems.join('\n')).toMatch(/sidebar.*not a colour Helm uses/)
   })
 
+  it('inherits every palette hue it does not set, and shows the one it does', () => {
+    const graphite = must(BUILTIN_THEMES.find((t) => t.id === 'graphite'))
+    const plain = parseThemeFile('slate.json', JSON.stringify({ extends: 'graphite', colors: { bg: '#202020' } }))
+    const tinted = parseThemeFile('moss.json', JSON.stringify({ extends: 'graphite', colors: { 'hue-green': '#9AD48F' } }))
+    if (!plain.ok || !tinted.ok) throw new Error('both files should load')
+    for (const hue of PALETTE_HUES) expect(plain.theme.tokens[hueToken(hue)]).toBe(graphite.tokens[hueToken(hue)])
+    expect(tinted.theme.tokens['hue-green']).toBe('#9ad48f')
+    expect(tinted.theme.tokens['hue-blue']).toBe(graphite.tokens['hue-blue'])
+    expect(tinted.theme.problems).toEqual([])
+
+    const light = parseThemeFile('paper.json', JSON.stringify({ kind: 'light' }))
+    const daylight = must(BUILTIN_THEMES.find((t) => t.id === 'daylight'))
+    expect(light.ok && light.theme.tokens['hue-pink']).toBe(daylight.tokens['hue-pink'])
+  })
+
+  it('falls back to the extended theme for a translucent or unreadable palette hue, and names it', () => {
+    const parsed = parseThemeFile(
+      'faded.json',
+      JSON.stringify({ extends: 'daylight', colors: { 'hue-blue': 'rgb(22 105 196 / 0.4)', 'hue-red': 'crimson' } })
+    )
+    if (!parsed.ok) throw new Error(parsed.message)
+    const daylight = must(BUILTIN_THEMES.find((t) => t.id === 'daylight'))
+    expect(parsed.theme.tokens['hue-blue']).toBe(daylight.tokens['hue-blue'])
+    expect(parsed.theme.tokens['hue-red']).toBe(daylight.tokens['hue-red'])
+    expect(parsed.theme.problems).toEqual([
+      "hue-blue must be opaque; Daylight's was used",
+      `hue-red: "crimson" is not a colour; Daylight's was used`
+    ])
+  })
+
   it.each([
     ['not JSON', 'x.json', '{ "kind": "dark", }', /not valid JSON/],
     ['an array', 'x.json', '[]', /JSON object/],
@@ -169,6 +238,48 @@ describe('parseThemeFile', () => {
     const parsed = parseThemeFile(file, text)
     expect(parsed.ok).toBe(false)
     if (!parsed.ok) expect(parsed.message).toMatch(message)
+  })
+})
+
+describe('hueForText', () => {
+  it('gives the same text the same hue every time, whatever its case or spacing', () => {
+    for (const tag of ['floti', 'helm', 'notes', 'journal', 'design']) {
+      expect(hueForText(tag)).toBe(hueForText(tag))
+      expect(hueForText(` ${tag.toUpperCase()} `)).toBe(hueForText(tag))
+    }
+  })
+
+  it('is fixed across releases for a known tag, so a tag keeps its colour after a restart or an update', () => {
+    // Pinned: changing the hash recolours every tag a user has.
+    expect(['floti', 'helm', 'notes', 'reference', 'journal', 'task'].map(hueForText)).toMatchInlineSnapshot(`
+      [
+        "amber",
+        "violet",
+        "red",
+        "blue",
+        "green",
+        "orange",
+      ]
+    `)
+  })
+
+  it('spreads different tags across the whole palette', () => {
+    const tags = Array.from({ length: 800 }, (_, i) => `tag-${String(i)}`)
+    const counts = new Map<string, number>()
+    for (const tag of tags) {
+      const hue = hueForText(tag)
+      counts.set(hue, (counts.get(hue) ?? 0) + 1)
+    }
+    const share = tags.length / PALETTE_HUES.length
+    for (const hue of PALETTE_HUES) {
+      expect(counts.get(hue) ?? 0, hue).toBeGreaterThan(share * 0.7)
+      expect(counts.get(hue) ?? 0, hue).toBeLessThan(share * 1.3)
+    }
+  })
+
+  it('tells apart tags that differ by one character', () => {
+    const hues = new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l'].map((x) => hueForText(`proj-${x}`)))
+    expect(hues.size).toBeGreaterThanOrEqual(5)
   })
 })
 
@@ -294,5 +405,18 @@ describe('user themes on disk', () => {
     const copy = must(read.themes.find((t) => t.id === 'graphite-copy'))
     expect(copy).toMatchObject({ name: 'Graphite copy', kind: 'dark', problems: [] })
     expect(copy.tokens).toEqual(graphite.tokens)
+  })
+
+  it('writes every palette hue into a duplicate, with the shades on screen', () => {
+    const nocturne = must(BUILTIN_THEMES.find((t) => t.id === 'nocturne'))
+    const written = JSON.parse(readFileSync(writeThemeCopy(dir, nocturne), 'utf8')) as { colors: Record<string, string> }
+    for (const hue of PALETTE_HUES) expect(written.colors[hueToken(hue)], hue).toBe(nocturne.tokens[hueToken(hue)])
+    const copy = must(readUserThemes(dir).themes.find((t) => t.id === 'nocturne-copy'))
+    expect(copy.tokens).toEqual(nocturne.tokens)
+    expect(copy.problems).toEqual([])
+  })
+
+  it('names the palette in the README it seeds', () => {
+    for (const hue of PALETTE_HUES) expect(THEMES_README).toContain(`\`hue-${hue}\``)
   })
 })

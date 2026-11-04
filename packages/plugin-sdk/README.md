@@ -716,7 +716,8 @@ before the plugin's own styles, and writes the theme onto `<html>`:
   `surface-raised`, `surface-sunken`, `hover`, `active`, `border`,
   `border-strong`, `fg`, `fg-muted`, `fg-subtle`, `accent`, `accent-fg`,
   `accent-soft`, `accent-soft-hover`, `accent-text`, `success`, `warn`,
-  `danger`;
+  `danger`, and the categorical palette, `hue-blue`, `hue-teal`, `hue-green`,
+  `hue-amber`, `hue-orange`, `hue-red`, `hue-pink` and `hue-violet`;
 - `--helm-radius` (the corner setting) and `--helm-radius-well` (one pixel
   rounder, for controls);
 - `--helm-row-y` and `--helm-line`, which follow the density setting, and
@@ -727,7 +728,22 @@ before the plugin's own styles, and writes the theme onto `<html>`:
 
 All of it changes in place when the user changes the theme, with no reload;
 the `theme` event follows. A page sits inside one of Helm's panels, and its
-`body` is already the panel's surface.
+`body` is already the panel's surface. `helm.theme.tokens` lists the same
+colours by the same names (`ThemeTokenName`).
+
+**The categorical palette** is for telling apart things of one kind that have
+no order or status: projects, tags, the series of a chart. Never use it for a
+status (that is `data-tone`), a selection or emphasis. Store the hue's name
+(`PaletteHue`: `"blue"`, `"teal"`, `"green"`, `"amber"`, `"orange"`, `"red"`,
+`"pink"`, `"violet"`), never a colour value, and draw it with `data-hue` or
+`var(--helm-hue-<name>)`, so it is the right shade in every theme. A hue is
+never a filled area, and never the only thing telling two items apart: they
+differ in their names too.
+
+```html
+<span class="helm-tag" data-hue="blue">Website</span>
+<span class="helm-dot" data-hue="orange"></span>
+```
 
 The primitives, so a plugin looks like the rest of Helm without copying it:
 
@@ -737,10 +753,10 @@ The primitives, so a plugin looks like the rest of Helm without copying it:
 | `helm-icon-button` | A 24px icon button. `aria-pressed="true"` for a toggled one. |
 | `helm-input`, `helm-select`, `helm-textarea` | Fields in Helm's sunken well. `aria-invalid="true"` marks one wrong. |
 | `helm-list`, `helm-row` | A list and its rows. `aria-selected="true"` or `aria-current` marks the chosen row. |
-| `helm-chip` | A borderless count or status, in a tone: `data-tone="accent|success|warn|danger"`. |
+| `helm-chip` | A borderless count or status, in a tone: `data-tone="accent|success|warn|danger"`. `data-hue="<name>"` draws it in a palette hue instead. |
 | `helm-state` | The one outlined pill: a single word that is a thing's whole status. Takes `data-tone`. |
-| `helm-dot` | A 6px dot in a tone. |
-| `helm-tag` | A hairline pill; `data-tone="accent"` for a kind. |
+| `helm-dot` | A 6px dot in a tone, or in a palette hue with `data-hue="<name>"`. |
+| `helm-tag` | A hairline pill; `data-tone="accent"` for a kind; `data-hue="<name>"` for a palette tag, the hue's tint behind its text. |
 | `helm-bar` | A row along the top of a page, with a hairline under it. |
 | `helm-rule` | A divider that fades at its ends. |
 | `helm-caps` | The small capitals label over a section. |
