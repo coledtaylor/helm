@@ -115,6 +115,33 @@ export function statusHint(
   return status.waitingFor === null ? null : `Waiting: ${status.waitingFor}`
 }
 
+/** Running sessions by what they are doing, for the status bar. */
+export interface StatusCounts {
+  working: number
+  waiting: number
+  /** Alive, and its program reports an error: never counted idle. */
+  error: number
+  /** Alive and none of the above: ready, handed back, or saying nothing. */
+  idle: number
+}
+
+/** Counts the running sessions by the state each paints. */
+export function statusCounts(
+  sessions: readonly SessionRecord[],
+  stateOf: (session: SessionRecord) => TabIndicator
+): StatusCounts {
+  const counts: StatusCounts = { working: 0, waiting: 0, error: 0, idle: 0 }
+  for (const session of sessions) {
+    if (session.status !== 'running') continue
+    const state = stateOf(session)
+    if (state === 'busy') counts.working += 1
+    else if (state === 'waiting') counts.waiting += 1
+    else if (state === 'error') counts.error += 1
+    else counts.idle += 1
+  }
+  return counts
+}
+
 /**
  * The time, re-read every `intervalMs`, for figures that age on screen.
  *

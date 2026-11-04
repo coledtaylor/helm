@@ -4,7 +4,7 @@ import { StatusBar, type StatusBarProps } from "./StatusBar";
 
 function renderBar(overrides: Partial<StatusBarProps> = {}) {
   const props: StatusBarProps = {
-    sessions: { working: 0, waiting: 0, idle: 0 },
+    sessions: { working: 0, waiting: 0, error: 0, idle: 0 },
     onShowWaiting: vi.fn(),
     mode: null,
     version: "0.4.2",
@@ -302,5 +302,28 @@ describe("StatusBar: the hosts sessions run in", () => {
     renderBar({ hosts: [] });
     expect(document.querySelectorAll("[data-status-host]")).toHaveLength(0);
     expect(segments().filter((segment) => segment === "|")).toHaveLength(2);
+  });
+});
+
+describe("StatusBar: sessions", () => {
+  it("says how many sessions report an error, in the danger tone, apart from the idle ones", () => {
+    renderBar({ sessions: { working: 1, waiting: 0, error: 1, idle: 2 } });
+    expect(segments().slice(3, 7)).toEqual([
+      "|",
+      "1 working",
+      "1 in error",
+      "2 idle",
+    ]);
+    const error = document.querySelector('[data-status-sessions="error"]');
+    expect(error?.className).toContain("text-danger");
+    expect(error?.querySelector("[aria-hidden]")?.className).toContain(
+      "bg-danger",
+    );
+  });
+
+  it("counts a lone erroring session as running, not as none", () => {
+    renderBar({ sessions: { working: 0, waiting: 0, error: 1, idle: 0 } });
+    expect(segments()).toContain("1 in error");
+    expect(segments()).not.toContain("No sessions running");
   });
 });

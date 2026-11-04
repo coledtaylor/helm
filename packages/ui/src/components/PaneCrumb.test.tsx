@@ -24,11 +24,17 @@ describe('PaneCrumb status', () => {
     expect(status?.className).toContain('text-danger')
   })
 
-  it('the place keeps its room while the status gives way', () => {
+  it('the place and branch keep their room while the status takes what is left', () => {
     const { container } = render(
-      <PaneCrumb place="reporter" status={{ text: 'Working · 3s', tone: 'accent' }} />
+      <PaneCrumb place="reporter" branch="main" status={{ text: 'Working · 3s', tone: 'accent' }} />
     )
     const place = container.querySelector<HTMLElement>('[data-crumb="place"]')
     expect(place?.className).toContain('shrink-0')
+    // A zero basis: the status grows into the room left over and never claims
+    // its text's width from the branch beside it.
+    const status = container.querySelector<HTMLElement>('[data-crumb="status"]')
+    expect(status?.className).toContain('basis-0')
+    expect(status?.className).toContain('flex-1')
+    expect(status?.className).toContain('text-right')
   })
 })

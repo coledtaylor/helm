@@ -315,7 +315,7 @@ describe('the usage display control', () => {
         <>
           <SettingsPane {...paneProps({ section: 'general', usageDisplay, onUsageDisplayChange: write, hasCostEstimate: true })} />
           <StatusBar
-            sessions={{ working: 0, waiting: 0, idle: 0 }}
+            sessions={{ working: 0, waiting: 0, error: 0, idle: 0 }}
             onShowWaiting={vi.fn()}
             mode={null}
             version="1.2.0"

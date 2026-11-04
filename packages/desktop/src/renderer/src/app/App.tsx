@@ -242,6 +242,7 @@ import {
   crumbStatus,
   indicatorOf,
   sessionNote,
+  statusCounts as countSessionStates,
   statusHint,
   useNow,
 } from "./sessionView";
@@ -3167,14 +3168,7 @@ export function App(): JSX.Element {
   /** Helm's live sessions by what they are doing, for the status bar. */
   const running = sessions.filter((session) => session.status === "running");
   const waiting = running.filter((session) => stateOf(session) === "waiting");
-  const working = running.filter(
-    (session) => stateOf(session) === "busy",
-  ).length;
-  const statusCounts = {
-    working,
-    waiting: waiting.length,
-    idle: running.length - waiting.length - working,
-  };
+  const statusCounts = countSessionStates(running, stateOf);
 
   /** "Needs you", pressed: the next waiting session after the one in front. */
   const showWaiting = (): void => {

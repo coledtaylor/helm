@@ -10,12 +10,13 @@ import { UsageStatus } from "./UsageStatus";
 
 export interface StatusBarProps {
   /**
-   * Helm's own live sessions, by what they are doing. `idle` counts every
-   * session that is alive and not working or waiting - one that has handed
-   * back with a background task still running, and one that has not said
-   * anything yet, as well as one that is simply ready.
+   * Helm's own live sessions, by what they are doing. `error` counts those
+   * whose program reports an error. `idle` counts every other session that is
+   * alive and not working or waiting - one that has handed back with a
+   * background task still running, and one that has not said anything yet, as
+   * well as one that is simply ready.
    */
-  sessions: { working: number; waiting: number; idle: number };
+  sessions: { working: number; waiting: number; error: number; idle: number };
   /** Brings the next session that is waiting on you to the front. */
   onShowWaiting: () => void;
   /**
@@ -127,7 +128,8 @@ export function StatusBar({
   plugins = [],
   hosts = [],
 }: StatusBarProps): JSX.Element {
-  const total = sessions.working + sessions.waiting + sessions.idle;
+  const total =
+    sessions.working + sessions.waiting + sessions.error + sessions.idle;
   return (
     // No island and no border: the status bar is the one strip that sits
     // directly on the canvas (DESIGN.md), a caption under the islands rather
@@ -218,6 +220,15 @@ export function StatusBar({
               <span aria-hidden className="size-1.5 rounded-full bg-warn" />
               {sessions.waiting} needs you
             </button>
+          )}
+          {sessions.error > 0 && (
+            <span
+              data-status-sessions="error"
+              className="flex shrink-0 items-center gap-1.5 text-danger"
+            >
+              <span aria-hidden className="size-1.5 rounded-full bg-danger" />
+              {sessions.error} in error
+            </span>
           )}
           {sessions.idle > 0 && (
             <span

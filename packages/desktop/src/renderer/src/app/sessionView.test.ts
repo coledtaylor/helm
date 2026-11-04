@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionActivity, SessionActivityState, SessionRecord } from '@helm/core/types'
-import { crumbStatus, indicatorOf, sessionNote, statusHint } from './sessionView'
+import { crumbStatus, indicatorOf, sessionNote, statusCounts, statusHint } from './sessionView'
 
 function session(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -111,5 +111,26 @@ describe('what the tree row and the crumb say', () => {
     expect(crumbStatus(ended, 'ended', null, now)).toEqual({ text: 'Ended after 3h', tone: 'subtle' })
     const failed = session({ status: 'exited', exitCode: 3, durationMs: 5_000 })
     expect(crumbStatus(failed, 'failed', null, now)).toEqual({ text: 'Exited 3', tone: 'danger' })
+  })
+})
+
+describe('statusCounts', () => {
+  it('counts a session whose program reports an error as in error, never as idle', () => {
+    const states = new Map<number, ReturnType<typeof indicatorOf>>([
+      [1, 'busy'],
+      [2, 'waiting'],
+      [3, 'error'],
+      [4, 'idle'],
+      [5, 'running'],
+      [6, 'shell']
+    ])
+    const running = [...states.keys()].map((id) => session({ id }))
+    const ended = session({ id: 7, status: 'exited', exitCode: 0 })
+    expect(statusCounts([...running, ended], (each) => states.get(each.id) ?? 'ended')).toEqual({
+      working: 1,
+      waiting: 1,
+      error: 1,
+      idle: 3
+    })
   })
 })

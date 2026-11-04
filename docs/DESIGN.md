@@ -605,7 +605,8 @@ overrides the gate; keep it.
   offer in `accent` text), a hairline, "claude 2.1.288" - or "claude CLI not
   found" in `warn`. The two versions lead because they are what the bar is read
   for when something is off. After another hairline come your sessions, each
-  count with its dot ("2 working", "1 needs you" in `warn`, "2 idle" with the
+  count with its dot ("2 working", "1 needs you" in `warn`, "1 in error" in
+  `danger` for a session whose program reports an error, "2 idle" with the
   idle ring), or "No sessions running". On the right, the plan's usage. The scan
   time is in Settings: it is a fact about Helm nobody acts on.
 - **Section labels**: the 10px/600 caps label style, everywhere a section
