@@ -4,7 +4,9 @@ import { contrastRatio, formatColor, mix, parseColor, withAlpha, type Rgba } fro
 /**
  * Themes: what one is, the three Helm ships, and how a file becomes one.
  *
- * A theme is the nineteen colours the chrome is painted with and nothing else.
+ * A theme is the twenty-seven colours the chrome is painted with and nothing
+ * else: nineteen roles - grounds, edges, text, accent, status - and the eight
+ * hues of the categorical palette.
  * Two things are deliberately **not** in it:
  *
  * - **The terminal.** Its ground and its 24-bit palette are the configuration
@@ -22,7 +24,7 @@ import { contrastRatio, formatColor, mix, parseColor, withAlpha, type Rgba } fro
 /**
  * Every colour a theme sets, by the name it has in a theme file and - with a
  * `--helm-` prefix - as a CSS custom property. Order is the order a duplicated
- * theme file lists them in: grounds, edges, text, accent, status.
+ * theme file lists them in: grounds, edges, text, accent, status, palette.
  */
 export const THEME_TOKENS = [
   'bg',
@@ -43,13 +45,84 @@ export const THEME_TOKENS = [
   'accent-text',
   'success',
   'warn',
-  'danger'
+  'danger',
+  'hue-blue',
+  'hue-teal',
+  'hue-green',
+  'hue-amber',
+  'hue-orange',
+  'hue-red',
+  'hue-pink',
+  'hue-violet'
 ] as const
 
 export type ThemeToken = (typeof THEME_TOKENS)[number]
 export type ThemeTokens = Record<ThemeToken, string>
 export type ThemeKind = 'dark' | 'light'
 export const THEME_KINDS: readonly ThemeKind[] = ['dark', 'light']
+
+/**
+ * The categorical palette: eight hues for telling apart things of one kind
+ * that have no order and no status - projects, tags, chart series. Never a
+ * status, a selection or emphasis; those are the accent and the three status
+ * colours. Each is a theme token, `hue-<name>`, so every theme has its own
+ * shade of it and a user theme may change any one.
+ *
+ * Named by hue, not by number, because a plugin stores the name (a project's
+ * colour is `"blue"`) and the name has to mean the same colour in every theme.
+ * The `hue-` prefix keeps them apart from Tailwind's own `blue-500` names.
+ *
+ * One shade per hue per theme serves as a mark and as text, like `success`:
+ * `theme.test.ts` holds each to 4.5:1 on `surface`, on `surface-raised` and on
+ * its own tag tint, and every pair in a theme to `PALETTE_MIN_DISTANCE` apart.
+ */
+export const PALETTE_HUES = ['blue', 'teal', 'green', 'amber', 'orange', 'red', 'pink', 'violet'] as const
+export type PaletteHue = (typeof PALETTE_HUES)[number]
+
+/** A palette hue's token: `blue` is `hue-blue`, painted as `--helm-hue-blue`. */
+export function hueToken(hue: PaletteHue): `hue-${PaletteHue}` {
+  return `hue-${hue}`
+}
+
+/**
+ * How much of a hue a palette tag's tint is, over the island: the weight the
+ * built-ins give their accent tint, per kind. The primitives (`helm.css`) and
+ * Helm's own tags (`ui/lib/hues.ts`) mix at these, and the floors are measured
+ * on the result.
+ */
+export const HUE_TINT_ALPHA: Readonly<Record<ThemeKind, number>> = { dark: 0.14, light: 0.1 }
+
+/**
+ * The smallest OKLab distance between two hues of one theme
+ * (`colorDistance`). Below it, two tags side by side read as one colour.
+ */
+export const PALETTE_MIN_DISTANCE = 0.07
+
+/**
+ * The hue a piece of text is drawn in: the same for the same text, in every
+ * pane, note and run, and spread evenly across the palette for different
+ * text. Case and surrounding space are ignored, so `#Floti` and `#floti` are
+ * one colour.
+ *
+ * FNV-1a over the text's UTF-16 units, then a finalizer so the low bits the
+ * modulo reads depend on every character.
+ */
+export function hueForText(text: string): PaletteHue {
+  const key = text.trim().toLowerCase()
+  let hash = 0x811c9dc5
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  hash ^= hash >>> 16
+  hash = Math.imul(hash, 0x85ebca6b)
+  hash ^= hash >>> 13
+  hash = Math.imul(hash, 0xc2b2ae35)
+  hash ^= hash >>> 16
+  const hue = PALETTE_HUES[(hash >>> 0) % PALETTE_HUES.length]
+  // The modulo keeps the index in range; this is for the type checker.
+  return hue ?? 'blue'
+}
 
 /**
  * The tokens that may be translucent. Everything else is a ground or a text
@@ -143,6 +216,14 @@ const SHADOW: Record<ThemeKind, string> = {
  * and a lighter well, since 6px of canvas between white islands reads as a
  * seam where 8px read as a gutter. `fg-subtle` holds 4.7:1 on white, where the
  * 11px chip text binds.
+ *
+ * Each palette was solved in OKLCH: one hue angle per name (blue 255, teal
+ * 190, green 145, amber 84, orange 50, red 22, pink 345, violet 300), the
+ * lightness raised on a dark theme and lowered on a light one until the shade
+ * clears 4.7:1 on the island, the raised ground and its tag tint, with amber
+ * and orange lifted on the dark themes so neither is taken for red. Graphite's
+ * are a step lighter and a little greyer than Nocturne's, for its lighter
+ * raised ground and its neutral cast.
  */
 export const BUILTIN_THEMES: readonly ThemeDefinition[] = [
   builtin('nocturne', 'Nocturne', 'dark', {
@@ -164,7 +245,15 @@ export const BUILTIN_THEMES: readonly ThemeDefinition[] = [
     'accent-text': '#d2cefd',
     success: '#8fbf7f',
     warn: '#d9b36c',
-    danger: '#d97c76'
+    danger: '#d97c76',
+    'hue-blue': '#6fa7ee',
+    'hue-teal': '#4ebcb6',
+    'hue-green': '#72b875',
+    'hue-amber': '#dfb459',
+    'hue-orange': '#f19560',
+    'hue-red': '#e27a78',
+    'hue-pink': '#e185ba',
+    'hue-violet': '#b191ea'
   }),
   builtin('graphite', 'Graphite', 'dark', {
     bg: '#25282e',
@@ -185,7 +274,15 @@ export const BUILTIN_THEMES: readonly ThemeDefinition[] = [
     'accent-text': '#bbd7ff',
     success: '#85c28b',
     warn: '#e3b262',
-    danger: '#e57a7c'
+    danger: '#e57a7c',
+    'hue-blue': '#7daff0',
+    'hue-teal': '#64c2bc',
+    'hue-green': '#80bf82',
+    'hue-amber': '#e4bd6d',
+    'hue-orange': '#f4a171',
+    'hue-red': '#e58683',
+    'hue-pink': '#e491c0',
+    'hue-violet': '#b89beb'
   }),
   builtin('daylight', 'Daylight', 'light', {
     bg: '#e6e8ee',
@@ -206,7 +303,15 @@ export const BUILTIN_THEMES: readonly ThemeDefinition[] = [
     'accent-text': '#5a4da8',
     success: '#2f7a43',
     warn: '#9a6b12',
-    danger: '#c03b38'
+    danger: '#c03b38',
+    'hue-blue': '#1669c4',
+    'hue-teal': '#0e7571',
+    'hue-green': '#227a2d',
+    'hue-amber': '#876409',
+    'hue-orange': '#ab4f04',
+    'hue-red': '#c1313c',
+    'hue-pink': '#b03c86',
+    'hue-violet': '#7f51c1'
   })
 ]
 

@@ -3,7 +3,7 @@
  *
  * Served at `/__helm/helm.css` on every plugin origin and linked at the top of
  * every page's `<head>`, before the plugin's own styles. The colours are the
- * nineteen theme tokens the bridge writes onto `<html>` as `--helm-*` and
+ * twenty-seven theme tokens the bridge writes onto `<html>` as `--helm-*` and
  * rewrites when the theme changes, so a page drawn with these classes follows
  * Helm without a reload; `--helm-radius` and `data-density` arrive the same
  * way, so corners and row height follow their settings too.
@@ -435,6 +435,65 @@
     border-color: transparent;
     background: var(--helm-accent-soft);
     color: var(--helm-accent-text);
+  }
+
+  /* ------------------------------------------------------------------------
+   * The categorical palette, by name: `data-hue="blue"` on a tag, chip or dot
+   * draws it in that hue's shade for the theme on screen, so a plugin stores
+   * a name and never a colour. For telling apart things of one kind with no
+   * order or status (projects, tags, series), never for status, selection or
+   * emphasis - those are `data-tone`. A palette tag is the accent tag's shape
+   * in the hue: its tint behind its text, no border. The tint's weight is the
+   * one the floors are measured at (core `HUE_TINT_ALPHA`).
+   * ---------------------------------------------------------------------- */
+  :root {
+    --helm-hue-tint: 10%;
+  }
+
+  :root.dark {
+    --helm-hue-tint: 14%;
+  }
+
+  [data-hue='blue'] {
+    --helm-hue: var(--helm-hue-blue);
+  }
+
+  [data-hue='teal'] {
+    --helm-hue: var(--helm-hue-teal);
+  }
+
+  [data-hue='green'] {
+    --helm-hue: var(--helm-hue-green);
+  }
+
+  [data-hue='amber'] {
+    --helm-hue: var(--helm-hue-amber);
+  }
+
+  [data-hue='orange'] {
+    --helm-hue: var(--helm-hue-orange);
+  }
+
+  [data-hue='red'] {
+    --helm-hue: var(--helm-hue-red);
+  }
+
+  [data-hue='pink'] {
+    --helm-hue: var(--helm-hue-pink);
+  }
+
+  [data-hue='violet'] {
+    --helm-hue: var(--helm-hue-violet);
+  }
+
+  :is(.helm-chip, .helm-dot)[data-hue] {
+    --helm-tone: var(--helm-hue);
+  }
+
+  .helm-tag[data-hue] {
+    border-color: transparent;
+    background: color-mix(in srgb, var(--helm-hue) var(--helm-hue-tint), transparent);
+    color: var(--helm-hue);
   }
 
   /* ------------------------------------------------------------------------

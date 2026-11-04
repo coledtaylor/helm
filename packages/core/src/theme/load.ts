@@ -108,6 +108,11 @@ of the theme on screen here. A theme can also say only what it changes:
 - Colours are \`#rrggbb\`, \`#rrggbbaa\` or \`rgb()\`. Only \`border\`,
   \`border-strong\`, \`accent-soft\` and \`accent-soft-hover\` may be
   translucent; grounds and text must be solid.
+- Eight colours are the categorical palette, used to tell apart things of
+  one kind such as tags and projects: \`hue-blue\`, \`hue-teal\`,
+  \`hue-green\`, \`hue-amber\`, \`hue-orange\`, \`hue-red\`, \`hue-pink\` and
+  \`hue-violet\`. They are solid too, and each is drawn as text on the
+  island, so keep it readable there.
 - The file name is the theme's id: \`My Theme.json\` is \`my-theme\`.
 
 The terminal's colours are not part of a theme. They are fixed so that Claude

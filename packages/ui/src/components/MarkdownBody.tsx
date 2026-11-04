@@ -2,6 +2,7 @@ import type { JSX, MouseEvent } from 'react'
 import { useLayoutEffect, useMemo, useRef } from 'react'
 import type { RenderedMarkdown } from '@helm/core'
 import { cn } from '../lib/cn'
+import { tagHue } from '../lib/hues'
 import { ListIcon } from './icons'
 
 /**
@@ -238,6 +239,10 @@ export function MarkdownBody({
  * decides whether the skill is ever selected. Both are the same thing - the
  * metadata a reader needs without scrolling - and neither should ever be raw
  * YAML on screen.
+ *
+ * Each tag is a palette tag (DESIGN.md "The categorical palette"): its hue
+ * comes from its text, so `#floti` is one colour in every note, pane and run,
+ * and the `#` and the words stay what tells two tags apart.
  */
 export function FrontmatterChips({
   fields,
@@ -255,15 +260,19 @@ export function FrontmatterChips({
     >
       {fields.map((chip) =>
         chip.key === 'tags' ? (
-          chip.values.map((value) => (
-            <span
-              key={`tag-${value}`}
-              data-chip="tags"
-              className="rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] text-accent-text"
-            >
-              #{value}
-            </span>
-          ))
+          chip.values.map((value) => {
+            const { hue, className } = tagHue(value)
+            return (
+              <span
+                key={`tag-${value}`}
+                data-chip="tags"
+                data-hue={hue}
+                className={cn('rounded-full px-2 py-0.5 text-[10.5px]', className)}
+              >
+                #{value}
+              </span>
+            )
+          })
         ) : (
           <span
             key={chip.key}

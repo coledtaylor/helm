@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HelmBridge, HelmContext, HelmError, HelmTheme } from '@coledtaylor/helm-plugin-sdk'
+import { BUILTIN_THEMES, PALETTE_HUES, pluginThemeOf, resolveTheme, type ThemeKind } from '@helm/core/types'
 import type { PluginFetchRequest, PluginFetchResponse } from '../../shared/ipc'
 import { installBridge } from './bridge'
 import { CONNECT, HELLO, contextName, type FrameMessage } from './wire'
@@ -413,6 +414,29 @@ describe('events', () => {
     expect(root.style.getPropertyValue('--helm-bg')).toBe('#ffffff')
     expect(root.style.getPropertyValue('--helm-radius')).toBe('2px')
     expect(helm.theme).toEqual(LIGHT)
+  })
+
+  it('carry the palette onto <html> as --helm-hue-<name> in the theme on screen, and rewrite it in place on a change', () => {
+    const themeFor = (kind: ThemeKind, id: string): HelmTheme =>
+      pluginThemeOf(
+        resolveTheme({ preference: kind, systemDark: kind === 'dark', themeDark: id, themeLight: id, accentColor: null }, BUILTIN_THEMES),
+        { cornerRadius: 3, density: 'comfortable' }
+      )
+    const nocturne = themeFor('dark', 'nocturne')
+    const { win, helm } = page(PANEL, JSON.stringify({ theme: nocturne }))
+    const root = win.document.documentElement
+    const painted = (): string[] => PALETTE_HUES.map((hue) => root.style.getPropertyValue(`--helm-hue-${hue}`))
+    const listed = (theme: HelmTheme): string[] => PALETTE_HUES.map((hue) => theme.tokens[`hue-${hue}`])
+    expect(painted()).toEqual(listed(nocturne))
+    expect(listed(helm.theme)).toEqual(listed(nocturne))
+
+    const port = connect(win)
+    for (const next of [themeFor('dark', 'graphite'), themeFor('light', 'daylight')]) {
+      port.postMessage({ t: 'event', name: 'theme', data: next })
+      expect(painted()).toEqual(listed(next))
+      expect(listed(helm.theme)).toEqual(listed(next))
+    }
+    expect(new Set(painted()).size).toBe(PALETTE_HUES.length)
   })
 
   it('say visibility only when it changes', () => {

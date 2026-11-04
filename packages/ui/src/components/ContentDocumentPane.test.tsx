@@ -2,8 +2,10 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContentDocument, ContentFile, ContentTree, RenderedMarkdown } from '@helm/core'
+import { hueForText, PALETTE_HUES } from '@helm/core/types'
 import { installExecCommand, installLayoutStandIns, type ExecCommandStandIn } from './CodeEditor.testkit'
 import { ContentDocumentPane, type ContentDocumentPaneProps } from './ContentDocumentPane'
+import { FrontmatterChips } from './MarkdownBody'
 import recording from './fixtures/content-documents.fixture.json'
 import { recorded } from './recorded.testkit'
 
@@ -103,6 +105,32 @@ describe('ContentDocumentPane: a note', () => {
     for (const chip of ['journal', '2026-08-10', '#helm', '#notes']) expect(screen.getByText(chip)).toBeTruthy()
     expect(document.body.textContent).not.toContain('type: journal')
     expect(document.body.textContent).not.toContain('tags: [helm')
+  })
+
+  it('draws each tag in a palette colour, the same tag text in the same colour in every note', async () => {
+    const tagged = (container: HTMLElement): Map<string, string> =>
+      new Map(
+        [...container.querySelectorAll<HTMLElement>('[data-chip="tags"]')].map((el) => [
+          el.textContent ?? '',
+          el.dataset['hue'] ?? ''
+        ])
+      )
+    const note = render(<ContentDocumentPane {...paneProps(await documentOf('notes/alpha.md'))} />)
+    const inNote = tagged(note.container)
+    expect([...inNote.keys()]).toEqual(['#helm', '#notes'])
+    for (const [text, hue] of inNote) {
+      expect(hue).toBe(hueForText(text.slice(1)))
+      const el = within(note.container).getByText(text)
+      expect(el.className).toContain(`text-hue-${hue}`)
+      expect(el.className.split(' ')).not.toContain('border')
+      expect(el.className).not.toContain('accent')
+    }
+    note.unmount()
+
+    // Another note, and the config console's header, which draw the same component.
+    const elsewhere = render(<FrontmatterChips fields={[{ key: 'tags', value: 'notes, floti', values: ['notes', 'floti'] }]} />)
+    expect(tagged(elsewhere.container).get('#notes')).toBe(inNote.get('#notes'))
+    expect(PALETTE_HUES).toContain(tagged(elsewhere.container).get('#floti'))
   })
 
   it('marks the words a search opened it on, and keeps them through a re-render', async () => {

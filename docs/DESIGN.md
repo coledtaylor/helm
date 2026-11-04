@@ -25,7 +25,8 @@ raw hex: it is a value core parsed and re-spelled, set as an inline style.
 
 ## 1. Themes
 
-A theme is nineteen colour roles and nothing else. Same roles in every theme,
+A theme is twenty-seven colour roles and nothing else: nineteen for grounds,
+edges, text, accent and status, and the eight hues of the categorical palette. Same roles in every theme,
 so every component maps 1:1 whichever is on screen. Themes are **data**, not
 CSS: the three built-ins are `BUILTIN_THEMES` in `core/theme/themes.ts`, a
 user's are JSON files, and the renderer paints the one on screen onto `<html>`
@@ -52,11 +53,21 @@ copy that drifts.
 | accent-soft-hover | `accent-soft-hover` | 26% accent           | 27% accent             | 20% accent             |
 | accent-text     | `accent-text`       | `#D2CEFD`              | `#BBD7FF`              | `#5A4DA8`              |
 | ok / warn / bad | `success` etc.      | `#8FBF7F` `#D9B36C` `#D97C76` | `#85C28B` `#E3B262` `#E57A7C` | `#2F7A43` `#9A6B12` `#C03B38` |
+| palette blue    | `hue-blue`          | `#6FA7EE`              | `#7DAFF0`              | `#1669C4`              |
+| palette teal    | `hue-teal`          | `#4EBCB6`              | `#64C2BC`              | `#0E7571`              |
+| palette green   | `hue-green`         | `#72B875`              | `#80BF82`              | `#227A2D`              |
+| palette amber   | `hue-amber`         | `#DFB459`              | `#E4BD6D`              | `#876409`              |
+| palette orange  | `hue-orange`        | `#F19560`              | `#F4A171`              | `#AB4F04`              |
+| palette red     | `hue-red`           | `#E27A78`              | `#E58683`              | `#C1313C`              |
+| palette pink    | `hue-pink`          | `#E185BA`              | `#E491C0`              | `#B03C86`              |
+| palette violet  | `hue-violet`        | `#B191EA`              | `#B89BEB`              | `#7F51C1`              |
 
 The values are the source's; this table is for reading, and
 `core/theme/theme.test.ts` is what holds every built-in to its floors - body and
 muted text at 4.5:1 on every ground they sit on, the accent at 3:1 as a mark
-and 4.5:1 as `accent-text`.
+and 4.5:1 as `accent-text`, each palette hue at 4.5:1 on the island, the raised
+ground and its own tag tint, and every two hues of a theme at least
+`PALETTE_MIN_DISTANCE` apart in OKLab.
 
 - **Nocturne** is v1's dark ramp exactly, so the default look did not move.
 - **Graphite** inverts the elevation: the canvas is *lighter* than the
@@ -90,9 +101,37 @@ file names its `kind` (or `extends` a built-in) and only the colours it
 changes; the rest come from the built-in it extends. Grounds and text must be
 opaque - `bg` and `fg-muted` are also the colours Windows paints the title-bar
 buttons with, which takes no alpha - and only the two borders and two accent
-tints may be translucent. A wrong value falls back by itself and is named in
+tints may be translucent; the palette hues are opaque like the text. A wrong
+value falls back by itself and is named in
 the Appearance pane; a file that cannot be read as a theme is skipped and named
 there too. A slot naming a theme that is gone shows the built-in of its kind.
+
+### The categorical palette
+
+Eight hues - `hue-blue`, `hue-teal`, `hue-green`, `hue-amber`, `hue-orange`,
+`hue-red`, `hue-pink`, `hue-violet` - for telling apart **things of one kind
+that have no order and no status**: projects, tags, the series of a chart. A
+plugin's project colour is one of them; a note's tag is one of them.
+
+- **Never status, selection or emphasis.** Status is `success`, `warn` and
+  `danger`; selection and emphasis are the accent. A green project is not a
+  healthy one, and a red tag is not an error. If the colour would mean
+  something, it is not a palette colour.
+- **Named, never a value.** A thing stores the name (`"blue"`) and is drawn
+  through the token - `text-hue-blue` in a component, `data-hue="blue"` or
+  `var(--helm-hue-blue)` in a plugin - so it is the right shade in every theme
+  and in every theme a user writes. A stored hex is a colour that is right in
+  one theme.
+- **Never floods.** Like the accent, a hue is text, a 6px dot, a 2px mark or a
+  tint behind its own text (a palette tag); never a filled pane, row or card.
+- **Never the only cue.** Two items a hue tells apart also differ in their
+  name or label, so the difference survives colour blindness, a greyscale
+  screenshot and a theme where two hues sit near each other.
+
+One shade per hue per theme serves as a mark and as text, like the status
+colours. Where Helm assigns a hue itself it is from the thing's own text
+(`hueForText` in core), so the same tag is the same colour in every note, pane
+and run, and different tags spread across all eight.
 
 **Native chrome follows the theme.** The window's own background (what Chromium
 shows before the first paint) and the Window Controls Overlay are repainted
@@ -321,6 +360,10 @@ overrides the gate; keep it.
 - **Tags / badges**: pills - hairline `border-strong` outline for neutral
   ones, `bg-accent-soft text-accent-text` for scope/kind badges. No borders on
   chips at row density; tone carries them (see `Chip`).
+- **Palette tag**: the accent tag's shape in a palette hue - the hue's tint
+  behind the hue's text, no border (`paletteTagClass` in `ui/lib/hues.ts`:
+  10% on a light theme, 14% on a dark one, the weights the floors are measured
+  at). A note's frontmatter tags are palette tags, each in the hue of its text.
 - **State chip**: one pill saying what something *is* rather than what it has.
   A hairline outline in a semantic tone at 40% alpha with the tone's own text
   colour, never a fill. This is the one pill that is allowed a coloured border,
@@ -1057,9 +1100,10 @@ a website inside it.
   only way a value gets in, and the value never comes back out to any page.
 
 **The primitives.** Every plugin page gets `/__helm/helm.css`, linked before
-its own styles. The theme arrives as CSS variables on `<html>` - the nineteen
-roles as `--helm-<role>` (`--helm-surface`, `--helm-fg-muted`,
-`--helm-accent-soft`, ...), `--helm-radius`, `data-density` and `data-theme`
+its own styles. The theme arrives as CSS variables on `<html>` - the
+twenty-seven roles as `--helm-<role>` (`--helm-surface`, `--helm-fg-muted`,
+`--helm-accent-soft`, ..., and the palette as `--helm-hue-blue` to
+`--helm-hue-violet`), `--helm-radius`, `data-density` and `data-theme`
 for light and dark - and is rewritten in place when the theme changes, so a
 page never reloads for it. The classes are Helm's controls by another name:
 
@@ -1069,8 +1113,8 @@ page never reloads for it. The classes are Helm's controls by another name:
 | `.helm-icon-button` | a 24px icon button; `aria-pressed="true"` for a toggle that is on |
 | `.helm-input`, `.helm-select`, `.helm-textarea` | the field well; `aria-invalid="true"` for a field in error |
 | `.helm-list`, `.helm-row` | a list and its rows at the density's height; `aria-selected` or `aria-current` is the selected row's `accent-soft` and 2px bar |
-| `.helm-chip`, `.helm-state`, `.helm-dot` | a chip carried by its tone alone, a state in a hairline outline of its tone, a 6px status dot; `data-tone` picks the tone |
-| `.helm-tag` | a label pill in outline; `data-tone="accent"` is `accent-soft` behind `accent-text` |
+| `.helm-chip`, `.helm-state`, `.helm-dot` | a chip carried by its tone alone, a state in a hairline outline of its tone, a 6px status dot; `data-tone` picks the tone, `data-hue="blue"` (any palette name) draws a chip or dot in that hue instead |
+| `.helm-tag` | a label pill in outline; `data-tone="accent"` is `accent-soft` behind `accent-text`; `data-hue="<name>"` is a palette tag, the hue's tint behind its text |
 | `.helm-bar`, `.helm-rule` | a page's bar of controls over a hairline, a divider that fades at its ends |
 | `.helm-caps`, `.helm-meta`, `.helm-mono` | the caps label, secondary text, machine data |
 | `.helm-empty` | the empty state, with `-icon`, `-title`, `-text` and `-actions` |
@@ -1141,5 +1185,7 @@ Don't:
   a filled badge
 - No theming foreign grounds - terminal and embedded documents keep their own
 - No raw hex in components; tokens only
+- No palette hue for a status, a selection or emphasis, and no stored colour
+  value for a thing - store the hue's name
 - No literal radius or gutter (`rounded-[5px]`, `gap-2` between islands) -
   the shape settings cannot reach a number written at the call site
