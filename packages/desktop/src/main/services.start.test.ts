@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { planOverlays, syncOverlay, type SyncedOverlay } from '@helm/core'
@@ -19,14 +19,13 @@ vi.mock('electron', async () => (await import('../../test/electron')).electronFa
 
 /**
  * What `createServices` - app start - does to the data directory before any
- * window exists: seeding the templates directory, and sweeping overlay shims
- * that nothing holds any more.
+ * window exists: sweeping overlay shims that nothing holds any more. The
+ * templates folder is the local host's to seed.
  */
 describe('app start', () => {
   let world: World
   let harness: PlantedHarness
   let shimRoot: string
-  let templatesDir: string
   let createServices: () => Services
 
   beforeAll(async () => {
@@ -36,7 +35,6 @@ describe('app start', () => {
     harness = plantHarness(world)
     // Where the app keeps these, by its own rule: under its data directory.
     shimRoot = join(world.dataDir, 'overlays')
-    templatesDir = join(world.dataDir, 'templates')
   })
 
   afterEach(() => removeShims(shimRoot))
@@ -64,20 +62,6 @@ describe('app start', () => {
 
   const skillThroughShim = (shim: SyncedOverlay): string =>
     readFileSync(join(shim.dir, 'skills', harness.skill, 'SKILL.md'), 'utf8')
-
-  it('seeds the templates directory on the first start and writes nothing on a later one', () => {
-    expect(existsSync(templatesDir)).toBe(false)
-
-    const first = start()
-    expect(first.templates.seeded).toBe(true)
-    expect(readdirSync(templatesDir).sort()).toEqual(['README.md', 'example'])
-    expect(existsSync(join(templatesDir, 'example', 'template.yaml'))).toBe(true)
-
-    writeFileSync(join(templatesDir, 'README.md'), 'edited by hand')
-    const second = start()
-    expect(second.templates.seeded).toBe(false)
-    expect(readFileSync(join(templatesDir, 'README.md'), 'utf8')).toBe('edited by hand')
-  })
 
   it('sweeps a shim whose owner has exited, and leaves the repository it linked', () => {
     const shim = buildShim()

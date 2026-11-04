@@ -1,6 +1,5 @@
 import type {
   LostSession,
-  PluginSessionFacts,
   RestoreOffer,
   SessionActivityState,
   SessionRecord,
@@ -145,12 +144,6 @@ export interface SessionHost {
   browserOpener: (id: number) => BrowserOpener | null
   /** Every session `browserOpener` answers for, by id and label: the share menu. */
   browserSessions: () => BrowserShare[]
-  /**
-   * Every session started since Helm opened, running or ended, oldest first,
-   * as a plugin may know it: by the id its tool calls carry, never by its row.
-   * An ended session stays after its tab closes, up to a bounded number.
-   */
-  pluginSessions: () => PluginSessionFacts[]
   /**
    * Called whenever the set of hosted sessions changes - a spawn, an exit, a
    * close - so the activity poller re-reads at once instead of on its next tick.

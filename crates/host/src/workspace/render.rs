@@ -1,5 +1,4 @@
-//! Markdown and source rendered to sanitised, highlighted HTML, the way
-//! today's app renders them in `packages/core/src/content`.
+//! Markdown and source rendered to sanitised, highlighted HTML.
 //!
 //! - [`markdown`]: a note to HTML. comrak parses GitHub-flavoured markdown,
 //!   ammonia sanitises everything the note wrote, and only then are the

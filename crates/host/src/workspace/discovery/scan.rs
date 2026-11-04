@@ -1,5 +1,4 @@
-//! Turns a list of root paths into the launcher's tree, as
-//! `packages/core/src/discovery/scan.ts` does.
+//! Turns a list of root paths into the launcher's tree.
 //!
 //! The shape it looks for, in order:
 //!   1. the root itself is a harness (`harness.yaml`) -> the harness and its

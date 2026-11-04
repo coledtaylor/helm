@@ -4,9 +4,8 @@
 //! bundled themes, and grammars of Floti's own under `grammars/` for what
 //! two-face carries only for Oniguruma (PowerShell).
 //!
-//! The languages are today's: [`ALIASES`] and [`PLAIN`] are the tables
-//! `packages/core/src/content/highlight.ts` resolves a name with, and
-//! `tests/highlighting.rs` reads that file and the app's language names and
+//! [`ALIASES`] and [`PLAIN`] are the tables a name is resolved with, and
+//! `tests/highlighting.rs` walks them and the app's language names and
 //! checks each one highlights over a client connection. A language with its
 //! own grammar in the set is highlighted with it; [`STAND_INS`] holds only the
 //! few that have none, with the nearest grammar that runs.

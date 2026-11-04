@@ -18,7 +18,7 @@ at the code it governs, and in git history.
 
 ```
 packages/
-├── core/     # headless logic: discovery, launch, config, content, usage, archive, store, layout
+├── core/     # what clients share: the host's answer shapes (types.ts), helm.db and its copy into the host (store), layout, themes, the start-up sweep
 ├── ui/       # React components
 ├── desktop/  # Electron main, preload and renderer
 └── plugin-sdk/ # manifest validator, bridge types, helm-plugin CLI, authoring guide

@@ -193,9 +193,9 @@ same inputs and expectations. A test that needs a repository makes one with
 the machine's git configuration. One that needs a link makes it with
 `link_folder`, a junction on Windows and a symlink on macOS and Linux, and
 checks that every file at its target is still there afterwards.
-`highlighting.rs` reads today's languages from
-`packages/core/src/content/highlight.ts` and `packages/ui/src/lib/languages.ts`
-when it runs, so a language the app highlights and the host does not fails it.
+`highlighting.rs` takes its languages from the host's own tables and from
+`packages/ui/src/lib/languages.ts` when it runs, so a language the app names
+and the host does not highlight fails it.
 
 The agent tools listener is tested at three levels. `src/agent_tools/tests.rs`
 drives the listener with families made in the test: loopback only, 401 before

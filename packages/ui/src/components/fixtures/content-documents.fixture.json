@@ -1,0 +1,376 @@
+{
+  "tree": {
+    "scope": {
+      "kind": "harness",
+      "path": "<root>",
+      "label": "vault"
+    },
+    "roots": [
+      {
+        "kind": "notes",
+        "offer": "named",
+        "relPath": "notes",
+        "path": "<root>/notes",
+        "label": "Notes",
+        "files": 4
+      }
+    ],
+    "files": [
+      {
+        "path": "<root>/notes/data.json",
+        "relPath": "notes/data.json",
+        "root": "notes",
+        "rootKind": "notes",
+        "kind": "data",
+        "slug": "data",
+        "ext": "json",
+        "title": "data.json",
+        "size": 84,
+        "mtimeMs": 1793773140396.0115,
+        "noteType": null,
+        "date": null,
+        "tags": []
+      },
+      {
+        "path": "<root>/notes/lesson.html",
+        "relPath": "notes/lesson.html",
+        "root": "notes",
+        "rootKind": "notes",
+        "kind": "html",
+        "slug": "lesson",
+        "ext": "html",
+        "title": "lesson",
+        "size": 24,
+        "mtimeMs": 1793773140396.0115,
+        "noteType": null,
+        "date": null,
+        "tags": []
+      },
+      {
+        "path": "<root>/notes/alpha.md",
+        "relPath": "notes/alpha.md",
+        "root": "notes",
+        "rootKind": "notes",
+        "kind": "markdown",
+        "slug": "alpha",
+        "ext": "md",
+        "title": "Alpha note",
+        "size": 154,
+        "mtimeMs": 1793773140395.4348,
+        "noteType": "journal",
+        "date": "2026-08-10",
+        "tags": [
+          "helm",
+          "notes"
+        ]
+      },
+      {
+        "path": "<root>/notes/second.md",
+        "relPath": "notes/second.md",
+        "root": "notes",
+        "rootKind": "notes",
+        "kind": "markdown",
+        "slug": "second",
+        "ext": "md",
+        "title": "Second",
+        "size": 9,
+        "mtimeMs": 1793773140395.4348,
+        "noteType": null,
+        "date": null,
+        "tags": []
+      }
+    ],
+    "errors": [],
+    "scannedAt": "2026-11-04T06:19:00.399Z",
+    "tookMs": 3
+  },
+  "documents": {
+    "notes/data.json": {
+      "file": {
+        "path": "<root>/notes/data.json",
+        "relPath": "notes/data.json",
+        "root": "notes",
+        "rootKind": "notes",
+        "kind": "data",
+        "slug": "data",
+        "ext": "json",
+        "title": "data.json",
+        "size": 84,
+        "mtimeMs": 1793773140396.0115,
+        "noteType": null,
+        "date": null,
+        "tags": []
+      },
+      "content": {
+        "path": "<root>/notes/data.json",
+        "exists": true,
+        "content": "{\n  \"outer\": {\n    \"inner\": \"a value long enough to wrap when wrapping is on\"\n  }\n}\n",
+        "hash": "b363facdc02d86ae36f4a9abc72e067befd74cce0107ed311fcfdddb95c884e4",
+        "size": 84,
+        "mtimeMs": 1793773140396.0115,
+        "binary": false
+      },
+      "rendered": null,
+      "error": null
+    },
+    "notes/lesson.html": {
+      "file": {
+        "path": "<root>/notes/lesson.html",
+        "relPath": "notes/lesson.html",
+        "root": "notes",
+        "rootKind": "notes",
+        "kind": "html",
+        "slug": "lesson",
+        "ext": "html",
+        "title": "lesson",
+        "size": 24,
+        "mtimeMs": 1793773140396.0115,
+        "noteType": null,
+        "date": null,
+        "tags": []
+      },
+      "content": {
+        "path": "<root>/notes/lesson.html",
+        "exists": true,
+        "content": "<p>Read [[second]].</p>\n",
+        "hash": "c4d6caa5180a4d052c400603185dceb9727d7dceff137359da4bcc991347c4a1",
+        "size": 24,
+        "mtimeMs": 1793773140396.0115,
+        "binary": false
+      },
+      "rendered": null,
+      "error": null
+    },
+    "notes/alpha.md": {
+      "file": {
+        "path": "<root>/notes/alpha.md",
+        "relPath": "notes/alpha.md",
+        "root": "notes",
+        "rootKind": "notes",
+        "kind": "markdown",
+        "slug": "alpha",
+        "ext": "md",
+        "title": "Alpha note",
+        "size": 154,
+        "mtimeMs": 1793773140395.4348,
+        "noteType": "journal",
+        "date": "2026-08-10",
+        "tags": [
+          "helm",
+          "notes"
+        ]
+      },
+      "content": {
+        "path": "<root>/notes/alpha.md",
+        "exists": true,
+        "content": "---\ntype: journal\ndate: 2026-08-10\ntags: [helm, notes]\n---\n\n# Alpha note\n\nRead [[second]], then [[unwritten]], then [the docs](https://example.com/page).\n",
+        "hash": "e91cb3ad49cc356b6da69b56bada53f30b8b31892ef9322a534cf8772087a4e2",
+        "size": 154,
+        "mtimeMs": 1793773140395.4348,
+        "binary": false
+      },
+      "rendered": {
+        "html": "<h1 data-heading=\"alpha-note\">Alpha note</h1>\n<p>Read <a class=\"wikilink\" href=\"#\" data-wikilink=\"second\" data-wikilink-path=\"<root>/notes/second.md\" title=\"<root>/notes/second.md\">second</a>, then <a class=\"wikilink wikilink-broken\" href=\"#\" data-wikilink=\"unwritten\" data-wikilink-broken=\"true\" title=\"No note called “unwritten” in this scope yet\">unwritten</a>, then <a href=\"https://example.com/page\">the docs</a>.</p>",
+        "frontmatter": {
+          "present": true,
+          "fields": [
+            {
+              "key": "type",
+              "value": "journal",
+              "values": [
+                "journal"
+              ]
+            },
+            {
+              "key": "date",
+              "value": "2026-08-10",
+              "values": [
+                "2026-08-10"
+              ]
+            },
+            {
+              "key": "tags",
+              "value": "helm, notes",
+              "values": [
+                "helm",
+                "notes"
+              ]
+            }
+          ],
+          "raw": "type: journal\ndate: 2026-08-10\ntags: [helm, notes]",
+          "error": null,
+          "endLine": 5
+        },
+        "headings": [
+          {
+            "depth": 1,
+            "text": "Alpha note",
+            "slug": "alpha-note"
+          }
+        ],
+        "links": [
+          {
+            "target": "second",
+            "label": "second",
+            "heading": null,
+            "resolved": "<root>/notes/second.md"
+          },
+          {
+            "target": "unwritten",
+            "label": "unwritten",
+            "heading": null,
+            "resolved": null
+          }
+        ],
+        "tags": [],
+        "words": 13,
+        "counts": {
+          "tables": 0,
+          "taskItems": 0,
+          "taskItemsChecked": 0,
+          "codeBlocks": 0,
+          "highlightedBlocks": 0,
+          "callouts": 0,
+          "wikilinks": 2,
+          "brokenWikilinks": 1,
+          "tags": 0,
+          "headings": 1
+        },
+        "unknownLanguages": [],
+        "tookMs": 5
+      },
+      "error": null
+    },
+    "notes/second.md": {
+      "file": {
+        "path": "<root>/notes/second.md",
+        "relPath": "notes/second.md",
+        "root": "notes",
+        "rootKind": "notes",
+        "kind": "markdown",
+        "slug": "second",
+        "ext": "md",
+        "title": "Second",
+        "size": 9,
+        "mtimeMs": 1793773140395.4348,
+        "noteType": null,
+        "date": null,
+        "tags": []
+      },
+      "content": {
+        "path": "<root>/notes/second.md",
+        "exists": true,
+        "content": "# Second\n",
+        "hash": "797e649f79050c5aae111c0f55d82376a57d7b3a227af67be93c3158c2e1999f",
+        "size": 9,
+        "mtimeMs": 1793773140395.4348,
+        "binary": false
+      },
+      "rendered": {
+        "html": "<h1 data-heading=\"second\">Second</h1>",
+        "frontmatter": {
+          "present": false,
+          "fields": [],
+          "raw": "",
+          "error": null,
+          "endLine": 0
+        },
+        "headings": [
+          {
+            "depth": 1,
+            "text": "Second",
+            "slug": "second"
+          }
+        ],
+        "links": [],
+        "tags": [],
+        "words": 1,
+        "counts": {
+          "tables": 0,
+          "taskItems": 0,
+          "taskItemsChecked": 0,
+          "codeBlocks": 0,
+          "highlightedBlocks": 0,
+          "callouts": 0,
+          "wikilinks": 0,
+          "brokenWikilinks": 0,
+          "tags": 0,
+          "headings": 1
+        },
+        "unknownLanguages": [],
+        "tookMs": 0
+      },
+      "error": null
+    }
+  },
+  "draftPreview": {
+    "html": "<h1 data-heading=\"alpha-redrafted\">Alpha redrafted</h1>\n<p>Read <a class=\"wikilink wikilink-broken\" href=\"#\" data-wikilink=\"second\" data-wikilink-broken=\"true\" title=\"No note called “second” in this scope yet\">second</a>, then <a class=\"wikilink wikilink-broken\" href=\"#\" data-wikilink=\"unwritten\" data-wikilink-broken=\"true\" title=\"No note called “unwritten” in this scope yet\">unwritten</a>, then <a href=\"https://example.com/page\">the docs</a>.\nDrafted line</p>",
+    "frontmatter": {
+      "present": true,
+      "fields": [
+        {
+          "key": "type",
+          "value": "journal",
+          "values": [
+            "journal"
+          ]
+        },
+        {
+          "key": "date",
+          "value": "2026-08-10",
+          "values": [
+            "2026-08-10"
+          ]
+        },
+        {
+          "key": "tags",
+          "value": "helm, notes",
+          "values": [
+            "helm",
+            "notes"
+          ]
+        }
+      ],
+      "raw": "type: journal\ndate: 2026-08-10\ntags: [helm, notes]",
+      "error": null,
+      "endLine": 5
+    },
+    "headings": [
+      {
+        "depth": 1,
+        "text": "Alpha redrafted",
+        "slug": "alpha-redrafted"
+      }
+    ],
+    "links": [
+      {
+        "target": "second",
+        "label": "second",
+        "heading": null,
+        "resolved": null
+      },
+      {
+        "target": "unwritten",
+        "label": "unwritten",
+        "heading": null,
+        "resolved": null
+      }
+    ],
+    "tags": [],
+    "words": 15,
+    "counts": {
+      "tables": 0,
+      "taskItems": 0,
+      "taskItemsChecked": 0,
+      "codeBlocks": 0,
+      "highlightedBlocks": 0,
+      "callouts": 0,
+      "wikilinks": 2,
+      "brokenWikilinks": 2,
+      "tags": 0,
+      "headings": 1
+    },
+    "unknownLanguages": [],
+    "tookMs": 2
+  }
+}

@@ -1,57 +1,24 @@
-import { randomBytes } from 'node:crypto'
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { probeProcess } from './overlay'
 
 /**
- * The per-session MCP registration, as a file on disk and two argv words.
+ * The per-session `--mcp-config` files an earlier Helm wrote under its data
+ * directory, when it ran sessions in its own process, swept at start.
  *
- * **Never `claude mcp add-json -s local`.** That writes into the user's
- * `~/.claude.json` on every launch, under `projects[<cwd>]`, and leaves the
- * entry there afterwards - so a Helm that had been run once would keep offering
- * a browser endpoint that no longer exists, and every launch would be a write
- * into a file CLAUDE.md says Helm only reads. `--mcp-config` takes a file, the
- * file belongs to Helm, and the session that was handed it is the only thing
- * that ever sees it. Nothing of the user's is touched at all.
+ * Each carried a bearer token for that run's listener, was named
+ * `mcp-<pid>-<something unique>.json` after the process that wrote it, and was
+ * removed when its session ended. What a crash left behind is still on disk in
+ * an upgraded install, so start removes it by the rule the overlay shims are
+ * swept by: the owning process is asked about, and anything not provably gone
+ * is left alone. The local host writes its sessions' files in its own folder,
+ * never here.
  *
- * The file carries a **bearer token**, which is the reason for everything else
- * in here: it is written under Helm's own data directory rather than `%TEMP%`,
- * it is removed when the session it was written for ends, and what is left
- * behind by a crash is swept by the same rule the overlay shims are swept by -
- * the owning process is asked about, and anything not provably gone is left
- * alone.
- */
-
-/** What a session is told about one of the endpoint's servers. */
-export interface SessionMcpServer {
-  /** The name the tools appear under. One server, one name. */
-  name: string
-  /** `http://127.0.0.1:<port>/mcp…`. Loopback, always. */
-  url: string
-  /** The bearer header. This is the whole of the auth. */
-  headers: Record<string, string>
-  /**
-   * Tools on this server the session calls without asking, by the name the
-   * server lists them under: a plugin's tools its manifest marks read-only.
-   * Passed as `--allowedTools`, never written into this file. Absent is none.
-   */
-  allowedTools?: readonly string[] | undefined
-}
-
-/**
- * The file name a sweep can reason about.
- *
- * `mcp-<pid>-<something unique>.json`. The pid is in the name rather than in
- * the JSON because the sweep has to be able to decide from a directory listing:
- * reading every file to find out whether it may be deleted means parsing files
- * another process may be part-way through writing.
+ * The pid is in the name rather than in the JSON so the sweep decides from a
+ * directory listing, never by parsing a file another process may be writing.
  */
 const PREFIX = 'mcp-'
 const SUFFIX = '.json'
-
-function fileName(pid: number): string {
-  return `${PREFIX}${String(pid)}-${randomBytes(6).toString('hex')}${SUFFIX}`
-}
 
 /** The pid a file name claims, or null when it is not one of ours. */
 function pidOf(name: string): number | null {
@@ -61,66 +28,13 @@ function pidOf(name: string): number | null {
 }
 
 /**
- * Writes one session's MCP config and answers with where it went.
- *
- * The shape is the CLI's `--mcp-config` document: `mcpServers`, keyed by name,
- * `type: 'http'`. Written whole rather than merged into anything - this file
- * exists for one session and is deleted with it.
- *
- * **A list rather than one server**, because Helm serves more than one family
- * of tools on the one listener: the browser tools and the session-awareness
- * tools are separate named servers on separate routes, sharing a port and a
- * token. Which of them a session gets is decided by the settings, one tick per
- * family, and this file is the only place a session ever learns that any of
- * them exist - so a family that is switched off is simply not a key in this
- * document. An empty list writes nothing at all and answers null, which is what
- * "both off" produces and what every launch looked like before any of it.
- */
-export function writeSessionMcpConfig(
-  dir: string,
-  servers: readonly SessionMcpServer[]
-): string | null {
-  if (servers.length === 0) return null
-  mkdirSync(dir, { recursive: true })
-  const file = join(dir, fileName(process.pid))
-  writeFileSync(
-    file,
-    `${JSON.stringify(
-      {
-        mcpServers: Object.fromEntries(
-          servers.map((server) => [
-            server.name,
-            { type: 'http', url: server.url, headers: server.headers }
-          ])
-        )
-      },
-      null,
-      2
-    )}\n`
-  )
-  return file
-}
-
-/** Removes one, and says nothing if it is already gone. */
-export function removeSessionMcpConfig(file: string | null): void {
-  if (file === null) return
-  try {
-    rmSync(file, { force: true })
-  } catch {
-    // A file that could not be removed is a file the next sweep finds. It
-    // carries a token no live endpoint will accept, so leaving one is inert.
-  }
-}
-
-/**
  * What a crashed run left behind, removed - and **only** what is provably dead.
  *
- * The same asymmetry `cleanStaleShims` is built on, for a weaker reason and
- * therefore with the same answer: a leftover config file is inert bytes naming
- * a port nothing is listening on, where a file deleted out from under a live
- * session is a session whose tools stop working mid-task. So `unknown` and
- * `alive` both mean leave it. Two Helms sharing a data directory is a state
- * `paths.ts` allows, and this is what makes that safe.
+ * The same asymmetry `cleanStaleShims` is built on: a leftover config file is
+ * inert bytes naming a port nothing is listening on, where a file deleted out
+ * from under a live session is a session whose tools stop working mid-task.
+ * So `unknown` and `alive` both mean leave it. Two Helms sharing a data
+ * directory is a state `paths.ts` allows, and this is what makes that safe.
  */
 export function cleanStaleMcpConfigs(
   dir: string,
@@ -136,7 +50,6 @@ export function cleanStaleMcpConfigs(
   for (const entry of entries) {
     const pid = pidOf(entry)
     if (pid === null) continue
-    // This process's own files are not stale - `stop()` owns those.
     if (pid === process.pid) continue
     if (probe(pid) !== 'gone') continue
     try {

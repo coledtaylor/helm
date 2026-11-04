@@ -588,7 +588,7 @@ async fn a_read_of_a_file_whose_name_git_would_take_as_a_pattern_answers_for_tha
 }
 
 // ---------------------------------------------------------------------------
-// Reading (core: readFileView)
+// Reading one file
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
@@ -770,7 +770,7 @@ async fn a_project_named_by_its_short_alias_reads_as_the_project() {
 }
 
 // ---------------------------------------------------------------------------
-// Listing (core: listProjectFiles; readContentDir through files:dir)
+// Listing: a project's files, and a folder through files:dir
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]

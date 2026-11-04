@@ -23,7 +23,7 @@ import { homedir } from 'node:os'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, emitToContents, pushTheme, registerIpc } from './ipc'
 import { createClipboardText } from './clipboard'
-import { appMode, dataDir, initDataDir, mcpConfigDir, templatesDir, themesDir } from './paths'
+import { appMode, dataDir, initDataDir, mcpConfigDir, themesDir } from './paths'
 import { createThemeService } from './themes'
 import { activePty, killPty, spawnPty, windowsBuildNumber } from './pty'
 import { adoptExistingProfile, createServices, updateSettings, type Services } from './services'
@@ -353,10 +353,6 @@ function startApp(options: AppOptions = {}): void {
   if (services.staleShims > 0) {
     console.log(`removed ${String(services.staleShims)} overlay shim(s) left by the last run`)
   }
-  if (services.templates.seeded) {
-    console.log(`seeded ${String(services.templates.created.length)} template file(s) into ${templatesDir}`)
-  }
-  if (services.templates.problem !== null) console.warn(services.templates.problem)
 
   // Before the window, because the window's first colour is the theme's. The
   // preference has to reach `nativeTheme` first for the same reason: `system`

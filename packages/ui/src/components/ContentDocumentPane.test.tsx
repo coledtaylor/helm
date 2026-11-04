@@ -1,32 +1,31 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  buildWikiIndex,
-  contentScope,
-  readConfigFileContent,
-  readContentTree,
-  renderMarkdown,
-  type ContentDocument,
-  type ContentFile,
-  type ContentTree
-} from '@helm/core'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ContentDocument, ContentFile, ContentTree, RenderedMarkdown } from '@helm/core'
 import { installExecCommand, installLayoutStandIns, type ExecCommandStandIn } from './CodeEditor.testkit'
 import { ContentDocumentPane, type ContentDocumentPaneProps } from './ContentDocumentPane'
+import recording from './fixtures/content-documents.fixture.json'
+import { recorded } from './recorded.testkit'
 
 installLayoutStandIns()
 
 /**
  * One open document, in each of the surfaces it can be: a rendered note, a
  * note being edited beside its preview, a source file, and an HTML artifact.
- * Every document is what core reads and renders from a scope on disk.
+ * Every document is what the host answers, recorded, for a scope holding
+ * `notes/alpha.md` (`NOTE`), `notes/second.md` (`# Second`),
+ * `notes/data.json` (`SOURCE`) and `notes/lesson.html`
+ * (`<p>Read [[second]].</p>`). `draftPreview` is its `content:render` of
+ * `NOTE` with `Drafted line` typed at the end and its heading changed to
+ * `Alpha redrafted`.
  */
 
-let root: string
-let tree: ContentTree
+const answers = recorded<{
+  tree: ContentTree
+  documents: Record<string, ContentDocument>
+  draftPreview: RenderedMarkdown
+}>(recording)
+const tree = answers.tree
 let editing: ExecCommandStandIn
 
 const NOTE = [
@@ -43,22 +42,6 @@ const NOTE = [
 ].join('\n')
 const SOURCE = ['{', '  "outer": {', '    "inner": "a value long enough to wrap when wrapping is on"', '  }', '}', ''].join('\n')
 
-function write(rel: string, body: string): void {
-  mkdirSync(dirname(join(root, rel)), { recursive: true })
-  writeFileSync(join(root, rel), body)
-}
-
-beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), 'helm content doc-'))
-  write('notes/alpha.md', NOTE)
-  write('notes/second.md', '# Second\n')
-  write('notes/data.json', SOURCE)
-  write('notes/lesson.html', '<p>Read [[second]].</p>\n')
-  tree = readContentTree(contentScope(root, 'harness', 'vault'))
-})
-
-afterAll(() => rmSync(root, { recursive: true, force: true }))
-
 beforeEach(() => {
   editing = installExecCommand()
 })
@@ -72,17 +55,20 @@ const fileAt = (rel: string): ContentFile => {
 }
 
 /** What `content:document` answers for a file: its bytes, rendered or highlighted. */
-async function documentOf(rel: string): Promise<ContentDocument> {
-  const file = fileAt(rel)
-  const content = readConfigFileContent(file.path)
-  if (file.kind === 'markdown') {
-    const rendered = await renderMarkdown(content.content, { index: buildWikiIndex(tree.files), path: file.path })
-    return { file, content, rendered, error: null }
-  }
-  return { file, content, rendered: null, error: null }
+function documentOf(rel: string): Promise<ContentDocument> {
+  const document = answers.documents[rel]
+  if (document === undefined) throw new Error(`the fixture has no ${rel}`)
+  return Promise.resolve(document)
 }
 
-function paneProps(document: ContentDocument, overrides: Partial<ContentDocumentPaneProps> = {}): ContentDocumentPaneProps {
+describe('ContentDocumentPane: the recording', () => {
+  it('holds the bytes of NOTE and SOURCE, which the tests below type against', async () => {
+    expect((await documentOf('notes/alpha.md')).content.content).toBe(NOTE)
+    expect((await documentOf('notes/data.json')).content.content).toBe(SOURCE)
+  })
+})
+
+function paneProps(document: ContentDocument,overrides: Partial<ContentDocumentPaneProps> = {}): ContentDocumentPaneProps {
   return {
     file: document.file,
     document,
@@ -178,8 +164,7 @@ describe('ContentDocumentPane: a note', () => {
     expect(props.onDraftChange).toHaveBeenLastCalledWith(draft)
 
     // The preview is whatever main rendered from the draft it was handed.
-    const preview = await renderMarkdown(draft.replace('# Alpha note', '# Alpha redrafted'), { path: document.file.path })
-    rerender(<ContentDocumentPane {...props} preview={preview} />)
+    rerender(<ContentDocumentPane {...props} preview={answers.draftPreview} />)
     expect(screen.getByRole('heading', { level: 1, name: 'Alpha redrafted' })).toBeTruthy()
 
     // Find, undo and the wrap toggle are all editing; none of them is a save.

@@ -1,9 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { claudeConfigFileIn, readUsage } from './read'
+import { describe, expect, it } from 'vitest'
 import { nextUsageMode, parseUsage, usageView, USAGE_STALE_AFTER_MS } from './shape'
 
 /**
@@ -386,50 +381,3 @@ describe('nextUsageMode', () => {
   })
 })
 
-describe('readUsage', () => {
-  let dir: string
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'helm-usage-'))
-  })
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true })
-  })
-
-  it('finds .claude.json beside the config directory', () => {
-    mkdirSync(join(dir, '.claude'), { recursive: true })
-    writeFileSync(join(dir, '.claude.json'), JSON.stringify(claudeJson()))
-
-    expect(claudeConfigFileIn(join(dir, '.claude'))).toBe(join(dir, '.claude.json'))
-  })
-
-  it('prefers one inside the config directory when that is where it is', () => {
-    mkdirSync(join(dir, '.claude'), { recursive: true })
-    writeFileSync(join(dir, '.claude', '.claude.json'), '{}')
-
-    expect(claudeConfigFileIn(join(dir, '.claude'))).toBe(join(dir, '.claude', '.claude.json'))
-  })
-
-  it('reports a file that is not there', () => {
-    expect(readUsage(join(dir, 'nothing.json')).problem?.kind).toBe('no-file')
-  })
-
-  it('reports a half-written file rather than throwing', () => {
-    const file = join(dir, '.claude.json')
-    writeFileSync(file, '{"cachedUsageUtilization": {"fetched')
-
-    expect(readUsage(file).problem?.kind).toBe('not-json')
-  })
-
-  it('reads a real reading off the disk', () => {
-    const file = join(dir, '.claude.json')
-    writeFileSync(file, JSON.stringify(claudeJson()))
-
-    const snapshot = readUsage(file)
-
-    expect(snapshot.problem).toBeNull()
-    expect(snapshot.limits).toHaveLength(3)
-    expect(snapshot.file).toBe(file)
-  })
-})

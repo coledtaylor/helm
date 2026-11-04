@@ -11,7 +11,7 @@ import type {
 /**
  * What the effective view has to say about one file in a `.claude` tree.
  *
- * `computeEffectiveView` already knows which skills resolve, under which
+ * The effective view already knows which skills resolve, under which
  * overlay namespace, and which layer won each setting leaf. The Files view was
  * showing none of it, which left the list reading as a directory listing - and
  * a directory listing is the one thing a file explorer already does better.

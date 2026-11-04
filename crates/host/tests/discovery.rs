@@ -467,7 +467,7 @@ async fn a_git_refresh_tells_subscribers_each_projects_branch_and_counts_and_nul
 }
 
 // ---------------------------------------------------------------------------
-// core/src/discovery/scan.test.ts, "scan", through the host.
+// The scan, through the host.
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
@@ -805,8 +805,8 @@ async fn leaves_git_null_unless_asked_for_it() {
 }
 
 // ---------------------------------------------------------------------------
-// core/src/discovery/claude-inventory.test.ts, through the host: one
-// project scanned as a root, which lists itself.
+// A project's `.claude` counted, through the host: one project scanned as
+// a root, which lists itself.
 // ---------------------------------------------------------------------------
 
 async fn inventory_of(files: &[(&str, &str)]) -> ClaudeInventory {

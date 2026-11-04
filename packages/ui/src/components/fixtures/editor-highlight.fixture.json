@@ -1,0 +1,9 @@
+{
+  "lines": [
+    "<span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">{ </span><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">\"a\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#005CC5;--shiki-dark:#D19A66\">1</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\"> }</span>",
+    "<span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">{ </span><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">\"b\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#005CC5;--shiki-dark:#D19A66\">true</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\"> }</span>",
+    ""
+  ],
+  "language": "json",
+  "highlighted": true
+}

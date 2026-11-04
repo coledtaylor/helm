@@ -486,7 +486,7 @@ fn every_heading_gets_an_anchor_a_wikilink_can_aim_at() {
 }
 
 // ---------------------------------------------------------------------------
-// The tree (core's readContentTree tests).
+// The tree.
 
 #[test]
 fn the_tree_finds_the_named_roots_the_scope_root_and_nothing_inside_repos() {

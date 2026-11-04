@@ -1,5 +1,4 @@
-//! Where to point a fresh install, as `packages/core/src/discovery/roots.ts`
-//! does. The host only ever suggests: it never scans a folder the user did
+//! Where to point a fresh install. The host only ever suggests: it never scans a folder the user did
 //! not choose, and never falls back to the home folder, which would walk a
 //! decade of unrelated files on a first run.
 

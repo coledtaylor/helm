@@ -3,15 +3,13 @@ import {
   openStore,
   readSettings,
   reconcileRunningSessions,
-  seedTemplates,
   writeSettings,
   type AppSettings,
   type LostSession,
   type SavedPaneLayout,
-  type SeedResult,
   type Store
 } from '@helm/core'
-import { dbFile, shimRoot, templatesDir } from './paths'
+import { dbFile, shimRoot } from './paths'
 
 /**
  * The main process's stateful bits, in one object rather than module-level
@@ -38,11 +36,6 @@ export interface Services {
    * same reason lost sessions are: it is evidence of how the last run ended.
    */
   staleShims: number
-  /**
-   * What the templates directory needed on the way in. `seeded: false` is the
-   * ordinary case - it was already there and nothing was touched.
-   */
-  templates: SeedResult
 }
 
 export function createServices(): Services {
@@ -69,18 +62,7 @@ export function createServices(): Services {
      * establish is dead. This is still the only place they are swept: doing it
      * per launch would churn directories a session in *this* app is reading.
      */
-    staleShims: cleanStaleShims(shimRoot).length,
-    /*
-     * The shipped README and example template, written once.
-     *
-     * At start rather than lazily when the dialog opens, and for the same
-     * reason the shim sweep is here: it is a claim about the state a Helm
-     * begins in, and a directory created the first time somebody happens to
-     * open a dialog is a directory whose contents depend on what they did
-     * first. It never overwrites - the trigger is the directory being absent -
-     * so this costs one `existsSync` on every start after the first.
-     */
-    templates: seedTemplates(templatesDir)
+    staleShims: cleanStaleShims(shimRoot).length
   }
 }
 

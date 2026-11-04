@@ -1,7 +1,6 @@
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { profileDraft, profileFromYaml, profileToYaml } from '../launch/profile'
 import type { ProfileDraft } from '../types'
 import { openStore, type Store } from './db'
 import {
@@ -9,6 +8,7 @@ import {
   deleteProfile,
   findProfileByName,
   listProfiles,
+  profileDraft,
   readProfile,
   setPinnedProfiles,
   updateProfile,
@@ -112,17 +112,3 @@ describe('ordering', () => {
   })
 })
 
-describe('YAML round trip through the store', () => {
-  /** The acceptance criterion, end to end: export, delete, import, unchanged. */
-  it('export → delete → import leaves the profile intact', () => {
-    const created = createProfile(store, draft())
-    const yaml = profileToYaml(profileDraft(created))
-
-    expect(deleteProfile(store, created.id)).toBe(true)
-    expect(listProfiles(store)).toHaveLength(0)
-
-    const imported = createProfile(store, profileFromYaml(yaml))
-    expect(profileDraft(imported)).toEqual(draft())
-    expect(imported.id).not.toBe(created.id)
-  })
-})

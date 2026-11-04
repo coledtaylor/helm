@@ -2,8 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { ConfigFile, EffectiveView } from '../types'
-import { computeEffectiveView } from './effective'
+import type { ConfigFile, ConfigTree, EffectiveView } from '../types'
 import {
   computeConfigLive,
   configFileNote,
@@ -11,16 +10,18 @@ import {
   isRedactedConfigFile,
   settingsDeclaredBy
 } from './live'
-import { projectConfigScope, readConfigTree, userConfigScope } from './tree'
+import recording from './live.recorded.json'
 
 /**
  * The join between a tree and a resolution, against real directories.
  *
- * Both halves are computed by the code that computes them in the app -
- * `readConfigTree` and `computeEffectiveView` - because the thing under test is
- * the *join*, and feeding it a hand-built view would be testing it against a
- * shape rather than against an answer. The expectations are written from the
- * fixture files below, by hand, which is where the second opinion comes from.
+ * Both halves are the local host's answers - `config:tree` for the scope and
+ * `config:effective` for a session in the project - for the files each test
+ * writes, recorded in `live.recorded.json` with every path under the test's
+ * root written `<root>/...`. The thing under test is the *join*, and feeding
+ * it a hand-built view would be testing it against a shape rather than against
+ * an answer. The expectations are written from the fixture files below, by
+ * hand, which is where the second opinion comes from.
  */
 
 let root: string
@@ -47,22 +48,58 @@ function userSkill(name: string, body = 'Ponder.'): string {
   return write(home, `skills/${name}/SKILL.md`, `---\nname: ${name}\ndescription: ${body}\n---\n`)
 }
 
-/** The tree and the resolution the console shows side by side. */
+/** What a test asked for: the scope's folder, which kind of scope, and the session's overlays. */
+interface ResolutionRequest {
+  scope: string
+  user: boolean
+  overlays: string[]
+}
+
+interface RecordedResolution {
+  request: ResolutionRequest
+  tree: ConfigTree
+  view: EffectiveView
+}
+
+/** `<root>/a/b` as this OS writes it under this test's root, wherever it appears. */
+function placed<T>(value: T): T {
+  const walk = (inner: unknown): unknown => {
+    if (typeof inner === 'string') {
+      return inner.replace(/<root>((?:\/[^"'<>\s)/]+)*)/g, (_match, rest: string) =>
+        join(root, ...rest.split('/').filter(Boolean))
+      )
+    }
+    if (Array.isArray(inner)) return inner.map(walk)
+    if (inner !== null && typeof inner === 'object') {
+      return Object.fromEntries(Object.entries(inner).map(([key, item]) => [walk(key) as string, walk(item)]))
+    }
+    return inner
+  }
+  return walk(value) as T
+}
+
+/** How many resolutions the running test has asked for, so each call finds its own. */
+let asked = 0
+
+/**
+ * The tree and the resolution the console shows side by side: the host's
+ * answer for `scopePath`'s scope and for a session in the project with
+ * `overlays`, as recorded for this test's call.
+ */
 function resolve(scopePath: string, opts: { user?: boolean; overlays?: string[] } = {}): {
   files: Map<string, ConfigFile>
   view: EffectiveView
 } {
-  const scope = opts.user === true ? userConfigScope(scopePath) : projectConfigScope(scopePath)
-  const tree = readConfigTree(scope)
-  const view = computeEffectiveView({
-    cwd: project,
-    userHome: home,
-    ...(opts.overlays ? { overlays: opts.overlays } : {})
-  })
-  return { files: new Map(tree.files.map((file) => [file.relPath, file])), view }
+  const key = `${expect.getState().currentTestName ?? ''} #${String(asked++)}`
+  const found = (recording as Record<string, unknown>)[key]
+  if (found === undefined) throw new Error(`no resolution is recorded for ${key}`)
+  const answer = placed(found as RecordedResolution)
+  expect(answer.request).toEqual({ scope: scopePath, user: opts.user === true, overlays: opts.overlays ?? [] })
+  return { files: new Map(answer.tree.files.map((file) => [file.relPath, file])), view: answer.view }
 }
 
 beforeEach(() => {
+  asked = 0
   root = mkdtempSync(join(tmpdir(), 'helm-live-'))
   home = join(root, 'home')
   project = join(root, 'project')
@@ -230,9 +267,8 @@ describe('computeConfigLive: skills, commands, agents', () => {
   it('marks a skill no session in this directory composes as absent', () => {
     const elsewhere = join(root, 'elsewhere')
     skill(elsewhere, 'unreachable')
-    const scope = readConfigTree(projectConfigScope(elsewhere))
-    const view = computeEffectiveView({ cwd: project, userHome: home })
-    const file = scope.files.find((candidate) => candidate.kind === 'skill')
+    const { files, view } = resolve(elsewhere)
+    const file = [...files.values()].find((candidate) => candidate.kind === 'skill')
     expect(file).toBeDefined()
     expect(computeConfigLive(file as ConfigFile, view)?.state).toBe('absent')
   })
@@ -353,25 +389,18 @@ describe('computeConfigLive: a hook run by something other than a hooks block', 
     // Found on a real tree: `hooks/statusline.cjs` is run by `statusLine`, not
     // by an event. The directory is a convention, not a claim about what reads
     // the file.
-    const project = mkdtempSync(join(tmpdir(), 'helm-live-hook-'))
-    try {
-      const path = join(project, '.claude', 'hooks', 'statusline.cjs')
-      mkdirSync(join(path, '..'), { recursive: true })
-      writeFileSync(path, 'module.exports = () => ""\n')
-      writeFileSync(
-        join(project, '.claude', 'settings.json'),
-        JSON.stringify({ statusLine: { type: 'command', command: 'node .claude/hooks/statusline.cjs' } })
-      )
-      const tree = readConfigTree(projectConfigScope(project))
-      const view = computeEffectiveView({ cwd: project, userHome: home })
-      const file = tree.files.find((candidate) => candidate.kind === 'hook')
-      expect(file).toBeDefined()
-      const live = computeConfigLive(file as ConfigFile, view)
-      expect(live?.state).toBe('live')
-      expect(live?.references[0]?.key).toBe('statusLine.command')
-      expect(live?.hooks).toEqual([])
-    } finally {
-      rmSync(project, { recursive: true, force: true })
-    }
+    write(project, '.claude/hooks/statusline.cjs', 'module.exports = () => ""\n')
+    write(
+      project,
+      '.claude/settings.json',
+      JSON.stringify({ statusLine: { type: 'command', command: 'node .claude/hooks/statusline.cjs' } })
+    )
+    const { files, view } = resolve(project)
+    const file = [...files.values()].find((candidate) => candidate.kind === 'hook')
+    expect(file).toBeDefined()
+    const live = computeConfigLive(file as ConfigFile, view)
+    expect(live?.state).toBe('live')
+    expect(live?.references[0]?.key).toBe('statusLine.command')
+    expect(live?.hooks).toEqual([])
   })
 })

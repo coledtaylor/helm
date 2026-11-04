@@ -2673,3 +2673,142 @@ export interface DoctorReport {
   /** Set when the CLI could not be run at all. */
   error: string | null
 }
+
+// ---------------------------------------------------------------------------
+// Templates
+// ---------------------------------------------------------------------------
+
+/*
+ * The templates folder as the local host answers for it: the New Harness
+ * picker and preview, the template manager, and Save as template. The host
+ * reads and writes the folder; the window only shows these.
+ */
+
+/** One row of the picker. */
+export interface TemplateChoice {
+  /** Directory name, and what `template:` records. `minimal` for the built-in. */
+  id: string
+  label: string
+  description: string | null
+  /** `order:` from `template.yaml`. Sorted on before the label; null sorts last. */
+  order: number | null
+  /** The built-in scaffold, which has no directory behind it. */
+  builtIn: boolean
+}
+
+export interface TemplateListing {
+  /** `minimal` first and always, then the user's by `order` then label. */
+  templates: TemplateChoice[]
+  /** Where the user's templates live, so the dialog can say so. */
+  dir: string
+  /** One sentence per template that could not be read. */
+  problems: string[]
+}
+
+/** What the New Harness dialog lists under "What gets written". */
+export interface TemplatePreview {
+  template: string
+  /** Display order - the manifest first, then everything else by path. */
+  entries: string[]
+  /** The sentence under the list. */
+  note: string
+  problems: string[]
+}
+
+/** One file in a template, and what a harness would receive it as. */
+export interface TemplateFile {
+  /** Relative to the template directory, forward-slashed. */
+  relPath: string
+  /**
+   * The path a new harness gets: `.tpl` dropped, `dot-claude` rewritten, and -
+   * for a `.gitkeep` - the empty folder it declares, with a trailing slash.
+   * Empty when the file is not written at all.
+   */
+  target: string
+  size: number
+  mtimeMs: number
+  /** A `.tpl`: its `{{...}}` placeholders are filled in on the way out. */
+  substituted: boolean
+  /** A link, which the engine refuses. Listed so the author can see why. */
+  link: boolean
+}
+
+/** One template, as the manager shows it. */
+export interface TemplateDetail {
+  id: string
+  dir: string
+  /** From `template.yaml`, or the folder name when it sets none. */
+  label: string
+  description: string
+  /** Whether there is a `template.yaml` at all - absent is legal. */
+  hasManifest: boolean
+  /** Everything but `template.yaml`, sorted by path. */
+  files: TemplateFile[]
+  fileCount: number
+  totalBytes: number
+  /** The newest mtime in the tree, or the directory's own when it is empty. */
+  modifiedAtMs: number
+  problems: string[]
+}
+
+export interface TemplateWriteResult {
+  ok: boolean
+  /** The template's id afterwards, or null when nothing was written. */
+  template: string | null
+  /** What went wrong, as sentences. Rendered straight into the dialog. */
+  problems: string[]
+}
+
+export interface TemplateDeleteResult {
+  ok: boolean
+  /** The template that is gone, or null when nothing was removed. */
+  template: string | null
+  problems: string[]
+}
+
+export interface TemplateImportResult {
+  ok: boolean
+  /** Targets that did not exist before, relative to the template. */
+  created: string[]
+  /** Targets that did, and were replaced. Named rather than counted. */
+  replaced: string[]
+  problems: string[]
+}
+
+/** Which of the two this is. The defaults and the wording differ; nothing else. */
+export type FolderTemplateKind = 'harness' | 'folder'
+
+/** One thing at the top of the folder, and whether it would be copied. */
+export interface FolderEntry {
+  name: string
+  directory: boolean
+  /** Files under it that would be copied. `truncated` says the count stopped. */
+  fileCount: number
+  bytes: number
+  truncated: boolean
+  /** Ticked when the dialog opens. */
+  included: boolean
+  /** Set when Helm will not copy it whatever the user ticks, and why. */
+  refused: string | null
+  /** A link. Never followed, never copied. */
+  link: boolean
+}
+
+export interface FolderTemplatePreview {
+  dir: string
+  kind: FolderTemplateKind
+  entries: FolderEntry[]
+  /** Files and bytes of everything ticked by default. The number that matters. */
+  fileCount: number
+  totalBytes: number
+  /** The sentence under the list. */
+  note: string
+  problems: string[]
+}
+
+export interface SaveFolderAsTemplateResult extends TemplateWriteResult {
+  /** What landed, relative to the template. */
+  created: string[]
+  fileCount: number
+  totalBytes: number
+}

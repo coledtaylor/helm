@@ -257,7 +257,7 @@ listening, not Helm's.
 
 ```
 packages/
-├── core/      # headless: launch/, discovery/, config/, content/, store/ - ZERO electron imports
+├── core/      # shared: types.ts, store/ (helm.db), layout/, theme/ - ZERO electron imports
 ├── ui/        # React components
 ├── desktop/   # Electron main + preload + renderer + pty host
 └── plugin-sdk/ # the manifest validator, the bridge's types, the helm-plugin CLI

@@ -1,5 +1,4 @@
-//! Counts a project's `.claude/` the way Claude Code resolves it, as
-//! `packages/core/src/discovery/claude-inventory.ts` does.
+//! Counts a project's `.claude/` the way Claude Code resolves it.
 //!
 //! A *skill* is a folder holding `SKILL.md`, at any depth; *commands* and
 //! *agents* are markdown files at any depth, since namespaced commands

@@ -198,7 +198,7 @@ fn looks_like_iso(text: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// listTemplates
+// Listing the templates folder
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -732,7 +732,7 @@ fn ignores_a_template_when_converting() {
 }
 
 // ---------------------------------------------------------------------------
-// seedTemplates
+// Seeding the templates folder
 // ---------------------------------------------------------------------------
 
 fn shipped(relative: &str) -> &'static str {

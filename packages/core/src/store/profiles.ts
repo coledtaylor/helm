@@ -33,6 +33,26 @@ function toProfile(row: Row): Profile {
   }
 }
 
+/**
+ * A stored profile, minus its identity: what the local host is sent when the
+ * profiles saved here are copied into it.
+ */
+export function profileDraft(profile: Profile): ProfileDraft {
+  return {
+    name: profile.name,
+    root: profile.root,
+    overlays: profile.overlays,
+    access: profile.access,
+    model: profile.model,
+    effort: profile.effort,
+    permissionMode: profile.permissionMode,
+    agent: profile.agent,
+    mcp: profile.mcp,
+    openingPrompt: profile.openingPrompt,
+    pinnedOrder: profile.pinnedOrder
+  }
+}
+
 function toValues(draft: ProfileDraft): Omit<Row, 'id' | 'createdAt' | 'updatedAt'> {
   return {
     name: draft.name.trim(),

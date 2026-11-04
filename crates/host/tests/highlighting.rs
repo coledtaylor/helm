@@ -1,11 +1,12 @@
-//! Today's languages, highlighted by the host as a client asks for them.
+//! Every language a client names, highlighted by the host as a client asks
+//! for it.
 //!
-//! The list is not written out here. It is read, when the test runs, from the
-//! two files that are today's: `packages/core/src/content/highlight.ts` (its
-//! alias table and the names it treats as plain text) and
-//! `packages/ui/src/lib/languages.ts` (the grammars the app shows by name).
-//! The host's own tables are checked against highlight.ts entry for entry,
-//! and every name is sent to a running host through a client connection on
+//! The list is not written out here. It is taken, when the test runs, from
+//! the host's own tables (`ALIASES` and `PLAIN` in
+//! `workspace::render::highlight`: what a name resolves to, and the names
+//! highlighted as plain text) and from the one file of the app's that names
+//! grammars, `packages/ui/src/lib/languages.ts` (the grammars the app shows by
+//! name). Every name is sent to a running host through a client connection on
 //! the three paths that highlight: a fence in `content:render`, a file in
 //! `config:render` and an editor's source in `editor:highlight`.
 //!
@@ -33,7 +34,7 @@ use floti_protocol::channels::workspace::{
 const CAPABILITIES: &[&str] = &["files", "terminal"];
 
 // ---------------------------------------------------------------------------
-// Today's list, read from the app's own files
+// The list: the host's tables, and the grammars the app names
 // ---------------------------------------------------------------------------
 
 /// A file of the JavaScript half of the repository, as text.
@@ -81,11 +82,11 @@ fn object_entries(source: &str, opening: &str, file: &str) -> BTreeMap<String, S
         .collect()
 }
 
-/// What highlight.ts and languages.ts say, as the test walks it.
+/// The host's tables and the names languages.ts shows, as the test walks them.
 struct Today {
-    /// highlight.ts's `ALIASES`.
+    /// The host's `ALIASES`.
     aliases: BTreeMap<String, String>,
-    /// highlight.ts's plain-text names: the set `loaded` starts with.
+    /// The host's `PLAIN`: the names it highlights as plain text.
     plain: BTreeSet<String>,
     /// Every name the test sends: each alias and what it means, each plain
     /// name, and each grammar languages.ts shows by name.
@@ -94,25 +95,15 @@ struct Today {
 
 impl Today {
     fn read() -> Self {
-        const HIGHLIGHT: &str = "packages/core/src/content/highlight.ts";
         const LANGUAGES: &str = "packages/ui/src/lib/languages.ts";
-        let highlight = repo_file(HIGHLIGHT);
-        let aliases = object_entries(&highlight, "const ALIASES", HIGHLIGHT);
-        let plain: BTreeSet<String> = highlight
-            .lines()
-            .find_map(|line| {
-                line.trim()
-                    .strip_prefix("const loaded = new Set<string>([")
-                    .and_then(|rest| rest.split_once("])"))
-                    .map(|(names, _)| names.to_owned())
-            })
-            .unwrap_or_else(|| panic!("{HIGHLIGHT} has no `const loaded` set"))
-            .split(',')
-            .map(unquote)
+        let aliases: BTreeMap<String, String> = ALIASES
+            .iter()
+            .map(|(alias, name)| ((*alias).to_owned(), (*name).to_owned()))
             .collect();
+        let plain: BTreeSet<String> = PLAIN.iter().map(|name| (*name).to_owned()).collect();
         let names = object_entries(&repo_file(LANGUAGES), "const NAMES", LANGUAGES);
-        assert!(!aliases.is_empty(), "{HIGHLIGHT}'s ALIASES read as empty");
-        assert!(!plain.is_empty(), "{HIGHLIGHT}'s plain set read as empty");
+        assert!(!aliases.is_empty(), "the host's ALIASES are empty");
+        assert!(!plain.is_empty(), "the host's PLAIN is empty");
         assert!(!names.is_empty(), "{LANGUAGES}'s NAMES read as empty");
 
         let walked = aliases
@@ -128,13 +119,13 @@ impl Today {
         }
     }
 
-    /// highlight.ts's `normaliseLanguage`.
+    /// What a raw name resolves to through `ALIASES`, as the host resolves it.
     fn normalise(&self, raw: &str) -> String {
         let lower = raw.trim().to_lowercase();
         self.aliases.get(&lower).cloned().unwrap_or(lower)
     }
 
-    /// Whether highlight.ts highlights `raw` as plain text by design.
+    /// Whether the host highlights `raw` as plain text by design.
     fn is_plain(&self, raw: &str) -> bool {
         let name = self.normalise(raw);
         name == "plaintext" || self.plain.contains(&name)
@@ -333,25 +324,17 @@ fn assert_none(problems: Vec<String>) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_hosts_language_tables_are_the_ones_highlight_ts_resolves_with() {
+fn the_hosts_language_tables_name_each_alias_once_and_reach_the_grammars_that_were_once_missed() {
     let today = Today::read();
-    let host_aliases: BTreeMap<String, String> = ALIASES
-        .iter()
-        .map(|(alias, name)| ((*alias).to_owned(), (*name).to_owned()))
-        .collect();
-    assert_eq!(
-        host_aliases, today.aliases,
-        "the host's ALIASES against highlight.ts's"
-    );
     assert_eq!(
         ALIASES.len(),
-        host_aliases.len(),
+        today.aliases.len(),
         "the host's ALIASES repeat an alias"
     );
-    let host_plain: BTreeSet<String> = PLAIN.iter().map(|name| (*name).to_owned()).collect();
     assert_eq!(
-        host_plain, today.plain,
-        "the host's PLAIN against highlight.ts's"
+        PLAIN.len(),
+        today.plain.len(),
+        "the host's PLAIN repeats a name"
     );
 
     // The list was read whole: the languages that once fell back to plain
@@ -407,7 +390,7 @@ async fn every_language_today_highlights_is_coloured_in_both_themes_through_cont
 
         let rendered = world.config_file(&path, code).await;
         if language == "markdown" {
-            // A markdown file is rendered as a note, as today.
+            // A markdown file is rendered as a note.
             if rendered.code.is_some() || rendered.markdown.is_none() {
                 problems.push(format!("config:render {path}: not rendered as markdown"));
             }

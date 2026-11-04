@@ -1,0 +1,2030 @@
+{
+  "computeConfigLive: settings > says which of a file’s keys are outranked, and by which layer #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/settings.json",
+          "relPath": ".claude/settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 45,
+          "mtimeMs": 1793773660118.1218,
+          "description": null,
+          "binary": false
+        },
+        {
+          "path": "<root>/project/.claude/settings.local.json",
+          "relPath": ".claude/settings.local.json",
+          "kind": "settings-local",
+          "name": "settings.local.json",
+          "size": 16,
+          "mtimeMs": 1793773660118.682,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.119Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": true,
+          "keys": 1,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": true,
+          "keys": 2,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "env.A",
+          "value": "\"from-project\"",
+          "winner": "project",
+          "winnerFile": "<root>/project/.claude/settings.json",
+          "candidates": [
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "\"from-project\""
+            }
+          ],
+          "overridden": false
+        },
+        {
+          "key": "model",
+          "value": "\"opus\"",
+          "winner": "local",
+          "winnerFile": "<root>/project/.claude/settings.local.json",
+          "candidates": [
+            {
+              "layer": "local",
+              "file": "<root>/project/.claude/settings.local.json",
+              "value": "\"opus\""
+            },
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "\"sonnet\""
+            }
+          ],
+          "overridden": true
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.135Z"
+    }
+  },
+  "computeConfigLive: settings > calls two layers that agree on a value live rather than shadowed #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/settings.json",
+          "relPath": ".claude/settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 16,
+          "mtimeMs": 1793773660169.9094,
+          "description": null,
+          "binary": false
+        },
+        {
+          "path": "<root>/project/.claude/settings.local.json",
+          "relPath": ".claude/settings.local.json",
+          "kind": "settings-local",
+          "name": "settings.local.json",
+          "size": 16,
+          "mtimeMs": 1793773660170.9077,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.171Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": true,
+          "keys": 1,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": true,
+          "keys": 1,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "model",
+          "value": "\"opus\"",
+          "winner": "local",
+          "winnerFile": "<root>/project/.claude/settings.local.json",
+          "candidates": [
+            {
+              "layer": "local",
+              "file": "<root>/project/.claude/settings.local.json",
+              "value": "\"opus\""
+            },
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "\"opus\""
+            }
+          ],
+          "overridden": false
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.173Z"
+    }
+  },
+  "computeConfigLive: settings > separates a file that says nothing from one the CLI cannot parse #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/settings.json",
+          "relPath": ".claude/settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 2,
+          "mtimeMs": 1793773660176.42,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.177Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": true,
+          "keys": 1,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "",
+          "value": "{}",
+          "winner": "project",
+          "winnerFile": "<root>/project/.claude/settings.json",
+          "candidates": [
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "{}"
+            }
+          ],
+          "overridden": false
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.179Z"
+    }
+  },
+  "computeConfigLive: settings > separates a file that says nothing from one the CLI cannot parse #1": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/settings.json",
+          "relPath": ".claude/settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 20,
+          "mtimeMs": 1793773660180.2786,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.180Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": true,
+          "keys": 0,
+          "error": "Expected double-quoted property name in JSON at position 19 (line 1 column 20)"
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [
+        "<root>/project/.claude/settings.json is not valid JSON, so the CLI ignores it: Expected double-quoted property name in JSON at position 19 (line 1 column 20)"
+      ],
+      "computedAt": "2026-11-04T06:27:40.189Z"
+    }
+  },
+  "computeConfigLive: settings > marks a settings file this resolution never reads as absent #0": {
+    "request": {
+      "scope": "<root>/home",
+      "user": true,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "user",
+        "path": "<root>/home",
+        "claudeDir": "<root>/home",
+        "label": "User",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/home/settings.local.json",
+          "relPath": "settings.local.json",
+          "kind": "settings-local",
+          "name": "settings.local.json",
+          "size": 16,
+          "mtimeMs": 1793773660192.4858,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.192Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.194Z"
+    }
+  },
+  "computeConfigLive: settings > reads a file’s own keys back out of the resolution #0": {
+    "request": {
+      "scope": "<root>/home",
+      "user": true,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "user",
+        "path": "<root>/home",
+        "claudeDir": "<root>/home",
+        "label": "User",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/home/settings.json",
+          "relPath": "settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 25,
+          "mtimeMs": 1793773660196.5903,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.197Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": true,
+          "keys": 2,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "env.A",
+          "value": "\"1\"",
+          "winner": "user",
+          "winnerFile": "<root>/home/settings.json",
+          "candidates": [
+            {
+              "layer": "user",
+              "file": "<root>/home/settings.json",
+              "value": "\"1\""
+            }
+          ],
+          "overridden": false
+        },
+        {
+          "key": "env.B",
+          "value": "\"2\"",
+          "winner": "user",
+          "winnerFile": "<root>/home/settings.json",
+          "candidates": [
+            {
+              "layer": "user",
+              "file": "<root>/home/settings.json",
+              "value": "\"2\""
+            }
+          ],
+          "overridden": false
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.204Z"
+    }
+  },
+  "computeConfigLive: skills, commands, agents > carries the invocation, namespaced when it comes from an overlay #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": [
+        "<root>/overlay"
+      ]
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/skills/think/SKILL.md",
+          "relPath": ".claude/skills/think/SKILL.md",
+          "kind": "skill",
+          "name": "think",
+          "size": 50,
+          "mtimeMs": 1793773660207.5137,
+          "description": "Ponder.",
+          "binary": false
+        },
+        {
+          "path": "<root>/project/.claude/commands/spec/plan.md",
+          "relPath": ".claude/commands/spec/plan.md",
+          "kind": "command",
+          "name": "spec:plan",
+          "size": 7,
+          "mtimeMs": 1793773660209.6174,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.215Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [
+        {
+          "name": "overlay",
+          "projectPath": "<root>/overlay",
+          "exists": true,
+          "skills": 1,
+          "commands": 0,
+          "agents": 0,
+          "workflows": 0
+        }
+      ],
+      "skills": [
+        {
+          "invocation": "overlay:review",
+          "name": "review",
+          "source": "overlay",
+          "namespace": "overlay",
+          "origin": "<root>/overlay",
+          "path": "<root>/overlay/.claude/skills/review/SKILL.md",
+          "description": "Ponder."
+        },
+        {
+          "invocation": "think",
+          "name": "think",
+          "source": "cwd",
+          "namespace": null,
+          "origin": "<root>/project",
+          "path": "<root>/project/.claude/skills/think/SKILL.md",
+          "description": "Ponder."
+        }
+      ],
+      "commands": [
+        {
+          "invocation": "spec:plan",
+          "name": "spec:plan",
+          "source": "cwd",
+          "namespace": null,
+          "origin": "<root>/project",
+          "path": "<root>/project/.claude/commands/spec/plan.md",
+          "description": null
+        }
+      ],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.219Z"
+    }
+  },
+  "computeConfigLive: skills, commands, agents > carries the invocation, namespaced when it comes from an overlay #1": {
+    "request": {
+      "scope": "<root>/overlay",
+      "user": false,
+      "overlays": [
+        "<root>/overlay"
+      ]
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/overlay",
+        "claudeDir": "<root>/overlay/.claude",
+        "label": "overlay",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/overlay/.claude/skills/review/SKILL.md",
+          "relPath": ".claude/skills/review/SKILL.md",
+          "kind": "skill",
+          "name": "review",
+          "size": 52,
+          "mtimeMs": 1793773660209.1023,
+          "description": "Ponder.",
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.220Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [
+        {
+          "name": "overlay",
+          "projectPath": "<root>/overlay",
+          "exists": true,
+          "skills": 1,
+          "commands": 0,
+          "agents": 0,
+          "workflows": 0
+        }
+      ],
+      "skills": [
+        {
+          "invocation": "overlay:review",
+          "name": "review",
+          "source": "overlay",
+          "namespace": "overlay",
+          "origin": "<root>/overlay",
+          "path": "<root>/overlay/.claude/skills/review/SKILL.md",
+          "description": "Ponder."
+        },
+        {
+          "invocation": "think",
+          "name": "think",
+          "source": "cwd",
+          "namespace": null,
+          "origin": "<root>/project",
+          "path": "<root>/project/.claude/skills/think/SKILL.md",
+          "description": "Ponder."
+        }
+      ],
+      "commands": [
+        {
+          "invocation": "spec:plan",
+          "name": "spec:plan",
+          "source": "cwd",
+          "namespace": null,
+          "origin": "<root>/project",
+          "path": "<root>/project/.claude/commands/spec/plan.md",
+          "description": null
+        }
+      ],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.223Z"
+    }
+  },
+  "computeConfigLive: skills, commands, agents > addresses a workflow by its meta name, with a slash, namespaced under an overlay #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": [
+        "<root>/overlay"
+      ]
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": false
+      },
+      "files": [],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.228Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [
+        {
+          "name": "overlay",
+          "projectPath": "<root>/overlay",
+          "exists": true,
+          "skills": 0,
+          "commands": 0,
+          "agents": 0,
+          "workflows": 1
+        }
+      ],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [
+        {
+          "invocation": "overlay:route-audit",
+          "name": "route-audit",
+          "source": "overlay",
+          "namespace": "overlay",
+          "origin": "<root>/overlay",
+          "path": "<root>/overlay/.claude/workflows/audit.js",
+          "description": "Audit routes"
+        }
+      ],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.238Z"
+    }
+  },
+  "computeConfigLive: skills, commands, agents > addresses a workflow by its meta name, with a slash, namespaced under an overlay #1": {
+    "request": {
+      "scope": "<root>/overlay",
+      "user": false,
+      "overlays": [
+        "<root>/overlay"
+      ]
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/overlay",
+        "claudeDir": "<root>/overlay/.claude",
+        "label": "overlay",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/overlay/.claude/workflows/audit.js",
+          "relPath": ".claude/workflows/audit.js",
+          "kind": "workflow",
+          "name": "route-audit",
+          "size": 73,
+          "mtimeMs": 1793773660228.0698,
+          "description": "Audit routes",
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.238Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [
+        {
+          "name": "overlay",
+          "projectPath": "<root>/overlay",
+          "exists": true,
+          "skills": 0,
+          "commands": 0,
+          "agents": 0,
+          "workflows": 1
+        }
+      ],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [
+        {
+          "invocation": "overlay:route-audit",
+          "name": "route-audit",
+          "source": "overlay",
+          "namespace": "overlay",
+          "origin": "<root>/overlay",
+          "path": "<root>/overlay/.claude/workflows/audit.js",
+          "description": "Audit routes"
+        }
+      ],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.241Z"
+    }
+  },
+  "computeConfigLive: skills, commands, agents > does not predict a winner when two unprefixed sources define one name #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/skills/think/SKILL.md",
+          "relPath": ".claude/skills/think/SKILL.md",
+          "kind": "skill",
+          "name": "think",
+          "size": 59,
+          "mtimeMs": 1793773660245.3394,
+          "description": "The project’s.",
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.250Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [
+        {
+          "invocation": "think",
+          "name": "think",
+          "source": "user",
+          "namespace": null,
+          "origin": "<root>/home",
+          "path": "<root>/home/skills/think/SKILL.md",
+          "description": "The user’s."
+        },
+        {
+          "invocation": "think",
+          "name": "think",
+          "source": "cwd",
+          "namespace": null,
+          "origin": "<root>/project",
+          "path": "<root>/project/.claude/skills/think/SKILL.md",
+          "description": "The project’s."
+        }
+      ],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [
+        {
+          "name": "think",
+          "invocations": [
+            "think",
+            "think"
+          ]
+        }
+      ],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.253Z"
+    }
+  },
+  "computeConfigLive: skills, commands, agents > does not call an overlay’s copy of a name a contest #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": [
+        "<root>/overlay"
+      ]
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/skills/think/SKILL.md",
+          "relPath": ".claude/skills/think/SKILL.md",
+          "kind": "skill",
+          "name": "think",
+          "size": 50,
+          "mtimeMs": 1793773660258.853,
+          "description": "Ponder.",
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.260Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [
+        {
+          "name": "overlay",
+          "projectPath": "<root>/overlay",
+          "exists": true,
+          "skills": 1,
+          "commands": 0,
+          "agents": 0,
+          "workflows": 0
+        }
+      ],
+      "skills": [
+        {
+          "invocation": "overlay:think",
+          "name": "think",
+          "source": "overlay",
+          "namespace": "overlay",
+          "origin": "<root>/overlay",
+          "path": "<root>/overlay/.claude/skills/think/SKILL.md",
+          "description": "Ponder."
+        },
+        {
+          "invocation": "think",
+          "name": "think",
+          "source": "cwd",
+          "namespace": null,
+          "origin": "<root>/project",
+          "path": "<root>/project/.claude/skills/think/SKILL.md",
+          "description": "Ponder."
+        }
+      ],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [
+        {
+          "name": "think",
+          "invocations": [
+            "overlay:think",
+            "think"
+          ]
+        }
+      ],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.263Z"
+    }
+  },
+  "computeConfigLive: skills, commands, agents > marks a skill no session in this directory composes as absent #0": {
+    "request": {
+      "scope": "<root>/elsewhere",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/elsewhere",
+        "claudeDir": "<root>/elsewhere/.claude",
+        "label": "elsewhere",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/elsewhere/.claude/skills/unreachable/SKILL.md",
+          "relPath": ".claude/skills/unreachable/SKILL.md",
+          "kind": "skill",
+          "name": "unreachable",
+          "size": 62,
+          "mtimeMs": 1793773660268.1992,
+          "description": "Ponder.",
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.272Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.274Z"
+    }
+  },
+  "computeConfigLive: instructions > is live for the CLAUDE.md a session in this directory is handed #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/CLAUDE.md",
+          "relPath": "CLAUDE.md",
+          "kind": "claude-md",
+          "name": "CLAUDE.md",
+          "size": 10,
+          "mtimeMs": 1793773660278.2102,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.278Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [
+        {
+          "path": "<root>/project/CLAUDE.md",
+          "source": "cwd",
+          "bytes": 10,
+          "origin": "<root>/project"
+        }
+      ],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.280Z"
+    }
+  },
+  "computeConfigLive: hooks > names the event, the matcher and the settings block that runs it #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/settings.json",
+          "relPath": ".claude/settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 114,
+          "mtimeMs": 1793773660283.3613,
+          "description": null,
+          "binary": false
+        },
+        {
+          "path": "<root>/project/.claude/hooks/guard.js",
+          "relPath": ".claude/hooks/guard.js",
+          "kind": "hook",
+          "name": "guard.js",
+          "size": 16,
+          "mtimeMs": 1793773660282.8362,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.283Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": true,
+          "keys": 1,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "hooks.PreToolUse",
+          "value": "[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/guard.js\"}]}]",
+          "winner": "project",
+          "winnerFile": "<root>/project/.claude/settings.json",
+          "candidates": [
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/guard.js\"}]}]"
+            }
+          ],
+          "overridden": false
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.289Z"
+    }
+  },
+  "computeConfigLive: hooks > is inert when nothing names it, and shadowed when hooks are switched off #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/hooks/guard.js",
+          "relPath": ".claude/hooks/guard.js",
+          "kind": "hook",
+          "name": "guard.js",
+          "size": 16,
+          "mtimeMs": 1793773660293.6128,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.293Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.295Z"
+    }
+  },
+  "computeConfigLive: hooks > is inert when nothing names it, and shadowed when hooks are switched off #1": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/settings.json",
+          "relPath": ".claude/settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 114,
+          "mtimeMs": 1793773660296.9915,
+          "description": null,
+          "binary": false
+        },
+        {
+          "path": "<root>/project/.claude/hooks/guard.js",
+          "relPath": ".claude/hooks/guard.js",
+          "kind": "hook",
+          "name": "guard.js",
+          "size": 16,
+          "mtimeMs": 1793773660293.6128,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.296Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": true,
+          "keys": 2,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "disableAllHooks",
+          "value": "true",
+          "winner": "project",
+          "winnerFile": "<root>/project/.claude/settings.json",
+          "candidates": [
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "true"
+            }
+          ],
+          "overridden": false
+        },
+        {
+          "key": "hooks.Stop",
+          "value": "[{\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/guard.js\"}]}]",
+          "winner": "project",
+          "winnerFile": "<root>/project/.claude/settings.json",
+          "candidates": [
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "[{\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/guard.js\"}]}]"
+            }
+          ],
+          "overridden": false
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.302Z"
+    }
+  },
+  "computeConfigLive: hooks > does not claim a hook for a command that merely contains its name #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/settings.json",
+          "relPath": ".claude/settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 117,
+          "mtimeMs": 1793773660306.438,
+          "description": null,
+          "binary": false
+        },
+        {
+          "path": "<root>/project/.claude/hooks/guard.js",
+          "relPath": ".claude/hooks/guard.js",
+          "kind": "hook",
+          "name": "guard.js",
+          "size": 16,
+          "mtimeMs": 1793773660306.438,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.306Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": true,
+          "keys": 1,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "hooks.PreToolUse",
+          "value": "[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/my-guard.js\"}]}]",
+          "winner": "project",
+          "winnerFile": "<root>/project/.claude/settings.json",
+          "candidates": [
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/my-guard.js\"}]}]"
+            }
+          ],
+          "overridden": false
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.312Z"
+    }
+  },
+  "computeConfigLive: everything else > finds the script a settings value runs #0": {
+    "request": {
+      "scope": "<root>/home",
+      "user": true,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "user",
+        "path": "<root>/home",
+        "claudeDir": "<root>/home",
+        "label": "User",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/home/settings.json",
+          "relPath": "settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 82,
+          "mtimeMs": 1793773660316.3984,
+          "description": null,
+          "binary": false
+        },
+        {
+          "path": "<root>/home/statusline-command.js",
+          "relPath": "statusline-command.js",
+          "kind": "other",
+          "name": "statusline-command.js",
+          "size": 26,
+          "mtimeMs": 1793773660315.8801,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.316Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": true,
+          "keys": 2,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "statusLine.command",
+          "value": "\"node ~/.claude/statusline-command.js\"",
+          "winner": "user",
+          "winnerFile": "<root>/home/settings.json",
+          "candidates": [
+            {
+              "layer": "user",
+              "file": "<root>/home/settings.json",
+              "value": "\"node ~/.claude/statusline-command.js\""
+            }
+          ],
+          "overridden": false
+        },
+        {
+          "key": "statusLine.type",
+          "value": "\"command\"",
+          "winner": "user",
+          "winnerFile": "<root>/home/settings.json",
+          "candidates": [
+            {
+              "layer": "user",
+              "file": "<root>/home/settings.json",
+              "value": "\"command\""
+            }
+          ],
+          "overridden": false
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.322Z"
+    }
+  },
+  "computeConfigLive: everything else > describes the CLI’s own working files and claims nothing about the rest #0": {
+    "request": {
+      "scope": "<root>/home",
+      "user": true,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "user",
+        "path": "<root>/home",
+        "claudeDir": "<root>/home",
+        "label": "User",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/home/history.jsonl",
+          "relPath": "history.jsonl",
+          "kind": "other",
+          "name": "history.jsonl",
+          "size": 3,
+          "mtimeMs": 1793773660325.2761,
+          "description": null,
+          "binary": true
+        },
+        {
+          "path": "<root>/home/scratch.txt",
+          "relPath": "scratch.txt",
+          "kind": "other",
+          "name": "scratch.txt",
+          "size": 6,
+          "mtimeMs": 1793773660325.7996,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.325Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.327Z"
+    }
+  },
+  "computeConfigLive: everything else > says nothing at all when there is no resolution to read #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/settings.json",
+          "relPath": ".claude/settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 16,
+          "mtimeMs": 1793773660331.906,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.332Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": true,
+          "keys": 1,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "model",
+          "value": "\"opus\"",
+          "winner": "project",
+          "winnerFile": "<root>/project/.claude/settings.json",
+          "candidates": [
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "\"opus\""
+            }
+          ],
+          "overridden": false
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.334Z"
+    }
+  },
+  "computeConfigLive: a hook run by something other than a hooks block > is live when a settings value names it, even with no hooks block #0": {
+    "request": {
+      "scope": "<root>/project",
+      "user": false,
+      "overlays": []
+    },
+    "tree": {
+      "scope": {
+        "kind": "project",
+        "path": "<root>/project",
+        "claudeDir": "<root>/project/.claude",
+        "label": "project",
+        "exists": true
+      },
+      "files": [
+        {
+          "path": "<root>/project/.claude/settings.json",
+          "relPath": ".claude/settings.json",
+          "kind": "settings",
+          "name": "settings.json",
+          "size": 79,
+          "mtimeMs": 1793773660337.0483,
+          "description": null,
+          "binary": false
+        },
+        {
+          "path": "<root>/project/.claude/hooks/statusline.cjs",
+          "relPath": ".claude/hooks/statusline.cjs",
+          "kind": "hook",
+          "name": "statusline.cjs",
+          "size": 26,
+          "mtimeMs": 1793773660337.0483,
+          "description": null,
+          "binary": false
+        }
+      ],
+      "errors": [],
+      "scannedAt": "2026-11-04T06:27:40.337Z"
+    },
+    "view": {
+      "cwd": "<root>/project",
+      "profileId": null,
+      "profileName": null,
+      "overlays": [],
+      "skills": [],
+      "commands": [],
+      "agents": [],
+      "workflows": [],
+      "sharedNames": [],
+      "settingsLayers": [
+        {
+          "kind": "local",
+          "file": "<root>/project/.claude/settings.local.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        },
+        {
+          "kind": "project",
+          "file": "<root>/project/.claude/settings.json",
+          "exists": true,
+          "keys": 2,
+          "error": null
+        },
+        {
+          "kind": "user",
+          "file": "<root>/home/settings.json",
+          "exists": false,
+          "keys": 0,
+          "error": null
+        }
+      ],
+      "settings": [
+        {
+          "key": "statusLine.command",
+          "value": "\"node .claude/hooks/statusline.cjs\"",
+          "winner": "project",
+          "winnerFile": "<root>/project/.claude/settings.json",
+          "candidates": [
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "\"node .claude/hooks/statusline.cjs\""
+            }
+          ],
+          "overridden": false
+        },
+        {
+          "key": "statusLine.type",
+          "value": "\"command\"",
+          "winner": "project",
+          "winnerFile": "<root>/project/.claude/settings.json",
+          "candidates": [
+            {
+              "layer": "project",
+              "file": "<root>/project/.claude/settings.json",
+              "value": "\"command\""
+            }
+          ],
+          "overridden": false
+        }
+      ],
+      "instructions": [],
+      "mcpServers": [],
+      "warnings": [],
+      "computedAt": "2026-11-04T06:27:40.344Z"
+    }
+  }
+}

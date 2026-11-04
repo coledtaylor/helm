@@ -585,8 +585,6 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
     browserSessions: () =>
       browserToolsOn() ? running().map((record) => ({ session: record.id, name: sessionLabel(record) })) : [],
 
-    pluginSessions: () => [],
-
     onChanged(listener) {
       changed.add(listener)
     },

@@ -124,7 +124,8 @@ export interface ThemesSeedResult {
 
 /**
  * Creates the directory and its README, only when the directory is absent -
- * the rule `seedTemplates` follows and for the same reason: Helm keeps no
+ * the rule the templates folder is seeded by, for the same reason: Helm
+ * keeps no
  * record of what it wrote, so it cannot tell an edited file from an untouched
  * one, and the only safe time to write is when there is nothing there.
  */

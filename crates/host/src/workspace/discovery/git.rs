@@ -1,5 +1,4 @@
-//! A working tree's state, read by running `git`, as
-//! `packages/core/src/discovery/git.ts` does: one `git status` per project
+//! A working tree's state, read by running `git`: one `git status` per project
 //! on a background refresh, with no git library to package.
 
 use std::collections::BTreeMap;

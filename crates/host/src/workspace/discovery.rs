@@ -1,5 +1,4 @@
-//! Project discovery: scan roots, harnesses and each project's git state, as
-//! `packages/core/src/discovery` and the desktop's `services.ts` do it.
+//! Project discovery: scan roots, harnesses and each project's git state.
 //!
 //! - [`scan`]: walking the roots into harnesses and projects, and which
 //!   cached rows a scan or a removed root proves wrong.

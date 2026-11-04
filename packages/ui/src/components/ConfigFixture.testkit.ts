@@ -1,20 +1,27 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import {
-  computeEffectiveView,
-  projectConfigScope,
-  readConfigTree,
-  type ConfigFile,
-  type ConfigScope,
-  type ConfigTree,
-  type EffectiveView
-} from '@helm/core'
+import type {
+  ConfigFile,
+  ConfigFileContent,
+  ConfigRendered,
+  ConfigScope,
+  ConfigTree,
+  EffectiveView
+} from '@helm/core/types'
+import recording from './fixtures/config.fixture.json'
+import { fixturePath, recorded } from './recorded.testkit'
 
 /**
- * A user `.claude` and a project with one of everything the console shows,
- * read by core the way main reads them. Each value a test expects is written
- * here, in the file that produces it.
+ * A user `.claude` and a project with one of everything the console shows, as
+ * the host answers for them: the tree, the effective view, each file's bytes
+ * and each file rendered. The files were:
+ *
+ * - `home/.claude/settings.json`: `{ model: 'sonnet', env: { A: 'user' } }`
+ * - `app/CLAUDE.md`
+ * - `app/.claude/settings.json`: `PROJECT_SETTINGS`
+ * - `app/.claude/settings.local.json`: `{ env: { B: 'local' } }`
+ * - `app/.claude/hooks/guard.js`, named by the PreToolUse hook
+ * - `app/.claude/skills/think/SKILL.md` (`SKILL`) and `prompts.md` beside it
+ * - `app/.claude/commands/spec/plan.md`, `app/.claude/agents/reviewer.md`
+ * - `app/.claude/workflows/audit-routes.js`, whose `meta.name` is `route-audit`
  */
 export interface ConfigFixture {
   root: string
@@ -26,6 +33,10 @@ export interface ConfigFixture {
   /** What a session in the project resolves. */
   view: EffectiveView
   file: (relPath: string) => ConfigFile
+  /** What `config:read` answers for a file of the tree. */
+  content: (relPath: string) => ConfigFileContent
+  /** What `config:render` answers for a file of the tree. */
+  rendered: (relPath: string) => ConfigRendered
   dispose: () => void
 }
 
@@ -37,46 +48,36 @@ export const PROJECT_SETTINGS = {
 
 export const SKILL = '---\nname: think\ndescription: Think before acting\n---\n\n# Think\n\nPonder first.\n'
 
+interface Recording {
+  scope: ConfigScope
+  tree: ConfigTree
+  view: EffectiveView
+  contents: Record<string, ConfigFileContent>
+  rendered: Record<string, ConfigRendered>
+}
+
+function lookup<T>(table: Record<string, T>, relPath: string): T {
+  const found = table[relPath]
+  if (found === undefined) throw new Error(`the fixture has no ${relPath}`)
+  return found
+}
+
 export function makeConfigFixture(): ConfigFixture {
-  const root = mkdtempSync(join(tmpdir(), 'helm config ui-'))
-  const write = (path: string, body: string): void => {
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, body)
-  }
-
-  const userClaude = join(root, 'home', '.claude')
-  write(join(userClaude, 'settings.json'), `${JSON.stringify({ model: 'sonnet', env: { A: 'user' } }, null, 2)}\n`)
-
-  const project = join(root, 'app')
-  write(join(project, 'CLAUDE.md'), '# App\n\nInstructions for the app.\n')
-  write(join(project, '.claude', 'settings.json'), `${JSON.stringify(PROJECT_SETTINGS, null, 2)}\n`)
-  write(join(project, '.claude', 'settings.local.json'), `${JSON.stringify({ env: { B: 'local' } }, null, 2)}\n`)
-  write(join(project, '.claude', 'hooks', 'guard.js'), 'process.exit(0)\n')
-  write(join(project, '.claude', 'skills', 'think', 'SKILL.md'), SKILL)
-  write(join(project, '.claude', 'skills', 'think', 'prompts.md'), '# Prompts\n\nAsk twice.\n')
-  write(join(project, '.claude', 'commands', 'spec', 'plan.md'), '---\ndescription: Plan a spec\n---\n\nPlan it.\n')
-  write(join(project, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Reviews a change\n---\n\nReview.\n')
-  write(
-    join(project, '.claude', 'workflows', 'audit-routes.js'),
-    "export const meta = {\n  name: 'route-audit',\n  description: 'Audit every route handler',\n}\n\nawait agent('List the routes.')\n"
-  )
-
-  const scope = projectConfigScope(project, 'project', 'app')
-  const tree = readConfigTree(scope)
-  const view = computeEffectiveView({ cwd: project, overlays: [], userHome: userClaude })
-
+  const answer = recorded<Recording>(recording)
   return {
-    root,
-    userClaude,
-    project,
-    scope,
-    tree,
-    view,
+    root: fixturePath(),
+    userClaude: fixturePath('home/.claude'),
+    project: fixturePath('app'),
+    scope: answer.scope,
+    tree: answer.tree,
+    view: answer.view,
     file: (relPath) => {
-      const found = tree.files.find((candidate) => candidate.relPath === relPath)
+      const found = answer.tree.files.find((candidate) => candidate.relPath === relPath)
       if (!found) throw new Error(`the fixture has no ${relPath}`)
       return found
     },
-    dispose: () => rmSync(root, { recursive: true, force: true })
+    content: (relPath) => lookup(answer.contents, relPath),
+    rendered: (relPath) => lookup(answer.rendered, relPath),
+    dispose: () => undefined
   }
 }

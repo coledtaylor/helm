@@ -1,0 +1,145 @@
+{
+  "mcpPreview": {
+    "file": "<root>/mcp/.mcp.json",
+    "before": "",
+    "after": "{\n  \"mcpServers\": {\n    \"echo\": {\n      \"command\": \"node\",\n      \"args\": [\n        \"server.mjs\"\n      ]\n    }\n  }\n}\n",
+    "diff": [
+      {
+        "sign": "+",
+        "text": "{"
+      },
+      {
+        "sign": "+",
+        "text": "  \"mcpServers\": {"
+      },
+      {
+        "sign": "+",
+        "text": "    \"echo\": {"
+      },
+      {
+        "sign": "+",
+        "text": "      \"command\": \"node\","
+      },
+      {
+        "sign": "+",
+        "text": "      \"args\": ["
+      },
+      {
+        "sign": "+",
+        "text": "        \"server.mjs\""
+      },
+      {
+        "sign": "+",
+        "text": "      ]"
+      },
+      {
+        "sign": "+",
+        "text": "    }"
+      },
+      {
+        "sign": "+",
+        "text": "  }"
+      },
+      {
+        "sign": "+",
+        "text": "}"
+      }
+    ],
+    "replaces": null,
+    "error": null
+  },
+  "view": {
+    "cwd": "<root>/work",
+    "profileId": 7,
+    "profileName": "Combo",
+    "overlays": [
+      {
+        "name": "alpha",
+        "projectPath": "<root>/alpha",
+        "exists": true,
+        "skills": 1,
+        "commands": 0,
+        "agents": 0,
+        "workflows": 0
+      },
+      {
+        "name": "beta",
+        "projectPath": "<root>/beta",
+        "exists": true,
+        "skills": 1,
+        "commands": 0,
+        "agents": 0,
+        "workflows": 0
+      }
+    ],
+    "skills": [
+      {
+        "invocation": "alpha:think",
+        "name": "think",
+        "source": "overlay",
+        "namespace": "alpha",
+        "origin": "<root>/alpha",
+        "path": "<root>/alpha/.claude/skills/think/SKILL.md",
+        "description": "Alpha thinking"
+      },
+      {
+        "invocation": "beta:think",
+        "name": "think",
+        "source": "overlay",
+        "namespace": "beta",
+        "origin": "<root>/beta",
+        "path": "<root>/beta/.claude/skills/think/SKILL.md",
+        "description": "Beta thinking"
+      },
+      {
+        "invocation": "plan",
+        "name": "plan",
+        "source": "cwd",
+        "namespace": null,
+        "origin": "<root>/work",
+        "path": "<root>/work/.claude/skills/plan/SKILL.md",
+        "description": "Plan first"
+      }
+    ],
+    "commands": [],
+    "agents": [],
+    "workflows": [],
+    "sharedNames": [
+      {
+        "name": "think",
+        "invocations": [
+          "alpha:think",
+          "beta:think"
+        ]
+      }
+    ],
+    "settingsLayers": [
+      {
+        "kind": "local",
+        "file": "<root>/work/.claude/settings.local.json",
+        "exists": false,
+        "keys": 0,
+        "error": null
+      },
+      {
+        "kind": "project",
+        "file": "<root>/work/.claude/settings.json",
+        "exists": false,
+        "keys": 0,
+        "error": null
+      },
+      {
+        "kind": "user",
+        "file": "<root>/home/.claude/settings.json",
+        "exists": false,
+        "keys": 0,
+        "error": null
+      }
+    ],
+    "settings": [],
+    "instructions": [],
+    "mcpServers": [],
+    "warnings": [],
+    "computedAt": "2026-11-04T06:19:00.390Z"
+  }
+}

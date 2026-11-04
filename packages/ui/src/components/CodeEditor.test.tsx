@@ -2,26 +2,29 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState, type JSX } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { highlightLines, type EditorHighlight } from '@helm/core'
+import type { EditorHighlight } from '@helm/core'
 import { CodeEditor } from './CodeEditor'
 import { installExecCommand, installLayoutStandIns, type ExecCommandStandIn } from './CodeEditor.testkit'
+import recording from './fixtures/editor-highlight.fixture.json'
 import { PATIENCE } from '../../../../test/patience'
 
 installLayoutStandIns()
 
 /**
  * The one editor, driven the way a person drives it: keys into the textarea,
- * and the layers under it read back. The tokeniser is core's own, reached
- * through the same callback main answers over IPC.
+ * and the layers under it read back. The tokeniser's answer is the host's,
+ * recorded, handed in through the same callback the window answers from it.
  */
 
 type Highlight = (path: string, source: string) => Promise<EditorHighlight>
 
-/** What `editor:highlight` answers, computed in-process. */
-const realHighlight: Highlight = async (path, source) => {
-  const ext = path.slice(path.lastIndexOf('.') + 1)
-  const out = await highlightLines(source, ext)
-  return { lines: out.lines, language: out.language, highlighted: out.highlighted, tooLarge: false, tookMs: 0 }
+/** The source `editor-highlight.fixture.json` is the host's `editor:highlight` of, as `file.json`. */
+const RECORDED_SOURCE = '{ "a": 1 }\n{ "b": true }\n'
+
+/** What `editor:highlight` answers for `RECORDED_SOURCE`, and for nothing else. */
+const realHighlight: Highlight = (_path, source) => {
+  if (source !== RECORDED_SOURCE) return Promise.reject(new Error(`no answer is recorded for ${JSON.stringify(source)}`))
+  return Promise.resolve({ ...recording, tooLarge: false, tookMs: 0 })
 }
 
 /** The editor with the state a host gives it: the value it is handed back. */
@@ -84,7 +87,7 @@ describe('CodeEditor: the text', () => {
   })
 
   it('paints each line of the tokeniser’s answer with both themes’ colours', async () => {
-    const { container } = render(<Editor initial={'{ "a": 1 }\n{ "b": true }\n'} onHighlight={realHighlight} />)
+    const { container } = render(<Editor initial={RECORDED_SOURCE} onHighlight={realHighlight} />)
 
     await vi.waitFor(() => expect(container.querySelector('.helm-editor')?.getAttribute('data-editor-coloured')).toBe('true'), { timeout: PATIENCE })
     const lines = [...layer(container, 'highlight').querySelectorAll<HTMLElement>('.line')]

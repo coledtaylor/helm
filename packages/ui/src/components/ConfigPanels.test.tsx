@@ -1,38 +1,26 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
 import { useState, type JSX } from 'react'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { computeEffectiveView, previewMcpAdd, type DoctorReport, type McpPreview, type McpScope, type Profile } from '@helm/core'
+import { describe, expect, it, vi } from 'vitest'
+import type { DoctorReport, EffectiveView, McpPreview, McpScope, Profile } from '@helm/core'
 import { EffectiveViewPane } from './EffectiveViewPane'
+import recording from './fixtures/config-panels.fixture.json'
 import { HealthPanel } from './HealthPanel'
 import { McpPanel } from './McpPanel'
+import { fixturePath, recorded } from './recorded.testkit'
 
 /**
  * The config console's three whole-pane views: MCP servers, the effective
  * view, and `claude doctor`.
+ *
+ * What the host answers is recorded: `config:mcpPreview` for the `echo` server
+ * below in an empty `mcp` folder, and `config:effective` for a profile whose
+ * `work` root has a `plan` skill and whose overlays `alpha` and `beta` both
+ * define `think`.
  */
 
-let root: string
-
-function write(rel: string, body: string): void {
-  mkdirSync(dirname(join(root, rel)), { recursive: true })
-  writeFileSync(join(root, rel), body)
-}
-
-beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), 'helm config panes-'))
-  // A working directory and two overlays that both define `think`.
-  write('work/.claude/skills/plan/SKILL.md', '---\nname: plan\ndescription: Plan first\n---\n')
-  write('alpha/.claude/skills/think/SKILL.md', '---\nname: think\ndescription: Alpha thinking\n---\n')
-  write('beta/.claude/skills/think/SKILL.md', '---\nname: think\ndescription: Beta thinking\n---\n')
-  mkdirSync(join(root, 'home', '.claude'), { recursive: true })
-  mkdirSync(join(root, 'mcp'), { recursive: true })
-})
-
-afterAll(() => rmSync(root, { recursive: true, force: true }))
+const answers = recorded<{ mcpPreview: McpPreview; view: EffectiveView }>(recording)
+const ECHO = { name: 'echo', scope: 'project' as const, json: '{"command": "node", "args": ["server.mjs"]}' }
 
 describe('McpPanel', () => {
   /** The panel with the draft and the preview held where `useConfig` holds them. */
@@ -53,7 +41,10 @@ describe('McpPanel', () => {
         draft={draft}
         onDraftChange={setDraft}
         preview={preview}
-        onPreview={() => setPreview(previewMcpAdd({ ...draft, cwd }))}
+        onPreview={() => {
+          expect({ ...draft, cwd }).toEqual({ ...ECHO, cwd: fixturePath('mcp') })
+          setPreview(answers.mcpPreview)
+        }}
         onApply={onApply}
         onCancelPreview={() => setPreview(null)}
         applying={false}
@@ -67,7 +58,7 @@ describe('McpPanel', () => {
   }
 
   it('shows the change to .mcp.json before anything runs, and runs nothing until Apply', async () => {
-    const cwd = join(root, 'mcp')
+    const cwd = fixturePath('mcp')
     const onApply = vi.fn()
     render(<Panel cwd={cwd} onApply={onApply} />)
 
@@ -81,9 +72,8 @@ describe('McpPanel', () => {
     expect(preview.disabled).toBe(false)
     await userEvent.click(preview)
 
-    expect(screen.getByText(join(cwd, '.mcp.json'))).toBeTruthy()
+    expect(screen.getByText(fixturePath('mcp/.mcp.json'))).toBeTruthy()
     expect(screen.getByText('"echo": {')).toBeTruthy()
-    expect(existsSync(join(cwd, '.mcp.json'))).toBe(false)
     expect(onApply).not.toHaveBeenCalled()
 
     await userEvent.click(screen.getByRole('button', { name: 'Run claude mcp add-json' }))
@@ -97,14 +87,14 @@ describe('McpPanel', () => {
       scope: 'project' as const,
       transport: 'stdio',
       config: '{ "command": "node" }',
-      file: join(root, 'mcp', '.mcp.json'),
+      file: fixturePath('mcp/.mcp.json'),
       approved: false,
       approvedBy: null,
       shadowedBy: null
     }
     render(
       <McpPanel
-        cwd={join(root, 'mcp')}
+        cwd={fixturePath('mcp')}
         servers={[server] as Parameters<typeof McpPanel>[0]['servers']}
         listing={null}
         listing_busy={false}
@@ -133,16 +123,9 @@ describe('EffectiveViewPane', () => {
     const profile = {
       id: 7,
       name: 'Combo',
-      root: join(root, 'work'),
-      overlays: [join(root, 'alpha'), join(root, 'beta')]
+      root: fixturePath('work'),
+      overlays: [fixturePath('alpha'), fixturePath('beta')]
     } as Profile
-    const view = computeEffectiveView({
-      cwd: profile.root,
-      overlays: profile.overlays,
-      profileId: profile.id,
-      profileName: profile.name,
-      userHome: join(root, 'home', '.claude')
-    })
     render(
       <EffectiveViewPane
         profiles={[profile]}
@@ -150,7 +133,7 @@ describe('EffectiveViewPane', () => {
         onProfileChange={vi.fn()}
         cwd=""
         onCwdChange={vi.fn()}
-        view={view}
+        view={answers.view}
         loading={false}
         error={null}
         onReveal={vi.fn()}

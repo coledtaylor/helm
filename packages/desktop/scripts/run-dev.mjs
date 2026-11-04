@@ -133,8 +133,8 @@ process.exit(status ?? 1)
  * one a developer would suspect, because everything else about a dev run is
  * disposable.
  *
- * This is the same rule `seedTemplates` in `core/discovery/templates.ts`
- * already applies to the real directory, for the same reason: **nothing here
+ * This is the same rule the local host's template seeding
+ * (`crates/host/src/workspace/templates/seed.rs`) applies to the real directory, for the same reason: **nothing here
  * keeps hashes, so nothing here can tell a template you authored from a stale
  * copy of a real one.** When the two cases are indistinguishable, the one that
  * must never happen decides, and that one is destroying authored work.

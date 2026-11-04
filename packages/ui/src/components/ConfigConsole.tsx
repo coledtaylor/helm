@@ -109,7 +109,7 @@ const KIND_LABEL: Record<ConfigFileKind, string> = {
  * in `Other` beside the CLI's caches, which is where a `.claude` tree's most
  * relevant files went to be lost.
  *
- * The nesting is presentation and nothing else: `readConfigTree` still returns
+ * The nesting is presentation and nothing else: `config:tree` still answers
  * one flat, kind-ordered list, so the tree, the counts and every check that
  * walks it are unchanged.
  */

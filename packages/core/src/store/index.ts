@@ -82,6 +82,7 @@ export {
   deleteProfile,
   findProfileByName,
   listProfiles,
+  profileDraft,
   readProfile,
   setPinnedProfiles,
   updateProfile,

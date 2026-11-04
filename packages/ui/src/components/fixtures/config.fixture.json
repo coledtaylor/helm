@@ -1,0 +1,598 @@
+{
+  "scope": {
+    "kind": "project",
+    "path": "<root>/app",
+    "claudeDir": "<root>/app/.claude",
+    "label": "app",
+    "exists": true
+  },
+  "tree": {
+    "scope": {
+      "kind": "project",
+      "path": "<root>/app",
+      "claudeDir": "<root>/app/.claude",
+      "label": "app",
+      "exists": true
+    },
+    "files": [
+      {
+        "path": "<root>/app/CLAUDE.md",
+        "relPath": "CLAUDE.md",
+        "kind": "claude-md",
+        "name": "CLAUDE.md",
+        "size": 33,
+        "mtimeMs": 1793773140162.2002,
+        "description": null,
+        "binary": false
+      },
+      {
+        "path": "<root>/app/.claude/settings.json",
+        "relPath": ".claude/settings.json",
+        "kind": "settings",
+        "name": "settings.json",
+        "size": 301,
+        "mtimeMs": 1793773140163.1997,
+        "description": null,
+        "binary": false
+      },
+      {
+        "path": "<root>/app/.claude/settings.local.json",
+        "relPath": ".claude/settings.local.json",
+        "kind": "settings-local",
+        "name": "settings.local.json",
+        "size": 36,
+        "mtimeMs": 1793773140163.1997,
+        "description": null,
+        "binary": false
+      },
+      {
+        "path": "<root>/app/.claude/skills/think/SKILL.md",
+        "relPath": ".claude/skills/think/SKILL.md",
+        "kind": "skill",
+        "name": "think",
+        "size": 77,
+        "mtimeMs": 1793773140165.2004,
+        "description": "Think before acting",
+        "binary": false
+      },
+      {
+        "path": "<root>/app/.claude/commands/spec/plan.md",
+        "relPath": ".claude/commands/spec/plan.md",
+        "kind": "command",
+        "name": "spec:plan",
+        "size": 43,
+        "mtimeMs": 1793773140166.2002,
+        "description": "Plan a spec",
+        "binary": false
+      },
+      {
+        "path": "<root>/app/.claude/agents/reviewer.md",
+        "relPath": ".claude/agents/reviewer.md",
+        "kind": "agent",
+        "name": "reviewer",
+        "size": 62,
+        "mtimeMs": 1793773140166.2002,
+        "description": "Reviews a change",
+        "binary": false
+      },
+      {
+        "path": "<root>/app/.claude/workflows/audit-routes.js",
+        "relPath": ".claude/workflows/audit-routes.js",
+        "kind": "workflow",
+        "name": "route-audit",
+        "size": 124,
+        "mtimeMs": 1793773140166.2002,
+        "description": "Audit every route handler",
+        "binary": false
+      },
+      {
+        "path": "<root>/app/.claude/hooks/guard.js",
+        "relPath": ".claude/hooks/guard.js",
+        "kind": "hook",
+        "name": "guard.js",
+        "size": 16,
+        "mtimeMs": 1793773140164.2039,
+        "description": null,
+        "binary": false
+      },
+      {
+        "path": "<root>/app/.claude/skills/think/prompts.md",
+        "relPath": ".claude/skills/think/prompts.md",
+        "kind": "other",
+        "name": "think/prompts.md",
+        "size": 22,
+        "mtimeMs": 1793773140165.2004,
+        "description": null,
+        "binary": false
+      }
+    ],
+    "errors": [],
+    "scannedAt": "2026-11-04T06:19:00.174Z"
+  },
+  "view": {
+    "cwd": "<root>/app",
+    "profileId": null,
+    "profileName": null,
+    "overlays": [],
+    "skills": [
+      {
+        "invocation": "think",
+        "name": "think",
+        "source": "cwd",
+        "namespace": null,
+        "origin": "<root>/app",
+        "path": "<root>/app/.claude/skills/think/SKILL.md",
+        "description": "Think before acting"
+      }
+    ],
+    "commands": [
+      {
+        "invocation": "spec:plan",
+        "name": "spec:plan",
+        "source": "cwd",
+        "namespace": null,
+        "origin": "<root>/app",
+        "path": "<root>/app/.claude/commands/spec/plan.md",
+        "description": "Plan a spec"
+      }
+    ],
+    "agents": [
+      {
+        "invocation": "reviewer",
+        "name": "reviewer",
+        "source": "cwd",
+        "namespace": null,
+        "origin": "<root>/app",
+        "path": "<root>/app/.claude/agents/reviewer.md",
+        "description": "Reviews a change"
+      }
+    ],
+    "workflows": [
+      {
+        "invocation": "route-audit",
+        "name": "route-audit",
+        "source": "cwd",
+        "namespace": null,
+        "origin": "<root>/app",
+        "path": "<root>/app/.claude/workflows/audit-routes.js",
+        "description": "Audit every route handler"
+      }
+    ],
+    "sharedNames": [],
+    "settingsLayers": [
+      {
+        "kind": "local",
+        "file": "<root>/app/.claude/settings.local.json",
+        "exists": true,
+        "keys": 1,
+        "error": null
+      },
+      {
+        "kind": "project",
+        "file": "<root>/app/.claude/settings.json",
+        "exists": true,
+        "keys": 4,
+        "error": null
+      },
+      {
+        "kind": "user",
+        "file": "<root>/home/.claude/settings.json",
+        "exists": true,
+        "keys": 2,
+        "error": null
+      }
+    ],
+    "settings": [
+      {
+        "key": "env.A",
+        "value": "\"project\"",
+        "winner": "project",
+        "winnerFile": "<root>/app/.claude/settings.json",
+        "candidates": [
+          {
+            "layer": "project",
+            "file": "<root>/app/.claude/settings.json",
+            "value": "\"project\""
+          },
+          {
+            "layer": "user",
+            "file": "<root>/home/.claude/settings.json",
+            "value": "\"user\""
+          }
+        ],
+        "overridden": true
+      },
+      {
+        "key": "env.B",
+        "value": "\"local\"",
+        "winner": "local",
+        "winnerFile": "<root>/app/.claude/settings.local.json",
+        "candidates": [
+          {
+            "layer": "local",
+            "file": "<root>/app/.claude/settings.local.json",
+            "value": "\"local\""
+          },
+          {
+            "layer": "project",
+            "file": "<root>/app/.claude/settings.json",
+            "value": "\"project\""
+          }
+        ],
+        "overridden": true
+      },
+      {
+        "key": "hooks.PreToolUse",
+        "value": "[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/guard.js\"}]}]",
+        "winner": "project",
+        "winnerFile": "<root>/app/.claude/settings.json",
+        "candidates": [
+          {
+            "layer": "project",
+            "file": "<root>/app/.claude/settings.json",
+            "value": "[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/guard.js\"}]}]"
+          }
+        ],
+        "overridden": false
+      },
+      {
+        "key": "model",
+        "value": "\"opus\"",
+        "winner": "project",
+        "winnerFile": "<root>/app/.claude/settings.json",
+        "candidates": [
+          {
+            "layer": "project",
+            "file": "<root>/app/.claude/settings.json",
+            "value": "\"opus\""
+          },
+          {
+            "layer": "user",
+            "file": "<root>/home/.claude/settings.json",
+            "value": "\"sonnet\""
+          }
+        ],
+        "overridden": true
+      }
+    ],
+    "instructions": [
+      {
+        "path": "<root>/app/CLAUDE.md",
+        "source": "cwd",
+        "bytes": 33,
+        "origin": "<root>/app"
+      }
+    ],
+    "mcpServers": [],
+    "warnings": [],
+    "computedAt": "2026-11-04T06:19:00.187Z"
+  },
+  "contents": {
+    "CLAUDE.md": {
+      "path": "<root>/app/CLAUDE.md",
+      "exists": true,
+      "content": "# App\n\nInstructions for the app.\n",
+      "hash": "071effe09047878e3491c1998bfe3760f11b40f3b77b0f99791ce93448cf08cd",
+      "size": 33,
+      "mtimeMs": 1793773140162.2002,
+      "binary": false
+    },
+    ".claude/settings.json": {
+      "path": "<root>/app/.claude/settings.json",
+      "exists": true,
+      "content": "{\n  \"model\": \"opus\",\n  \"env\": {\n    \"A\": \"project\",\n    \"B\": \"project\"\n  },\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node .claude/hooks/guard.js\"\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+      "hash": "656bbea7fc37dc56b553cccb78741f559219215c8741f3d33c57eb64d0546b84",
+      "size": 301,
+      "mtimeMs": 1793773140163.1997,
+      "binary": false
+    },
+    ".claude/settings.local.json": {
+      "path": "<root>/app/.claude/settings.local.json",
+      "exists": true,
+      "content": "{\n  \"env\": {\n    \"B\": \"local\"\n  }\n}\n",
+      "hash": "e772c1f7b5e3711cfaaeaf97a69caa8c52301b37ae938dc50839df577452ec84",
+      "size": 36,
+      "mtimeMs": 1793773140163.1997,
+      "binary": false
+    },
+    ".claude/skills/think/SKILL.md": {
+      "path": "<root>/app/.claude/skills/think/SKILL.md",
+      "exists": true,
+      "content": "---\nname: think\ndescription: Think before acting\n---\n\n# Think\n\nPonder first.\n",
+      "hash": "ae221d570205f59b37106c8c1ba1866fa52714e41d5f16905fb32e960f624e9f",
+      "size": 77,
+      "mtimeMs": 1793773140165.2004,
+      "binary": false
+    },
+    ".claude/commands/spec/plan.md": {
+      "path": "<root>/app/.claude/commands/spec/plan.md",
+      "exists": true,
+      "content": "---\ndescription: Plan a spec\n---\n\nPlan it.\n",
+      "hash": "08f54a9a430efc51aa8d58b8df17ad7f479238ea61d780596e3ad8afd2474a81",
+      "size": 43,
+      "mtimeMs": 1793773140166.2002,
+      "binary": false
+    },
+    ".claude/agents/reviewer.md": {
+      "path": "<root>/app/.claude/agents/reviewer.md",
+      "exists": true,
+      "content": "---\nname: reviewer\ndescription: Reviews a change\n---\n\nReview.\n",
+      "hash": "a6fe09e7aa9d80786ca7a834acf8ea5d925bddbe1f2f37baad47ce4fc34ddf20",
+      "size": 62,
+      "mtimeMs": 1793773140166.2002,
+      "binary": false
+    },
+    ".claude/workflows/audit-routes.js": {
+      "path": "<root>/app/.claude/workflows/audit-routes.js",
+      "exists": true,
+      "content": "export const meta = {\n  name: 'route-audit',\n  description: 'Audit every route handler',\n}\n\nawait agent('List the routes.')\n",
+      "hash": "480314cc924215ee54a12f2da3bed9047ae9142a8e312f2a4403a847fee313e3",
+      "size": 124,
+      "mtimeMs": 1793773140166.2002,
+      "binary": false
+    },
+    ".claude/hooks/guard.js": {
+      "path": "<root>/app/.claude/hooks/guard.js",
+      "exists": true,
+      "content": "process.exit(0)\n",
+      "hash": "d546961614a68d141d3a4e14ca29064b4b620c5779e38f3cf32f2abed20ae879",
+      "size": 16,
+      "mtimeMs": 1793773140164.2039,
+      "binary": false
+    },
+    ".claude/skills/think/prompts.md": {
+      "path": "<root>/app/.claude/skills/think/prompts.md",
+      "exists": true,
+      "content": "# Prompts\n\nAsk twice.\n",
+      "hash": "a17f77eb93a6a03e2a11d09dfd4241559c69e1f3a8f57cad1dc33578a79d4bda",
+      "size": 22,
+      "mtimeMs": 1793773140165.2004,
+      "binary": false
+    }
+  },
+  "rendered": {
+    "CLAUDE.md": {
+      "markdown": {
+        "html": "<h1 data-heading=\"app\">App</h1>\n<p>Instructions for the app.</p>",
+        "frontmatter": {
+          "present": false,
+          "fields": [],
+          "raw": "",
+          "error": null,
+          "endLine": 0
+        },
+        "headings": [
+          {
+            "depth": 1,
+            "text": "App",
+            "slug": "app"
+          }
+        ],
+        "links": [],
+        "tags": [],
+        "words": 5,
+        "counts": {
+          "tables": 0,
+          "taskItems": 0,
+          "taskItemsChecked": 0,
+          "codeBlocks": 0,
+          "highlightedBlocks": 0,
+          "callouts": 0,
+          "wikilinks": 0,
+          "brokenWikilinks": 0,
+          "tags": 0,
+          "headings": 1
+        },
+        "unknownLanguages": [],
+        "tookMs": 11
+      },
+      "code": null
+    },
+    ".claude/settings.json": {
+      "markdown": null,
+      "code": {
+        "html": "<pre class=\"shiki shiki-themes github-light one-dark-pro\" style=\"--shiki-light:#24292e;--shiki-dark:#abb2bf;--shiki-light-bg:#fff;--shiki-dark-bg:#282c34\" tabindex=\"0\"><code><span class=\"line\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">{</span></span>\n<span class=\"line\" style=\"--line-indent:2ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">  \"model\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">\"opus\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">,</span></span>\n<span class=\"line\" style=\"--line-indent:2ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">  \"env\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: {</span></span>\n<span class=\"line\" style=\"--line-indent:4ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">    \"A\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">\"project\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">,</span></span>\n<span class=\"line\" style=\"--line-indent:4ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">    \"B\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">\"project\"</span></span>\n<span class=\"line\" style=\"--line-indent:2ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">  },</span></span>\n<span class=\"line\" style=\"--line-indent:2ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">  \"hooks\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: {</span></span>\n<span class=\"line\" style=\"--line-indent:4ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">    \"PreToolUse\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: [</span></span>\n<span class=\"line\" style=\"--line-indent:6ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">      {</span></span>\n<span class=\"line\" style=\"--line-indent:8ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">        \"matcher\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">\"Bash\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">,</span></span>\n<span class=\"line\" style=\"--line-indent:8ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">        \"hooks\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: [</span></span>\n<span class=\"line\" style=\"--line-indent:10ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">          {</span></span>\n<span class=\"line\" style=\"--line-indent:12ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">            \"type\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">\"command\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">,</span></span>\n<span class=\"line\" style=\"--line-indent:12ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">            \"command\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">\"node .claude/hooks/guard.js\"</span></span>\n<span class=\"line\" style=\"--line-indent:10ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">          }</span></span>\n<span class=\"line\" style=\"--line-indent:8ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">        ]</span></span>\n<span class=\"line\" style=\"--line-indent:6ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">      }</span></span>\n<span class=\"line\" style=\"--line-indent:4ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">    ]</span></span>\n<span class=\"line\" style=\"--line-indent:2ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">  }</span></span>\n<span class=\"line\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">}</span></span>\n<span class=\"line\"></span></code></pre>",
+        "language": "json",
+        "highlighted": true
+      }
+    },
+    ".claude/settings.local.json": {
+      "markdown": null,
+      "code": {
+        "html": "<pre class=\"shiki shiki-themes github-light one-dark-pro\" style=\"--shiki-light:#24292e;--shiki-dark:#abb2bf;--shiki-light-bg:#fff;--shiki-dark-bg:#282c34\" tabindex=\"0\"><code><span class=\"line\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">{</span></span>\n<span class=\"line\" style=\"--line-indent:2ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">  \"env\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: {</span></span>\n<span class=\"line\" style=\"--line-indent:4ch\"><span style=\"--shiki-light:#005CC5;--shiki-dark:#E06C75\">    \"B\"</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">\"local\"</span></span>\n<span class=\"line\" style=\"--line-indent:2ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">  }</span></span>\n<span class=\"line\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">}</span></span>\n<span class=\"line\"></span></code></pre>",
+        "language": "json",
+        "highlighted": true
+      }
+    },
+    ".claude/skills/think/SKILL.md": {
+      "markdown": {
+        "html": "<h1 data-heading=\"think\">Think</h1>\n<p>Ponder first.</p>",
+        "frontmatter": {
+          "present": true,
+          "fields": [
+            {
+              "key": "name",
+              "value": "think",
+              "values": [
+                "think"
+              ]
+            },
+            {
+              "key": "description",
+              "value": "Think before acting",
+              "values": [
+                "Think before acting"
+              ]
+            }
+          ],
+          "raw": "name: think\ndescription: Think before acting",
+          "error": null,
+          "endLine": 4
+        },
+        "headings": [
+          {
+            "depth": 1,
+            "text": "Think",
+            "slug": "think"
+          }
+        ],
+        "links": [],
+        "tags": [],
+        "words": 3,
+        "counts": {
+          "tables": 0,
+          "taskItems": 0,
+          "taskItemsChecked": 0,
+          "codeBlocks": 0,
+          "highlightedBlocks": 0,
+          "callouts": 0,
+          "wikilinks": 0,
+          "brokenWikilinks": 0,
+          "tags": 0,
+          "headings": 1
+        },
+        "unknownLanguages": [],
+        "tookMs": 5
+      },
+      "code": null
+    },
+    ".claude/commands/spec/plan.md": {
+      "markdown": {
+        "html": "<p>Plan it.</p>",
+        "frontmatter": {
+          "present": true,
+          "fields": [
+            {
+              "key": "description",
+              "value": "Plan a spec",
+              "values": [
+                "Plan a spec"
+              ]
+            }
+          ],
+          "raw": "description: Plan a spec",
+          "error": null,
+          "endLine": 3
+        },
+        "headings": [],
+        "links": [],
+        "tags": [],
+        "words": 2,
+        "counts": {
+          "tables": 0,
+          "taskItems": 0,
+          "taskItemsChecked": 0,
+          "codeBlocks": 0,
+          "highlightedBlocks": 0,
+          "callouts": 0,
+          "wikilinks": 0,
+          "brokenWikilinks": 0,
+          "tags": 0,
+          "headings": 0
+        },
+        "unknownLanguages": [],
+        "tookMs": 1
+      },
+      "code": null
+    },
+    ".claude/agents/reviewer.md": {
+      "markdown": {
+        "html": "<p>Review.</p>",
+        "frontmatter": {
+          "present": true,
+          "fields": [
+            {
+              "key": "name",
+              "value": "reviewer",
+              "values": [
+                "reviewer"
+              ]
+            },
+            {
+              "key": "description",
+              "value": "Reviews a change",
+              "values": [
+                "Reviews a change"
+              ]
+            }
+          ],
+          "raw": "name: reviewer\ndescription: Reviews a change",
+          "error": null,
+          "endLine": 4
+        },
+        "headings": [],
+        "links": [],
+        "tags": [],
+        "words": 1,
+        "counts": {
+          "tables": 0,
+          "taskItems": 0,
+          "taskItemsChecked": 0,
+          "codeBlocks": 0,
+          "highlightedBlocks": 0,
+          "callouts": 0,
+          "wikilinks": 0,
+          "brokenWikilinks": 0,
+          "tags": 0,
+          "headings": 0
+        },
+        "unknownLanguages": [],
+        "tookMs": 0
+      },
+      "code": null
+    },
+    ".claude/workflows/audit-routes.js": {
+      "markdown": null,
+      "code": {
+        "html": "<pre class=\"shiki shiki-themes github-light one-dark-pro\" style=\"--shiki-light:#24292e;--shiki-dark:#abb2bf;--shiki-light-bg:#fff;--shiki-dark-bg:#282c34\" tabindex=\"0\"><code><span class=\"line\"><span style=\"--shiki-light:#D73A49;--shiki-dark:#C678DD\">export</span><span style=\"--shiki-light:#D73A49;--shiki-dark:#C678DD\"> const</span><span style=\"--shiki-light:#005CC5;--shiki-dark:#E5C07B\"> meta</span><span style=\"--shiki-light:#D73A49;--shiki-dark:#56B6C2\"> =</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\"> {</span></span>\n<span class=\"line\" style=\"--line-indent:2ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#E06C75\">  name</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">'route-audit'</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">,</span></span>\n<span class=\"line\" style=\"--line-indent:2ch\"><span style=\"--shiki-light:#24292E;--shiki-dark:#E06C75\">  description</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">: </span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">'Audit every route handler'</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">,</span></span>\n<span class=\"line\"><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">}</span></span>\n<span class=\"line\"></span>\n<span class=\"line\"><span style=\"--shiki-light:#D73A49;--shiki-dark:#C678DD\">await</span><span style=\"--shiki-light:#6F42C1;--shiki-dark:#61AFEF\"> agent</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">(</span><span style=\"--shiki-light:#032F62;--shiki-dark:#98C379\">'List the routes.'</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">)</span></span>\n<span class=\"line\"></span></code></pre>",
+        "language": "javascript",
+        "highlighted": true
+      }
+    },
+    ".claude/hooks/guard.js": {
+      "markdown": null,
+      "code": {
+        "html": "<pre class=\"shiki shiki-themes github-light one-dark-pro\" style=\"--shiki-light:#24292e;--shiki-dark:#abb2bf;--shiki-light-bg:#fff;--shiki-dark-bg:#282c34\" tabindex=\"0\"><code><span class=\"line\"><span style=\"--shiki-light:#24292E;--shiki-dark:#E5C07B\">process</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">.</span><span style=\"--shiki-light:#6F42C1;--shiki-dark:#61AFEF\">exit</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">(</span><span style=\"--shiki-light:#005CC5;--shiki-dark:#D19A66\">0</span><span style=\"--shiki-light:#24292E;--shiki-dark:#ABB2BF\">)</span></span>\n<span class=\"line\"></span></code></pre>",
+        "language": "javascript",
+        "highlighted": true
+      }
+    },
+    ".claude/skills/think/prompts.md": {
+      "markdown": {
+        "html": "<h1 data-heading=\"prompts\">Prompts</h1>\n<p>Ask twice.</p>",
+        "frontmatter": {
+          "present": false,
+          "fields": [],
+          "raw": "",
+          "error": null,
+          "endLine": 0
+        },
+        "headings": [
+          {
+            "depth": 1,
+            "text": "Prompts",
+            "slug": "prompts"
+          }
+        ],
+        "links": [],
+        "tags": [],
+        "words": 3,
+        "counts": {
+          "tables": 0,
+          "taskItems": 0,
+          "taskItemsChecked": 0,
+          "codeBlocks": 0,
+          "highlightedBlocks": 0,
+          "callouts": 0,
+          "wikilinks": 0,
+          "brokenWikilinks": 0,
+          "tags": 0,
+          "headings": 1
+        },
+        "unknownLanguages": [],
+        "tookMs": 1
+      },
+      "code": null
+    }
+  }
+}
