@@ -7,8 +7,7 @@ import type * as P from './protocol'
 import { profileFromHost } from './records'
 
 /**
- * Helm's saved profiles when sessions run in the local host: they live in the
- * host, which composes a launch from them, and this is the `ProfileService`
+ * Helm's saved profiles: they live in the local host, which composes a launch from them, and this is the `ProfileService`
  * the window and main's other readers use.
  *
  * On every connect it subscribes to the host's `profiles:changed`, keeps the

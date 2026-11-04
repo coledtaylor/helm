@@ -7,7 +7,7 @@ import type { HostReach } from './history'
 import type { HostAdapter } from './router'
 
 /**
- * Saved profiles while sessions run in the local host: they live in the host,
+ * Saved profiles: they live in the host,
  * and the window lists, saves, pins, exports and imports them over its own
  * connection, in ipc.ts's shapes.
  *

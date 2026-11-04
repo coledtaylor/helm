@@ -20,7 +20,7 @@ import type { HostAdapter } from './router'
 import { createTerminalsAdapter, type ShellShelf } from './terminals'
 
 /**
- * Sessions and terminals while sessions run in the local host, over the
+ * Sessions and terminals, over the
  * window's own connection: the host owns each session's process, its row and
  * its terminal, and every client sees every session it runs. Which of them
  * have a tab here is this device's own (its saved layout), so the window says

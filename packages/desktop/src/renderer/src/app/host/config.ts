@@ -7,7 +7,7 @@ import type { HostReach } from './history'
 import type { HostAdapter } from './router'
 
 /**
- * The config console while sessions run in the local host: the host reads the
+ * The config console: the host reads the
  * agent's configuration, renders it, runs the agent's own CLI for MCP and the
  * doctor, and writes through its one writer, which snapshots the bytes it
  * replaces first, aborts with a sentence when it cannot, and refuses a write

@@ -24,7 +24,7 @@ import type { HostReach } from './history'
 import type { HostAdapter } from './router'
 
 /**
- * Plugins while sessions run in the local host, over a Helm page's own
+ * Plugins, over a Helm page's own
  * connection. The host registers the folders, keeps their switches, setting
  * values and secrets, runs their services and answers their pages' calls:
  * `helm.fetch`, `exec`, settings, secrets, sessions, status and badge, and a

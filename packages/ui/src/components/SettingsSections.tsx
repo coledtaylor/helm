@@ -15,9 +15,9 @@ export type SettingsSectionId =
   | 'appearance'
   | 'terminal'
   | 'sessions'
-  /** The hosts on other computers. Listed only while sessions run in the local host. */
+  /** The hosts on other computers. */
   | 'hosts'
-  /** The devices attached to each connected host. Listed only while sessions run in the local host. */
+  /** The devices attached to each connected host. */
   | 'devices'
   | 'workspace'
   | 'files'

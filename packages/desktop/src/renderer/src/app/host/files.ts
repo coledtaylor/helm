@@ -6,7 +6,7 @@ import type { HostReach } from './history'
 import type { HostAdapter } from './router'
 
 /**
- * The Files view and the note viewer while sessions run in the local host:
+ * The Files view and the note viewer:
  * the host lists, reads, searches, renders and watches its own machine's
  * folders, and writes the one thing the view writes, a note, through the
  * config console's writer, which snapshots the bytes it replaces first, aborts

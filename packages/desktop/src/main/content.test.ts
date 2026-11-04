@@ -99,6 +99,7 @@ describe('the artifact scheme', () => {
     const { registerIpc } = await import('./ipc')
     registerIpc({
       window: () => null,
+      services: { settings: { theme: 'system' } },
       themes: { onChange: () => () => undefined }
     } as unknown as Parameters<typeof registerIpc>[0])
     const open = captured.handlers.get('shell:openExternal')

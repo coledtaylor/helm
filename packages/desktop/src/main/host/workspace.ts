@@ -25,7 +25,7 @@ import { CLAUDE_CODE_BACKEND, type Emit } from './sessions'
 
 /**
  * Discovery, scan roots, harnesses, setup, templates and the host's half of
- * the settings, when sessions run in the local host. The host scans its own
+ * the settings. The local host scans its own
  * machine's folders, keeps the scan roots, the pinned projects and whether
  * setup was finished, checks Claude Code for setup, makes harnesses and keeps
  * the templates; Helm's main process does none of it.

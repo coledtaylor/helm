@@ -51,8 +51,7 @@ export interface StatusBarProps {
   plugins?: readonly StatusPluginItem[] | undefined;
   /**
    * The hosts sessions run in and what quitting Helm does on each, this PC
-   * first, while sessions run in the local host; empty otherwise, when there
-   * is no host to name. Pressing one opens the setting that decides.
+   * first. Pressing one opens the setting that decides.
    */
   hosts?: readonly StatusHostItem[] | undefined;
 }

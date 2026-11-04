@@ -104,7 +104,7 @@ export interface SessionTreeProps {
   localKey?: string | undefined
   /**
    * The list's right-click menu offers Add a host…, which this opens. Given
-   * only while sessions run in the local host and this PC is the only host;
+   * only while this PC is the only host;
    * once there are others, the Add a host line at the end of the list does it.
    */
   onAddHostMenu?: (() => void) | undefined

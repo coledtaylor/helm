@@ -46,8 +46,8 @@ export function installOverlayInspector(): void {
 /**
  * The window's routed bridge, for the end-to-end tests: what the app's own
  * hooks call, so a test asks for a host feature the way the window does, over
- * the window's own connection when sessions run in the local host and over
- * Electron IPC otherwise.
+ * the window's own connection to the host, or over Electron IPC for what is
+ * the window's own.
  *
  * Only on Helm's own top-level window. It is the same object the app imports
  * and reaches nothing the page did not already have: a plugin page, an

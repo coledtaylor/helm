@@ -4,11 +4,10 @@ import type * as P from './protocol'
 import { resourcesFromHost } from './records'
 
 /**
- * What each hosted session is holding - its process tree and its ports - when
- * sessions run in the local host. The host runs the pass (it is the one with
- * the sessions' processes) under the same rules Helm's own pass keeps: only
+ * What each hosted session is holding - its process tree and its ports. The
+ * local host runs the pass (it is the one with the sessions' processes) only
  * while somebody is looking, every 4s, never two at once. This is how the
- * window reads it over its own connection, in the shape Helm's own pass has.
+ * window reads it over its own connection.
  *
  * On every connect it subscribes to the host's `sessions:resources` and hands
  * each set to the window, converted field by field, so "could not look"

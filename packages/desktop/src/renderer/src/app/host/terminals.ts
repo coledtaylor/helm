@@ -5,7 +5,7 @@ import type { HostReach } from './history'
 import type { HostAdapter } from './router'
 
 /**
- * Plain terminals while sessions run in the local host: each shell runs on the
+ * Plain terminals: each shell runs on the
  * host and its terminal is carried on a stream over the window's own
  * connection, so a page that has just loaded draws the shell's screen as it is
  * and then streams.

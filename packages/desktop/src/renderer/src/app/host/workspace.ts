@@ -16,8 +16,7 @@ import type { HostReach } from './history'
 import type { HostAdapter } from './router'
 
 /**
- * Discovery, scan roots, harnesses, setup, templates and the settings while
- * sessions run in the local host. The host scans its own machine's folders,
+ * Discovery, scan roots, harnesses, setup, templates and the settings. The host scans its own machine's folders,
  * keeps the scan roots, the pinned projects and whether setup was finished,
  * checks Claude Code, makes harnesses and keeps the templates, and the window
  * asks it over its own connection, in ipc.ts's shapes.

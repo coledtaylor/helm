@@ -1,7 +1,8 @@
 //! The environment every session's program gets, whatever backend runs it.
 //!
-//! It is the host's own environment with two kinds of change, the rules
-//! today's app applies in `packages/desktop/src/main/pty.ts`:
+//! It is the host's own environment with two kinds of change (the desktop's
+//! spike page applies the same rules to its single terminal, in
+//! `packages/desktop/src/main/pty.ts`):
 //!
 //! - Variables a hosted agent must not inherit are removed. Claude Code
 //!   stamps `CLAUDECODE` and `CLAUDE_CODE_*` on every process it spawns; a
