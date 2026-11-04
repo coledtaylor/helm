@@ -49,6 +49,8 @@ export function sessionNote(state: TabIndicator, since: number | null, now: numb
   switch (state) {
     case 'waiting':
       return 'needs you'
+    case 'error':
+      return 'error'
     case 'busy':
       return since === null ? '' : shortAge(now - since)
     case 'idle':
@@ -63,17 +65,24 @@ export function sessionNote(state: TabIndicator, since: number | null, now: numb
   }
 }
 
-/** The crumb's status: what the session is doing, and for how long. */
+/**
+ * The crumb's status: what the session is doing, and for how long. A reported
+ * error carries its program's own message, which the host already cut to 200
+ * characters.
+ */
 export function crumbStatus(
   session: SessionRecord,
   state: TabIndicator,
   since: number | null,
-  now: number
+  now: number,
+  message: string | null = null
 ): { text: string; tone: CrumbTone } {
   const age = since === null ? '' : ` · ${shortAge(now - since)}`
   switch (state) {
     case 'waiting':
       return { text: `Needs you${age}`, tone: 'warn' }
+    case 'error':
+      return { text: message === null ? 'Error' : `Error · ${message}`, tone: 'danger' }
     case 'busy':
       return { text: `Working${age}`, tone: 'accent' }
     case 'idle':
@@ -90,6 +99,20 @@ export function crumbStatus(
     default:
       return { text: 'Running', tone: 'subtle' }
   }
+}
+
+/**
+ * What a running session's hint adds to its folder: what a waiting one waits
+ * on, and a reported error's message. The CLI's sentence and the program's
+ * message are shown verbatim and never matched against. Null when it says
+ * nothing more.
+ */
+export function statusHint(
+  status: Pick<SessionActivityState, 'activity' | 'waitingFor' | 'message'> | undefined
+): string | null {
+  if (status === undefined) return null
+  if (status.activity === 'error') return status.message === null ? null : `Error: ${status.message}`
+  return status.waitingFor === null ? null : `Waiting: ${status.waitingFor}`
 }
 
 /**

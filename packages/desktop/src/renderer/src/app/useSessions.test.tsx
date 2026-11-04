@@ -54,13 +54,13 @@ async function mounted() {
 describe('useSessions', () => {
   it('adopts the sessions main is still hosting after a reload, with what each is doing', async () => {
     hosting = [record(1), record(2)]
-    activity = [{ id: 2, activity: 'busy', waitingFor: null, claudeSessionId: 'c' }]
+    activity = [{ id: 2, activity: 'busy', waitingFor: null, message: null, claudeSessionId: 'c' }]
     const { result } = await mounted()
     await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1, 2]))
     expect(result.current.activity.get(2)?.activity).toBe('busy')
 
     // Every push carries the whole set, so a session that stopped being reported loses its dot.
-    act(() => bridge.emit('session:activity', [{ id: 1, activity: 'waiting', waitingFor: 'dialog open', claudeSessionId: 'c' }]))
+    act(() => bridge.emit('session:activity', [{ id: 1, activity: 'waiting', waitingFor: 'dialog open', message: null, claudeSessionId: 'c' }]))
     expect([...result.current.activity.keys()]).toEqual([1])
   })
 

@@ -15,6 +15,7 @@ function live(pid: number, helmSessionId: number | null): LiveSession {
     name: `session ${String(pid)}`,
     activity: 'idle',
     waitingFor: null,
+    message: null,
     statusSinceMs: null,
     version: null,
     entrypoint: null,

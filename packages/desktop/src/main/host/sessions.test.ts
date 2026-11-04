@@ -595,11 +595,13 @@ describe('sessions through the local host', () => {
     const w = world({ listed: [row()] })
     await w.connect()
     w.connection.snapshot('session:activity', [
-      { id: 7, activity: 'busy', waitingFor: null, conversationId: ROW.conversationId }
+      { id: 7, activity: 'busy', waitingFor: null, message: null, conversationId: ROW.conversationId },
+      { id: 8, activity: 'error', waitingFor: null, message: 'build failed', conversationId: null }
     ])
 
     expect(w.host.activity.states()).toEqual([
-      { id: 7, activity: 'busy', waitingFor: null, claudeSessionId: ROW.conversationId }
+      { id: 7, activity: 'busy', waitingFor: null, message: null, claudeSessionId: ROW.conversationId },
+      { id: 8, activity: 'error', waitingFor: null, message: 'build failed', claudeSessionId: null }
     ])
     expect(w.emitted).toContainEqual({ channel: 'session:activity', payload: w.host.activity.states() })
   })

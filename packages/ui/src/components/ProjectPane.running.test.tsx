@@ -26,6 +26,7 @@ function live(over: Partial<LiveSession> & Pick<LiveSession, 'pid'>): LiveSessio
     name: null,
     activity: 'idle',
     waitingFor: null,
+    message: null,
     statusSinceMs: null,
     version: '2.1.999',
     entrypoint: 'cli',

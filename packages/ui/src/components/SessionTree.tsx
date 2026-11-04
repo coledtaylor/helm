@@ -186,10 +186,12 @@ function matchesText(text: string, query: string): boolean {
 
 /**
  * Which of a project's sessions' states a folded project shows: the one that
- * most wants you. Waiting first, then working, then a failure, then the rest.
+ * most wants you. Waiting first, then a reported error, then working, then a
+ * failure, then the rest.
  */
 const URGENCY: readonly SessionState[] = [
   'waiting',
+  'error',
   'busy',
   'failed',
   'running',

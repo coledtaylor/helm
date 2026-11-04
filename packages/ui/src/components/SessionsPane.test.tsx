@@ -24,6 +24,7 @@ function live(
     name: null,
     activity: "idle",
     waitingFor: null,
+    message: null,
     statusSinceMs: null,
     version: "2.1.999",
     entrypoint: "cli",
@@ -166,6 +167,45 @@ const items = (region: HTMLElement): string[] =>
     .map((item) => item.textContent ?? "");
 
 describe("SessionsPane", () => {
+  it("shows a session whose program reports an error, with its message, and a reported block's kind", () => {
+    const failing = live({
+      helmSessionId: 1,
+      pid: 4100,
+      cwd: "C:\\work\\shop",
+      name: "shop",
+      registered: false,
+      activity: "error",
+      message: "build failed: 3 errors",
+    });
+    const asking = live({
+      helmSessionId: 2,
+      pid: 4200,
+      cwd: "C:\\work\\docs",
+      name: "docs",
+      registered: false,
+      activity: "waiting",
+      waitingFor: "question",
+    });
+    renderPane({
+      sessions: [failing, asking],
+      selectedPid: failing.pid,
+    });
+    const inHelm = screen.getByRole("region", { name: "In Helm" });
+    const [shop, docs] = within(inHelm).getAllByRole("button");
+    expect(shop?.textContent).toContain("build failed: 3 errors");
+    expect(
+      within(shop as HTMLElement).getByTitle("Error: build failed: 3 errors"),
+    ).toBeDefined();
+    expect(
+      shop?.querySelector("[data-session-dot]")?.classList.contains("bg-danger"),
+    ).toBe(true);
+    expect(within(docs as HTMLElement).getByTitle("Waiting: question")).toBeDefined();
+
+    const chip = document.querySelector('[data-session-state-chip="error"]');
+    expect(chip?.textContent).toBe("reports an error");
+    expect(chip?.getAttribute("title")).toBe("Error: build failed: 3 errors");
+  });
+
   it("lists Helm’s sessions and everything else on the machine apart, each with its own folder", async () => {
     const props = renderPane();
     const inHelm = screen.getByRole("region", { name: "In Helm" });

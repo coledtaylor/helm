@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionActivity, SessionActivityState, SessionRecord } from '@helm/core/types'
-import { crumbStatus, indicatorOf, sessionNote } from './sessionView'
+import { crumbStatus, indicatorOf, sessionNote, statusHint } from './sessionView'
 
 function session(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -22,8 +22,12 @@ function session(over: Partial<SessionRecord> = {}): SessionRecord {
   }
 }
 
-function said(activity: SessionActivity | null, waitingFor: string | null = null): SessionActivityState {
-  return { id: 1, activity, waitingFor, claudeSessionId: activity === null ? null : 'conversation' }
+function said(
+  activity: SessionActivity | null,
+  waitingFor: string | null = null,
+  message: string | null = null
+): SessionActivityState {
+  return { id: 1, activity, waitingFor, message, claudeSessionId: activity === null ? null : 'conversation' }
 }
 
 const MINUTE = 60_000
@@ -34,6 +38,15 @@ describe('indicatorOf', () => {
     expect(indicatorOf(session(), said('waiting', 'permission prompt'))).toBe('waiting')
     expect(indicatorOf(session(), said('idle'))).toBe('idle')
     expect(indicatorOf(session(), said('shell'))).toBe('shell')
+  })
+
+  it('paints a plain tab with what its program reports: working, idle, needs you or error', () => {
+    expect(indicatorOf(session(), said('busy'))).toBe('busy')
+    expect(indicatorOf(session(), said('idle'))).toBe('idle')
+    expect(indicatorOf(session(), said('waiting', 'question'))).toBe('waiting')
+    expect(indicatorOf(session(), said('error', null, 'build failed'))).toBe('error')
+    // A program that has exited is over, whatever it last reported.
+    expect(indicatorOf(session({ status: 'exited', exitCode: 1 }), said('error', null, 'x'))).toBe('failed')
   })
 
   it('paints running, never a guess, where no live record speaks for the session', () => {
@@ -64,6 +77,33 @@ describe('what the tree row and the crumb say', () => {
     expect(crumbStatus(session(), 'busy', now - 90 * MINUTE, now)).toEqual({ text: 'Working · 1h', tone: 'accent' })
     expect(crumbStatus(session(), 'idle', null, now)).toEqual({ text: 'Idle', tone: 'success' })
     expect(crumbStatus(session(), 'running', null, now)).toEqual({ text: 'Running', tone: 'subtle' })
+  })
+
+  it('says a reported error, with the program\'s message in the crumb, in the danger tone', () => {
+    expect(sessionNote('error', now - 4 * MINUTE, now)).toBe('error')
+    expect(crumbStatus(session(), 'error', now - 4 * MINUTE, now, 'build failed')).toEqual({
+      text: 'Error · build failed',
+      tone: 'danger'
+    })
+    expect(crumbStatus(session(), 'error', null, now)).toEqual({ text: 'Error', tone: 'danger' })
+    const longest = 'm'.repeat(200)
+    expect(crumbStatus(session(), 'error', null, now, longest).text).toBe(`Error · ${longest}`)
+  })
+
+  it('names what a reported block waits on, and a reported error, in the hint', () => {
+    expect(statusHint(said('waiting', 'permission prompt'))).toBe('Waiting: permission prompt')
+    expect(statusHint(said('waiting', 'question'))).toBe('Waiting: question')
+    expect(statusHint(said('waiting', 'sign-in'))).toBe('Waiting: sign-in')
+    expect(statusHint(said('error', null, 'build failed'))).toBe('Error: build failed')
+    expect(statusHint(said('error'))).toBeNull()
+  })
+
+  it('says nothing more for a plain tab whose program never reports', () => {
+    expect(indicatorOf(session(), said(null))).toBe('running')
+    expect(sessionNote('running', null, now)).toBe('')
+    expect(crumbStatus(session(), 'running', null, now)).toEqual({ text: 'Running', tone: 'subtle' })
+    expect(statusHint(said(null))).toBeNull()
+    expect(statusHint(undefined)).toBeNull()
   })
 
   it('says how a session ended', () => {

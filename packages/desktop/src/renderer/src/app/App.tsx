@@ -238,7 +238,13 @@ import { readable } from "./errors";
 import { TerminalPane, type HostLost } from "./TerminalPane";
 import { TerminalTabPane } from "./TerminalTabPane";
 import { terminalFontStack } from "../terminal";
-import { crumbStatus, indicatorOf, sessionNote, useNow } from "./sessionView";
+import {
+  crumbStatus,
+  indicatorOf,
+  sessionNote,
+  statusHint,
+  useNow,
+} from "./sessionView";
 import { useConfig } from "./useConfig";
 import {
   DocumentModeSwitch,
@@ -3010,7 +3016,7 @@ export function App(): JSX.Element {
           : undefined;
       const state = indicatorOf(session, activity);
       const live = liveByHelmId.get(session.id);
-      const waitingFor = activity?.waitingFor ?? null;
+      const status = statusHint(activity);
       const id = `session:${String(session.id)}`;
       const label = sessionLabel(session);
       const row: TreeSession = {
@@ -3018,10 +3024,7 @@ export function App(): JSX.Element {
         label,
         state,
         note: sessionNote(state, live?.statusSinceMs ?? null, now),
-        hint:
-          waitingFor === null
-            ? session.cwd
-            : `${session.cwd}\nWaiting: ${waitingFor}`,
+        hint: status === null ? session.cwd : `${session.cwd}\n${status}`,
         outside: false,
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
@@ -3048,7 +3051,7 @@ export function App(): JSX.Element {
           note: "outside Helm",
           hint:
             `Started outside Helm, in ${live.cwd ?? project.path}` +
-            (live.waitingFor === null ? "" : `\nWaiting: ${live.waitingFor}`),
+            (statusHint(live) === null ? "" : `\n${statusHint(live)}`),
           outside: true,
           shown: null,
         });
@@ -3209,10 +3212,11 @@ export function App(): JSX.Element {
           if (there === null) return [];
           const label = sessionLabel(there.record);
           const on = hostName(hostOf(ref));
-          const waitingFor =
+          const status =
             there.record.status === "running"
-              ? (hostWork.byHost.get(hostOf(ref))?.activity.get(ref.id)
-                  ?.waitingFor ?? null)
+              ? statusHint(
+                  hostWork.byHost.get(hostOf(ref))?.activity.get(ref.id),
+                )
               : null;
           return [
             {
@@ -3220,9 +3224,9 @@ export function App(): JSX.Element {
               title: label,
               host: on,
               hint:
-                waitingFor === null
+                status === null
                   ? `${label} · ${on} · ${there.record.cwd}`
-                  : `${label} · ${on} · ${there.record.cwd}\nWaiting: ${waitingFor}`,
+                  : `${label} · ${on} · ${there.record.cwd}\n${status}`,
               indicator: there.indicator,
               // Its host's link is down: a warning ring until it is back.
               away:
@@ -3235,22 +3239,22 @@ export function App(): JSX.Element {
         const session = sessionsById.get(ref.id);
         if (!session) return [];
         const label = sessionLabel(session);
-        const waitingFor =
+        const status =
           session.status === "running"
-            ? (sessionActivity.get(session.id)?.waitingFor ?? null)
+            ? statusHint(sessionActivity.get(session.id))
             : null;
         return [
           {
             id: paneId(ref),
             title: label,
-            // The CLI's own sentence for why it is blocked, verbatim and never
-            // matched against: it comes from whichever dialog is on top, and
-            // anything that interpreted it would be a second parser of a string
-            // the CLI can change freely.
+            // The CLI's own sentence for why it is blocked, or a program's own
+            // error message, verbatim and never matched against: it comes from
+            // whichever dialog is on top, and anything that interpreted it
+            // would be a second parser of a string the CLI can change freely.
             hint:
-              waitingFor === null
+              status === null
                 ? `${label} · ${session.cwd}`
-                : `${label} · ${session.cwd}\nWaiting: ${waitingFor}`,
+                : `${label} · ${session.cwd}\n${status}`,
             indicator: stateOf(session),
             renamable: true,
           },
@@ -3508,6 +3512,9 @@ export function App(): JSX.Element {
           stateOf(session),
           liveByHelmId.get(session.id)?.statusSinceMs ?? null,
           now,
+          session.status === "running"
+            ? (sessionActivity.get(session.id)?.message ?? null)
+            : null,
         )}
       />
     );

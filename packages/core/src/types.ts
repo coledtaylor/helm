@@ -371,7 +371,7 @@ export interface SessionRecord {
  * *value* in the browser bundle - so it lives in `types.ts`, the one entry
  * point safe to import values from (CLAUDE.md "Boundaries").
  */
-export const SESSION_ACTIVITIES = ['busy', 'shell', 'idle', 'waiting'] as const
+export const SESSION_ACTIVITIES = ['busy', 'shell', 'idle', 'waiting', 'error'] as const
 export type SessionActivity = (typeof SESSION_ACTIVITIES)[number]
 
 /**
@@ -458,9 +458,20 @@ export interface SessionRegistryEntry {
 export interface SessionActivityState {
   /** Helm's own session row id. */
   id: number
+  /**
+   * From the backend's own records where it keeps them, or else from the
+   * OSC 7501 reports the session's program writes. `error` only ever comes
+   * from a report.
+   */
   activity: SessionActivity | null
-  /** The CLI's sentence for a `waiting` session. Null otherwise. */
+  /**
+   * What a `waiting` session waits on: the CLI's own sentence, or for a
+   * reported block its kind in words (`permission prompt`, `question`,
+   * `sign-in`). Null otherwise.
+   */
   waitingFor: string | null
+  /** The program's own message for an `error`, at most 200 characters. Null otherwise. */
+  message: string | null
   /**
    * The conversation id the registry is currently reporting under.
    *
@@ -555,8 +566,10 @@ export interface LiveSession {
   /** What it is called: the `-n` name, or Helm's own label for a hosted one. */
   name: string | null
   activity: SessionActivity | null
-  /** The CLI's own sentence for a `waiting` session, verbatim. */
+  /** The CLI's own sentence for a `waiting` session, verbatim, or a reported block's kind in words. */
   waitingFor: string | null
+  /** The program's own message for an `error`, at most 200 characters. Null otherwise. */
+  message: string | null
   /**
    * When the status above was last published, epoch ms, or null.
    *

@@ -447,6 +447,10 @@ overrides the gate; keep it.
   the process, and what the session says about itself. Claude Code publishes its
   own status for every live session, and putting it on the tab is the difference
   between a strip of six tabs and a strip that says which one is waiting on you.
+  A session whose backend keeps no such record says the same things through the
+  OSC 7501 reports its program writes: working is `busy`, idle and done are
+  `idle`, blocked is `waiting` (its hint naming a permission prompt, a question
+  or a sign-in), and error is `error`.
 
   | state | tone | what it is |
   | --- | --- | --- |
@@ -457,6 +461,14 @@ overrides the gate; keep it.
   | `running` | `success`, filled | alive, and not saying anything |
   | `ended` | `fg-subtle` | exited cleanly |
   | `failed` | `danger` | exited with a code |
+  | `error` | `danger`, filled | running, and its program reports an error |
+
+  `error` and `failed` share `danger` because both are something gone wrong, and
+  differ in what the session still is: `failed` has exited with a code and is
+  over, `error` is still running and may recover. The row says "error" against
+  "failed", and the crumb says "Error · <the program's message>" against
+  "Exited <code>". Only a program's own report says `error`; Claude Code's
+  records never do.
 
   Four decisions in that table are deliberate and each would be easy to undo by
   accident.

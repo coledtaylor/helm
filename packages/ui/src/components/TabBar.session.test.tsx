@@ -99,6 +99,18 @@ describe('TabBar session tabs', () => {
     expect(new Set(tones).size).toBe(3)
   })
 
+  it('paints a tab whose program reports an error in danger, said apart from one that exited', () => {
+    renderBar([
+      { id: 'session:error', title: 'build', indicator: 'error' },
+      { id: 'session:failed', title: 'old', indicator: 'failed' }
+    ])
+    const error = dotOf(screen.getByRole('tab', { name: 'build, reports an error' }))
+    expect(error).toContain('bg-danger')
+    expect(error).toContain('rounded-full')
+    // Same tone, different words: one is still running, the other is over.
+    expect(screen.getByRole('tab', { name: 'old, exited with an error' })).toBeTruthy()
+  })
+
   it('opens the rename field focused with the title selected, and keeps its keys from the strip', async () => {
     const props = renderBar([
       { id: 'session:1', title: 'alpha', indicator: 'idle', renamable: true },

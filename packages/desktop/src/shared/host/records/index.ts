@@ -116,6 +116,7 @@ export function activityFromHost(states: readonly P.SessionActivityState[]): Ses
     id: state.id,
     activity: state.activity,
     waitingFor: state.waitingFor,
+    message: state.message,
     claudeSessionId: state.conversationId
   }))
 }
@@ -129,6 +130,7 @@ function liveFromHost(session: P.LiveSession): LiveSession {
     name: session.name,
     activity: session.activity,
     waitingFor: session.waitingFor,
+    message: session.message,
     statusSinceMs: session.statusSinceMs,
     version: session.version,
     entrypoint: session.entrypoint,

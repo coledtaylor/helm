@@ -756,6 +756,17 @@ function Row({
             {session.waitingFor}
           </Chip>
         )}
+        {session.activity === "error" && session.message !== null && (
+          // The program's own message, from its OSC 7501 report, verbatim.
+          <Chip
+            tone="danger"
+            dense
+            truncate
+            title={`Error: ${session.message}`}
+          >
+            {session.message}
+          </Chip>
+        )}
         {ports !== null && ports.length > 0 && (
           <Chip
             tone="accent"
@@ -928,7 +939,11 @@ function Detail({
         {/* A hairline outline in a semantic tone, never a fill - DESIGN.md 4's
             state chip. One word carrying the whole status of the thing on screen is exactly
             what that pill is for. */}
-        <StateChip state={state} waitingFor={session.waitingFor} />
+        <StateChip
+          state={state}
+          waitingFor={session.waitingFor}
+          message={session.activity === "error" ? session.message : null}
+        />
         {helmSessionId === null && (
           <span className="shrink-0 rounded-full border border-border-strong px-2.5 py-0.5 text-[10px] text-fg-muted">
             outside Helm
@@ -1042,9 +1057,11 @@ function Detail({
 function StateChip({
   state,
   waitingFor,
+  message,
 }: {
   state: SessionState;
   waitingFor: string | null;
+  message: string | null;
 }): JSX.Element {
   const TONE: Record<SessionState, string> = {
     busy: "border-accent/40 text-accent-text",
@@ -1054,11 +1071,18 @@ function StateChip({
     running: "border-success/40 text-success",
     ended: "border-border-strong text-fg-muted",
     failed: "border-danger/40 text-danger",
+    error: "border-danger/40 text-danger",
   };
   return (
     <span
       data-session-state-chip={state}
-      title={waitingFor === null ? undefined : `Waiting: ${waitingFor}`}
+      title={
+        message !== null
+          ? `Error: ${message}`
+          : waitingFor === null
+            ? undefined
+            : `Waiting: ${waitingFor}`
+      }
       className={cn(
         "shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] whitespace-nowrap",
         TONE[state],

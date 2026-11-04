@@ -19,9 +19,10 @@ import type { SessionActivity } from '@helm/core/types'
 /**
  * Everything a session's dot can say.
  *
- * Seven and not three. The first three are Helm's own knowledge of the process;
- * the four after them are what the session says about itself in Claude Code's
- * live registry.
+ * Eight and not three. The first three are Helm's own knowledge of the
+ * process; the five after them are what the session says about itself, in its
+ * backend's own records (Claude Code's live registry) or else in the OSC 7501
+ * reports its program writes. `error` only ever comes from a report.
  */
 export type SessionState = 'running' | 'ended' | 'failed' | SessionActivity
 
@@ -46,10 +47,14 @@ export const SESSION_STATE_DOT: Record<SessionState, string> = {
   // same tone, hollow, on the checkbox's own outline-versus-fill vocabulary.
   // The one thing it must never read as is "more urgent than waiting".
   shell: 'border-[1.5px] border-success',
-  idle: 'bg-success'
+  idle: 'bg-success',
+  // Alive, and its program reports an error. Filled `danger`, the tone of
+  // `failed`, because both are something gone wrong; the crumb and the label
+  // tell them apart - `failed` has exited with a code, `error` is still running.
+  error: 'bg-danger'
 }
 
-/** The same seven, in words, for a label and for anyone not using colour. */
+/** The same eight, in words, for a label and for anyone not using colour. */
 export const SESSION_STATE_LABEL: Record<SessionState, string> = {
   running: 'running',
   ended: 'ended',
@@ -57,5 +62,6 @@ export const SESSION_STATE_LABEL: Record<SessionState, string> = {
   busy: 'working',
   waiting: 'waiting for you',
   shell: 'finished, background task still running',
-  idle: 'ready'
+  idle: 'ready',
+  error: 'reports an error'
 }
