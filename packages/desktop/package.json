@@ -39,8 +39,8 @@
     "verify:artifact": "node scripts/verify-artifact.mjs",
     "//verify:mac-artifact": "The macOS counterpart: opens the dmg and the zip a person downloads and asserts the app inside is arm64, carries a valid ad-hoc signature, names its .icns icon and has its native modules unpacked. Needs macOS (codesign, hdiutil, ditto, lipo). --icon checks only build/icon.icns, which runs anywhere.",
     "verify:mac-artifact": "node scripts/verify-mac-artifact.mjs",
-    "//screenshots": "Not a test, and in no suite. Builds, launches the app in a fake-claude world (test/world.ts) through the E2E launch, and saves a screenshot of every rail destination and a session terminal in the light and the dark theme to reports/screenshots, for a person to look at. The macOS screenshot workflow runs it on macos-latest; it runs the same on Windows and Linux.",
-    "screenshots": "electron-vite build && node scripts/playwright.mjs test -c scripts/screenshots",
+    "//screenshots": "Not a test, and in no suite. Builds the local host (floti, debug, as test:e2e does: the app always runs its sessions there) and the app, launches the app in a fake-claude world (test/world.ts) through the E2E launch, and saves a screenshot of every rail destination and a session terminal in the light and the dark theme to reports/screenshots, for a person to look at. The macOS screenshot workflow runs it on macos-latest; it runs the same on Windows and Linux.",
+    "screenshots": "cargo build -p floti-host --bin floti --features testkit && electron-vite build && node scripts/playwright.mjs test -c scripts/screenshots",
     "//icon": "Draws build/icon.* and packs build/icon.ico and build/icon.icns. Both are committed, so this is not part of the build - run it when the artwork changes.",
     "icon": "node scripts/make-icon.mjs"
   },

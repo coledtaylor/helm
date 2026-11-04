@@ -100,6 +100,13 @@ jobs:
             "packages/desktop/dist-app/Helm-$VERSION-arm64.dmg" \
             "packages/desktop/dist-app/Helm-$VERSION-arm64-mac.zip"
 
+      # The app built in packages/desktop/out runs every session in the local
+      # host, and outside a package it starts the debug `floti` in
+      # target/debug, built as `test:e2e` builds it. The artefacts' release
+      # build above is staged inside the package, where this launch never looks.
+      - name: Build the local host the capture starts
+        run: cargo build -p floti-host --bin floti --features testkit
+
       - name: Launch Helm with the fake claude and capture each view
         id: capture
         run: pnpm --filter @helm/desktop exec node scripts/playwright.mjs test -c scripts/screenshots
