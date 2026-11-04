@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, type SessionRecord } from '@helm/core'
 import { FakeConnection, fakeLink } from '../../../test/host-connection'
-import type { ConfirmRequest } from '../sessions'
+import type { ConfirmRequest } from './session-host'
 import type * as P from './protocol'
 import { HostRequestError } from './client'
 import { CLAUDE_CODE_BACKEND, createHostSessions, hostSettingsFor, quitQuestion } from './sessions'

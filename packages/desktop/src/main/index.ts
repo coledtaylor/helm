@@ -10,7 +10,7 @@ import {
 } from 'electron'
 import {
   addPluginFolder,
-  describePluginSessions,
+  cleanStaleMcpConfigs,
   pluginThemeOf,
   quitEndsSessions,
   writeSetting,
@@ -18,7 +18,6 @@ import {
   type AppSettings,
   type Profile
 } from '@helm/core'
-import type { PluginSession } from '@coledtaylor/helm-plugin-sdk'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -48,7 +47,8 @@ import {
 import { createBrowserMcp, type BrowserMcpHost } from './browser-mcp'
 import { installIpcRecorder } from './ipc-recorder'
 import { maybeCheckForUpdate } from './update'
-import { quitConfirm, sessionConfirm, type Confirm, type SessionHost } from './sessions'
+import { quitConfirm, sessionConfirm } from './host/confirm'
+import type { Confirm, SessionHost } from './host/session-host'
 import {
   createDesktopHost,
   createDesktopRemoteAdder,
@@ -387,12 +387,6 @@ function startApp(options: AppOptions = {}): void {
    * the window.
    */
   let browserMcp: BrowserMcpHost | null = null
-  /**
-   * Helm's sessions as plugins see them, which needs the desktop host made
-   * below. Until then there are none, which was true a moment ago; the first
-   * `sessions` event corrects a page that asked early.
-   */
-  let pluginSessionList = (): PluginSession[] => []
   /*
    * The host keeps the plugin registry - the folders, their switches,
    * settings, services and page files - and Helm keeps what concerns its own
@@ -404,23 +398,12 @@ function startApp(options: AppOptions = {}): void {
   const pluginBackground = createBackgroundHost({ onGone: (reason) => pluginBackgroundGone(reason) })
 
   const plugins = createPluginHost({
-    store: services.store,
     window: () => win,
     theme: () => pluginThemeOf(windowTheme(), services.settings),
     bridge: pluginBridge,
     stylesheet: pluginStylesheet,
-    // The host's list says which plugins offer tools (`host/plugins.ts`).
-    onToolsChanged: () => {
-      void browserMcp?.sync()
-    },
-    // Called only once the user has agreed in the window, which is long after
-    // the desktop host below exists.
-    startSession: (request) => sessions.startWithPrompt(request),
-    sessionList: () => pluginSessionList(),
-    registry: false,
     background: pluginBackground
   })
-  plugins.start()
   // Asked only once a page loads, which is after the desktop host below exists.
   // Each origin from its own host's files: This PC's from the local host, a
   // remote host's (`helm-plugin://<id>.<label>/`) from that host only.
@@ -454,7 +437,6 @@ function startApp(options: AppOptions = {}): void {
       checkConfirm !== undefined
         ? async (request) => ((await checkConfirm(request)) ? 'end' : 'cancel')
         : quitConfirm(() => win),
-    onActivityChange: () => plugins.sessionsChanged(),
     browserTools: () => browserMcp,
     runPluginTool: (request, signal) => plugins.runTool(request, signal),
     pluginBackground
@@ -568,7 +550,6 @@ function startApp(options: AppOptions = {}): void {
         profiles: profileList(),
         sessions: sessions.list()
       }),
-    onChanged: (root, paths) => emit(win, 'files:changed', { root, paths }),
     protocolHandler: (url) => app.getApplicationNameForProtocol(url),
     openExternal: (url) => shell.openExternal(url)
   })
@@ -608,27 +589,15 @@ function startApp(options: AppOptions = {}): void {
    * (`host/browser-tools.ts`). It never listens: the host serves its
    * sessions' tools.
    */
-  browserMcp = createBrowserMcp({
-    browsers,
-    settings: () => services.settings,
-    dir: mcpConfigDir,
-    plugins: {
-      servers: () => plugins.toolServers(),
-      call: (request, signal) => plugins.callTool(request, signal)
-    },
-    listen: false
-  })
-  void browserMcp.start()
+  browserMcp = createBrowserMcp({ browsers, settings: () => services.settings })
+  // The `--mcp-config` files an earlier version wrote for its own sessions,
+  // where their owning pid is provably dead (`core/launch/mcp.ts`).
+  cleanStaleMcpConfigs(mcpConfigDir)
 
-  // What each session is doing, from the host. The plugins are told after
-  // every spawn, exit, close and rename, whatever the host found: a session
-  // that started is listed even before the registry knows what it is doing.
+  // What each session is doing, from the host, asked again after every spawn,
+  // exit, close and rename.
   const activity = desktopHost.activity
-  sessions.onChanged(() => {
-    activity.refresh()
-    plugins.sessionsChanged()
-  })
-  pluginSessionList = () => describePluginSessions(sessions.pluginSessions(), activity.overview().sessions)
+  sessions.onChanged(() => activity.refresh())
 
   // What each session is holding, from the host's pass. A session ending is a
   // tree that has gone with it, so the pass is re-run at once. A no-op when
@@ -805,13 +774,8 @@ function startApp(options: AppOptions = {}): void {
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
     persistBounds()
-    // Before the store is let go of: a watch firing after `will-quit` would
-    // write to a closed connection.
-    files.stop()
     // The hidden plugin window and the frames go with the window.
     plugins.shutdown()
-    // Not awaited: `before-quit` is synchronous.
-    void browserMcp?.stop()
     activity.stop()
     /*
      * The browser views die here too, and it is the same argument.

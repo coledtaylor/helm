@@ -12,7 +12,7 @@ import { readSshConfigHosts } from './ssh-config'
 import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
 import { emit } from '../ipc'
 import { appMode, dataDir, templatesDir } from '../paths'
-import type { Confirm, QuitConfirm } from '../sessions'
+import type { Confirm, QuitConfirm } from './session-host'
 import type { BrowserMcpHost } from '../browser-mcp'
 import type { BackgroundHost } from '../plugins/background'
 import type { ToolAnswer, ToolCallRequest } from '../plugins/tools'
@@ -91,7 +91,6 @@ export interface DesktopHostDeps {
   confirm: Confirm
   /** The quit question, with Keep running and quit beside End and quit. */
   confirmQuit: QuitConfirm
-  onActivityChange: () => void
   /** Helm's browser tools, which answer the calls; null until they exist. */
   browserTools: () => BrowserMcpHost | null
   /** Hands a session's call to a plugin's tool to its background page, in the background host. */
@@ -347,7 +346,6 @@ export function createDesktopHost({
   window,
   confirm,
   confirmQuit,
-  onActivityChange,
   browserTools,
   runPluginTool,
   pluginBackground
@@ -383,7 +381,6 @@ export function createDesktopHost({
     relist: true,
     layout: services.lost.layout,
     knownProject: (cwd) => workspace.knownProject(cwd),
-    onActivityChange,
     browserTools: () => services.settings.browserMcp,
     browserIdentityEnded: (key) => browserTools()?.forgetOpener(key),
     log

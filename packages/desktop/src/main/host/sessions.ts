@@ -7,9 +7,14 @@ import {
   type SessionRecord,
   type SessionsOverview
 } from '@helm/core'
-import type { ActivityService } from '../activity'
-import type { RestoreService } from '../restore'
-import type { Confirm, ConfirmRequest, QuitConfirm, SessionHost } from '../sessions'
+import type {
+  ActivityService,
+  Confirm,
+  ConfirmRequest,
+  QuitConfirm,
+  RestoreService,
+  SessionHost
+} from './session-host'
 import { CLAUDE_CODE_BACKEND } from '../../shared/host/backend'
 import type { EventChannel, EventPayload, QuitAnswer } from '../../shared/ipc'
 import type { HostConnection, HostSubscription } from './client'

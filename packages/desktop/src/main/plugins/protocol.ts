@@ -1,14 +1,13 @@
-import { readFileSync } from 'node:fs'
-import { extname, sep } from 'node:path'
+import { extname } from 'node:path'
 import { protocol } from 'electron'
 import { RESERVED_PREFIX } from '@coledtaylor/helm-plugin-sdk/manifest'
 import { PLUGIN_SCHEME } from '../../shared/ipc'
 import { parsePluginOrigin } from '../../shared/plugins/origin'
 import { MIME } from '../content'
-import { resolveInside } from './loader'
 
 /**
- * `helm-plugin://<id>/<path>`: a plugin's folder, and Helm's runtime beside it.
+ * `helm-plugin://<id>/<path>`: a plugin's page files, served from the host
+ * that keeps the plugin, and Helm's runtime beside them.
  *
  * The host names the plugin, so every plugin is its own **origin**: the
  * browser keeps it out of Helm's page and out of every other plugin's, gives
@@ -47,11 +46,6 @@ export const PLUGIN_CSP = [
   "base-uri 'none'"
 ].join('; ')
 
-/** A plugin Helm serves: enabled and loaded. */
-export interface ServedPlugin {
-  dir: string
-}
-
 export interface PluginRuntime {
   /** The bridge script, for this plugin's pages. */
   bridge(): string
@@ -70,10 +64,7 @@ const HEADERS = {
   'cache-control': 'no-store'
 }
 
-/**
- * Where a plugin's page files come from when the local host has its folder,
- * with sessions running there (`host/plugins.ts`).
- */
+/** Where a plugin's page files come from: the host that has its folder (`host/plugins.ts`). */
 export interface PluginPageSource {
   /**
    * Whether that host runs on this computer, so its pages are told they are
@@ -144,38 +135,10 @@ function page(path: string, bytes: Uint8Array, boot: () => string, fallbackType:
   return new Response(new Uint8Array(bytes), { status: 200, headers: { ...HEADERS, 'content-type': type } })
 }
 
-/** Answers one request on the scheme. Separate from the registration so a test can call it. */
-export function servePluginRequest(
-  requestUrl: string,
-  lookup: (id: string) => ServedPlugin | null,
-  runtime: PluginRuntime
-): Response {
-  const parsed = parse(requestUrl)
-  if (parsed instanceof Response) return parsed
-  const { id } = parsed
-  // Helm's own folders are This PC's plugins; another host's origin has nothing here.
-  const plugin = parsed.label === null ? lookup(id) : null
-  if (plugin === null) return new Response('Not found', { status: 404 })
-  if ('runtime' in parsed) return runtimeAsset(parsed.runtime, runtime)
-
-  const rel = parsed.parts.join(sep)
-  if (rel === '' || rel.includes('\0')) return new Response('Not found', { status: 404 })
-  const target = resolveInside(plugin.dir, rel)
-  if (target === 'outside') return new Response('Forbidden', { status: 403 })
-  if (target === null) return new Response('Not found', { status: 404 })
-
-  let bytes: Buffer
-  try {
-    bytes = readFileSync(target)
-  } catch {
-    return new Response('Not found', { status: 404 })
-  }
-  return page(target, bytes, () => ownBoot(runtime.boot(id)), 'application/octet-stream')
-}
-
 /**
- * Answers one request on the scheme from a host's files: the same headers,
- * CSP and injected runtime as a folder Helm reads itself. Each origin is
+ * Answers one request on the scheme from a host's files, every response under
+ * the plugin CSP and every page with the runtime injected. Separate from the
+ * registration so a test can call it. Each origin is
  * served from the host it names and from no other: This PC's
  * (`helm-plugin://<id>/`) from the local host, a remote host's
  * (`helm-plugin://<id>.<label>/`) from that host, and one naming a host this
@@ -215,19 +178,10 @@ export async function servePluginRequestFrom(
 }
 
 /**
- * The boot facts of a page Helm serves from its own folders: the runtime's,
- * and that it is drawn on the computer the plugin runs on, which is this one.
- */
-function ownBoot(boot: string): string {
-  return JSON.stringify({ ...(JSON.parse(boot) as Record<string, unknown>), onHostComputer: true })
-}
-
-/**
  * The boot facts of a page drawn from a host's files: the runtime's, that the
  * page's `BroadcastChannel`s are relayed through the host, so a message
  * reaches the plugin's pages on every client and its background page, and
- * whether that host runs on this computer. A page Helm serves from its own
- * folders keeps the browser's own channels.
+ * whether that host runs on this computer.
  */
 export function hostBoot(boot: string, onHostComputer: boolean): string {
   return JSON.stringify({ ...(JSON.parse(boot) as Record<string, unknown>), channels: 'host', onHostComputer })
@@ -262,11 +216,7 @@ function insertAt(text: string, at: number, insert: string): string {
   return text.slice(0, at) + insert + text.slice(at)
 }
 
-export function registerPluginProtocol(lookup: (id: string) => ServedPlugin | null, runtime: PluginRuntime): void {
-  protocol.handle(PLUGIN_SCHEME, (request) => servePluginRequest(request.url, lookup, runtime))
-}
-
-/** The scheme, answered from each host's files while sessions run in the local host. */
+/** The scheme, answered from each host's files. */
 export function registerHostPluginProtocol(sources: PluginPageSources, runtime: PluginRuntime): void {
   protocol.handle(PLUGIN_SCHEME, (request) => servePluginRequestFrom(request.url, sources, runtime))
 }

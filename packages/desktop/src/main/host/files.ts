@@ -1,12 +1,12 @@
 import { hostArtifactUrl, windowArtifactUrl } from '../../shared/host/records/content'
-import type { FilesReads } from '../files-reads'
+import type { IpcRequests } from '../../shared/ipc'
 import type { HostConnection, HostSubscription } from './client'
 import type { HostLink } from './link'
 import { filesStatusFromHost, writeConfigResultFromHost } from './records'
 import type { Emit } from './sessions'
 
 /**
- * The Files view and the note viewer when sessions run in the local host: the
+ * The Files view and the note viewer, as main reaches the local host: the
  * host lists, reads, searches, renders and watches its own machine's folders,
  * and writes the one thing the view writes, a note, through the config
  * console's writer, which snapshots the bytes it replaces first, aborts with
@@ -34,6 +34,29 @@ import type { Emit } from './sessions'
  */
 
 export { hostArtifactUrl, windowArtifactUrl }
+
+type Response<K extends keyof IpcRequests> = IpcRequests[K]['response']
+
+export interface FilesReads {
+  scopes(): Promise<Response<'content:scopes'>>
+  document(scopePath: string, path: string): Promise<Response<'content:document'>>
+  render(scopePath: string, path: string, source: string): Promise<Response<'content:render'>>
+  search(scopePath: string, query: string): Promise<Response<'content:search'>>
+  /** The one write: a note, snapshotted first and refused on a hash conflict. */
+  write(request: IpcRequests['content:write']['request']): Promise<Response<'content:write'>>
+  snapshots(scopePath: string, path: string): Promise<Response<'content:snapshots'>>
+  restore(id: number, path: string): Promise<Response<'content:restore'>>
+  /** The address a sandboxed frame may load an HTML artifact from. */
+  artifact(scopePath: string, path: string): Promise<Response<'content:artifact'>>
+  wikilink(scopePath: string, target: string, from: string): Promise<string | null>
+  highlight(path: string, source: string): Promise<Response<'editor:highlight'>>
+  dir(root: string, relPath: string): Promise<Response<'files:dir'>>
+  status(root: string): Promise<Response<'files:status'>>
+  read(root: string, path: string): Promise<Response<'files:read'>>
+  list(root: string): Promise<Response<'files:list'>>
+  /** Every root the window has on screen; any other is let go. */
+  watch(roots: readonly string[]): Promise<void>
+}
 
 /** What a frame's request for an artifact address is answered with. */
 export interface ArtifactAnswer {

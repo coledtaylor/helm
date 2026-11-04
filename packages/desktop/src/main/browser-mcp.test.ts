@@ -1,43 +1,32 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
-import { request } from 'node:http'
-import { connect } from 'node:net'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_SETTINGS, writeSessionMcpConfig, type AppSettings } from '@helm/core'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { DEFAULT_SETTINGS, type AppSettings } from '@helm/core'
 import { FakeConnection, fakeLink } from '../../test/host-connection'
-import { callTool, rpc, rpcResult, send, toolNames, type ToolAnswer as McpToolAnswer } from '../../test/mcp-client'
+import type { ToolAnswer as McpToolAnswer } from '../../test/mcp-client'
 import type { BrowserHost, BrowserOpener } from './browser'
 import {
   BROWSER_TOOL_TABLE,
   createBrowserMcp,
-  NOT_LISTENING_IN_HOST,
   pairBrowserTools,
   SNAPSHOT_MAX_NODES,
   TEXT_MAX_CHARS,
   WAIT_DEFAULT_S,
   WAIT_MAX_S,
   type BrowserMcpHost,
-  type BrowserMcpRegistration,
   type BrowserToolResult
 } from './browser-mcp'
 import { ANSWER_TOO_LARGE, createBrowserToolRelay, NOT_A_BROWSER_SESSION } from './host/browser-tools'
-import { createPluginToolRelay } from './host/plugin-tools'
-import { SESSION_TOOL_TABLE } from './session-tools'
 import { MAX_FRAME_LEN } from './host/protocol'
 import type * as P from './host/protocol'
-import type { ToolAnswer, ToolCallRequest, ToolServer } from './plugins/tools'
 import type { BrowserConsoleEntry, BrowserState } from '../shared/ipc'
-import { PATIENCE } from '../../../../test/patience'
 
 /**
- * Helm's one inbound listener, over real HTTP on 127.0.0.1: what it binds, who
- * it answers, which routes exist with which settings, how long a token lives,
- * and what the browser tools let a session do to tabs it does and does not own.
+ * Helm's browser tools, as the local host relays its sessions' calls to them
+ * over a connection the test drives: what the tools let a session do to tabs
+ * it does and does not own, and where they may reach.
  *
  * The browser host is a fake that records every call: what is under test here
- * is the endpoint's gate in front of the host. The tools against a real page
- * are `e2e/agent-tools.spec.ts`.
+ * is the tools' gate in front of the host. The tools against a real page are
+ * `e2e/agent-tools.spec.ts`.
  */
 
 const BROWSER_TOOLS = [
@@ -225,7 +214,7 @@ function fakeBrowsers() {
   }
 }
 
-/** A relayed answer as the agent reads it, the way `callTool` reads one over HTTP. */
+/** A relayed answer as the agent reads it. */
 function answerOf({ outcome }: P.AgentBrowserToolAnswer): McpToolAnswer {
   if (outcome.status === 'failed') return { text: outcome.message, isError: true, images: [] }
   const result = outcome.value as BrowserToolResult
@@ -240,296 +229,32 @@ function answerOf({ outcome }: P.AgentBrowserToolAnswer): McpToolAnswer {
   }
 }
 
-/** Whether anything accepts a TCP connection at that address. */
-function accepts(host: string, port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = connect({ host, port })
-    socket.once('connect', () => {
-      socket.destroy()
-      resolve(true)
-    })
-    socket.once('error', () => resolve(false))
-  })
-}
-
-describe('the tool endpoint', () => {
-  let dir: string
+describe('the browser tools', () => {
   let settings: AppSettings
   let browsers: ReturnType<typeof fakeBrowsers>
   let endpoint: BrowserMcpHost
-  const others: BrowserMcpHost[] = []
 
-  const make = (): BrowserMcpHost =>
-    createBrowserMcp({ browsers: browsers.host, settings: () => settings, dir, sessions: () => null })
-
-  /** A registration and the two URLs it was handed. */
-  const register = (name: string): BrowserMcpRegistration & { browser: string; sessions: string } => {
-    const registration = endpoint.register({ id: `plugin-id-${name}`, name, cwd: `C:/work/${name}` })
-    if (registration === null) throw new Error('the endpoint registered nobody')
-    const url = (server: string): string => registration.launch.servers.find((s) => s.name === server)?.url ?? ''
-    return { ...registration, browser: url('helm-browser'), sessions: url('helm-sessions') }
-  }
+  const make = (): BrowserMcpHost => createBrowserMcp({ browsers: browsers.host, settings: () => settings })
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'helm mcp-'))
     settings = { ...DEFAULT_SETTINGS }
     browsers = fakeBrowsers()
     endpoint = make()
   })
 
-  afterEach(async () => {
-    await Promise.all([endpoint, ...others.splice(0)].map((host) => host.stop()))
-    rmSync(dir, { recursive: true, force: true })
-  })
-
-  describe('the listener', () => {
-    it('binds 127.0.0.1 on a port the kernel chose, and nothing else', async () => {
-      expect(await endpoint.start()).toEqual({ started: true, problem: null })
-      const bound = endpoint.address()
-      expect(bound).toEqual({ address: '127.0.0.1', family: 'IPv4', port: expect.any(Number) as number })
-      const port = bound?.port ?? 0
-      expect(port).toBeGreaterThan(0)
-
-      // Ephemeral: a second endpoint is handed a different port, not a fixed one.
-      const second = make()
-      others.push(second)
-      await second.start()
-      expect(second.address()?.port).not.toBe(port)
-
-      // The IPv4 loopback and not the IPv6 one: `::` would have answered both.
-      expect(await accepts('127.0.0.1', port)).toBe(true)
-      expect(await accepts('::1', port)).toBe(false)
-    })
-
-    it('answers 401 before reading anything to a request without the exact token', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const offByOne = `${alpha.token.slice(0, -1)}${alpha.token.endsWith('0') ? '1' : '0'}`
-      const wrong = [
-        {},
-        { Authorization: `Bearer ${offByOne}` },
-        { Authorization: `Bearer ${alpha.token}0` },
-        { Authorization: `Bearer ${alpha.token.slice(1)}` },
-        { Authorization: `Basic ${alpha.token}` },
-        { Authorization: alpha.token }
-      ]
-      for (const url of [alpha.browser, alpha.sessions]) {
-        for (const headers of wrong) {
-          // A body that is not JSON: a parse error here would mean it was read.
-          const answer = await send(url, { body: '{ not json', headers })
-          expect(answer.status).toBe(401)
-          expect(answer.headers['www-authenticate']).toBe('Bearer')
-        }
-      }
-      // Without a token, a path that does not exist is no different from one that does.
-      const origin = new URL(alpha.browser).origin
-      expect((await send(`${origin}/nothing-here`, { body: '{}' })).status).toBe(401)
-      expect((await send(alpha.browser, { method: 'GET' })).status).toBe(401)
-    })
-
-    it('answers a wrong path with 404 and anything but POST with 405, to a caller holding the token', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const origin = new URL(alpha.browser).origin
-      const auth = { Authorization: `Bearer ${alpha.token}` }
-      for (const path of ['/', '/mcp/', '/MCP', '/mcp/browser', '/mcp/sessions/list', '/health']) {
-        expect((await send(`${origin}${path}`, { body: '{}', headers: auth })).status, path).toBe(404)
-      }
-      for (const url of [alpha.browser, alpha.sessions]) {
-        const get = await send(url, { method: 'GET', headers: auth })
-        expect(get.status).toBe(405)
-        expect(get.headers['allow']).toBe('POST')
-        expect((await send(url, { method: 'DELETE', headers: auth })).status).toBe(405)
-      }
-    })
-
-    it('refuses a request from a web page, whatever token it carries', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const fromPage = await rpc(alpha.browser, alpha.token, 'tools/list', undefined, { Origin: 'https://example.com' })
-      expect(fromPage.status).toBe(403)
-      const fromLoopback = await rpc(alpha.browser, alpha.token, 'tools/list', undefined, { Origin: 'http://localhost:3000' })
-      expect(fromLoopback.status).toBe(200)
-    })
-
-    it('serves exactly the ten browser tools on the browser route', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      expect((await toolNames(alpha.browser, alpha.token)).sort()).toEqual(BROWSER_TOOLS)
-    })
-
-    it('serves exactly the two session tools on the sessions route, and says they are read-only', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const { tools } = await rpcResult<{ tools: { name: string; description: string }[] }>(
-        alpha.sessions,
-        alpha.token,
-        'tools/list'
-      )
-      expect(tools.map((tool) => tool.name).sort()).toEqual(['session_detail', 'sessions_list'])
-      for (const tool of tools) expect(tool.description, tool.name).toMatch(/read-only/i)
-      const init = await rpcResult<{ instructions: string }>(alpha.sessions, alpha.token, 'initialize', {})
-      expect(init.instructions).toMatch(/read-only/i)
-    })
-
-    it('names each family on its own route of one port, and negotiates the protocol version', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const port = endpoint.address()?.port ?? 0
-      expect(alpha.token).toMatch(/^[0-9a-f]{64}$/)
-      expect(alpha.launch).toEqual({
-        dir,
-        servers: [
-          { name: 'helm-browser', url: `http://127.0.0.1:${String(port)}/mcp`, headers: { Authorization: `Bearer ${alpha.token}` } },
-          {
-            name: 'helm-sessions',
-            url: `http://127.0.0.1:${String(port)}/mcp/sessions`,
-            headers: { Authorization: `Bearer ${alpha.token}` }
-          }
-        ]
-      })
-
-      type Init = { protocolVersion: string; serverInfo: { name: string }; instructions: string }
-      const browser = await rpcResult<Init>(alpha.browser, alpha.token, 'initialize', { protocolVersion: '2025-03-26' })
-      expect(browser.serverInfo.name).toBe('helm-browser')
-      expect(browser.protocolVersion).toBe('2025-03-26')
-      expect(browser.instructions).toContain('browser pane')
-      const sessions = await rpcResult<Init>(alpha.sessions, alpha.token, 'initialize', { protocolVersion: '1999-01-01' })
-      expect(sessions.serverInfo.name).toBe('helm-sessions')
-      expect(sessions.protocolVersion).toBe('2025-06-18')
-    })
-
-    it('answers a notification with 202 and no body, and refuses what it does not speak', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const auth = { Authorization: `Bearer ${alpha.token}` }
-
-      const notification = await send(alpha.browser, {
-        body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
-        headers: auth
-      })
-      expect(notification.status).toBe(202)
-      expect(notification.text).toBe('')
-
-      const codeOf = (answer: { json: unknown }): number | undefined => (answer.json as { error?: { code: number } }).error?.code
-      expect(codeOf(await rpc(alpha.browser, alpha.token, 'resources/list'))).toBe(-32601)
-      expect(codeOf(await send(alpha.browser, { body: '{ not json', headers: auth }))).toBe(-32700)
-      expect(codeOf(await send(alpha.browser, { body: '[]', headers: auth }))).toBe(-32600)
-      expect(await rpcResult(alpha.browser, alpha.token, 'ping')).toEqual({})
-    })
-
-    it('gives every registration a token of its own', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const beta = register('beta')
-      expect(beta.token).not.toBe(alpha.token)
-      expect(beta.browser).toBe(alpha.browser)
-      for (const who of [alpha, beta]) {
-        expect((await rpc(who.browser, who.token, 'ping')).status).toBe(200)
-        expect((await rpc(who.sessions, who.token, 'ping')).status).toBe(200)
-      }
-    })
-
-    it('with every family off, binds nothing and mints no token', async () => {
-      settings = { ...settings, browserMcp: false, sessionMcp: false }
-      const answer = await endpoint.start()
-      expect(answer.started).toBe(false)
-      expect(answer.problem).toContain('both off')
-      expect(endpoint.running()).toBe(false)
-      expect(endpoint.address()).toBeNull()
-      expect(endpoint.register({ id: 'plugin-id-alpha', name: 'alpha', cwd: 'C:/work/alpha' })).toBeNull()
-      expect(endpoint.servedNames()).toEqual([])
-    })
-
-    it('takes a family away at once when it is switched off, and gives it back when it is switched on', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      expect(endpoint.servedNames()).toEqual(['helm-browser', 'helm-sessions'])
-
-      settings = { ...settings, sessionMcp: false }
-      expect((await rpc(alpha.sessions, alpha.token, 'tools/list')).status).toBe(404)
-      expect((await rpc(alpha.browser, alpha.token, 'tools/list')).status).toBe(200)
-      expect(endpoint.servedNames()).toEqual(['helm-browser'])
-      // A session launched now is told about the browser tools only.
-      expect(register('beta').launch.servers.map((server) => server.name)).toEqual(['helm-browser'])
-
-      settings = { ...settings, sessionMcp: true }
-      expect((await rpc(alpha.sessions, alpha.token, 'tools/list')).status).toBe(200)
-      expect(endpoint.servedNames()).toEqual(['helm-browser', 'helm-sessions'])
-
-      settings = { ...settings, browserMcp: false }
-      expect((await rpc(alpha.browser, alpha.token, 'tools/list')).status).toBe(404)
-      expect((await rpc(alpha.sessions, alpha.token, 'tools/list')).status).toBe(200)
-      expect(endpoint.servedNames()).toEqual(['helm-sessions'])
-    })
-
-    it('revokes one token and its file on release, and every token and file on stop', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const beta = register('beta')
-      const alphaFile = writeSessionMcpConfig(dir, alpha.launch.servers)
-      const betaFile = writeSessionMcpConfig(dir, beta.launch.servers)
-      expect(alphaFile !== null && existsSync(alphaFile)).toBe(true)
-      expect(betaFile !== null && existsSync(betaFile)).toBe(true)
-      endpoint.attach(alpha.token, alphaFile)
-      endpoint.attach(beta.token, betaFile)
-
-      endpoint.release(alpha.token)
-      expect((await rpc(alpha.browser, alpha.token, 'ping')).status).toBe(401)
-      expect((await rpc(alpha.sessions, alpha.token, 'ping')).status).toBe(401)
-      expect(existsSync(alphaFile!)).toBe(false)
-      expect((await rpc(beta.browser, beta.token, 'ping')).status).toBe(200)
-      expect(existsSync(betaFile!)).toBe(true)
-      endpoint.release(alpha.token)
-      endpoint.release(null)
-
-      const port = endpoint.address()?.port ?? 0
-      await endpoint.stop()
-      expect(endpoint.running()).toBe(false)
-      expect(existsSync(betaFile!)).toBe(false)
-      expect(await accepts('127.0.0.1', port)).toBe(false)
-
-      // A restarted endpoint knows none of the tokens it handed out before.
-      await endpoint.start()
-      const after = register('gamma')
-      expect((await rpc(after.browser, beta.token, 'ping')).status).toBe(401)
-      expect((await rpc(after.browser, after.token, 'ping')).status).toBe(200)
-    })
-
-    it('says a session tool cannot answer yet while the app is still starting', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const answer = await callTool(alpha.sessions, alpha.token, 'sessions_list')
-      expect(answer.isError).toBe(true)
-      expect(answer.text).toContain('still starting up')
-    })
-  })
-
   /**
-   * A session calling the browser tools: one Helm runs, over its own
-   * listener, or one in the local host, whose calls the host relays to the
-   * window (`host/browser-tools.ts`) over a connection the test drives.
+   * A session in the local host calling the browser tools, whose calls the
+   * host relays to the window (`host/browser-tools.ts`) over a connection the
+   * test drives.
    */
   interface Caller {
-    /** Its identity at the tools: the bearer token, or the key main minted for a host session. */
+    /** Its identity at the tools: the key main minted for a host session. */
     key: string
     call(tool: string, args?: Record<string, unknown>): Promise<McpToolAnswer>
     /** The session ends. */
     end(): void
     /** Asserts that a call made after the session ended is refused. */
     refusedAfterEnd(): Promise<void>
-  }
-
-  const listenerCaller = (name: string): Caller => {
-    const registration = register(name)
-    return {
-      key: registration.token,
-      call: (tool, args = {}) => callTool(registration.browser, registration.token, tool, args),
-      end: () => endpoint.release(registration.token),
-      refusedAfterEnd: async () => {
-        expect((await rpc(registration.browser, registration.token, 'tools/list')).status).toBe(401)
-      }
-    }
   }
 
   /** Callers relayed from a fake host connection, each a running host session with a key of its own. */
@@ -577,18 +302,12 @@ describe('the tool endpoint', () => {
     }
   }
 
-  const TRANSPORTS = [
-    { through: 'its own listener', relayed: false },
-    { through: 'the local host', relayed: true }
-  ]
-
-  describe.each(TRANSPORTS)('the browser tools, through $through', ({ relayed }) => {
+  describe('called from the local host', () => {
     let alpha: Caller
     let beta: Caller
 
     beforeEach(async () => {
-      await endpoint.start()
-      const caller = relayed ? await relayedCallers() : listenerCaller
+      const caller = await relayedCallers()
       alpha = caller('alpha')
       beta = caller('beta')
     })
@@ -907,11 +626,6 @@ describe('the tool endpoint', () => {
         expect(browsers.calls.filter((call) => call.method === 'revoke').map((call) => call.detail)).toEqual([alpha.key])
         expect(browsers.tabs.get(user)?.shared).toBeNull()
 
-        // Stopping the listener revokes every token it minted, and nothing of a host session's.
-        await endpoint.stop()
-        expect(browsers.calls.filter((call) => call.method === 'revoke').map((call) => call.detail)).toEqual(
-          relayed ? [alpha.key] : [alpha.key, beta.key]
-        )
       })
 
       it('is held to the tools\' reach: off the machine is refused while they are confined to it', async () => {
@@ -1119,327 +833,7 @@ describe('the tool endpoint', () => {
     })
   })
 
-  describe("a plugin's tools", () => {
-    const TRACKER: ToolServer = {
-      plugin: 'tracker',
-      name: 'Tracker',
-      server: 'helm-plugin-tracker',
-      instructions: 'Cards live on the board.',
-      tools: [
-        { name: 'list_cards', description: 'Lists the cards.', inputSchema: { type: 'object', properties: {} }, readOnly: true },
-        {
-          name: 'add_card',
-          description: 'Adds a card.',
-          inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] },
-          readOnly: false
-        }
-      ]
-    }
-
-    let servers: ToolServer[]
-    let calls: Array<{ request: ToolCallRequest; signal: AbortSignal }>
-    let answerWith: (request: ToolCallRequest, signal: AbortSignal) => Promise<ToolAnswer>
-
-    beforeEach(() => {
-      servers = [TRACKER]
-      calls = []
-      answerWith = () => Promise.resolve({ ok: true, text: 'two cards' })
-      endpoint = createBrowserMcp({
-        browsers: browsers.host,
-        settings: () => settings,
-        dir,
-        sessions: () => null,
-        plugins: {
-          servers: () => servers,
-          call: (request, signal) => {
-            calls.push({ request, signal })
-            return answerWith(request, signal)
-          }
-        }
-      })
-    })
-
-    const trackerUrl = (registration: BrowserMcpRegistration): string =>
-      registration.launch.servers.find((server) => server.name === 'helm-plugin-tracker')?.url ?? ''
-
-    it("serves a plugin's tools on a route of its own, named for the plugin, with the plugin's instructions after Helm's", async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const port = endpoint.address()?.port ?? 0
-      expect(alpha.launch.servers.map((server) => server.name)).toEqual(['helm-browser', 'helm-sessions', 'helm-plugin-tracker'])
-      expect(trackerUrl(alpha)).toBe(`http://127.0.0.1:${String(port)}/mcp/plugin/tracker`)
-
-      const { tools } = await rpcResult<{ tools: Array<{ name: string; description: string; inputSchema: unknown }> }>(
-        trackerUrl(alpha),
-        alpha.token,
-        'tools/list'
-      )
-      // The manifest's `readOnly` is MCP's `readOnlyHint`, on the one tool marked.
-      expect(tools).toEqual([
-        {
-          name: 'list_cards',
-          description: 'Lists the cards.',
-          inputSchema: { type: 'object', properties: {} },
-          annotations: { readOnlyHint: true }
-        },
-        {
-          name: 'add_card',
-          description: 'Adds a card.',
-          inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
-        }
-      ])
-      const init = await rpcResult<{ serverInfo: { name: string }; instructions: string }>(trackerUrl(alpha), alpha.token, 'initialize', {})
-      expect(init.serverInfo.name).toBe('helm-plugin-tracker')
-      expect(init.instructions).toMatch(/^These tools come from "Tracker", a plugin the user added to Helm/)
-      expect(init.instructions.endsWith('\n\nCards live on the board.')).toBe(true)
-      expect(endpoint.servedNames()).toEqual(['helm-browser', 'helm-sessions', 'helm-plugin-tracker'])
-    })
-
-    it("registers a plugin's read-only tools as allowed for the session, and nothing of Helm's own families", async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      expect(alpha.launch.servers.map((server) => [server.name, server.allowedTools])).toEqual([
-        ['helm-browser', undefined],
-        ['helm-sessions', undefined],
-        ['helm-plugin-tracker', ['list_cards']]
-      ])
-
-      // A plugin with no tool marked has no allow list at all.
-      servers = [{ ...TRACKER, tools: TRACKER.tools.map((tool) => ({ ...tool, readOnly: false })) }]
-      const beta = register('beta')
-      expect(beta.launch.servers.find((server) => server.name === 'helm-plugin-tracker')).not.toHaveProperty('allowedTools')
-    })
-
-    it('hands the plugin the call, its arguments and who made it - an id, a name and a folder, never the token', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const beta = register('beta')
-      expect(await callTool(trackerUrl(alpha), alpha.token, 'add_card', { title: 'Ship it' })).toEqual({
-        text: 'two cards',
-        isError: false,
-        images: []
-      })
-      await callTool(trackerUrl(alpha), alpha.token, 'list_cards')
-      await callTool(trackerUrl(beta), beta.token, 'list_cards')
-
-      const [first, second, third] = calls.map((call) => call.request)
-      expect(first).toEqual({
-        plugin: 'tracker',
-        tool: 'add_card',
-        args: { title: 'Ship it' },
-        session: { id: 'plugin-id-alpha', name: 'alpha', cwd: 'C:/work/alpha' }
-      })
-      // The id the session host minted at launch, the one a plugin's session
-      // list carries too: the same session is the same id, another is another.
-      expect(second?.session.id).toBe('plugin-id-alpha')
-      expect(third?.session).toEqual({ id: 'plugin-id-beta', name: 'beta', cwd: 'C:/work/beta' })
-      for (const call of calls) {
-        const said = JSON.stringify(call.request)
-        expect(said).not.toContain(alpha.token)
-        expect(said).not.toContain(beta.token)
-      }
-    })
-
-    it('says what the plugin said when it could not answer, as a failed call', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      answerWith = () => Promise.resolve({ ok: false, message: 'The board is locked.' })
-      expect(await callTool(trackerUrl(alpha), alpha.token, 'add_card', { title: 'x' })).toMatchObject({
-        isError: true,
-        text: 'The board is locked.'
-      })
-    })
-
-    it('takes the route away the moment the plugin stops offering tools, and a session started after gets none', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      servers = []
-      expect((await rpc(trackerUrl(alpha), alpha.token, 'tools/list')).status).toBe(404)
-      expect(endpoint.servedNames()).toEqual(['helm-browser', 'helm-sessions'])
-      expect(register('beta').launch.servers.map((server) => server.name)).toEqual(['helm-browser', 'helm-sessions'])
-
-      servers = [TRACKER]
-      expect((await rpc(trackerUrl(alpha), alpha.token, 'tools/list')).status).toBe(200)
-    })
-
-    it("binds for a plugin's tools alone, and lets go of the port when the last plugin stops offering them", async () => {
-      settings = { ...settings, browserMcp: false, sessionMcp: false }
-      servers = []
-      expect((await endpoint.start()).problem).toContain('no plugin offers tools')
-
-      servers = [TRACKER]
-      await endpoint.sync()
-      expect(endpoint.running()).toBe(true)
-      const alpha = register('alpha')
-      expect(alpha.launch.servers.map((server) => server.name)).toEqual(['helm-plugin-tracker'])
-      expect((await rpc(trackerUrl(alpha), alpha.token, 'ping')).status).toBe(200)
-
-      // A sync that changes nothing leaves the listener and its tokens alone.
-      await endpoint.sync()
-      expect((await rpc(trackerUrl(alpha), alpha.token, 'ping')).status).toBe(200)
-
-      const port = endpoint.address()?.port ?? 0
-      servers = []
-      await endpoint.sync()
-      expect(endpoint.running()).toBe(false)
-      expect(await accepts('127.0.0.1', port)).toBe(false)
-    })
-
-    it('aborts the call when the session cancels it or hangs up, and lets no other session cancel it', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const beta = register('beta')
-      answerWith = (_request, signal) =>
-        new Promise((resolve) => signal.addEventListener('abort', () => resolve({ ok: false, message: 'stopped' })))
-      const auth = (who: BrowserMcpRegistration): Record<string, string> => ({ Authorization: `Bearer ${who.token}` })
-      const cancel = (who: BrowserMcpRegistration, requestId: unknown): Promise<{ status: number }> =>
-        send(trackerUrl(who), {
-          body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId, reason: 'interrupted' } }),
-          headers: auth(who)
-        })
-
-      // Cancelled: the client says so with a notification naming its request.
-      const waiting = send(trackerUrl(alpha), {
-        body: JSON.stringify({ jsonrpc: '2.0', id: 77, method: 'tools/call', params: { name: 'list_cards', arguments: {} } }),
-        headers: auth(alpha)
-      })
-      await vi.waitFor(() => expect(calls).toHaveLength(1), { timeout: PATIENCE })
-      expect((await cancel(beta, 77)).status).toBe(202)
-      expect((await cancel(alpha, 78)).status).toBe(202)
-      expect(calls[0]?.signal.aborted).toBe(false)
-      expect((await cancel(alpha, 77)).status).toBe(202)
-      expect(calls[0]?.signal.aborted).toBe(true)
-      expect((await waiting).json).toMatchObject({ id: 77, result: { isError: true } })
-
-      // Hung up: the connection closes with the call unanswered.
-      const req = request(trackerUrl(alpha), { method: 'POST', agent: false, headers: { 'content-type': 'application/json', ...auth(alpha) } })
-      req.on('error', () => undefined)
-      req.end(JSON.stringify({ jsonrpc: '2.0', id: 'x', method: 'tools/call', params: { name: 'list_cards', arguments: {} } }))
-      await vi.waitFor(() => expect(calls).toHaveLength(2), { timeout: PATIENCE })
-      req.destroy()
-      await vi.waitFor(() => expect(calls[1]?.signal.aborted).toBe(true), { timeout: PATIENCE })
-
-      // Released: the session ended with a call in flight.
-      void send(trackerUrl(beta), {
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_cards', arguments: {} } }),
-        headers: auth(beta)
-      }).catch(() => undefined)
-      await vi.waitFor(() => expect(calls).toHaveLength(3), { timeout: PATIENCE })
-      endpoint.release(beta.token)
-      expect(calls[2]?.signal.aborted).toBe(true)
-    })
-
-    it('answers a call the local host relays with the very tool result its own route answers', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      const connection = new FakeConnection()
-      const link = fakeLink(connection)
-      const answers = new Map<number, (answer: P.AgentPluginToolAnswer) => void>()
-      connection.answer('agentPlugin:answer', (answer) => {
-        answers.get(answer.callId)?.(answer)
-        return null
-      })
-      createPluginToolRelay({
-        link,
-        servers: () => servers,
-        call: (request, signal) => {
-          calls.push({ request, signal })
-          return answerWith(request, signal)
-        },
-        log: () => undefined
-      })
-      await link.connect()
-
-      const pluginAnswers: ToolAnswer[] = [
-        { ok: true, text: 'two cards' },
-        { ok: false, message: 'The board is locked.' }
-      ]
-      for (const [callId, answer] of pluginAnswers.entries()) {
-        answerWith = () => Promise.resolve(answer)
-        const routed = await rpcResult<unknown>(trackerUrl(alpha), alpha.token, 'tools/call', {
-          name: 'list_cards',
-          arguments: {}
-        })
-        const relayed = new Promise<P.AgentPluginToolAnswer>((resolve) => answers.set(callId, resolve))
-        connection.push('agentPlugin:call', {
-          callId,
-          session: 3,
-          caller: { id: 'minted-in-host', label: 'alpha', folder: 'C:/work/alpha' },
-          plugin: 'tracker',
-          tool: 'list_cards',
-          arguments: {}
-        })
-        expect((await relayed).outcome).toEqual({ status: 'done', value: routed })
-      }
-      // The relay names the session as the host named it, never by a token.
-      expect(calls.at(-1)?.request.session).toEqual({ id: 'minted-in-host', name: 'alpha', cwd: 'C:/work/alpha' })
-    })
-  })
-
-  describe('with sessions in the local host', () => {
-    beforeEach(() => {
-      endpoint = createBrowserMcp({
-        browsers: browsers.host,
-        settings: () => settings,
-        dir,
-        sessions: () => null,
-        plugins: {
-          servers: () => [
-            { plugin: 'notes', name: 'Notes', server: 'helm-plugin-notes', instructions: null, tools: [] }
-          ],
-          call: () => Promise.resolve({ ok: true, text: '' })
-        },
-        listen: false
-      })
-    })
-
-    it('binds nothing, mints no token and registers nobody, whatever is switched on', async () => {
-      settings = { ...settings, browserMcp: true, sessionMcp: true }
-      expect(await endpoint.start()).toEqual({ started: false, problem: NOT_LISTENING_IN_HOST })
-      await endpoint.sync()
-      expect(endpoint.running()).toBe(false)
-      expect(endpoint.address()).toBeNull()
-      expect(endpoint.register({ id: 'x', name: 'alpha', cwd: 'C:/work/alpha' })).toBeNull()
-      expect(readdirSync(dir)).toEqual([])
-    })
-
-    it('still answers the browser calls the host relays', async () => {
-      const answer = await endpoint.runBrowserTool({ key: 'host-key', name: 'alpha' }, 'browser_tabs', {})
-      expect(answer.isError).toBeUndefined()
-      expect(answer.content[0]?.text).toContain('No browser tabs are open')
-    })
-  })
-
-  describe('the shared session tool table', () => {
-    it('lists exactly the tools, descriptions, input schemas and instructions in the table the host reads', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      expect(SESSION_TOOL_TABLE.name).toBe('helm-sessions')
-      expect(new URL(alpha.sessions).pathname).toBe(SESSION_TOOL_TABLE.path)
-      const { tools } = await rpcResult<{ tools: unknown[] }>(alpha.sessions, alpha.token, 'tools/list')
-      expect(tools).toEqual(SESSION_TOOL_TABLE.tools)
-      const init = await rpcResult<{ serverInfo: { name: string }; instructions: string }>(
-        alpha.sessions,
-        alpha.token,
-        'initialize',
-        {}
-      )
-      expect(init.serverInfo.name).toBe('helm-sessions')
-      expect(init.instructions).toBe(SESSION_TOOL_TABLE.instructions)
-    })
-  })
-
   describe('the shared browser tool table', () => {
-    it('lists exactly the tools, descriptions, input schemas and instructions in the table the host reads', async () => {
-      await endpoint.start()
-      const alpha = register('alpha')
-      expect(BROWSER_TOOL_TABLE.name).toBe('helm-browser')
-      const { tools } = await rpcResult<{ tools: unknown[] }>(alpha.browser, alpha.token, 'tools/list')
-      expect(tools).toEqual(BROWSER_TOOL_TABLE.tools)
-      const init = await rpcResult<{ instructions: string }>(alpha.browser, alpha.token, 'initialize', {})
-      expect(init.instructions).toBe(BROWSER_TOOL_TABLE.instructions)
-    })
-
     it('has a run for every tool in the table and no run outside it', () => {
       // Building an endpoint pairs the table with the runs, and throws on a
       // tool in one and not the other.

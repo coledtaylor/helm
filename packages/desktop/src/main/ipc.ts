@@ -25,8 +25,8 @@ import { activePty, windowsBuildNumber } from './pty'
 import { createClipboardText } from './clipboard'
 import { nativeProfileDialogs } from './profiles'
 import { updateSettings, type Services } from './services'
-import type { WorkspaceService } from './workspace'
-import { registerConfirmAnswers, showExitNotification } from './sessions'
+import type { WorkspaceService } from './host/workspace'
+import { registerConfirmAnswers, showExitNotification } from './host/confirm'
 import { isClientOnly, isHostInternal } from '../shared/host/protocol'
 import type {
   EventChannel,
@@ -210,7 +210,7 @@ export function mainHandles(channel: string): 'always' | 'fromPluginWindow' | 'n
 
 export function registerIpc(ctx: IpcContext): void {
   const { services, workspace } = ctx
-  registerConfirmAnswers(true)
+  registerConfirmAnswers()
   /** Whether a message came from the hidden plugin window, the only page a host-internal channel is taken from. */
   const fromPluginWindow = (sender: WebContents): boolean => ctx.pluginBackground()?.id === sender.id
   // One for the app, so a later copy supersedes one still retrying.
@@ -545,7 +545,7 @@ export function registerIpc(ctx: IpcContext): void {
     // The host judged nobody saw this exit, from what the window said was on
     // screen; only main can show the OS notification.
     'windowSessions:notify': (record) => {
-      showExitNotification(ctx.window, record, 'windowSessions:activate')
+      showExitNotification(ctx.window, record)
     }
   }
 

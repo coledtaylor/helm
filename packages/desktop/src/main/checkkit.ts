@@ -3,7 +3,7 @@ import type { SessionRecord } from '@helm/core'
 import { squash } from './bridge'
 import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
-import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './sessions'
+import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './host/session-host'
 import type { Services } from './services'
 
 /**

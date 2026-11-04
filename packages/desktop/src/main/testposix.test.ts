@@ -11,16 +11,14 @@ import {
 } from '../../scripts/test-posix.mjs'
 
 /**
- * `pnpm test:posix`: the processes-and-ports, overlay, process-tree and
- * data-directory tests, run under Linux in WSL from Windows and natively on
+ * `pnpm test:posix`: the overlay, process-tree and data-directory tests, run under Linux in WSL from Windows and natively on
  * macOS and Linux.
  */
 
 describe('the POSIX test command', () => {
-  it('runs the processes-and-ports, overlay, process-tree and data-directory tests, each of which exists', () => {
+  it('runs the overlay, process-tree and data-directory tests, each of which exists', () => {
     expect(POSIX_TESTS).toEqual(
       expect.arrayContaining([
-        'packages/desktop/src/main/processes.test.ts',
         'packages/core/src/launch/overlay.test.ts',
         'packages/desktop/src/main/treekill.test.ts',
         'packages/desktop/src/main/datadirs.test.ts'

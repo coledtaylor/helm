@@ -1,20 +1,11 @@
 import {
-  cacheProjects,
   cleanStaleShims,
-  disprovedProjectPaths,
-  forgetProjects,
   openStore,
-  readCachedProjects,
-  readGitStates,
   readSettings,
   reconcileRunningSessions,
-  scan,
   seedTemplates,
-  suggestRoots,
   writeSettings,
   type AppSettings,
-  type DiscoveryResult,
-  type GitState,
   type LostSession,
   type SavedPaneLayout,
   type SeedResult,
@@ -31,8 +22,6 @@ import { dbFile, shimRoot, templatesDir } from './paths'
 export interface Services {
   store: Store
   settings: AppSettings
-  /** Last completed scan, or null before the first one. */
-  lastScan: DiscoveryResult | null
   /**
    * What the previous run left behind when it stopped without shutting down -
    * a crash, or a kill from Task Manager: the sessions still claiming to be
@@ -62,7 +51,6 @@ export function createServices(): Services {
   return {
     store,
     settings,
-    lastScan: null,
     lost: { sessions: reconcileRunningSessions(store), layout: settings.paneLayout },
     /*
      * The shims no live process is holding.
@@ -102,23 +90,11 @@ export function updateSettings(services: Services, patch: Partial<AppSettings>):
 }
 
 /**
- * Whether the setup pane owns the window.
- *
- * One question with one answer: has this profile been through setup. Not "does
- * it have roots" - during setup it acquires roots, and a pane that vanished the
- * moment the first folder was added would close itself halfway through the
- * thing it exists to do. The stamp is written by the button, and by nothing
- * else.
- */
-export function needsFirstRun(services: Services): boolean {
-  return services.settings.firstRunCompletedAt === null
-}
-
-/**
  * An install that predates the setup pane, brought up to date.
  *
- * It has roots and no stamp, which the rule above would read as "never set up"
- * and answer with a setup pane over a working launcher. Done here rather than
+ * It has roots and no stamp, which would read as "never set up" and answer
+ * with a setup pane over a working launcher; the stamp goes to the local host
+ * with the roots on its first connect (`host/workspace.ts`). Done here rather than
  * during the first scan because the window is created immediately afterwards:
  * a stamp written a second later would show that pane and then take it away.
  */
@@ -127,107 +103,4 @@ export function adoptExistingProfile(services: Services): boolean {
   if (services.settings.scanRoots.length === 0) return false
   updateSettings(services, { firstRunCompletedAt: new Date().toISOString() })
   return true
-}
-
-/**
- * Ensures there is something to scan.
- *
- * A profile that has been through setup adopts whatever discovery can justify
- * if it somehow has no roots - the harness Helm is running inside, most often.
- * What it deliberately does *not* do any more is adopt before setup: guessing a
- * scan root before the user has been asked is how a fresh install ends up
- * quietly pointed at somebody else's directory. Until then the suggestions are
- * offered in the pane, where they can be declined.
- */
-export async function ensureScanRoots(services: Services): Promise<string[]> {
-  if (services.settings.scanRoots.length > 0) return services.settings.scanRoots
-  if (needsFirstRun(services)) return []
-
-  const suggested = await suggestRoots()
-  if (suggested.length === 0) return []
-  updateSettings(services, { scanRoots: suggested })
-  return suggested
-}
-
-/**
- * How many scans each `Services` has started, and which of them `lastScan` came
- * from.
- *
- * Scans overlap - the startup scan is still walking when a root accepted in the
- * setup pane starts another - and they finish in whatever order the disk
- * decides. A scan that started earlier describes roots that have since changed,
- * so it must not land on top of one that started later: it used to, and the
- * app was left holding (and the window was told) the tree from before the
- * accept.
- */
-const scanOrder = new WeakMap<Services, { started: number; applied: number }>()
-
-export async function runScan(
-  services: Services,
-  opts: { includeGit?: boolean } = {}
-): Promise<DiscoveryResult> {
-  const order = scanOrder.get(services) ?? { started: 0, applied: 0 }
-  scanOrder.set(services, order)
-  const ticket = ++order.started
-
-  const roots = await ensureScanRoots(services)
-  const result = await scan({ roots, includeGit: opts.includeGit ?? true })
-  // Superseded: a newer scan has already landed. Its answer is the current
-  // one, so it is what this caller gets too, and nothing here is written.
-  if (ticket < order.applied && services.lastScan !== null) return services.lastScan
-  order.applied = ticket
-
-  cacheProjects(services.store, result.projects, result.harnesses)
-  // The cache is written to on every pass and read from at every start, so a
-  // row a scan can *disprove* has to go: otherwise a project that has been
-  // deleted, or one an older Helm listed by a rule since corrected, paints for
-  // a second at every launch for the rest of the install's life. Only where
-  // this pass walked the root without error - `disprovedProjectPaths` is where
-  // that argument lives, and where the unplugged drive is kept.
-  forgetProjects(
-    services.store,
-    disprovedProjectPaths(
-      readCachedProjects(services.store).map((project) => project.path),
-      result
-    )
-  )
-  services.lastScan = result
-  return result
-}
-
-/**
- * Re-reads git only. The launcher calls this when the window regains focus:
- * a scan walks every `.claude` tree, which is wasted work when the thing that
- * changed while the user was in an editor is the working tree.
- */
-export async function refreshGit(services: Services): Promise<Record<string, GitState | null>> {
-  const paths = (services.lastScan?.projects ?? readCachedProjects(services.store)).map(
-    (p) => p.path
-  )
-  const states = await readGitStates(paths)
-
-  const asRecord: Record<string, GitState | null> = {}
-  for (const [path, state] of states) asRecord[path] = state
-
-  if (services.lastScan) {
-    for (const project of services.lastScan.projects) {
-      project.git = states.get(project.path) ?? null
-    }
-    // The harnesses go in with them: this write is an upsert over the same
-    // rows, so passing the projects alone would put null over every recorded
-    // `template:` the moment the window regained focus.
-    cacheProjects(services.store, services.lastScan.projects, services.lastScan.harnesses)
-  }
-  return asRecord
-}
-
-export function cachedProjects(services: Services): ReturnType<typeof readCachedProjects> {
-  return readCachedProjects(services.store)
-}
-
-/** The discovered project at `cwd`, by the path discovery spells it, or null. */
-export function knownProject(services: Services, cwd: string): string | null {
-  const wanted = cwd.toLowerCase()
-  const projects = services.lastScan?.projects ?? readCachedProjects(services.store)
-  return projects.find((project) => project.path.toLowerCase() === wanted)?.path ?? null
 }

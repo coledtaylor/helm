@@ -1,6 +1,14 @@
 import type { AppSettings, CachedProject, DiscoveryResult } from '@helm/core'
-import type { ClaudeStatus } from '../../shared/ipc'
-import type { WorkspaceService } from '../workspace'
+import type {
+  FolderTemplateKind,
+  FolderTemplatePreview,
+  SaveFolderAsTemplateResult,
+  TemplateDeleteResult,
+  TemplateDetail,
+  TemplateImportResult,
+  TemplateWriteResult
+} from '@helm/core'
+import type { ClaudeStatus, IpcRequests } from '../../shared/ipc'
 import type { HostConnection, HostSubscription } from './client'
 import type { HostLink } from './link'
 import type * as P from './protocol'
@@ -46,6 +54,68 @@ import { CLAUDE_CODE_BACKEND, type Emit } from './sessions'
  * cannot be reached, each rejects with the link's sentence; none answers an
  * empty list in its place.
  */
+
+type Request<K extends keyof IpcRequests> = IpcRequests[K]['request']
+type Response<K extends keyof IpcRequests> = IpcRequests[K]['response']
+
+export interface WorkspaceTemplates extends TemplateService {
+  list(): Promise<Response<'template:list'>>
+  preview(request: Request<'template:preview'>): Promise<Response<'template:preview'>>
+}
+
+export interface WorkspaceService {
+  /** The settings as the window sees them. */
+  settings(): Promise<AppSettings>
+  /** Writes a patch to wherever each key lives, and answers the settings after. */
+  writeSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+  cached(): Promise<Response<'discovery:cached'>>
+  /** A scan; the window is told it is running, its result and that it stopped. */
+  scan(includeGit: boolean): Promise<Response<'discovery:scan'>>
+  suggestRoots(): Promise<string[]>
+  /** Adds each path that is not a root already; answers the roots after. */
+  acceptRoots(paths: readonly string[]): Promise<string[]>
+  removeRoot(path: string): Promise<string[]>
+  setupStatus(): Promise<ClaudeStatus>
+  /** Checks a picked executable, keeps it when it answers, and says what setup finds after. */
+  locateClaude(path: string): Promise<ClaudeStatus>
+  completeSetup(): Promise<AppSettings>
+  createHarness(request: Request<'harness:create'>): Promise<Response<'harness:create'>>
+  templates: WorkspaceTemplates
+}
+
+export interface TemplateService {
+  detail: (template: string) => Promise<TemplateDetail>
+  create: (req: {
+    name: string
+    label?: string | undefined
+    description?: string | undefined
+  }) => Promise<TemplateWriteResult>
+  rename: (req: { template: string; name: string }) => Promise<TemplateWriteResult>
+  remove: (template: string) => Promise<TemplateDeleteResult>
+  metadata: (req: {
+    template: string
+    label: string
+    description: string
+  }) => Promise<TemplateWriteResult>
+  substitute: (req: { template: string; path: string }) => Promise<TemplateWriteResult>
+  importFiles: (req: {
+    template: string
+    scopePath: string
+    paths: string[]
+  }) => Promise<TemplateImportResult>
+  folderPreview: (req: {
+    dir: string
+    kind: FolderTemplateKind
+  }) => Promise<FolderTemplatePreview>
+  fromFolder: (req: {
+    dir: string
+    kind: FolderTemplateKind
+    name: string
+    label: string
+    description: string
+    include: string[]
+  }) => Promise<SaveFolderAsTemplateResult>
+}
 
 export interface HostWorkspaceDeps {
   link: HostLink

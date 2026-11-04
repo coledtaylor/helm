@@ -72,8 +72,8 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   push, then builds. All three jobs are required: a failure on any one fails
   the run and stops the release, and a branch merges only once all three
   passed. End-to-end tests run locally only, never in CI.
-- `pnpm test:posix` runs the processes-and-ports, overlay, process-tree and
-  data-directory tests where that code is the POSIX one: natively on macOS and
+- `pnpm test:posix` runs the overlay, process-tree and data-directory
+  tests where that code is the POSIX one: natively on macOS and
   Linux, and under Linux in WSL from Windows.
 - A test cleans up by construction, never by reaching its own teardown, which
   a crash skips: every folder it makes is under its run's root, which the
@@ -216,11 +216,11 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   reader, read `.json` files only; never widen either.
 - The `persist:helm-browser` partition holds the user's cookies and logins.
   Nothing reads it; the only call against it is `clearStorageData`.
-- The plugin secret store (`main/plugins/secrets.ts`) is the one place Helm
-  keeps a secret, and only one the user typed into it. It is encrypted with
-  `safeStorage` and refuses to store when encryption is unavailable; a value is
-  filled in by main, for a host and a plugin the user allowed, and never sent
-  to any window. Helm never reads a Claude or GitHub credential to put there.
+- The plugin secret store (`crates/host/src/plugins/secrets`) is the one
+  place Helm keeps a secret, and only one the user typed into it. Each value
+  is sealed by this OS's store for the user (`platform/secret_seal`) and
+  refused when it cannot be; a value is filled in by the host, for an origin
+  and a plugin the user allowed, and never sent to any client. Helm never reads a Claude or GitHub credential to put there.
 - The user's login is the access to Floti. The host serves whatever reaches
   its local socket, which only the user's OS account can open, once its Noise
   handshake completes: a client on the host's computer, or one that comes
@@ -433,8 +433,8 @@ folder: run through npx, that folder is a cache.
   top-level pages: Chromium partitions an iframe's storage by its top-level
   site, and a top-level page would share nothing with the plugin's panels.
 - A plugin's tools (`agent` in its manifest) are answered by its background
-  page, through `main/plugins/tools.ts`, and served as one more family on the
-  inbound listener. A plugin sends no notifications and never sends a running
+  page, through `main/plugins/tools.ts`, and served by the host as one more
+  family on its agent tools listener. A plugin sends no notifications and never sends a running
   session anything: a session calls it, not the other way round.
 - A tool its manifest marks `readOnly` is listed with `readOnlyHint` and
   passed as `--allowedTools mcp__helm-plugin-<id>__<tool>` to the sessions

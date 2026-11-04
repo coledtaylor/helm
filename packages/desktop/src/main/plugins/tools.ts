@@ -4,8 +4,8 @@ import type { NormalizedAgentTool } from '@coledtaylor/helm-plugin-sdk/manifest'
 import { PLUGIN_TOOL_ANSWER_MAX_CHARS, type PluginToolCall, type PluginToolOutcome } from '../../shared/ipc'
 
 /**
- * Tools a plugin offers the sessions Helm starts: the calls in flight between
- * a session's MCP request (`browser-mcp.ts`) and the plugin's background page.
+ * Tools a plugin offers sessions: the calls in flight between a session's MCP
+ * request, relayed by the host, and the plugin's background page.
  *
  * A call goes to the background host as `plugins:tool` and comes back as
  * `plugins:toolResult`, and nothing about it is left to chance on the way:
@@ -15,7 +15,7 @@ import { PLUGIN_TOOL_ANSWER_MAX_CHARS, type PluginToolCall, type PluginToolOutco
  * handler's `signal`.
  */
 
-/** A plugin offering tools right now, as the MCP endpoint serves it. */
+/** A plugin offering tools right now, as the host serves it. */
 export interface ToolServer {
   /** The plugin's id. */
   plugin: string
@@ -41,12 +41,6 @@ export interface ToolCallRequest {
 
 /** What the session reads: the page's text, or why there is none. */
 export type ToolAnswer = { ok: true; text: string } | { ok: false; message: string }
-
-/** What `browser-mcp.ts` needs of the plugins: who offers tools, and a way to call one. */
-export interface PluginToolProvider {
-  servers(): ToolServer[]
-  call(request: ToolCallRequest, signal: AbortSignal): Promise<ToolAnswer>
-}
 
 /**
  * The longest a call waits for its answer. As long as `helm.exec` lets a
