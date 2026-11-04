@@ -35,6 +35,7 @@ const CONCERNS: &[&str] = &[
     "standard_error",
     "terminal_size",
     "wsl",
+    "shell_folders",
 ];
 
 /// The words that make a `cfg` depend on the OS.
