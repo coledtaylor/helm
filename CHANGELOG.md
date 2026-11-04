@@ -14,6 +14,77 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.4.1-preview.7
+
+A preview, not a release: nothing offers it as an update.
+
+**Hosts on other computers**
+
+- Helm can now run sessions on other computers. Add a host…, in Settings >
+  Hosts and in the sidebar, lists the hosts in your `~/.ssh/config` or takes
+  any ssh target or command. It connects with your own ssh login, offers to
+  install or update floti there (it says what it will do and where, and runs
+  nothing until you agree), then shows which agents are installed there and
+  whether they are signed in. If a step fails, it says what went wrong and
+  how to fix it.
+- Signing in is all it takes: anyone who can log in to that computer over ssh
+  can use its host. There are no pairing codes and nothing to approve.
+  Settings > Devices lists the devices attached to each host, with
+  Disconnect.
+- One window shows every host. The sidebar groups sessions by host. The
+  launcher, profiles and New harness say which host they start on, and a
+  tab's title names its host. History, Usage, Config, Files and Settings >
+  Plugins show one host at a time, and a remote host's plugins join the rail.
+- A WSL distro can be a host. Add a host lists your distros, leaving out
+  Docker Desktop's and Rancher Desktop's own, and Helm keeps a distro running
+  while it hosts sessions.
+- A Linux server with no desktop can be a host. Setting floti up there keeps
+  the host running with nobody signed in, and starts it again if it crashes.
+- The sessions pane lists the ports a remote session listens on. Open in
+  browser forwards the port and opens the page in the Browser tab.
+- The status bar shows each remote host's round trip: how long a keystroke
+  takes to come back.
+- If the connection to a host drops, its tabs keep their last screen, dimmed,
+  under a banner with Reconnect now, and the sessions keep running there. A
+  host Helm cannot reach shows ssh's last line and the command to try
+  yourself.
+- Each host has its own setting for what quitting Helm does to its sessions.
+  A newly added host keeps them running.
+- From this preview, Helm can install floti only on a computer with the same
+  system and processor as this one, from its own copy. Any other computer,
+  WSL included, downloads floti from a published release, so it cannot be
+  set up from a preview.
+
+**Sessions**
+
+- Sessions and terminals now outlive a host crash. They keep running, and the
+  next host takes them back, browser and plugin tools included.
+- When sessions are lost with their host, the window marks them lost, starts
+  a new host and reconnects. Restore resumes a lost session in its own tab
+  and names the host that stopped. A lost terminal says so and starts again
+  in its folder.
+- "Run sessions in the local host" is gone, and sessions always run in the
+  host. If you had it off, the first start brings over what only Helm kept,
+  as 2.4.1-preview.5 describes.
+- A program in a plain tab can report its own status (working, idle, needs
+  you or error) with an OSC 7501 sequence. The tab, the sidebar and the
+  sessions pane show it, and the status bar counts sessions in error.
+- In the row under a session's tab, a long status no longer pushes out the
+  branch. It gets cut short with an ellipsis instead.
+- The host writes its errors, and the reason for any crash, to `host.log` in
+  floti's `logs` folder (`%LOCALAPPDATA%\Floti\logs` on Windows).
+
+**Terminal**
+
+- PowerShell 7 from the Microsoft Store is found even when its folder is
+  missing from PATH.
+- Settings > Terminal accepts a shell's full path typed in, for a shell the
+  file picker cannot open, such as a Store app.
+
+**Files**
+
+- A note's tags each get a colour from the theme.
+
 ## 2.4.1-preview.6
 
 A preview, not a release: nothing offers it as an update.
