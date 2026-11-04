@@ -120,7 +120,7 @@ describe('the install scripts, run where floti goes', () => {
       const bytes = Buffer.from('this is floti for a server\n')
       await writeFile(own, bytes)
       const line =
-        'floti setup: could not turn on lingering, which keeps the host running with nobody signed in: Could not enable linger: Access denied. Ask an administrator here to run sudo loginctl enable-linger me, then run floti setup again.'
+        'floti setup: could not turn on lingering, which keeps the host running with nobody signed in: Could not enable linger: Access denied. Ask an administrator there to run sudo loginctl enable-linger me, then run floti setup again.'
       const { outcome } = await checkAndInstall(
         { ...env, FAKE_SSH_SETUP: `fail:${line}` },
         { ownBuild: async () => ({ path: own, sha256: sha256(bytes) }) }

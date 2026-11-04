@@ -319,10 +319,12 @@ fn settle_lingering(system: &dyn SignInSystem, linger: Linger) -> Result<bool, S
 }
 
 /// The one line setup fails with when lingering could not be turned on for
-/// `user`: what loginctl said, unedited, then the fix.
+/// `user`: what loginctl said, unedited, then the fix. The fix says "there"
+/// rather than "here": the line is mostly read on another computer, in the
+/// desktop's add-a-host dialog, which shows it unedited.
 pub fn linger_refused_line(said: &str, user: &str) -> String {
     format!(
-        "could not turn on lingering, which keeps the host running with nobody signed in: {said}. Ask an administrator here to run sudo loginctl enable-linger {user}, then run floti setup again."
+        "could not turn on lingering, which keeps the host running with nobody signed in: {said}. Ask an administrator there to run sudo loginctl enable-linger {user}, then run floti setup again."
     )
 }
 

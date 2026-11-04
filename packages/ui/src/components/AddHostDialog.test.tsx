@@ -391,7 +391,7 @@ describe('the add-a-host dialog', () => {
 
   it('a Linux server whose loginctl refuses lingering shows setup’s line unedited and adds nothing', async () => {
     const line =
-      'floti setup: could not turn on lingering, which keeps the host running with nobody signed in: Could not enable linger: Access denied. Ask an administrator here to run sudo loginctl enable-linger me, then run floti setup again.'
+      'floti setup: could not turn on lingering, which keeps the host running with nobody signed in: Could not enable linger: Access denied. Ask an administrator there to run sudo loginctl enable-linger me, then run floti setup again.'
     const w = world()
     await pick(w)
     await userEvent.click(w.button('Connect'))

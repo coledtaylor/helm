@@ -623,7 +623,7 @@ async fn s3_where_loginctl_refuses_lingering_setup_registers_and_starts_nothing_
     assert_eq!(*line, linger_refused_line(LINGER_REFUSED, USER_NAME));
     assert!(line.contains(LINGER_REFUSED), "{line}");
     assert!(
-        line.contains("Ask an administrator here to run sudo loginctl enable-linger me"),
+        line.contains("Ask an administrator there to run sudo loginctl enable-linger me"),
         "{line}"
     );
     assert!(!line.contains('\n'), "{line}");
