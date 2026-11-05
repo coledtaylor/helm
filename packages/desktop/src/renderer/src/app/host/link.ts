@@ -36,6 +36,10 @@ import type { HelmBridge, HostLinkOpened, RefusedVersions } from '../../../../sh
  * the side to update; the link rejects with that sentence, as a
  * `HostRefusedError` carrying the versions, and tells its `onRefused`
  * listeners, so the window can say which side is older and offer what fits.
+ * A link that connects again by itself tries a refusing host again with the
+ * same waits, so the page connects once main reaches a host that welcomes it
+ * (the carried floti's, after Restart host to update); Reconnect now drops
+ * the wait.
  */
 
 /** What the app window says it can do: draw terminals, show files and draw plugins' pages. */
@@ -247,6 +251,9 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
         },
         (error: unknown) => {
           if (attempt === made) attempt = null
+          // A refusing host is tried again, as main's link tries it, so the
+          // page connects once main has a host that speaks its protocol.
+          if (error instanceof HostRefusedError && deps.retries !== false) scheduleRetry()
           throw error
         }
       )

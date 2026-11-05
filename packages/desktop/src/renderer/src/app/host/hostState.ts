@@ -7,8 +7,9 @@ import type { PageLink } from './link'
  * answer. `restarting` is set from the moment a Restart host to update ends
  * the connection until the window has the new host: no loss, and nothing is
  * marked lost. `reconnects` counts the times the window got its host back
- * after either, so what the new host offers (the sessions the old one could
- * not hand over) is asked for again each time.
+ * after either, or got one at all after a host refused it, so what the new
+ * host lists and offers (the sessions the old one could not hand over) is
+ * asked for again each time.
  */
 export interface HostState {
   lost: { restarts: boolean } | null
@@ -22,8 +23,10 @@ export interface HostStateStore {
   subscribe(listener: () => void): () => void
 }
 
-export function createHostState(link: Pick<PageLink, 'onEnded' | 'onConnected'>): HostStateStore {
+export function createHostState(link: Pick<PageLink, 'onEnded' | 'onConnected' | 'onRefused'>): HostStateStore {
   let state: HostState = { lost: null, restarting: false, reconnects: 0 }
+  /** A host refused the window since it last connected: nothing it shows came from a host yet. */
+  let refused = false
   const listeners = new Set<() => void>()
   const set = (next: HostState): void => {
     state = next
@@ -35,8 +38,13 @@ export function createHostState(link: Pick<PageLink, 'onEnded' | 'onConnected'>)
     // A stop or a quit is no loss, and says nothing.
     else if (!end.planned) set({ ...state, lost: { restarts: end.restarts } })
   })
+  link.onRefused?.(() => {
+    refused = true
+  })
   link.onConnected(() => {
-    if (state.lost !== null || state.restarting) {
+    const afterRefusal = refused
+    refused = false
+    if (state.lost !== null || state.restarting || afterRefusal) {
       set({ lost: null, restarting: false, reconnects: state.reconnects + 1 })
     }
   })

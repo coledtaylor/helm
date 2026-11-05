@@ -242,3 +242,6 @@ export const devices: Devices = {
 
 /** The window's own connection to this PC's host: none in these tests. */
 export const localHostConnection = (): Promise<never> => Promise.reject(new Error('No host in this test.'))
+
+/** The window's Reconnect now for this PC's host: there is none to reach in these tests. */
+export const reconnectLocalHost = (): void => undefined

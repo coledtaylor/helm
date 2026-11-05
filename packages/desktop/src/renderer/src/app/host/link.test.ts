@@ -363,6 +363,29 @@ describe('a Helm page’s own connection to the local host', () => {
     expect(refusals).toEqual([versions, versions])
   })
 
+  it('S15: a host that refused the page is tried again with the link’s waits, and Reconnect now connects at once to the host that replaced it', async () => {
+    const w = world()
+    let connects = 0
+    w.link.onConnected(() => (connects += 1))
+    const versions = { host: { major: 1, minor: 4 }, client: { major: 2, minor: 0 }, update: 'host' as const }
+    // This PC's host speaks protocol 1.4 and refuses this Helm.
+    w.main.answer = () => ({ unreachable: 'This client speaks Floti protocol 2.0 and the host speaks 1.4.', refused: versions })
+    await expect(w.link.connection()).rejects.toBeInstanceOf(HostRefusedError)
+    expect(w.timers.pending()).toEqual([RECONNECT_FIRST_MS])
+    w.timers.fireAll()
+    await settle()
+    expect(w.main.opens).toHaveLength(2)
+    expect(w.timers.pending()).toEqual([RECONNECT_FIRST_MS * 2])
+
+    // Restart host to update ended it, and main has the carried floti's host.
+    w.main.answer = () => ({ connection: 7, appVersion: '2.9.0' })
+    w.link.reconnectNow()
+    await settle()
+    expect(connects).toBe(1)
+    expect(w.main.opens).toHaveLength(3)
+    expect(w.timers.pending()).toEqual([])
+  })
+
   it('takes a connection the page closed itself for no loss of the host', async () => {
     const w = world()
     const ends: HostEnd[] = []

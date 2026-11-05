@@ -110,6 +110,9 @@ export const devices: Devices = createDevices({ log })
 /** The window's own connection to this PC's host, for Settings > Devices. */
 export const localHostConnection = (): ReturnType<typeof link.connection> => link.connection()
 
+/** Drops the window's wait to connect to this PC's host again, and connects now (`PageLink.reconnectNow`). */
+export const reconnectLocalHost = (): void => link.reconnectNow()
+
 /**
  * Which of a host's sessions have a tab in this window: the layout is this
  * device's own, so the window tells that host's connection which terminals to

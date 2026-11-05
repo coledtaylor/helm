@@ -231,6 +231,7 @@ import {
   hostState,
   seenHostVersion,
   localHostConnection,
+  reconnectLocalHost,
   remoteHosts as remoteHostLinks,
 } from "./bridge";
 import { useDevicesSettings } from "./useDevicesSettings";
@@ -988,7 +989,7 @@ export function App(): JSX.Element {
     (id: number) => focusSessionRef.current(id),
     [],
   );
-  const sessionState = useSessions(activateSession);
+  const sessionState = useSessions(activateSession, hostLink.reconnects);
   const {
     sessions,
     activity: sessionActivity,
@@ -3598,7 +3599,10 @@ export function App(): JSX.Element {
   const restartHostDeps = useMemo<RestartHostDeps>(
     () => ({
       ask: () => helm.invoke("windowSessions:restartAsk"),
-      restart: () => helm.invoke("windowSessions:restartHost"),
+      // Main resolves once it has the new host. A window that old host
+      // refused waits to try again, and connects to the new one now.
+      restart: () =>
+        helm.invoke("windowSessions:restartHost").then(reconnectLocalHost),
       onError: setStopHostError,
     }),
     [],

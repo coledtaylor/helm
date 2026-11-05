@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { FakeConnection, fakeReach, reconnectingReach } from '../../../../../test/fake-connection'
 import { CLAUDE_CODE_BACKEND } from '../../../../shared/host/backend'
+import type { HostConnection } from '../../../../shared/host/client'
 import type * as P from '../../../../shared/host/protocol'
 import type {
   EventChannel,
@@ -595,6 +596,117 @@ describe('sessions over the window’s own connection', () => {
       ])
       // Offered, not reopened: the user answers the offer.
       expect(second.payloads('session:restore')).toEqual([])
+    })
+  })
+
+  describe('when this PC’s host refused the window and Restart host to update replaced it', () => {
+    /**
+     * A window that opened while a protocol-1.x host refused it, its saved
+     * layout naming 7 and 9, and the link that connects once `carried` is
+     * set: the carried floti's host, after the old one was ended.
+     */
+    function refusedWorld() {
+      let carried: FakeConnection | null = null
+      let attempt: Promise<HostConnection> | null = null
+      const listeners: Array<(connection: HostConnection) => void> = []
+      const link = {
+        connection(): Promise<HostConnection> {
+          const reached = carried
+          if (reached === null) {
+            return Promise.reject(new Error('This client speaks Floti protocol 2.0 and the host speaks 1.4.'))
+          }
+          attempt ??= Promise.resolve().then(() => {
+            for (const listener of listeners) listener(reached.asConnection())
+            return reached.asConnection()
+          })
+          return attempt
+        },
+        onConnected: (listener: (connection: HostConnection) => void) => {
+          listeners.push(listener)
+        },
+        onEnded: () => undefined
+      }
+      const { own } = ownBridge()
+      const adapters = createSessionsAdapters({
+        link,
+        own,
+        front: { focused: () => true, onChange: () => undefined },
+        shelf: null
+      })
+      return {
+        adapters,
+        link,
+        replace: async (next: FakeConnection) => {
+          carried = next
+          await link.connection()
+          await settle()
+        }
+      }
+    }
+
+    it('S15: carries the terminal of each session its layout names on the carried host, with its screen, and resumes nothing, when that host took the keeper back', async () => {
+      const w = refusedWorld()
+      await expect(ask(w.adapters, 'session:list')).rejects.toThrow(/1\.4/)
+      w.adapters.show([7, 9])
+      await expect(ask(w.adapters, 'session:restorable')).resolves.toBeNull()
+
+      const carried = new FakeConnection()
+        .answer('session:list', () => [row({ id: 7 }), row({ id: 9, cwd: '/work dir/api' })])
+        .answer('session:restorable', () => null)
+      const data = hear(w.adapters, 'session:data')
+      await w.replace(carried)
+
+      const listed = await ask(w.adapters, 'session:list')
+      expect(listed.map((record) => [record.id, record.status])).toEqual([
+        [7, 'running'],
+        [9, 'running']
+      ])
+      const seven = carried.streamsFor('session:data', 7)
+      expect([seven.length, carried.streamsFor('session:data', 9).length]).toEqual([1, 1])
+      seven[0]!.send('\x1bcYou said: sketch\r\ntick 12')
+      expect(data).toEqual([{ id: 7, data: '\x1bcYou said: sketch\r\ntick 12' }])
+      send(w.adapters, 'session:input', { id: 7, data: 'carry on\r' })
+      expect(seven[0]!.text()).toBe('carry on\r')
+      await expect(ask(w.adapters, 'session:restorable')).resolves.toBeNull()
+      expect(carried.payloads('session:restore')).toEqual([])
+      expect(carried.payloads('history:resume')).toEqual([])
+    })
+
+    it('S15: hands the window the carried host’s offer of each session whose keeper it could not take back, and carries none of them', async () => {
+      const w = refusedWorld()
+      await expect(ask(w.adapters, 'session:list')).rejects.toThrow(/1\.4/)
+      w.adapters.show([7, 9])
+
+      const offered = (id: number, cwd: string): P.RestoreOffer['sessions'][number] => ({
+        id,
+        name: 'app',
+        cwd,
+        branch: 'main',
+        profile: null,
+        profileGone: false,
+        lastAt: null,
+        blocked: null
+      })
+      const carried = new FakeConnection()
+        .answer('session:list', () => [
+          row({ id: 7, status: 'lost' }),
+          row({ id: 9, cwd: '/work dir/api', status: 'lost' })
+        ])
+        .answer('session:restorable', () => ({
+          sessions: [offered(7, '/work dir/app'), offered(9, '/work dir/api')],
+          elsewhere: 0
+        }))
+      await w.replace(carried)
+
+      expect(carried.streams).toEqual([])
+      const offer = await ask(w.adapters, 'session:restorable')
+      expect(offer?.sessions.map((session) => [session.id, session.cwd])).toEqual([
+        [7, '/work dir/app'],
+        [9, '/work dir/api']
+      ])
+      // Offered, each to come back in its own tab when the user answers; never through History.
+      expect(carried.payloads('session:restore')).toEqual([])
+      expect(carried.payloads('history:resume')).toEqual([])
     })
   })
 })
