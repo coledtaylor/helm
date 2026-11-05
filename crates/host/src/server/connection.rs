@@ -64,8 +64,8 @@ use floti_protocol::channels::devices::DevicesDisconnect;
 use floti_protocol::channels::host::{HostPing, HostStop, HostStopReason};
 use floti_protocol::channels::sessions::SessionList;
 use floti_protocol::message::{
-    ErrorCode, ErrorReply, Event, Hello, Request, Snapshot, StreamClose, StreamCredit, StreamData,
-    StreamOpen, Subscribe, SubscriptionError,
+    ClientInfo, ErrorCode, ErrorReply, Event, Hello, Request, RestartState, Snapshot, StreamClose,
+    StreamCredit, StreamData, StreamOpen, Subscribe, SubscriptionError,
 };
 use floti_protocol::noise::{
     KeyPair, NoiseError, Opener, PublicKey, Responder, ResponderStep, Sealer, Transport,
@@ -302,6 +302,7 @@ pub(crate) async fn serve(
     let Some((channels, name)) = connection
         .hello(
             &context.identity,
+            &context.hosted,
             device,
             context.admission.hello_deadline,
             &mut shutdown,
@@ -395,7 +396,7 @@ async fn hello_within_deadline(
     device: PublicKey,
     deadline: Duration,
     shutdown: &mut watch::Receiver<bool>,
-) -> Result<Hello, Option<Refusal>> {
+) -> Result<First, Option<Refusal>> {
     match tokio::time::timeout(deadline, read_hello(reader, opener, decoder, shutdown)).await {
         Ok(Some(hello)) => Ok(hello),
         Ok(None) => Err(None),
@@ -403,20 +404,32 @@ async fn hello_within_deadline(
     }
 }
 
+/// A client's first message: `hello`, or a restart frame in its place, which
+/// a client of any protocol version may send.
+enum First {
+    Hello(Hello),
+    /// What restarting the host would mean.
+    RestartAsk(ClientInfo),
+    /// Restart the host for an update.
+    Restart(ClientInfo),
+}
+
 /// Reads the client's first message, opened and decoded after whatever
-/// `decoder` already holds: its `hello`, or `None` when it went, sent
-/// anything else first (a client that does not speak the protocol), sent a
-/// frame that does not open, or the host is stopping.
+/// `decoder` already holds: its `hello` or a restart frame, or `None` when
+/// it went, sent anything else first (a client that does not speak the
+/// protocol), sent a frame that does not open, or the host is stopping.
 async fn read_hello(
     reader: &mut (impl AsyncRead + Unpin),
     opener: &mut Opener,
     decoder: &mut FrameDecoder,
     shutdown: &mut watch::Receiver<bool>,
-) -> Option<Hello> {
+) -> Option<First> {
     let mut buf = vec![0; READ_CHUNK];
     loop {
         match decoder.next_message() {
-            Ok(Some(Message::Hello(hello))) => return Some(hello),
+            Ok(Some(Message::Hello(hello))) => return Some(First::Hello(hello)),
+            Ok(Some(Message::RestartAsk(ask))) => return Some(First::RestartAsk(ask.client)),
+            Ok(Some(Message::Restart(restart))) => return Some(First::Restart(restart.client)),
             Ok(Some(_)) | Err(_) => return None,
             Ok(None) => {}
         }
@@ -484,7 +497,9 @@ impl<S: AsyncRead + AsyncWrite> Sealed<S> {
         )
         .await
         {
-            Ok(hello) => Some(hello),
+            Ok(First::Hello(hello)) => Some(hello),
+            // The host's own shell does not restart it.
+            Ok(First::RestartAsk(_) | First::Restart(_)) => None,
             Err(refusal) => {
                 if let Some(refusal) = refusal {
                     log_line!("floti host: refused client {}: {refusal}", client.0);
@@ -702,6 +717,44 @@ enum End {
 }
 
 impl Connection {
+    /// Answers a restart frame with what the host runs; with `restart`, the
+    /// host then lets go of its keeper and exits once the answer is out
+    /// ([`HostStopReason::Restart`]), through the one stop it takes.
+    async fn answer_restart(
+        &mut self,
+        identity: &HostIdentity,
+        hosted: &Hosted,
+        client: &ClientInfo,
+        restart: bool,
+    ) {
+        let (sessions, keeper_link) = hosted.restart_counts();
+        let state = RestartState {
+            host_version: identity.host_version.clone(),
+            protocol: identity.protocol,
+            sessions,
+            keeper_link,
+        };
+        let reserved = if restart {
+            let reserved = self.stopper.reserve(HostStopReason::Restart);
+            let name: String = client.name.chars().filter(|c| !c.is_control()).collect();
+            log_line!(
+                "floti host: {name} on device {} asked it to restart for an update, with {sessions} sessions running{}.",
+                self.device.fingerprint(),
+                if reserved.is_some() {
+                    ""
+                } else {
+                    "; it is already stopping"
+                }
+            );
+            reserved
+        } else {
+            None
+        };
+        let _ = self.write(&Message::RestartState(state)).await;
+        // Dropping the reserved stop carries it out, once the answer is out.
+        drop(reserved);
+    }
+
     /// Opens `bytes` from the client and decodes the frames in them. An
     /// error is a session that failed: nothing more from it can be trusted.
     fn received(&mut self, bytes: &[u8]) -> Result<(), End> {
@@ -713,15 +766,19 @@ impl Connection {
     /// Waits up to `deadline` for `device`'s `hello` and answers it. The
     /// capabilities the client was welcomed with and the name its device is
     /// listed under, or `None` when it was refused, went away or said nothing
-    /// in time, which the log says naming the device.
+    /// in time, which the log says naming the device. A restart frame in
+    /// place of `hello` is answered with what the host runs, and `restart`
+    /// then restarts it once the answer is sent; the connection ends either
+    /// way.
     async fn hello(
         &mut self,
         identity: &HostIdentity,
+        hosted: &Hosted,
         device: PublicKey,
         deadline: Duration,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Option<(ClientChannels<'static>, String)> {
-        let hello = match hello_within_deadline(
+        let first = match hello_within_deadline(
             &mut self.reader,
             &mut self.opener,
             &mut self.decoder,
@@ -731,11 +788,22 @@ impl Connection {
         )
         .await
         {
-            Ok(hello) => hello,
+            Ok(first) => first,
             Err(refusal) => {
                 if let Some(refusal) = refusal {
                     log_line!("floti host: refused client {}: {refusal}", self.client.0);
                 }
+                return None;
+            }
+        };
+        let hello = match first {
+            First::Hello(hello) => hello,
+            First::RestartAsk(client) => {
+                self.answer_restart(identity, hosted, &client, false).await;
+                return None;
+            }
+            First::Restart(client) => {
+                self.answer_restart(identity, hosted, &client, true).await;
                 return None;
             }
         };

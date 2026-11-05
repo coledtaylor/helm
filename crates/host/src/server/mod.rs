@@ -155,6 +155,31 @@ fn test_deadline(data: &Path) -> Option<Duration> {
     None
 }
 
+/// The file in a data folder whose text, `<major>.<minor>`, is the protocol
+/// version a test build's host greets with in place of [`PROTOCOL_VERSION`],
+/// so a test can meet a host one version apart. A production build never
+/// reads it.
+#[cfg(any(test, feature = "testkit"))]
+pub const TEST_HOST_PROTOCOL: &str = "floti-test-host-protocol";
+
+/// The protocol version the host over the data folder `data` greets with:
+/// [`PROTOCOL_VERSION`], or in a test build what [`TEST_HOST_PROTOCOL`] there
+/// says.
+fn host_protocol(data: &Path) -> floti_protocol::ProtocolVersion {
+    #[cfg(any(test, feature = "testkit"))]
+    if let Some((major, minor)) = std::fs::read_to_string(data.join(TEST_HOST_PROTOCOL))
+        .ok()
+        .and_then(|text| {
+            let (major, minor) = text.trim().split_once('.')?;
+            Some((major.parse().ok()?, minor.parse().ok()?))
+        })
+    {
+        return floti_protocol::ProtocolVersion::new(major, minor);
+    }
+    let _ = data;
+    PROTOCOL_VERSION
+}
+
 /// How long a stop waits, once the sessions have ended, for the plugin
 /// registry to be let go, and then for the store, before it goes on anyway.
 const RELEASE_WAIT: Duration = Duration::from_secs(10);
@@ -387,7 +412,7 @@ impl Host {
             .clone()
             .map(|program| Arc::new(Keeper::new(program, &folders, inherited_env.clone())));
         let identity = Arc::new(HostIdentity {
-            protocol: PROTOCOL_VERSION,
+            protocol: host_protocol(&folders.data),
             host_version: crate::version::FLOTI_VERSION.to_owned(),
             backends: backends
                 .iter()

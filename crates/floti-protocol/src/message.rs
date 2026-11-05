@@ -10,7 +10,10 @@
 //!
 //! `hello` and `refused` are frozen across majors: their fields are never
 //! renamed or removed, so any client, however old, can read why it was
-//! refused.
+//! refused. So are the restart frames (`restartAsk`, `restart` and their
+//! answer `restartState`), which a client sends in place of `hello`: a client
+//! can ask a host it is too new or too old for what restarting it would end,
+//! and restart it.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -42,6 +45,47 @@ pub enum Message {
     StreamData(StreamData),
     StreamCredit(StreamCredit),
     StreamClose(StreamClose),
+    RestartAsk(RestartAsk),
+    Restart(Restart),
+    RestartState(RestartState),
+}
+
+/// Sent in place of `hello`: asks the host what restarting it for an update
+/// would mean, answered with [`RestartState`], after which the host closes
+/// the connection. It takes no protocol version, so a client on any version
+/// the host would refuse can still ask. Frozen across majors.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartAsk {
+    pub client: ClientInfo,
+}
+
+/// Sent in place of `hello`: the host lets go of its session keeper, leaving
+/// every session and plain terminal running in it, answers with
+/// [`RestartState`], closes the connection and exits, as a crash would leave
+/// things, so the next host takes the keeper back. A host without a keeper
+/// stops as a stop for an update does. Frozen across majors.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Restart {
+    pub client: ClientInfo,
+}
+
+/// The host's answer to [`RestartAsk`] and [`Restart`]. Frozen across
+/// majors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartState {
+    /// The host program's own version, such as "2.4.1".
+    pub host_version: String,
+    /// The protocol version the host speaks.
+    pub protocol: ProtocolVersion,
+    /// How many sessions it runs.
+    pub sessions: u32,
+    /// The link version of the session keeper it holds them in, or none when
+    /// it runs no keeper. A host built with this link version takes that
+    /// keeper back.
+    pub keeper_link: Option<u32>,
 }
 
 /// The client's first message. Frozen across majors.

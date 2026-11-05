@@ -14,7 +14,9 @@
 //!   pinned host key, then every byte sealed under keys fresh to the
 //!   connection. Not in the generated schema: no message carries it.
 //! - [`frame`]: length-prefixed CBOR, one [`Message`] per frame.
-//! - [`handshake`] and [`version`]: `hello`, then `welcome` or `refused`.
+//! - [`handshake`] and [`version`]: `hello`, then `welcome` or `refused`; or,
+//!   in place of `hello`, `restartAsk` or `restart`, answered with
+//!   `restartState`.
 //! - [`capability`] and [`delivery`]: what a client can draw, declared at
 //!   connect, and the host sending it only what that covers.
 //! - [`backend`]: which agent runs a session, and what each agent declares.
@@ -24,7 +26,8 @@
 //! - [`generate`]: the JSON Schema and TypeScript that clients build against.
 //!
 //! Changes follow one rule: additions in a minor version, removals only in a
-//! major one, after a minor that deprecates them.
+//! major one, after a minor that deprecates them ([`version`] says which
+//! change is which, and [`record`] holds each version's contents).
 
 pub mod backend;
 pub mod bytes;
@@ -39,6 +42,7 @@ pub mod generate;
 pub mod handshake;
 pub mod message;
 pub mod noise;
+pub mod record;
 pub mod subscription;
 pub mod version;
 
@@ -57,4 +61,4 @@ pub use frame::{FrameDecoder, MAX_FRAME_LEN, encode_frame};
 pub use handshake::HostIdentity;
 pub use message::{Message, Payload};
 pub use subscription::{Delivery, EventCursor, Topic};
-pub use version::{PROTOCOL_VERSION, ProtocolVersion, UpdateSide};
+pub use version::{KEEPER_LINK_VERSION, PROTOCOL_VERSION, ProtocolVersion, UpdateSide};

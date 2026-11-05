@@ -15,9 +15,13 @@
 //!   over one [`KeeperLink`]. The keeper is started outside the host's own
 //!   tie ([`ProcessTree::prepare_lasting_root`]), so it outlives the host.
 //! - A host starting finds the keeper the last one left ([`Keeper::reattach`])
-//!   and takes back what it holds. A keeper of another version is told to end
-//!   everything, or ended by its pid, and one of this version starts when the
-//!   next program does.
+//!   and takes back what it holds, whenever the keeper speaks its link
+//!   version ([`floti_protocol::KEEPER_LINK_VERSION`]), whatever floti version
+//!   built it. A keeper of another link version, or one that names none, is
+//!   told to end everything, or ended by its pid, and one of this link
+//!   version starts when the next program does.
+//! - A host restarted for an update ([`Keeper::let_go`]) leaves the keeper
+//!   running as a crash would, for the next host to take back.
 //! - Only a deliberate stop ([`Keeper::shutdown`]) ends the keeper and every
 //!   tree in it. A host that lets go of it ([`Keeper`]'s drop) leaves it
 //!   running.
@@ -67,7 +71,30 @@ const GONE_POLL: Duration = Duration::from_millis(25);
 #[cfg(any(test, feature = "testkit"))]
 pub const TEST_KEEPER_VERSION: &str = "floti-test-keeper-version";
 
-/// The version a keeper says it is, and a host wants: this build's.
+/// A file in a test's data folder whose text is the link version the host
+/// and keeper on it speak, in place of [`floti_protocol::KEEPER_LINK_VERSION`]:
+/// a number, or `none` for a keeper from before there was one.
+#[cfg(any(test, feature = "testkit"))]
+pub const TEST_KEEPER_LINK_VERSION: &str = "floti-test-keeper-link-version";
+
+/// The link version a keeper names in its greeting, and a host takes back:
+/// this build's.
+pub fn keeper_link_version(data: &Path) -> Option<u32> {
+    #[cfg(any(test, feature = "testkit"))]
+    if let Ok(text) = fs::read_to_string(data.join(TEST_KEEPER_LINK_VERSION)) {
+        let text = text.trim();
+        if text == "none" {
+            return None;
+        }
+        if let Ok(link) = text.parse() {
+            return Some(link);
+        }
+    }
+    let _ = data;
+    Some(floti_protocol::KEEPER_LINK_VERSION)
+}
+
+/// The floti version a keeper says built it: this build's.
 pub fn keeper_version(data: &Path) -> String {
     #[cfg(any(test, feature = "testkit"))]
     if let Ok(version) = fs::read_to_string(data.join(TEST_KEEPER_VERSION)) {
@@ -105,7 +132,8 @@ pub struct Keeper {
     /// The keeper's environment, which every program it starts inherits.
     env: Vec<(OsString, OsString)>,
     endpoint: Endpoint,
-    version: String,
+    /// The link version this host takes a keeper back by.
+    link_version: Option<u32>,
     link: Mutex<Option<Arc<KeeperLink>>>,
 }
 
@@ -119,16 +147,17 @@ impl Keeper {
             logs: folders.logs.clone(),
             env,
             endpoint: keeper_endpoint(&folders.runtime, &folders.data),
-            version: keeper_version(&folders.data),
+            link_version: keeper_link_version(&folders.data),
             link: Mutex::new(None),
         }
     }
 
     /// Connects to the keeper the last host left, and returns what it holds:
-    /// nothing when there is none. A keeper of another version is ended,
-    /// with everything it holds, and nothing is returned.
+    /// nothing when there is none. A keeper of another link version, or
+    /// one that names none, is ended, with everything it holds, and nothing
+    /// is returned.
     pub fn reattach(&self) -> Vec<Held> {
-        match KeeperLink::connect(socket::Native, &self.endpoint, &self.version) {
+        match KeeperLink::connect(socket::Native, &self.endpoint, self.link_version) {
             // No keeper is listening: the last host left none.
             Err(_) => Vec::new(),
             Ok((link, Greeting::Ours(held))) => {
@@ -140,10 +169,18 @@ impl Keeper {
                 *lock(&self.link) = Some(link);
                 held
             }
-            Ok((link, Greeting::Other { version })) => {
+            Ok((
+                link,
+                Greeting::Other {
+                    version,
+                    link: theirs,
+                },
+            )) => {
                 log_line!(
-                    "floti host: the session keeper, process {}, is version {version}; it is ended with what it holds.",
-                    link.pid()
+                    "floti host: the session keeper, process {}, is floti {version} with {}, and this host speaks {}; it is ended with what it holds.",
+                    link.pid(),
+                    link_version_name(theirs),
+                    link_version_name(self.link_version)
                 );
                 end_keeper(&link);
                 Vec::new()
@@ -168,6 +205,27 @@ impl Keeper {
             .as_ref()
             .filter(|link| !link.is_ended())
             .map(|link| link.pid())
+    }
+
+    /// The link version of the keeper this host is connected to, or none
+    /// while it is connected to none.
+    pub fn running_link_version(&self) -> Option<u32> {
+        lock(&self.link)
+            .as_ref()
+            .filter(|link| !link.is_ended())
+            .and_then(|link| link.link_version())
+    }
+
+    /// Lets go of the keeper, leaving it running with everything it holds,
+    /// as a host that crashed leaves it: a restart for an update.
+    pub fn let_go(&self) {
+        if let Some(link) = lock(&self.link).take() {
+            log_line!(
+                "floti host: let go of the session keeper, process {}, for the next host to take back.",
+                link.pid()
+            );
+            link.detach();
+        }
     }
 
     /// Ends the keeper and every tree in it, as a deliberate stop does.
@@ -230,7 +288,8 @@ impl Keeper {
         // A keeper that would not bind found one already there: connect to
         // that one all the same.
         let _ = saying.recv_timeout(KEEPER_WAIT);
-        let (link, greeting) = KeeperLink::connect(socket::Native, &self.endpoint, &self.version)?;
+        let (link, greeting) =
+            KeeperLink::connect(socket::Native, &self.endpoint, self.link_version)?;
         match greeting {
             Greeting::Ours(held) => {
                 for program in held {
@@ -245,10 +304,14 @@ impl Keeper {
                 }
                 Ok(link)
             }
-            Greeting::Other { version } => {
+            Greeting::Other {
+                version,
+                link: theirs,
+            } => {
                 end_keeper(&link);
                 Err(Error::Refused(format!(
-                    "Another session keeper, version {version}, holds this host's endpoint."
+                    "Another session keeper, floti {version} with {}, holds this host's endpoint.",
+                    link_version_name(theirs)
                 )))
             }
         }
@@ -285,6 +348,14 @@ impl Drop for Keeper {
             link.detach();
         }
     }
+}
+
+/// How a log names a keeper link version.
+fn link_version_name(link: Option<u32>) -> String {
+    link.map_or_else(
+        || "no link version".to_owned(),
+        |link| format!("link version {link}"),
+    )
 }
 
 /// Tells the keeper on `link` to end everything and exit, and ends its tree

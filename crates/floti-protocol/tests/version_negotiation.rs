@@ -1,10 +1,13 @@
 //! The host accepts its own and the previous minor protocol version and
 //! refuses any other with a message naming both versions.
 
-use floti_protocol::message::{ClientInfo, ClientKind, Hello, Refused};
+use floti_protocol::message::{
+    ClientInfo, ClientKind, Hello, Refused, Restart, RestartAsk, RestartState,
+};
 use floti_protocol::version::negotiate;
 use floti_protocol::{
-    FrameDecoder, HostIdentity, Message, ProtocolVersion, UpdateSide, encode_frame,
+    FrameDecoder, HostIdentity, Message, PROTOCOL_VERSION, ProtocolVersion, UpdateSide,
+    encode_frame,
 };
 use serde::Deserialize;
 
@@ -151,4 +154,74 @@ fn hello_and_refused_encode_to_their_frozen_bytes() {
         decoder.next_message().unwrap(),
         Some(Message::Hello(hello(1, 0)))
     );
+}
+
+// The restart frames are frozen beside them: a client sends `restartAsk` or
+// `restart` in place of `hello`, to a host of any version, and reads its
+// `restartState`.
+const FROZEN_RESTART_ASK: &str = "a264747970656a7265737461727441736b66636c69656e74a2646e616d656b7465737420636c69656e74646b696e6463747569";
+const FROZEN_RESTART: &str = "a26474797065677265737461727466636c69656e74a2646e616d656b7465737420636c69656e74646b696e6463747569";
+const FROZEN_RESTART_STATE: &str = "a564747970656c7265737461727453746174656b686f737456657273696f6e65322e342e316870726f746f636f6ca2656d616a6f7202656d696e6f72006873657373696f6e73036a6b65657065724c696e6b01";
+const FROZEN_RESTART_STATE_WITHOUT_KEEPER: &str = "a564747970656c7265737461727453746174656b686f737456657273696f6e65322e342e316870726f746f636f6ca2656d616a6f7202656d696e6f72006873657373696f6e73006a6b65657065724c696e6bf6";
+
+fn test_client() -> ClientInfo {
+    hello(2, 0).client
+}
+
+#[test]
+fn the_restart_frames_encode_to_their_frozen_bytes_and_decode_back() {
+    let frames = [
+        (
+            "restartAsk",
+            Message::RestartAsk(RestartAsk {
+                client: test_client(),
+            }),
+            FROZEN_RESTART_ASK,
+        ),
+        (
+            "restart",
+            Message::Restart(Restart {
+                client: test_client(),
+            }),
+            FROZEN_RESTART,
+        ),
+        (
+            "restartState",
+            Message::RestartState(RestartState {
+                host_version: "2.4.1".into(),
+                protocol: ProtocolVersion::new(2, 0),
+                sessions: 3,
+                keeper_link: Some(1),
+            }),
+            FROZEN_RESTART_STATE,
+        ),
+        (
+            "restartState without a keeper",
+            Message::RestartState(RestartState {
+                host_version: "2.4.1".into(),
+                protocol: ProtocolVersion::new(2, 0),
+                sessions: 0,
+                keeper_link: None,
+            }),
+            FROZEN_RESTART_STATE_WITHOUT_KEEPER,
+        ),
+    ];
+    let mut changed = Vec::new();
+    for (name, message, frozen) in frames {
+        let frame = encode_frame(&message).unwrap();
+        let encoded = hex(&frame[4..]);
+        if encoded != frozen {
+            changed.push(format!("the {name} encoding changed: {encoded}"));
+        }
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&frame);
+        assert_eq!(decoder.next_message().unwrap(), Some(message), "{name}");
+    }
+    assert!(changed.is_empty(), "{}", changed.join("\n"));
+}
+
+#[test]
+fn s1_this_release_speaks_protocol_2_0() {
+    assert_eq!(PROTOCOL_VERSION, ProtocolVersion::new(2, 0));
+    assert_eq!(PROTOCOL_VERSION.to_string(), "2.0");
 }

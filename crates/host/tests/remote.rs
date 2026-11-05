@@ -1142,7 +1142,7 @@ async fn floti_answers_its_version_protocol_os_and_cpu_on_one_line_through_ssh_a
         let words: Vec<&str> = printed.split_whitespace().collect();
         assert_eq!(words[0], "floti");
         assert_eq!(words[1], floti_host::version::FLOTI_VERSION);
-        assert_eq!(words[2..4], ["protocol", "1.0"]);
+        assert_eq!(words[2..4], ["protocol", "2.0"]);
         assert_eq!(words[4], floti_host::version::os_name());
         assert_eq!(words[5], floti_host::version::cpu_name());
         assert!(answered.stderr.is_empty(), "{answered:?}");

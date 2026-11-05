@@ -9,8 +9,8 @@ use std::time::Duration;
 use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
 use floti_protocol::channels::sessions::{SessionStreamOpen, SessionTerminal};
 use floti_protocol::message::{
-    ClientInfo, ClientKind, ErrorCode, ErrorReply, Hello, Request, StreamCredit, StreamData,
-    StreamOpen, Subscribe, Welcome,
+    ClientInfo, ClientKind, ErrorCode, ErrorReply, Hello, Request, Restart, RestartAsk,
+    RestartState, StreamCredit, StreamData, StreamOpen, Subscribe, Welcome,
 };
 use floti_protocol::{Bytes, Message, PROTOCOL_VERSION, Payload, StreamChannel};
 use tokio::time::Instant;
@@ -186,6 +186,34 @@ impl TestClient {
             other => panic!("the host did not welcome the client: {other:?}"),
         }
         client
+    }
+
+    /// Sends `restartAsk`, or with `restart` the `restart` frame, in place
+    /// of `hello` to the running host at `endpoint`, as the testkit's
+    /// device, and returns its answer once the host has closed the
+    /// connection.
+    pub async fn restart_frame(endpoint: &Endpoint, restart: bool) -> RestartState {
+        let mut connection = Self::handshake(endpoint, super::test_device()).await;
+        let client = ClientInfo {
+            name: "floti host tests".to_owned(),
+            kind: ClientKind::Desktop,
+            device_name: None,
+        };
+        let frame = if restart {
+            Message::Restart(Restart { client })
+        } else {
+            Message::RestartAsk(RestartAsk { client })
+        };
+        connection.send(&frame).await.expect("send a restart frame");
+        let answer = match tokio::time::timeout(PATIENCE, connection.next()).await {
+            Ok(Ok(Some(Message::RestartState(state)))) => state,
+            other => panic!("the host did not answer the restart frame: {other:?}"),
+        };
+        match tokio::time::timeout(PATIENCE, connection.next()).await {
+            Ok(Ok(None) | Err(_)) => {}
+            other => panic!("the host did not close the connection after its answer: {other:?}"),
+        }
+        answer
     }
 
     /// The key the host proved in the handshake.

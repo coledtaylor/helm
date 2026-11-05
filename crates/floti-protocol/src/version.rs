@@ -5,6 +5,25 @@
 //! is refused with a message that names both versions and which side to
 //! update. "Previous minor" stays inside one major: a host on 2.0 accepts only
 //! 2.0, since a major is where removals happen.
+//!
+//! # Which change takes which version
+//!
+//! - A **minor** only adds: a channel, a message, a type, an optional field,
+//!   an enum variant. Everything the previous minor had is still there, in
+//!   the same shape, so a client one minor behind still reads every frame it
+//!   knows.
+//! - A **major** is any removal or change of shape: a channel, type, field or
+//!   variant removed or renamed, a field's type changed, an optional field
+//!   made required, a channel's kind or capability changed. The handshake
+//!   counts too: `hello`, `welcome`, `refused` and the restart frames.
+//!
+//! Each version's record (`crates/floti-protocol/versions/<major>.<minor>.json`,
+//! [`crate::record`]) holds what it contains. A protocol that differs from the
+//! current version's record fails the crate's tests, naming each channel and
+//! type that differs, until [`PROTOCOL_VERSION`] is bumped by this rule and
+//! `cargo run -p floti-protocol --bin generate` writes the new version's
+//! record; a minor whose record removes or changes anything from the previous
+//! minor's fails them too.
 
 use std::fmt;
 
@@ -34,7 +53,14 @@ impl fmt::Display for ProtocolVersion {
 }
 
 /// The version this crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
+
+/// The version of the link between a host and its session keeper, which a
+/// keeper names in its greeting. A host takes back a keeper that speaks this
+/// link version, whatever floti version built it, and ends any other, with
+/// what it holds. It changes only when what a host and its keeper say to each
+/// other changes in a way the other cannot read.
+pub const KEEPER_LINK_VERSION: u32 = 1;
 
 /// Which side has to be updated for two versions to talk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

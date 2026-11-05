@@ -25,7 +25,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
 
 use super::wire::{FromKeeper, Label, Spawned, ToKeeper, WireExit, read_frame, write_frame};
-use super::{keeper_endpoint, keeper_version};
+use super::{keeper_endpoint, keeper_link_version, keeper_version};
 use crate::agent::LaunchSpec;
 use crate::platform::process_tree::{self, ProcessTree};
 use crate::platform::socket::{self, LocalListener, LocalSocket, LocalStream};
@@ -182,7 +182,10 @@ pub fn run_keeper(data: &Path, runtime: &Path) -> std::result::Result<(), (u8, E
     // Every tree it holds ends with it, however it ends.
     process_tree::Native.end_tree_with_this_process();
     let endpoint = keeper_endpoint(runtime, data);
-    let version = keeper_version(data);
+    let version = KeeperName {
+        version: keeper_version(data),
+        link: keeper_link_version(data),
+    };
     let tokio = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -215,10 +218,17 @@ pub fn run_keeper(data: &Path, runtime: &Path) -> std::result::Result<(), (u8, E
     })
 }
 
+/// What a keeper says it is in its greeting: the floti version that built it
+/// and its link version.
+struct KeeperName {
+    version: String,
+    link: Option<u32>,
+}
+
 async fn serve_hosts(
     mut listener: impl LocalListener,
     keeper: &Keeper,
-    version: &str,
+    version: &KeeperName,
 ) -> Result<()> {
     loop {
         let stream: LocalStream = if keeper.holds_anything() {
@@ -236,7 +246,7 @@ async fn serve_hosts(
 }
 
 /// Serves one host until it goes or tells the keeper to end everything.
-async fn serve_host<S>(stream: S, keeper: &Keeper, version: &str) -> Served
+async fn serve_host<S>(stream: S, keeper: &Keeper, version: &KeeperName) -> Served
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
@@ -252,8 +262,9 @@ where
     let mut forwarders: Vec<JoinHandle<()>> = Vec::new();
 
     let _ = out.send(FromKeeper::Hello {
-        version: version.to_owned(),
+        version: version.version.clone(),
         pid: std::process::id(),
+        link: version.link,
     });
     let mut attached = Vec::new();
     for program in keeper.programs.list() {

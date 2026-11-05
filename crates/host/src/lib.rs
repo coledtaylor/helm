@@ -218,6 +218,9 @@ pub fn run_host(options: HostOptions) -> Result<()> {
     say(match reason {
         HostStopReason::Stop => "Floti host stopped.",
         HostStopReason::Update => "Floti host stopped for an update.",
+        HostStopReason::Restart => {
+            "Floti host stopped to be restarted for an update; its sessions run on in the session keeper."
+        }
     });
     Ok(())
 }

@@ -94,7 +94,11 @@ fn the_typescript_declares_every_channel_message_and_payload_type() {
         "\"stub:changed\": { event: StubChange; snapshot: StubState; capability: null };",
         "\"stub:data\": { open: StubOpen; capability: \"terminal\" };",
         "{ name: \"stub:data\", kind: \"stream\", capability: \"terminal\" },",
-        "export const PROTOCOL_VERSION = { major: 1, minor: 0 } as const;",
+        "export const PROTOCOL_VERSION = { major: 2, minor: 0 } as const;",
+        "export const KEEPER_LINK_VERSION = 1;",
+        "export type RestartAsk = ",
+        "export type Restart = ",
+        "export type RestartState = ",
     ] {
         assert!(ts.contains(declared), "missing `{declared}` in:\n{ts}");
     }
@@ -161,7 +165,7 @@ fn the_json_schema_defines_every_message_and_payload_type_and_lists_the_channels
         assert!(defs.contains_key(name), "$defs lacks {name}");
     }
     assert_eq!(schema["$ref"], "#/$defs/Message");
-    assert_eq!(schema["x-protocolVersion"], "1.0");
+    assert_eq!(schema["x-protocolVersion"], "2.0");
 
     let channels = schema["x-channels"].as_array().unwrap();
     let data = channels

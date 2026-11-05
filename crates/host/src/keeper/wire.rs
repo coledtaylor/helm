@@ -1,10 +1,13 @@
 //! What the host and its keeper say to each other: one frame at a time, each
 //! a four-byte little-endian length and then that many bytes of CBOR.
 //!
-//! The first frame a keeper sends is always [`FromKeeper::Hello`], with its
-//! version, and a host reads nothing else from a keeper of another version.
-//! Serde names each variant, so a later version that adds variants still
-//! reads and writes that greeting the same way.
+//! The first frame a keeper sends is always [`FromKeeper::Hello`], with the
+//! floti version that built it and its link version
+//! ([`floti_protocol::KEEPER_LINK_VERSION`]), and a host reads nothing else
+//! from a keeper of another link version, or one that names none. Serde
+//! names each variant, so a later version that adds variants still reads and
+//! writes that greeting the same way, and one from before the link version
+//! reads as naming none.
 //!
 //! Nothing here carries a key, a code or a credential. A program is started
 //! with its arguments, its folder and only the variables its backend adds for
@@ -132,8 +135,15 @@ pub(crate) enum ToKeeper {
 /// From the keeper to its host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum FromKeeper {
-    /// The first frame on every connection.
-    Hello { version: String, pid: u32 },
+    /// The first frame on every connection: the floti version that built the
+    /// keeper, its process and its link version, which a keeper from before
+    /// there was one leaves out.
+    Hello {
+        version: String,
+        pid: u32,
+        #[serde(default)]
+        link: Option<u32>,
+    },
     /// One program the keeper holds, sent to a host as it connects: running,
     /// with its screen drawn again and its output from here on, or ended
     /// while no host was there, with how.
@@ -235,6 +245,7 @@ mod tests {
             FromKeeper::Hello {
                 version: "1.2.3".to_owned(),
                 pid: 42,
+                link: Some(1),
             },
             FromKeeper::held(
                 7,
