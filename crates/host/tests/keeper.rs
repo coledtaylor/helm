@@ -7,18 +7,19 @@
 //! test ends with a deliberate stop, which ends the keeper and everything it
 //! holds; a keeper a failed test leaves exits once this process has gone.
 
-use std::path::Path;
-use std::process::{Child, Command};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
+use floti_host::client::ClientKeys;
 use floti_host::fake_agent;
 use floti_host::keeper::{KEEPER_LOG, TEST_KEEPER_LINK_VERSION, TEST_KEEPER_VERSION};
 use floti_host::platform::process_table::{self, ProcessTable};
 use floti_host::platform::process_tree::{Ending, Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::network_listeners;
-use floti_host::server::{HostConfig, HostRun};
+use floti_host::server::{HostConfig, HostRun, TEST_HOST_PROTOCOL, host_public_key};
 use floti_host::testkit::{
     FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs, floti_exe, record_test_host,
 };
@@ -33,7 +34,9 @@ use floti_protocol::channels::sessions::{
     SessionRestorable, SessionStart, StartSessionRequest,
 };
 use floti_protocol::message::RestartState;
-use floti_protocol::{EventChannel, KEEPER_LINK_VERSION, Knowable, PROTOCOL_VERSION};
+use floti_protocol::{
+    EventChannel, KEEPER_LINK_VERSION, Knowable, PROTOCOL_VERSION, ProtocolVersion,
+};
 
 const TERMINAL: &[&str] = &["terminal"];
 
@@ -79,6 +82,13 @@ impl KillableHost {
             let _ = child.kill();
             child.wait().expect("reap the host");
         }
+    }
+
+    /// Whether the host is still running.
+    fn is_running(&mut self) -> bool {
+        self.0
+            .as_mut()
+            .is_some_and(|child| child.try_wait().expect("poll the host").is_none())
     }
 
     /// Waits for the host to end by itself.
@@ -487,8 +497,9 @@ async fn s12_a_keeper_killed_while_the_host_runs_loses_its_sessions_and_offers_t
 
 // ---------------------------------------------------------------------------
 // S14: the keeper's greeting names its link version; a host takes back a
-// keeper that speaks its link version whatever floti version built it, and
-// ends one of another link version, or one that names none, offering its
+// keeper that speaks its link version whatever floti version built it, a
+// keeper that names none (2.4.1-preview.7's) included, which speaks link
+// version 1, and ends one of a link version it does not speak, offering its
 // sessions back once
 // ---------------------------------------------------------------------------
 
@@ -527,9 +538,9 @@ async fn s14_a_keeper_another_floti_version_built_is_taken_back_when_it_speaks_t
     .await;
 }
 
-/// A host whose keeper speaks `link` (a number, or `none`), killed with a
-/// session running, then a host of this build's link version: the keeper is
-/// ended, and its session offered back once.
+/// A host whose keeper speaks link version `link`, killed with a session
+/// running, then a host of this build's link version: the keeper is ended,
+/// and its session offered back once.
 async fn a_keeper_of_link_version_is_ended_and_its_sessions_offered_back(link: &str) {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
@@ -576,8 +587,96 @@ async fn s14_a_keeper_of_another_link_version_is_ended_and_its_sessions_offered_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s14_a_keeper_that_names_no_link_version_is_ended_and_its_sessions_offered_back() {
-    a_keeper_of_link_version_is_ended_and_its_sessions_offered_back("none").await;
+async fn s14_a_keeper_that_names_no_link_version_is_taken_back_by_this_releases_host() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    // A keeper whose greeting leaves its link version out, as
+    // 2.4.1-preview.7's does, from a host of that floti version.
+    let link = dirs.data.join(TEST_KEEPER_LINK_VERSION);
+    std::fs::write(&link, "none").unwrap();
+    let version = dirs.data.join(TEST_KEEPER_VERSION);
+    std::fs::write(&version, "2.4.1-preview.7").unwrap();
+    let mut first = KillableHost::start(&dirs, &agent);
+    let endpoint = dirs.floti_endpoint();
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let in_session = dirs.folder("a project");
+    let (session, session_pid) = fake_session(&mut client, &agent, &in_session, "", 1).await;
+    let in_terminal = dirs.folder("another project");
+    let terminal = fake_terminal(&mut client, &agent, &in_terminal, 2).await;
+    let terminal_pid = run_in(&agent, &in_terminal).await;
+    client.type_into(2, b"before\r").await;
+    client
+        .read_stream_until(2, |bytes| {
+            String::from_utf8_lossy(bytes).contains("echo: before")
+        })
+        .await;
+    let keeper = keeper_above(session_pid);
+    drop(client);
+    first.kill();
+    std::fs::remove_file(&link).unwrap();
+    std::fs::remove_file(&version).unwrap();
+
+    let second = in_process(&dirs, &agent, &[]);
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let listed = client.request::<SessionList>(&()).await.unwrap();
+    assert_eq!(listed.iter().map(|s| s.id).collect::<Vec<_>>(), [session]);
+    assert_eq!(listed[0].status, SessionStatus::Running);
+    assert!(
+        alive(keeper) && alive(session_pid) && alive(terminal_pid),
+        "the keeper was taken back with its session and terminal, not ended"
+    );
+    assert_eq!(
+        client.request::<SessionRestorable>(&()).await.unwrap(),
+        None,
+        "nothing taken back is offered"
+    );
+    // The folder's terminal is the same one, with its screen, and answers.
+    assert_eq!(
+        fake_terminal(&mut client, &agent, &in_terminal, 3).await,
+        terminal
+    );
+    client
+        .read_stream_until(3, |bytes| {
+            String::from_utf8_lossy(bytes).contains("echo: before")
+        })
+        .await;
+    client.type_into(3, b"after\r").await;
+    client
+        .read_stream_until(3, |bytes| {
+            String::from_utf8_lossy(bytes).contains("echo: after")
+        })
+        .await;
+    let state = TestClient::restart_frame(&endpoint, false).await;
+    assert_eq!(
+        state.keeper_link,
+        Some(1),
+        "a keeper naming none speaks link 1"
+    );
+    second.stop(HostStopReason::Stop).await;
+    until("the keeper and what it held ended", || {
+        !alive(keeper) && !alive(session_pid) && !alive(terminal_pid)
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_restart_ask_on_a_keeper_that_names_no_link_version_answers_link_version_1() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    std::fs::write(dirs.data.join(TEST_KEEPER_LINK_VERSION), "none").unwrap();
+    let host = in_process(&dirs, &agent, &[]);
+    let endpoint = dirs.floti_endpoint();
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let folder = dirs.folder("a project");
+    client
+        .request::<SessionStart>(&start_request(&folder))
+        .await
+        .unwrap();
+    run_in(&agent, &folder).await;
+    let state = TestClient::restart_frame(&endpoint, false).await;
+    assert_eq!((state.sessions, state.keeper_link), (1, Some(1)));
+    drop(client);
+    host.stop(HostStopReason::Stop).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -739,6 +838,157 @@ async fn after_a_restart_a_host_that_does_not_speak_the_keepers_link_version_end
         [session]
     );
     second.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// S15: `floti end-old-host` ends a protocol-1.x host's process alone, as a
+// crash would, so its keeper and every program in it run on and the next host
+// takes them back; it ends nothing for a host of any other protocol
+// ---------------------------------------------------------------------------
+
+/// Helm's client folder, with a device key of its own and the host on
+/// `dirs`' data folder pinned, as Helm's is once it has connected.
+async fn helm_client(dirs: &TestDirs) -> PathBuf {
+    let folder = dirs.root().join("Helm data").join("host-client");
+    let mut keys = ClientKeys::open(&folder).expect("set up Helm's client keys");
+    let mut host = None;
+    until("the host made its key", || {
+        host = host_public_key(&dirs.data).ok().flatten();
+        host.is_some()
+    })
+    .await;
+    keys.pin_host(host.expect("a host key"))
+        .expect("pin the host key");
+    folder
+}
+
+/// Runs `floti end-old-host <folder>` over `dirs`' folders and waits for it
+/// to end, for at most [`PATIENCE`].
+async fn end_old_host(dirs: &TestDirs, folder: &Path) -> Output {
+    let mut command = dirs.floti_command(env!("CARGO_BIN_EXE_floti"));
+    command.arg("end-old-host").arg(folder);
+    let mut child = command.spawn().expect("run floti end-old-host");
+    let deadline = Instant::now() + PATIENCE;
+    while child.try_wait().expect("poll floti end-old-host").is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("floti end-old-host did not end within {PATIENCE:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    child.wait_with_output().expect("read floti end-old-host")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s15_ending_a_protocol_1_host_leaves_its_keeper_running_and_the_next_host_takes_it_back() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    // 2.4.1-preview.7's host: protocol 1.4, and a keeper whose greeting
+    // names no link version.
+    let protocol = dirs.data.join(TEST_HOST_PROTOCOL);
+    std::fs::write(&protocol, "1.4").unwrap();
+    let link = dirs.data.join(TEST_KEEPER_LINK_VERSION);
+    std::fs::write(&link, "none").unwrap();
+    let mut old = KillableHost::start(&dirs, &agent);
+    let endpoint = dirs.floti_endpoint();
+    let mut client = TestClient::connect_at(&endpoint, ProtocolVersion::new(1, 4), TERMINAL).await;
+    let in_session = dirs.folder("a project");
+    let (session, session_pid) =
+        fake_session(&mut client, &agent, &in_session, "--fake-tick=100", 1).await;
+    let in_terminal = dirs.folder("another project");
+    let terminal = fake_terminal(&mut client, &agent, &in_terminal, 2).await;
+    let terminal_pid = run_in(&agent, &in_terminal).await;
+    client.type_into(2, b"before\r").await;
+    client
+        .read_stream_until(2, |bytes| {
+            String::from_utf8_lossy(bytes).contains("echo: before")
+        })
+        .await;
+    let keeper = keeper_above(session_pid);
+    drop(client);
+    let folder = helm_client(&dirs).await;
+
+    let ended = end_old_host(&dirs, &folder).await;
+    assert_eq!(
+        ended.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&ended.stderr)
+    );
+    old.ended().await;
+    assert!(
+        alive(keeper) && alive(session_pid) && alive(terminal_pid),
+        "only the host ended: its keeper and what it holds run on"
+    );
+    assert_eq!(rows(&dirs.data)[0].1, "running", "nothing recorded an end");
+
+    // The carried floti's host starts on the same folders.
+    std::fs::remove_file(&protocol).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    let new = in_process(&dirs, &agent, &[]);
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let listed = client.request::<SessionList>(&()).await.unwrap();
+    assert_eq!(listed.iter().map(|s| s.id).collect::<Vec<_>>(), [session]);
+    assert_eq!(listed[0].status, SessionStatus::Running);
+    assert_eq!(
+        client.request::<SessionRestorable>(&()).await.unwrap(),
+        None,
+        "nothing is offered back: nothing ended"
+    );
+    client.attach(3, session).await;
+    client.type_into(3, b"after\r").await;
+    client
+        .read_stream_until(3, |bytes| {
+            String::from_utf8_lossy(bytes).contains("echo: after")
+        })
+        .await;
+    assert_eq!(
+        fake_terminal(&mut client, &agent, &in_terminal, 4).await,
+        terminal
+    );
+    client
+        .read_stream_until(4, |bytes| {
+            String::from_utf8_lossy(bytes).contains("echo: before")
+        })
+        .await;
+    assert_eq!(keeper_above(session_pid), keeper);
+    new.stop(HostStopReason::Stop).await;
+    until("the keeper and its programs ended", || {
+        !alive(keeper) && !alive(session_pid) && !alive(terminal_pid)
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s15_end_old_host_ends_nothing_for_a_host_of_this_protocol() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let mut host = KillableHost::start(&dirs, &agent);
+    let endpoint = dirs.floti_endpoint();
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let folder = dirs.folder("a project");
+    let (session, pid) = fake_session(&mut client, &agent, &folder, "", 1).await;
+    let helm = helm_client(&dirs).await;
+
+    let left = end_old_host(&dirs, &helm).await;
+    assert_eq!(left.status.code(), Some(9));
+    let said = String::from_utf8_lossy(&left.stderr);
+    assert!(
+        said.starts_with("floti end-old-host: ") && said.trim_end().lines().count() == 1,
+        "one line on standard error: {said:?}"
+    );
+    assert!(host.is_running(), "the host was left running");
+    assert!(alive(pid));
+    let listed = client.request::<SessionList>(&()).await.unwrap();
+    assert_eq!(listed.iter().map(|s| s.id).collect::<Vec<_>>(), [session]);
+    drop(client);
+    // A deliberate stop ends the keeper and the session in it.
+    host.kill();
+    in_process(&dirs, &agent, &[])
+        .stop(HostStopReason::Stop)
+        .await;
+    until("the session ended", || !alive(pid)).await;
 }
 
 // ---------------------------------------------------------------------------

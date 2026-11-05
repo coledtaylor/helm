@@ -12,7 +12,7 @@ use floti_protocol::message::{
     ClientInfo, ClientKind, ErrorCode, ErrorReply, Hello, Request, Restart, RestartAsk,
     RestartState, StreamCredit, StreamData, StreamOpen, Subscribe, Welcome,
 };
-use floti_protocol::{Bytes, Message, PROTOCOL_VERSION, Payload, StreamChannel};
+use floti_protocol::{Bytes, Message, PROTOCOL_VERSION, Payload, ProtocolVersion, StreamChannel};
 use tokio::time::Instant;
 
 use crate::client::{self, ClientError, Connection};
@@ -52,13 +52,32 @@ impl TestClient {
     /// one whose endpoint came from [`TestDirs::endpoint`](super::TestDirs)
     /// or was named to [`record_test_host`](super::record_test_host).
     pub async fn connect(endpoint: &Endpoint, capabilities: &[&str]) -> Self {
+        let connection = Self::handshake_when_answering(endpoint).await;
+        Self::over(connection, capabilities).await
+    }
+
+    /// [`Self::connect`], saying `hello` at `protocol` in place of this
+    /// build's: a client of another release, such as one a protocol-1.x
+    /// host welcomes.
+    pub async fn connect_at(
+        endpoint: &Endpoint,
+        protocol: ProtocolVersion,
+        capabilities: &[&str],
+    ) -> Self {
+        let connection = Self::handshake_when_answering(endpoint).await;
+        Self::over_speaking(connection, None, protocol, capabilities).await
+    }
+
+    /// The handshake as the testkit's device, polled until the host at
+    /// `endpoint` answers, for at most [`PATIENCE`].
+    async fn handshake_when_answering(endpoint: &Endpoint) -> Connection {
         let data = super::data_folder_of(endpoint);
         let deadline = Instant::now() + PATIENCE;
-        let connection = loop {
+        loop {
             let waited = match host_public_key(&data) {
                 Ok(Some(host)) => {
                     match client::connect(endpoint, super::test_device(), &host).await {
-                        Ok(connection) => break connection,
+                        Ok(connection) => return connection,
                         Err(err @ ClientError::Unreachable { .. }) => err.to_string(),
                         Err(err) => {
                             panic!("the host at {endpoint} did not let the client in: {err}")
@@ -73,8 +92,7 @@ impl TestClient {
                 "no host answered at {endpoint} within {PATIENCE:?}: {waited}"
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
-        };
-        Self::over(connection, capabilities).await
+        }
     }
 
     /// Connects to the running host at `endpoint` as a new device of its
@@ -152,6 +170,16 @@ impl TestClient {
         device_name: Option<&str>,
         capabilities: &[&str],
     ) -> Self {
+        Self::over_speaking(connection, device_name, PROTOCOL_VERSION, capabilities).await
+    }
+
+    /// [`Self::over_named`], saying `hello` at `protocol`.
+    async fn over_speaking(
+        connection: Connection,
+        device_name: Option<&str>,
+        protocol: ProtocolVersion,
+        capabilities: &[&str],
+    ) -> Self {
         let mut client = Self {
             connection,
             next_request: 1,
@@ -162,7 +190,7 @@ impl TestClient {
             withholding: false,
             owed: HashMap::new(),
             welcome: Welcome {
-                protocol: PROTOCOL_VERSION,
+                protocol,
                 host_version: String::new(),
                 capabilities: Vec::new(),
                 backends: Vec::new(),
@@ -172,7 +200,7 @@ impl TestClient {
         };
         client
             .send(&Message::Hello(Hello {
-                protocol: PROTOCOL_VERSION,
+                protocol,
                 client: ClientInfo {
                     name: "floti host tests".to_owned(),
                     kind: ClientKind::Tui,

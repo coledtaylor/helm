@@ -798,6 +798,12 @@ impl Connection {
         };
         let hello = match first {
             First::Hello(hello) => hello,
+            // Restart frames came with protocol 2.0. A host on 1.x, which only
+            // a test build's can be ([`super::TEST_HOST_PROTOCOL`]), closes
+            // a connection that starts with one, as 2.4.1-preview.7's does.
+            First::RestartAsk(_) | First::Restart(_) if identity.protocol.major < 2 => {
+                return None;
+            }
             First::RestartAsk(client) => {
                 self.answer_restart(identity, hosted, &client, false).await;
                 return None;

@@ -146,6 +146,45 @@ impl ProcessTree for Native {
     }
 }
 
+/// One process, named by its id: macOS and Linux have no handle to hold, so
+/// it is ended by that id, while the connection that named it keeps it from
+/// having exited unseen.
+#[derive(Debug)]
+pub struct OneProcess {
+    pid: libc::pid_t,
+}
+
+impl OneProcess {
+    /// Names process `pid` to end it later.
+    pub fn hold(pid: u32) -> io::Result<Self> {
+        // 0 and 1 would be this group or init; never this process either.
+        match libc::pid_t::try_from(pid) {
+            Ok(id) if id > 1 && pid != std::process::id() => Ok(Self { pid: id }),
+            _ => Err(io::Error::other(format!("process {pid} is not one to end"))),
+        }
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid.unsigned_abs()
+    }
+
+    /// Ends this process alone, at once, as a crash would: SIGKILL to it,
+    /// never to its group, so nothing it started ends with it. A process that
+    /// has already exited is not an error.
+    pub fn end_now(&self) -> io::Result<()> {
+        // SAFETY: kill takes plain values; the pid is above 1 (`hold`).
+        if unsafe { libc::kill(self.pid, libc::SIGKILL) } == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(err)
+        }
+    }
+}
+
 /// Tells the guard, once it runs, that the program `pid` started ([`TIE`])
 /// or exited ([`UNTIE`]).
 fn tell_guard(what: u8, pid: u32) {

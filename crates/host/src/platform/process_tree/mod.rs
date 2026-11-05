@@ -10,6 +10,12 @@
 //! tree is the session keeper's (`crate::keeper`), which ties them to its
 //! own life instead and is started to outlive the host
 //! ([`ProcessTree::prepare_lasting_root`]).
+//!
+//! Beside the trees, [`OneProcess`] ends one process alone, at once, as a
+//! crash would (`TerminateProcess` on Windows, SIGKILL to that pid alone on
+//! macOS and Linux), never its tree or group: what `floti end-old-host` ends
+//! an older host with, so its session keeper and every program in it carry
+//! on.
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -24,11 +30,11 @@ mod windows;
 mod tests;
 
 #[cfg(target_os = "linux")]
-pub use linux::Native;
+pub use linux::{Native, OneProcess};
 #[cfg(target_os = "macos")]
-pub use macos::Native;
+pub use macos::{Native, OneProcess};
 #[cfg(target_os = "windows")]
-pub use windows::Native;
+pub use windows::{Native, OneProcess};
 
 #[cfg(all(target_os = "linux", any(test, feature = "testkit")))]
 pub use linux::descendants;

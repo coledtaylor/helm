@@ -19,6 +19,7 @@ use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt,
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 
+use floti_protocol::Knowable;
 use tokio::net::{UnixListener, UnixStream};
 
 use super::{Endpoint, LocalListener, LocalSocket, LocalStream, already_running};
@@ -87,11 +88,31 @@ impl LocalSocket for Native {
     }
 
     async fn connect(&self, endpoint: &Endpoint) -> Result<LocalStream> {
-        let stream = UnixStream::connect(endpoint.as_path())
-            .await
-            .map_err(|e| Error::path("connect to", endpoint.as_path(), e))?;
-        Ok(Box::pin(stream))
+        Ok(Box::pin(open(endpoint).await?))
     }
+
+    /// The peer's process id from its credentials: `SO_PEERCRED` on Linux,
+    /// `LOCAL_PEERPID` on macOS, which name the process that listens.
+    async fn connect_naming_server(
+        &self,
+        endpoint: &Endpoint,
+    ) -> Result<(LocalStream, Knowable<u32>)> {
+        let stream = open(endpoint).await?;
+        let server = stream
+            .peer_cred()
+            .ok()
+            .and_then(|credentials| credentials.pid())
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .map_or(Knowable::Unknown, Knowable::Known);
+        Ok((Box::pin(stream), server))
+    }
+}
+
+async fn open(endpoint: &Endpoint) -> Result<UnixStream> {
+    UnixStream::connect(endpoint.as_path())
+        .await
+        .map_err(|e| Error::path("connect to", endpoint.as_path(), e))
 }
 
 impl LocalListener for Listener {

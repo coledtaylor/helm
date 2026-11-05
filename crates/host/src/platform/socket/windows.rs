@@ -17,12 +17,15 @@
 use std::ffi::{OsString, c_void};
 use std::fmt;
 use std::io;
-use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 use std::ptr;
 use std::time::Instant;
 
-use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, PipeMode, ServerOptions};
+use floti_protocol::Knowable;
+use tokio::net::windows::named_pipe::{
+    ClientOptions, NamedPipeClient, NamedPipeServer, PipeMode, ServerOptions,
+};
 use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -31,6 +34,7 @@ use windows_sys::Win32::Security::{
     GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
     TokenUser,
 };
+use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use super::{CONNECT_PATIENCE, Endpoint, LocalListener, LocalSocket, LocalStream, already_running};
@@ -104,18 +108,44 @@ impl LocalSocket for Native {
     }
 
     async fn connect(&self, endpoint: &Endpoint) -> Result<LocalStream> {
-        let deadline = Instant::now() + CONNECT_PATIENCE;
-        loop {
-            match ClientOptions::new().open(endpoint.as_path()) {
-                Ok(client) => return Ok(Box::pin(client)),
-                Err(e)
-                    if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32)
-                        && Instant::now() < deadline =>
-                {
-                    tokio::time::sleep(BUSY_RETRY).await;
-                }
-                Err(e) => return Err(Error::path("connect to", endpoint.as_path(), e)),
+        Ok(Box::pin(open_client(endpoint).await?))
+    }
+
+    /// The pipe's server process, from `GetNamedPipeServerProcessId` on this
+    /// end of it.
+    async fn connect_naming_server(
+        &self,
+        endpoint: &Endpoint,
+    ) -> Result<(LocalStream, Knowable<u32>)> {
+        let client = open_client(endpoint).await?;
+        let mut pid = 0u32;
+        // SAFETY: the handle is this client's end of the pipe, open for the
+        // call, and `pid` is written by it.
+        let named =
+            unsafe { GetNamedPipeServerProcessId(client.as_raw_handle() as HANDLE, &raw mut pid) };
+        let server = if named != 0 && pid != 0 {
+            Knowable::Known(pid)
+        } else {
+            Knowable::Unknown
+        };
+        Ok((Box::pin(client), server))
+    }
+}
+
+/// This user's client end of the pipe at `endpoint`, trying again while it is
+/// busy, for at most [`CONNECT_PATIENCE`].
+async fn open_client(endpoint: &Endpoint) -> Result<NamedPipeClient> {
+    let deadline = Instant::now() + CONNECT_PATIENCE;
+    loop {
+        match ClientOptions::new().open(endpoint.as_path()) {
+            Ok(client) => return Ok(client),
+            Err(e)
+                if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32)
+                    && Instant::now() < deadline =>
+            {
+                tokio::time::sleep(BUSY_RETRY).await;
             }
+            Err(e) => return Err(Error::path("connect to", endpoint.as_path(), e)),
         }
     }
 }

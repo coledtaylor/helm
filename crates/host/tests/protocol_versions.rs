@@ -17,7 +17,7 @@ use floti_host::server::{
 use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::workspace::AppMode;
-use floti_protocol::message::{ClientInfo, ClientKind, Hello, Refused};
+use floti_protocol::message::{ClientInfo, ClientKind, Hello, Refused, Restart, RestartAsk};
 use floti_protocol::{Message, PROTOCOL_VERSION, ProtocolVersion, UpdateSide};
 
 /// A running host that greets as protocol `on`, over folders of its own.
@@ -194,6 +194,37 @@ async fn s8_a_desktop_more_than_one_minor_behind_or_on_an_older_major_is_refused
         refused(&host, ProtocolVersion::new(1, 9)).await,
         UpdateSide::Client
     );
+    host.stop().await;
+}
+
+/// A host on protocol 1.x had no restart frames: it closes a connection
+/// whose first frame is one, answering nothing, as 2.4.1-preview.7's does,
+/// so a test catches a desktop that sends one to such a host.
+#[tokio::test(flavor = "multi_thread")]
+async fn s15_a_test_host_on_protocol_1_closes_a_connection_that_starts_with_a_restart_frame() {
+    let host = start_host(ProtocolVersion::new(1, 4));
+    let client = ClientInfo {
+        name: "Helm (protocol version tests)".to_owned(),
+        kind: ClientKind::Desktop,
+        device_name: None,
+    };
+    for frame in [
+        Message::RestartAsk(RestartAsk {
+            client: client.clone(),
+        }),
+        Message::Restart(Restart {
+            client: client.clone(),
+        }),
+    ] {
+        let mut connection = handshake(&host).await;
+        connection.send(&frame).await.expect("send the frame");
+        match tokio::time::timeout(PATIENCE, connection.next()).await {
+            Ok(Ok(None) | Err(_)) => {}
+            other => panic!("a 1.x host answered {frame:?} with {other:?}"),
+        }
+    }
+    // It serves on, and refuses this release's desktop naming both versions.
+    assert_eq!(refused(&host, PROTOCOL_VERSION).await, UpdateSide::Host);
     host.stop().await;
 }
 

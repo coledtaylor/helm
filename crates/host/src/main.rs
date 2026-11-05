@@ -18,7 +18,12 @@
 //! --stop` is what an installer runs before it replaces the binary: it says
 //! what stopping the host would end, then stops it; without a client folder
 //! it is run on the host's own computer, as the host itself, and `--ask`
-//! prints how many sessions it runs. `floti doctor` checks that each host
+//! prints how many sessions it runs. `floti end-old-host <client folder>` is
+//! what Helm runs, from the floti it carries, when the user chooses Restart
+//! host to update for this PC's host and that host speaks protocol 1.x: only
+//! when the host refuses this floti's hello naming protocol 1.x, it ends that
+//! host's process alone, as a crash would, leaving its session keeper
+//! running for the next host to take back. `floti doctor` checks that each host
 //! this device uses answers, this computer's through its socket and each on
 //! another computer through its own ssh or command, and prints one line per
 //! host: its floti version and round trip, or the last line ssh or the
@@ -43,6 +48,7 @@
 //! session keeper a host starts for itself, which holds its sessions so they
 //! outlive it; it is not run by hand.
 
+mod end_old_host;
 mod update_stop;
 
 use std::ffi::OsString;
@@ -58,7 +64,7 @@ use floti_host::keep_awake::run_keep_awake;
 use floti_host::version;
 use floti_host::{ALREADY_RUNNING_EXIT, DesktopCommand, Error, HostOptions, log_line};
 
-const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--floti <path>] [--as-written] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti keep-awake\n       floti doctor [--record]\n       floti version\n       floti setup [--linger | --no-linger]\n       floti update-stop [<client folder>] --ask | --stop";
+const USAGE: &str = "usage: floti host [--desktop <program> [--desktop-arg <arg>]...]\n       floti bridge <client folder>\n       floti bridge <client folder> [--floti <path>] [--as-written] -- <program> [<arg>...]\n       floti connect [--host-key]\n       floti keep-awake\n       floti doctor [--record]\n       floti version\n       floti setup [--linger | --no-linger]\n       floti update-stop [<client folder>] --ask | --stop\n       floti end-old-host <client folder>";
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -104,6 +110,10 @@ fn main() -> ExitCode {
         ["doctor", "--record"] => ExitCode::from(run_doctor(DoctorStep::Record).code()),
         ["update-stop", ..] => match update_stop::parse(&args[1..]) {
             Some((asker, step)) => ExitCode::from(update_stop::run(&asker, step)),
+            None => usage(),
+        },
+        ["end-old-host", ..] => match end_old_host::parse(&args[1..]) {
+            Some(folder) => ExitCode::from(end_old_host::run(&folder)),
             None => usage(),
         },
         ["version"] => {

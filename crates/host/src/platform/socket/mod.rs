@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::Duration;
 
+use floti_protocol::Knowable;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{Error, Result};
@@ -112,6 +113,16 @@ pub trait LocalSocket {
 
     /// Connects to a host listening at `endpoint`.
     fn connect(&self, endpoint: &Endpoint) -> impl Future<Output = Result<LocalStream>> + Send;
+
+    /// Connects to a host listening at `endpoint`, as
+    /// [`LocalSocket::connect`] does, and names the process serving the
+    /// connection, as the OS tells it: the server process of the pipe on
+    /// Windows, the peer's credentials on macOS and Linux. Unknown when the
+    /// OS would not say.
+    fn connect_naming_server(
+        &self,
+        endpoint: &Endpoint,
+    ) -> impl Future<Output = Result<(LocalStream, Knowable<u32>)>> + Send;
 }
 
 /// A bound socket, accepting clients. Dropping it stops listening.

@@ -58,8 +58,11 @@ pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
 /// The version of the link between a host and its session keeper, which a
 /// keeper names in its greeting. A host takes back a keeper that speaks this
 /// link version, whatever floti version built it, and ends any other, with
-/// what it holds. It changes only when what a host and its keeper say to each
-/// other changes in a way the other cannot read.
+/// what it holds. Link version 1 is also what a keeper whose greeting names
+/// none speaks: one built before the greeting carried it, as
+/// 2.4.1-preview.7's was, so this host takes such a keeper back. It changes
+/// only when what a host and its keeper say to each other changes in a way
+/// the other cannot read.
 pub const KEEPER_LINK_VERSION: u32 = 1;
 
 /// Which side has to be updated for two versions to talk.
