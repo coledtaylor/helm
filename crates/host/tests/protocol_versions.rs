@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use floti_host::client::{self, ClientError, Connection};
 use floti_host::platform::socket::Endpoint;
-use floti_host::server::{HostConfig, HostRun, TEST_HOST_PROTOCOL, backends, host_public_key};
+use floti_host::server::{
+    HostConfig, HostRun, TEST_HOST_PROTOCOL, TEST_HOST_VERSION, backends, host_public_key,
+};
 use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::workspace::AppMode;
@@ -36,9 +38,25 @@ impl Host {
 
 /// A host over a [`TestDirs`] tree of its own that greets as protocol `on`.
 fn start_host(on: ProtocolVersion) -> Host {
+    start_host_naming(on, None)
+}
+
+/// A host like [`start_host`]'s that names floti `version`, when given, in
+/// place of its own.
+fn start_host_naming(on: ProtocolVersion, version: Option<&str>) -> Host {
     let dirs = TestDirs::new();
     std::fs::write(dirs.data.join(TEST_HOST_PROTOCOL), on.to_string())
         .expect("write the host's test protocol");
+    if let Some(version) = version {
+        std::fs::write(
+            dirs.data.join(TEST_HOST_VERSION),
+            format!(
+                "{version}
+"
+            ),
+        )
+        .expect("write the host's test floti version");
+    }
     let endpoint = dirs.endpoint();
     let running = RunningHost::start(HostConfig {
         folders: dirs.folders(),
@@ -177,4 +195,15 @@ async fn s8_a_desktop_more_than_one_minor_behind_or_on_an_older_major_is_refused
         UpdateSide::Client
     );
     host.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s9_a_test_host_names_the_older_floti_its_data_folder_says_so_a_window_can_meet_one() {
+    let host = start_host_naming(PROTOCOL_VERSION, Some("2.4.0"));
+    let named = match greet(&host, PROTOCOL_VERSION).await {
+        Message::Welcome(welcome) => welcome.host_version,
+        other => panic!("a hello at {PROTOCOL_VERSION} was not welcomed: {other:?}"),
+    };
+    host.stop().await;
+    assert_eq!(named, "2.4.0");
 }
