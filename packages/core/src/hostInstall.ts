@@ -133,9 +133,13 @@ export function formatProtocol(version: ProtocolVersionNumbers): string {
  * The floti `floti version` names (`floti 2.6.0 protocol 1.0 linux x64`), or
  * null for anything else. The OS and CPU are that floti's build.
  */
-export function parseVersionLine(
-  output: string
-): (FlotiFound & { protocolNumbers: ProtocolVersionNumbers; os: string; cpu: string }) | null {
+export function parseVersionLine(output: string):
+  | (FlotiFound & {
+      protocolNumbers: ProtocolVersionNumbers
+      os: string
+      cpu: string
+    })
+  | null {
   for (const line of output.split(/\r?\n/)) {
     const match = /^floti (\S+) protocol (\d+)\.(\d+) (\S+) (\S+)$/.exec(line.trim())
     if (match === null) continue
@@ -207,14 +211,14 @@ export function hostFlotiOlder(hostVersion: string, helmVersion: string): boolea
  * (`2.4.0`), or `protocol 1.3` when that is all the refusal said.
  *
  * - `older: 'host'`: the host runs an older floti, and is offered Restart
- *   host to update. With `stopFromMenu` it speaks protocol 1.x, which has no
- *   restart: it is stopped from the Stop host item in its notification-area
- *   menu, which ends its sessions. Once it is gone Helm starts the floti it
- *   carries and connects, and History offers each ended session to resume.
+ *   host to update. With `beforeRestart` it speaks protocol 1.x, from before
+ *   the restart could be asked for: Restart host to update ends its process
+ *   as a crash would, leaving its session keeper running, and the floti Helm
+ *   carries starts and takes every session and terminal over in its tab.
  * - `older: 'helm'`: this Helm is too old for the host, and is updated.
  */
 export type LocalHostVersions =
-  | { older: 'host'; host: string; helm: string; stopFromMenu: boolean }
+  | { older: 'host'; host: string; helm: string; beforeRestart: boolean }
   | { older: 'helm'; host: string; helm: string }
 
 /**
@@ -231,10 +235,10 @@ export function localHostVersions(
   if ('refused' in seen) {
     const { host, client, update } = seen.refused
     const named = { host: `protocol ${formatProtocol(host)}`, helm: `protocol ${formatProtocol(client)}` }
-    return update === 'host' ? { older: 'host', ...named, stopFromMenu: host.major < 2 } : { older: 'helm', ...named }
+    return update === 'host' ? { older: 'host', ...named, beforeRestart: host.major < 2 } : { older: 'helm', ...named }
   }
   return hostFlotiOlder(seen.hostVersion, helmVersion)
-    ? { older: 'host', host: seen.hostVersion, helm: helmVersion, stopFromMenu: false }
+    ? { older: 'host', host: seen.hostVersion, helm: helmVersion, beforeRestart: false }
     : null
 }
 
@@ -250,21 +254,29 @@ export function localHostVersionsSentence(versions: LocalHostVersions): string {
   if (versions.older === 'helm') {
     return `This PC’s host runs ${host}, newer than the ${helm} this Helm speaks, so Helm cannot connect to it. Update Helm on this PC.`
   }
-  if (versions.stopFromMenu) {
-    return `This PC’s host runs ${host}, older than the ${helm} this Helm carries, and cannot be restarted from here. Stop it with Stop host in its notification-area menu, which ends its sessions; Helm then starts the floti it carries, and History offers each ended session to resume.`
+  if (versions.beforeRestart) {
+    return `This PC’s host runs ${host}, older than the ${helm} this Helm carries. Restart host to update keeps every session and terminal running in its tab.`
   }
   return `This PC’s host runs ${host}, older than the ${helm} this Helm carries. Restart host to update says first what it ends.`
 }
 
 /** What restarting this PC's host on the floti this Helm carries does, asked before anything happens. */
 export interface LocalHostRestartOffer {
-  /** The floti the host runs now. */
+  /**
+   * The floti the host runs now (`2.4.0`), or `protocol 1.4` for a host from
+   * before the restart could be asked for, which names only its protocol.
+   */
   hostVersion: string
-  /** The sessions running in it, whichever device started them. */
-  sessions: number
+  /**
+   * The sessions running in it, whichever device started them; null for a
+   * host from before the restart, which cannot be asked.
+   */
+  sessions: number | null
   /**
    * How many of them the restart ends: none when the carried floti speaks the
-   * keeper's link and takes them over, every one when it does not.
+   * keeper's link and takes them over, every one when it does not. None for a
+   * host from before the restart, whose process is ended as a crash would end
+   * it, leaving its keeper for the carried floti to take back.
    */
   ends: number
 }
@@ -276,8 +288,16 @@ export function restartHostQuestion(offer: LocalHostRestartOffer, helmVersion: s
   return `Restart this PC’s host on ${to}, ending ${String(offer.ends)} session${offer.ends === 1 ? '' : 's'}?`
 }
 
+/** The restart question's confirm button: the danger one only when the restart ends a session. */
+export function restartHostConfirmTone(offer: LocalHostRestartOffer): 'danger' | 'primary' {
+  return offer.ends > 0 ? 'danger' : 'primary'
+}
+
 /** What the restart question says beneath it. */
 export function restartHostDetail(offer: LocalHostRestartOffer): string {
+  if (offer.sessions === null) {
+    return `The host runs Floti ${offer.hostVersion}, from before Restart host to update, so Helm ends its process as a crash would. Every session and terminal keeps running in its tab, and the new host takes them over; any it cannot take over come back in their own tabs to resume.`
+  }
   if (offer.ends === 0) {
     return offer.sessions === 0
       ? 'No session is running in it. Helm starts the new host and connects to it.'

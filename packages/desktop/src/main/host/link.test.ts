@@ -262,7 +262,7 @@ describe('the link to the local host', () => {
       expect(link.current()).toBe(first.asConnection())
     })
 
-    it('S15: a host on protocol 1.x that refuses is tried again with the backoff, never stopped or replaced, and once it is gone the carried floti is started and connected', async () => {
+    it('S15: a host on protocol 1.x that refuses is tried again with the backoff and never ended unasked; Restart host to update ends it, then the carried floti is started and connected', async () => {
       const timers = steppedTimers()
       const carried = new FakeConnection()
       const starts: boolean[] = []
@@ -271,8 +271,8 @@ describe('the link to the local host', () => {
       const link = createHostLink({
         start: ({ startHost }) => {
           starts.push(startHost)
-          // While the 1.x host runs it answers and refuses; once the user
-          // stopped it from its menu, the launcher starts the floti Helm carries.
+          // While the 1.x host runs it answers and refuses; once Restart host
+          // to update ended its process, the launcher starts the floti Helm carries.
           return oldHostRunning
             ? Promise.reject(
                 new LocalHostRefusedError(
@@ -282,9 +282,11 @@ describe('the link to the local host', () => {
               )
             : Promise.resolve(fakeLocalHost(carried, true))
         },
+        // `restartLocalHost` with the 1.x refusal: `floti end-old-host` ends its process alone.
         restart: () => {
           restarts += 1
-          return Promise.resolve()
+          oldHostRunning = false
+          return Promise.resolve(null)
         },
         log: () => undefined,
         ...timers
@@ -299,17 +301,22 @@ describe('the link to the local host', () => {
       await settle()
       expect(timers.pending()).toEqual([HOST_RETRY_MS * 2])
       expect(link.current()).toBeNull()
+      // Without the user's click nothing ends it.
+      expect(restarts).toBe(0)
 
-      oldHostRunning = false
-      timers.fireAll()
-      await settle()
+      await link.restartHost()
 
+      expect(restarts).toBe(1)
       expect(link.current()).toBe(carried.asConnection())
       expect(starts).toEqual([true, true, true])
-      expect(timers.pending()).toEqual([])
-      // Nothing restarted, stopped or quit the refusing host.
-      expect(restarts).toBe(0)
+      expect(link.restarting()).toBe(false)
+      // The carried host is never asked to stop.
       expect(carried.payloads('host:stop')).toEqual([])
+      // The retry still pending finds the carried host connected and does nothing.
+      timers.fireAll()
+      await settle()
+      expect(starts).toEqual([true, true, true])
+      expect(link.current()).toBe(carried.asConnection())
     })
 
     it('S11: a link with no restart never restarts its host', async () => {

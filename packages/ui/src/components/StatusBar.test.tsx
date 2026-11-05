@@ -140,7 +140,7 @@ describe("StatusBar: the hosts sessions run in", () => {
           id: "local",
           name: "This PC",
           quitEnds: true,
-          versions: { older: "host", host: "2.4.0", helm: "2.4.1", stopFromMenu: false },
+          versions: { older: "host", host: "2.4.0", helm: "2.4.1", beforeRestart: false },
           onRestart,
           onOpen,
         },
@@ -156,7 +156,7 @@ describe("StatusBar: the hosts sessions run in", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("S15: a host on protocol 1.x says it is older and opens Settings, which says to stop it from its menu", () => {
+  it("S17: a host on protocol 1.x names both versions and a press offers Restart host to update, which keeps every session running", () => {
     const onOpen = vi.fn();
     const onRestart = vi.fn();
     renderBar({
@@ -165,17 +165,22 @@ describe("StatusBar: the hosts sessions run in", () => {
           id: "local",
           name: "This PC",
           quitEnds: true,
-          versions: { older: "host", host: "protocol 1.4", helm: "protocol 2.0", stopFromMenu: true },
+          versions: { older: "host", host: "protocol 1.4", helm: "protocol 2.0", beforeRestart: true },
           onRestart,
           onOpen,
         },
       ],
     });
-    const item = screen.getByRole("button", { name: "This PC · older host" });
-    expect(item.getAttribute("title")).toContain("Stop host in its notification-area menu");
+    const item = screen.getByRole("button", {
+      name: "This PC · older host · Restart host to update",
+    });
+    const title = item.getAttribute("title") ?? "";
+    expect(title).toContain("Floti protocol 1.4, older than the Floti protocol 2.0");
+    expect(title).toContain("keeps every session and terminal running");
+    expect(title).not.toMatch(/History|notification-area|Stop host/);
     item.click();
-    expect(onOpen).toHaveBeenCalledTimes(1);
-    expect(onRestart).not.toHaveBeenCalled();
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it("S8: a Helm behind its host says to update Helm", () => {

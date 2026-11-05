@@ -81,10 +81,10 @@ export interface StatusHostItem {
    */
   roundTripMs?: number | null | undefined;
   /**
-   * This PC's host only: which of it and this Helm is behind. An older host
-   * says so and pressing it offers Restart host to update (`onRestart`); one
-   * on protocol 1.x, and a Helm behind its host, open Settings > Hosts, which
-   * says what to do.
+   * This PC's host only: which of it and this Helm is behind. An older host,
+   * one on protocol 1.x included, says so and pressing it offers Restart host
+   * to update (`onRestart`); a Helm behind its host opens Settings > Hosts,
+   * which says what to do.
    */
   versions?: LocalHostVersions | null | undefined;
   /** Starts Restart host to update, which asks before anything happens. */
@@ -270,9 +270,7 @@ export function StatusBar({
         const versions = away ? null : (host.versions ?? null);
         if (versions !== null) {
           const restart =
-            versions.older === "host" &&
-            !versions.stopFromMenu &&
-            host.onRestart !== undefined
+            versions.older === "host" && host.onRestart !== undefined
               ? host.onRestart
               : null;
           return (

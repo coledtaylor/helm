@@ -47,11 +47,10 @@ import { Action, Divider, Group, Select } from './SettingsKit'
  * (`classifyHostFailure`), with the last line written there, unedited.
  *
  * Above them, while this PC's host and this Helm are on different floti
- * versions, a notice says which is behind, naming both. An older host is
- * offered Restart host to update, which says what it ends before anything
- * happens; one on protocol 1.x is told to stop through its notification-area
- * menu, which ends its sessions, after which Helm starts the host it carries
- * and History offers them to resume. A Helm behind its host is told to update
+ * versions, a notice says which is behind, naming both. An older host, one on
+ * protocol 1.x included, is offered Restart host to update, which says what
+ * it ends before anything happens; for a 1.x host it says every session and
+ * terminal keeps running in its tab. A Helm behind its host is told to update
  * Helm. Nothing is restarted without the user's click.
  */
 
@@ -266,7 +265,7 @@ function LocalHostNotice({
   versions: LocalHostVersions
   onRestart: () => void
 }): JSX.Element {
-  const restarts = versions.older === 'host' && !versions.stopFromMenu
+  const restarts = versions.older === 'host'
   return (
     <div data-settings-local-host={versions.older} aria-label="This PC" role="group" className="py-2">
       <div className="flex min-w-0 items-center gap-2.5">

@@ -12,6 +12,7 @@ import {
   parseSums,
   parseSystemLine,
   parseVersionLine,
+  restartHostConfirmTone,
   restartHostDetail,
   restartHostQuestion,
   saysNotFound
@@ -201,13 +202,28 @@ describe('S12 and S13: the restart question says first what ends', () => {
     )
     expect(restartHostDetail(offer)).toContain('offers them back once')
   })
+
+  it('S15 and S16: a protocol-1.x host is asked as ending no session, and says every session and terminal keeps running', () => {
+    const offer = { hostVersion: 'protocol 1.4', sessions: null, ends: 0 }
+    expect(restartHostQuestion(offer, '2.4.1')).toBe('Restart this PC’s host on floti 2.4.1? No session ends.')
+    const detail = restartHostDetail(offer)
+    expect(detail).toContain('The host runs Floti protocol 1.4, from before Restart host to update')
+    expect(detail).toContain('Every session and terminal keeps running in its tab')
+    expect(detail).not.toMatch(/History|notification-area|Stop host/)
+    expect(restartHostConfirmTone(offer)).toBe('primary')
+  })
+
+  it('S16: the confirm is the ordinary button when the restart ends no session, the danger one when it ends some', () => {
+    expect(restartHostConfirmTone({ hostVersion: '2.4.0', sessions: 3, ends: 0 })).toBe('primary')
+    expect(restartHostConfirmTone({ hostVersion: '2.4.0', sessions: 3, ends: 3 })).toBe('danger')
+  })
 })
 
 describe('which of this PC’s host and this Helm is behind', () => {
   it('S7: a refusal saying to update the host marks this PC’s host older, naming both protocols', () => {
     expect(
       localHostVersions({ refused: { host: { major: 2, minor: 0 }, client: { major: 2, minor: 1 }, update: 'host' } }, '2.5.0')
-    ).toEqual({ older: 'host', host: 'protocol 2.0', helm: 'protocol 2.1', stopFromMenu: false })
+    ).toEqual({ older: 'host', host: 'protocol 2.0', helm: 'protocol 2.1', beforeRestart: false })
   })
 
   it('S8: a refusal saying to update the client says this Helm is the one behind', () => {
@@ -216,10 +232,10 @@ describe('which of this PC’s host and this Helm is behind', () => {
     ).toEqual({ older: 'helm', host: 'protocol 2.2', helm: 'protocol 2.0' })
   })
 
-  it('S15: a host on protocol 1.x is stopped from its notification-area menu rather than restarted', () => {
+  it('S17: a host on protocol 1.x is older and from before the restart could be asked for', () => {
     expect(
       localHostVersions({ refused: { host: { major: 1, minor: 4 }, client: { major: 2, minor: 0 }, update: 'host' } }, '2.4.1')
-    ).toEqual({ older: 'host', host: 'protocol 1.4', helm: 'protocol 2.0', stopFromMenu: true })
+    ).toEqual({ older: 'host', host: 'protocol 1.4', helm: 'protocol 2.0', beforeRestart: true })
   })
 
   it('S9: a welcome naming an earlier floti marks the host older; S10: the same floti, nothing', () => {
@@ -227,7 +243,7 @@ describe('which of this PC’s host and this Helm is behind', () => {
       older: 'host',
       host: '2.4.1-preview.6',
       helm: '2.4.1-preview.7',
-      stopFromMenu: false
+      beforeRestart: false
     })
     expect(localHostVersions({ hostVersion: '2.4.1-preview.7' }, '2.4.1-preview.7')).toBeNull()
   })
@@ -235,7 +251,7 @@ describe('which of this PC’s host and this Helm is behind', () => {
 
 describe('what is said of this PC’s host’s version', () => {
   it('S9: an older host names both flotis and offers the restart', () => {
-    expect(localHostVersionsSentence({ older: 'host', host: '2.4.0', helm: '2.4.1', stopFromMenu: false })).toBe(
+    expect(localHostVersionsSentence({ older: 'host', host: '2.4.0', helm: '2.4.1', beforeRestart: false })).toBe(
       'This PC’s host runs floti 2.4.0, older than the floti 2.4.1 this Helm carries. Restart host to update says first what it ends.'
     )
   })
@@ -246,15 +262,16 @@ describe('what is said of this PC’s host’s version', () => {
     )
   })
 
-  it('S15: a host on protocol 1.x is told to stop through Stop host in its notification-area menu, which ends its sessions, after which Helm starts the host it carries and History offers them to resume', () => {
+  it('S17: a host on protocol 1.x names both versions and says Restart host to update keeps every session and terminal running', () => {
     const sentence = localHostVersionsSentence({
       older: 'host',
       host: 'protocol 1.4',
       helm: 'protocol 2.0',
-      stopFromMenu: true
+      beforeRestart: true
     })
-    expect(sentence).toContain('runs Floti protocol 1.4, older than the Floti protocol 2.0 this Helm carries')
-    expect(sentence).toContain('Stop it with Stop host in its notification-area menu, which ends its sessions')
-    expect(sentence).toContain('Helm then starts the floti it carries, and History offers each ended session to resume.')
+    expect(sentence).toBe(
+      'This PC’s host runs Floti protocol 1.4, older than the Floti protocol 2.0 this Helm carries. Restart host to update keeps every session and terminal running in its tab.'
+    )
+    expect(sentence).not.toMatch(/History|notification-area|Stop host/)
   })
 })

@@ -20,8 +20,11 @@ import type { HostSettingsPatch } from './protocol'
  * every session; the next request then starts a fresh one. Or, when this
  * Helm carries a newer floti, they can restart it for the update
  * (`restartHost`): the host leaves its sessions running in its keeper and
- * exits, and the link starts the floti this Helm carries and connects to it.
- * Neither end is a crash, so neither is retried or marked lost.
+ * exits, or, for a host on protocol 1.x from before the restart frames, its
+ * process alone is ended as a crash would end it, leaving its keeper; then
+ * the link starts the floti this Helm carries and connects to it, and that
+ * host takes the keeper back. Neither end is a crash to the link, so neither
+ * is retried or marked lost.
  *
  * A connection that ends without a stop or a quit is a host that crashed or
  * was killed. The link then connects again by itself, the first try after
@@ -130,7 +133,8 @@ export interface HostLinkDeps {
   onAttemptFailed?: (error: Error) => void
   /**
    * Restarts the host for an update and resolves once it has gone
-   * (`restartLocalHost`); absent for a host this link does not restart.
+   * (`restartLocalHost`, which ends a protocol-1.x host's process alone);
+   * absent for a host this link does not restart.
    */
   restart?: () => Promise<unknown>
   log: (line: string) => void

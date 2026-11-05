@@ -13,7 +13,9 @@ import {
   clientFolder,
   desktopArgs,
   flotiBinary,
+  fromBeforeRestart,
   hostEnvironment,
+  oldHostOffer,
   localHostRestartFrame,
   restartLocalHost,
   restartOffer,
@@ -686,10 +688,52 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
       world.timers[0]!()
       await expect.poll(() => world.timers.length, { timeout: PATIENCE }).toBe(2)
       world.timers[1]!()
-      expect((await restarting).hostVersion).toBe('2.4.0')
+      expect((await restarting)?.hostVersion).toBe('2.4.0')
       expect(asked).toEqual(['restart', 'restartAsk'])
       // Only bridges: the new host is the link's to start.
       expect(world.programs().every((program) => program.startsWith('bridge '))).toBe(true)
+    })
+
+    const OLD_HOST = {
+      host: { major: 1, minor: 4 },
+      client: { major: 2, minor: 0 },
+      update: 'host' as const
+    }
+
+    it('S15: a host that refused naming protocol 1.x is from before the restart, and is offered as ending no session', () => {
+      expect(fromBeforeRestart(OLD_HOST)).toBe(true)
+      expect(fromBeforeRestart({ ...OLD_HOST, host: { major: 2, minor: 0 } })).toBe(false)
+      expect(fromBeforeRestart(null)).toBe(false)
+      expect(oldHostOffer(OLD_HOST)).toEqual({
+        hostVersion: 'protocol 1.4',
+        sessions: null,
+        ends: 0
+      })
+    })
+
+    it('S15: a protocol-1.x host is ended by floti end-old-host from the carried floti, with no restart frame or bridge to it', async () => {
+      const world = new World({
+        bridges: [],
+        hosts: [(child) => queueMicrotask(() => child.exit(0))]
+      })
+      expect(await restartLocalHost(WIN_PLACES, world.deps(), OLD_HOST)).toBeNull()
+      expect(world.programs()).toEqual([`end-old-host ${clientFolder(WIN_PLACES, 'win32')}`])
+      expect(world.spawned[0]!.command).toBe(flotiBinary(WIN_PLACES, world.deps()))
+    })
+
+    it('S15: when floti end-old-host ends nothing, the restart fails saying its reason', async () => {
+      const world = new World({
+        bridges: [],
+        hosts: [
+          (child) => {
+            child.stderr.write('floti end-old-host: This PC’s host speaks Floti protocol 2.0, so it was not ended.\n')
+            queueMicrotask(() => child.exit(9))
+          }
+        ]
+      })
+      expect(await refusal(restartLocalHost(WIN_PLACES, world.deps(), OLD_HOST))).toBe(
+        'This PC’s host was not restarted: This PC’s host speaks Floti protocol 2.0, so it was not ended.'
+      )
     })
   })
 

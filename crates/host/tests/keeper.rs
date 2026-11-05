@@ -961,6 +961,52 @@ async fn s15_ending_a_protocol_1_host_leaves_its_keeper_running_and_the_next_hos
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn s15_after_ending_a_protocol_1_host_whose_keeper_the_next_host_cannot_take_back_its_sessions_are_offered_back_once()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let protocol = dirs.data.join(TEST_HOST_PROTOCOL);
+    std::fs::write(&protocol, "1.4").unwrap();
+    let link = dirs.data.join(TEST_KEEPER_LINK_VERSION);
+    std::fs::write(&link, (KEEPER_LINK_VERSION + 1).to_string()).unwrap();
+    let mut old = KillableHost::start(&dirs, &agent);
+    let endpoint = dirs.floti_endpoint();
+    let mut client = TestClient::connect_at(&endpoint, ProtocolVersion::new(1, 4), TERMINAL).await;
+    let in_session = dirs.folder("a project");
+    let (session, session_pid) = fake_session(&mut client, &agent, &in_session, "", 1).await;
+    let keeper = keeper_above(session_pid);
+    drop(client);
+    let folder = helm_client(&dirs).await;
+
+    let ended = end_old_host(&dirs, &folder).await;
+    assert_eq!(
+        ended.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&ended.stderr)
+    );
+    old.ended().await;
+    assert!(alive(keeper) && alive(session_pid), "only the host ended");
+
+    std::fs::remove_file(&protocol).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    let new = in_process(&dirs, &agent, &[]);
+    assert!(!alive(keeper), "the keeper it does not speak to was ended");
+    until("its session ended", || !alive(session_pid)).await;
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let offer = client
+        .request::<SessionRestorable>(&())
+        .await
+        .unwrap()
+        .expect("its session is offered back");
+    assert_eq!(
+        offer.sessions.iter().map(|s| s.id).collect::<Vec<_>>(),
+        [session]
+    );
+    new.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn s15_end_old_host_ends_nothing_for_a_host_of_this_protocol() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);

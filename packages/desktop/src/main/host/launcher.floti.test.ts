@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, inject, it } from 'vitest'
@@ -9,7 +9,9 @@ import { RUN_ROOT } from '../../../../../test/run-root'
 import { FLOTI_PLACES, endStartedProcesses, flotiAvailable, runFloti, startFlotiHost, startedProcesses } from '../../../test/floti-host'
 import {
   LocalHostRefusedError,
+  fromBeforeRestart,
   hostEnvironment,
+  oldHostOffer,
   localHostRestartFrame,
   restartLocalHost,
   restartOffer,
@@ -173,6 +175,55 @@ describe.runIf(flotiAvailable)('this PC’s host and this Helm on either version
 
     // A deliberate stop ends the terminal and the keeper before the host
     // exits, so once it has exited this test leaves nothing running.
+    expect(world.startedHosts).toHaveLength(1)
+    await after.connection.request('host:stop', { reason: 'stop' })
+    await world.startedHosts[0]
+    await after.close()
+  })
+
+  it('S15: Restart host to update ends a protocol-1.x host like a crash, and the carried floti takes its terminal back with its screen', async () => {
+    const world = await hostWorld('restart a protocol 1 host', '1.4')
+    const data = world.env['FLOTI_DATA_DIR']!
+    // 2.4.1-preview.7's keeper names no link version.
+    await writeFile(join(data, 'floti-test-keeper-link-version'), 'none')
+    const old = await startFlotiHost(world.env)
+    // A Helm of that release reaches it and opens a terminal.
+    const before = await startLocalHost(world.places, world.deps({ major: 1, minor: 4 }))
+    const folder = await mkdtemp(join(inject(RUN_ROOT), 'terminal folder '))
+    const opened = await before.connection.request('pterm:open', {
+      path: folder,
+      cols: 100,
+      rows: 30,
+      shell: null,
+      separate: true
+    })
+    const first = screen(before.connection, opened.id)
+    const marker = 'floti-old-host-marker'
+    first.stream.write(new TextEncoder().encode(`echo ${marker}\r`))
+    await expect.poll(() => first.text(), { timeout: PATIENCE }).toContain(marker)
+
+    // This Helm is refused, naming protocol 1.4, and offered the restart as ending nothing.
+    const refused = (await refusedWith(startLocalHost(world.places, world.deps()))).refused
+    expect(fromBeforeRestart(refused)).toBe(true)
+    expect(oldHostOffer(refused)).toEqual({
+      hostVersion: 'protocol 1.4',
+      sessions: null,
+      ends: 0
+    })
+
+    expect(await restartLocalHost(world.places, world.deps(), refused)).toBeNull()
+    await old.exited
+    await before.close()
+
+    // The carried floti, greeting with this Helm's protocol, starts on the same folders.
+    await rm(join(data, 'floti-test-host-protocol'))
+    await rm(join(data, 'floti-test-keeper-link-version'))
+    const after = await startLocalHost(world.places, world.deps())
+    expect(after.startedHost).toBe(true)
+    const second = screen(after.connection, opened.id)
+    await expect.poll(() => second.text(), { timeout: PATIENCE }).toContain(marker)
+    expect(second.closed()).toBeNull()
+
     expect(world.startedHosts).toHaveLength(1)
     await after.connection.request('host:stop', { reason: 'stop' })
     await world.startedHosts[0]

@@ -530,14 +530,99 @@ export function restartOffer(state: RestartState): LocalHostRestartOffer {
 }
 
 /**
- * Restarts the local host for an update: sends it `restart`, which leaves
- * every session running in its keeper when it has one and exits, then waits
- * until no host answers on the socket, trying every `HOST_RETRY_MS` up to the
- * start deadline. Resolves with the host's answer; the caller then starts the
- * floti this Helm carries, which takes the sessions over when it speaks the
- * keeper's link. Only ever on the user's click.
+ * The protocol major the restart frames came with. A host on an older one
+ * (2.4.1-preview.7's speaks 1.x) closes a connection that starts with one, so
+ * it is never sent one, nor `host:stop`.
  */
-export async function restartLocalHost(places: HostPlaces, deps: LauncherDeps): Promise<RestartState> {
+export const RESTART_FRAMES_MAJOR = 2
+
+/** Whether a host that refused this Helm naming `refused` is one from before the restart frames. */
+export function fromBeforeRestart(refused: RefusedVersions | null): refused is RefusedVersions {
+  return refused !== null && refused.host.major < RESTART_FRAMES_MAJOR
+}
+
+/**
+ * Restart host to update for a host from before the restart frames, which
+ * cannot be asked what it runs: it is named by the protocol it refused this
+ * Helm with, no count is given, and nothing ends, since its process is ended
+ * as a crash would end it and the floti this Helm carries takes its keeper
+ * back (`endOldLocalHost`).
+ */
+export function oldHostOffer(refused: RefusedVersions): LocalHostRestartOffer {
+  return {
+    hostVersion: `protocol ${String(refused.host.major)}.${String(refused.host.minor)}`,
+    sessions: null,
+    ends: 0
+  }
+}
+
+/**
+ * Ends the local host when it speaks protocol 1.x, from before the restart
+ * frames: runs `floti end-old-host` from the floti this Helm carries, which
+ * ends that host's process alone, as a crash would, leaving its session
+ * keeper running, and exits once it has gone. Nothing is sent to the host
+ * that it could handle: no restart frame, no protocol-1.0 `hello` and no
+ * `host:stop`. Only ever on the user's click. Rejects with the sentence to
+ * show, its one line on standard error in it, when nothing was ended.
+ */
+export async function endOldLocalHost(
+  places: HostPlaces,
+  deps: Omit<LauncherDeps, 'setTimeout' | 'clearTimeout'>
+): Promise<void> {
+  const binary = flotiBinary(places, deps)
+  if (!deps.exists(binary)) throw failure(`Helm could not find the local host program at ${binary}`)
+  deps.log('host: ending the local host on protocol 1.x for an update, leaving its session keeper running')
+  const child = deps.spawn(binary, ['end-old-host', clientFolder(places, deps.platform)], {
+    env: hostEnvironment(places, deps),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true
+  })
+  const exited = exitOf(child)
+  // It prints nothing on standard output; its one line on standard error says why it ended nothing.
+  child.stdout?.resume()
+  let said = ''
+  const { stderr } = child
+  const heard =
+    stderr === null
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          stderr.on('data', (chunk: Buffer | string) => {
+            said += chunk.toString()
+          })
+          stderr.on('error', () => resolve())
+          stderr.once('end', () => resolve())
+          stderr.once('close', () => resolve())
+        })
+  const exit = await exited
+  if (exit.error !== undefined) throw couldNotRun(binary, exit.error)
+  await heard
+  if (exit.code === 0) return
+  const why = said.replace(/^floti end-old-host: /, '').trim()
+  deps.log(`host: floti end-old-host ended nothing (${describeExit(exit)})`)
+  throw new LocalHostError(
+    `This PC’s host was not restarted: ${why === '' ? `floti end-old-host exited with status ${String(exit.code)}.` : why}`
+  )
+}
+
+/**
+ * Restarts the local host for an update. A host whose last refusal named
+ * protocol 1.x (`fromBeforeRestart`) is ended as a crash would end it
+ * (`endOldLocalHost`). Any other is sent `restart`, which leaves every
+ * session running in its keeper when it has one and exits; this then waits
+ * until no host answers on the socket, trying every `HOST_RETRY_MS` up to the
+ * start deadline, and resolves with the host's answer. Either way the caller
+ * then starts the floti this Helm carries, which takes the sessions over when
+ * it speaks the keeper's link. Only ever on the user's click.
+ */
+export async function restartLocalHost(
+  places: HostPlaces,
+  deps: LauncherDeps,
+  refused: RefusedVersions | null = null
+): Promise<RestartState | null> {
+  if (fromBeforeRestart(refused)) {
+    await endOldLocalHost(places, deps)
+    return null
+  }
   const state = await localHostRestartFrame(places, deps, true)
   if (state === null) throw failure('No local host answered on its socket, so there was nothing to restart')
   deps.log(`host: restarting the local host on floti ${state.hostVersion} for an update`)
