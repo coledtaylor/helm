@@ -516,6 +516,86 @@ describe('sessions over the window’s own connection', () => {
       const listed = await ask(w.adapters, 'session:list')
       expect(listed.filter((record) => record.status === 'lost')).toEqual([])
     })
+
+    /** How main's link says a Restart host to update ended the connection (`desktop.ts` `howEnded`). */
+    const RESTART_END = { planned: true, restarts: true, restarting: true }
+
+    it('S12: after Restart host to update, keeps every session running in its tab and takes it back from the new host on a new stream that starts with its screen, resuming nothing', async () => {
+      const w = await shownWorld()
+      w.link.lose(RESTART_END)
+      await settle()
+      // While the old host exits and the new one starts, nothing is said to have ended.
+      expect(w.exits).toEqual([])
+
+      // The carried floti's host took the keeper back: the same ids, still running.
+      const second = new FakeConnection()
+        .answer('session:list', () => [
+          row({ id: 7 }),
+          row({ id: 8, status: 'exited', exitCode: 0 }),
+          row({ id: 9, cwd: '/work dir/api' })
+        ])
+        .answer('session:restorable', () => null)
+      const data = hear(w.adapters, 'session:data')
+      await w.link.reconnect(second)
+      await settle()
+
+      expect(w.exits).toEqual([])
+      const seven = second.streamsFor('session:data', 7)
+      const nine = second.streamsFor('session:data', 9)
+      expect([seven.length, nine.length]).toEqual([1, 1])
+      seven[0]!.send('\x1bcYou said: sketch\r\ntick 12')
+      nine[0]!.send('\x1bcapi ready')
+      expect(data).toEqual([
+        { id: 7, data: '\x1bcYou said: sketch\r\ntick 12' },
+        { id: 9, data: '\x1bcapi ready' }
+      ])
+      send(w.adapters, 'session:input', { id: 9, data: 'go\r' })
+      expect(nine[0]!.text()).toBe('go\r')
+      await expect(ask(w.adapters, 'session:restorable')).resolves.toBeNull()
+      expect(second.payloads('session:restore')).toEqual([])
+      expect(second.payloads('session:launch')).toEqual([])
+      expect(second.payloads('history:resume')).toEqual([])
+    })
+
+    it('S13: after a confirmed Restart host to update whose keeper the new host could not take back, says each session ended as lost and hands the window the new host’s offer of them', async () => {
+      const w = await shownWorld()
+      w.link.lose(RESTART_END)
+      await settle()
+
+      // The new host ended the keeper it does not speak to, and offers its sessions back once.
+      const lost = (id: number, cwd: string) => row({ id, cwd, status: 'lost' })
+      const offered = (id: number, name: string, cwd: string): P.RestoreOffer['sessions'][number] => ({
+        id,
+        name,
+        cwd,
+        branch: 'main',
+        profile: null,
+        profileGone: false,
+        lastAt: null,
+        blocked: null
+      })
+      const second = new FakeConnection()
+        .answer('session:list', () => [lost(7, '/work dir/app'), row({ id: 8, status: 'exited', exitCode: 0 }), lost(9, '/work dir/api')])
+        .answer('session:restorable', () => ({
+          sessions: [offered(7, 'app', '/work dir/app'), offered(9, 'app', '/work dir/api')],
+          elsewhere: 0
+        }))
+      await w.link.reconnect(second)
+      await settle()
+
+      expect(w.exits.map((record) => [record.id, record.status])).toEqual([
+        [7, 'lost'],
+        [9, 'lost']
+      ])
+      expect(second.streams).toEqual([])
+      const offer = await ask(w.adapters, 'session:restorable')
+      expect(offer?.sessions.map((session) => [session.id, session.cwd])).toEqual([
+        [7, '/work dir/app'],
+        [9, '/work dir/api']
+      ])
+      // Offered, not reopened: the user answers the offer.
+      expect(second.payloads('session:restore')).toEqual([])
+    })
   })
 })
 
@@ -662,6 +742,36 @@ describe('plain terminals over the window’s own connection', () => {
       await settle()
 
       expect(w.exits).toEqual([])
+    })
+
+    it('S12: after Restart host to update, reattaches each shell the new host took back from the keeper, with its screen, and ends none', async () => {
+      const w = await shellWorld()
+      w.link.lose({ planned: true, restarts: true, restarting: true })
+      await settle()
+      expect(w.exits).toEqual([])
+
+      const second = new FakeConnection().answer('session:list', () => [])
+      const data = hear(w.adapters, 'pterm:data')
+      await w.link.reconnect(second)
+      await settle()
+
+      const three = second.streamsFor('pterm:data', 3)
+      const four = second.streamsFor('pterm:data', 4)
+      expect([three.length, four.length]).toEqual([1, 1])
+      three[0]!.send('\x1bcPS> ls')
+      four[0]!.send('\x1bcPS> ')
+      expect(data).toEqual([
+        { id: 3, data: '\x1bcPS> ls' },
+        { id: 4, data: '\x1bcPS> ' }
+      ])
+      send(w.adapters, 'pterm:input', { id: 4, data: 'git status\r' })
+      expect(four[0]!.text()).toBe('git status\r')
+      expect(w.exits).toEqual([])
+      expect(JSON.parse(w.shelf.text ?? '{}')).toEqual({
+        version: 1,
+        shells: [{ id: 4, path: '/work dir/app', shell: 'pwsh' }]
+      })
+      expect(second.payloads('pterm:open')).toEqual([])
     })
   })
 })

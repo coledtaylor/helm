@@ -15,7 +15,8 @@ import {
   restartOffer,
   startLocalHost,
   type HostPlaces,
-  type LauncherDeps
+  type LauncherDeps,
+  type LocalHost
 } from './launcher'
 import { PROTOCOL_VERSION, type ProtocolVersion } from './protocol'
 
@@ -48,11 +49,14 @@ async function hostWorld(label: string, hostProtocol?: string) {
     await first.exited
     await writeFile(join(env['FLOTI_DATA_DIR']!, 'floti-test-host-protocol'), hostProtocol)
   }
+  /** Each host Helm's start path started, settling once it has exited. */
+  const startedHosts: Array<Promise<void>> = []
   const deps = (protocol?: ProtocolVersion): LauncherDeps => ({
     ...programs,
     spawn: (command, args, options) => {
       const child = spawn(command, args, options)
       startedProcesses.push(child)
+      if (args[0] === 'host') startedHosts.push(new Promise((done) => child.once('exit', () => done())))
       return child
     },
     appVersion: '0.0.0',
@@ -61,7 +65,7 @@ async function hostWorld(label: string, hostProtocol?: string) {
     clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout),
     ...(protocol !== undefined ? { protocol } : {})
   })
-  return { places, env, deps }
+  return { places, env, deps, startedHosts }
 }
 
 async function refusedWith(promise: Promise<unknown>): Promise<LocalHostRefusedError> {
@@ -135,4 +139,63 @@ describe.runIf(flotiAvailable)('this PC’s host and this Helm on either version
     expect(local.startedHost).toBe(true)
     await local.close()
   })
+
+  it('S12: a plain terminal running in the old host keeps running through Restart host to update, and the new host gives its screen back', async () => {
+    const world = await hostWorld('restart with a terminal')
+    const old = await startFlotiHost(world.env)
+    const before = await startLocalHost(world.places, world.deps())
+    const folder = await mkdtemp(join(inject(RUN_ROOT), 'terminal folder '))
+    const opened = await before.connection.request('pterm:open', {
+      path: folder,
+      cols: 100,
+      rows: 30,
+      shell: null,
+      separate: true
+    })
+    const first = screen(before.connection, opened.id)
+    const marker = 'floti-restart-marker'
+    first.stream.write(new TextEncoder().encode(`echo ${marker}\r`))
+    await expect.poll(() => first.text(), { timeout: PATIENCE }).toContain(marker)
+
+    const asked = await localHostRestartFrame(world.places, world.deps(), false)
+    // The carried floti speaks the keeper's link version, so nothing ends.
+    expect(restartOffer(asked!)).toEqual({ hostVersion: asked!.hostVersion, sessions: 0, ends: 0 })
+    await restartLocalHost(world.places, world.deps())
+    await old.exited
+    await before.close()
+
+    const after = await startLocalHost(world.places, world.deps())
+    expect(after.startedHost).toBe(true)
+    // The same terminal, taken back from the keeper, its screen drawn again.
+    const second = screen(after.connection, opened.id)
+    await expect.poll(() => second.text(), { timeout: PATIENCE }).toContain(marker)
+    expect(second.closed()).toBeNull()
+
+    // A deliberate stop ends the terminal and the keeper before the host
+    // exits, so once it has exited this test leaves nothing running.
+    expect(world.startedHosts).toHaveLength(1)
+    await after.connection.request('host:stop', { reason: 'stop' })
+    await world.startedHosts[0]
+    await after.close()
+  })
 })
+
+/** A plain terminal's stream on `connection`: what it drew, as text, and how it closed. */
+function screen(connection: LocalHost['connection'], id: number) {
+  let text = ''
+  let closed: string | null = null
+  const decoder = new TextDecoder()
+  const stream = connection.openStream(
+    'pterm:data',
+    { id },
+    {
+      data: (bytes) => {
+        text += decoder.decode(bytes, { stream: true })
+      },
+      close: (reason) => {
+        closed = reason ?? 'closed'
+      }
+    }
+  )
+  return { stream, text: () => text, closed: () => closed }
+}
