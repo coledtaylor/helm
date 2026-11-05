@@ -250,7 +250,7 @@ export function localHostVersionsSentence(versions: LocalHostVersions): string {
     return `This PC’s host runs ${host}, newer than the ${helm} this Helm speaks, so Helm cannot connect to it. Update Helm on this PC.`
   }
   if (versions.stopFromMenu) {
-    return `This PC’s host runs ${host}, older than the ${helm} this Helm carries, and cannot be restarted from here. Stop it with Stop host in its notification-area menu; Helm starts the new one when it next needs it.`
+    return `This PC’s host runs ${host}, older than the ${helm} this Helm carries, and cannot be restarted from here. Stop it with Stop host in its notification-area menu, which ends its sessions; Helm then starts the floti it carries, and History offers each ended session to resume.`
   }
   return `This PC’s host runs ${host}, older than the ${helm} this Helm carries. Restart host to update says first what it ends.`
 }

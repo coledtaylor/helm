@@ -246,9 +246,15 @@ describe('what is said of this PC’s host’s version', () => {
     )
   })
 
-  it('S15: a host on protocol 1.x is told to stop through Stop host in its notification-area menu', () => {
-    expect(
-      localHostVersionsSentence({ older: 'host', host: 'protocol 1.4', helm: 'protocol 2.0', stopFromMenu: true })
-    ).toContain('Stop it with Stop host in its notification-area menu')
+  it('S15: a host on protocol 1.x is told to stop through Stop host in its notification-area menu, which ends its sessions, and where they are offered back', () => {
+    const sentence = localHostVersionsSentence({
+      older: 'host',
+      host: 'protocol 1.4',
+      helm: 'protocol 2.0',
+      stopFromMenu: true
+    })
+    expect(sentence).toContain('runs Floti protocol 1.4, older than the Floti protocol 2.0 this Helm carries')
+    expect(sentence).toContain('Stop it with Stop host in its notification-area menu, which ends its sessions')
+    expect(sentence).toContain('Helm then starts the floti it carries, and History offers each ended session to resume.')
   })
 })

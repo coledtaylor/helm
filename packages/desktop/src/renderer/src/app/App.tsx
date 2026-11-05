@@ -90,7 +90,6 @@ import {
   type RestoreOffer,
   type SavedPaneLayout,
   type SessionRecord,
-  type LocalHostRestartOffer,
 } from "@helm/core/types";
 import {
   AppShell,
@@ -265,6 +264,7 @@ import { useProfiles } from "./useProfiles";
 import { useLiveSessions } from "./useLiveSessions";
 import { useNewSession } from "./useNewSession";
 import { useRestore } from "./useRestore";
+import { useRestartHost, type RestartHostDeps } from "./useRestartHost";
 import { useSessions } from "./useSessions";
 import { useSetup } from "./useSetup";
 import { useHostWorkspaces } from "./useHostWorkspaces";
@@ -3593,33 +3593,22 @@ export function App(): JSX.Element {
       );
   }, []);
 
-  /**
-   * Restart host to update, on the user's click only: what it ends is asked
-   * of the host first and said in the question, Cancel changes nothing, and
-   * only the confirm restarts it. Helm never restarts the host on its own.
-   */
-  const [restartHostAsk, setRestartHostAsk] =
-    useState<LocalHostRestartOffer | null>(null);
+  /** Restart host to update, on the user's click only (`useRestartHost`). */
+  const restartHostDeps = useMemo<RestartHostDeps>(
+    () => ({
+      ask: () => helm.invoke("windowSessions:restartAsk"),
+      restart: () => helm.invoke("windowSessions:restartHost"),
+      onError: setStopHostError,
+    }),
+    [],
+  );
+  const restartHostFlow = useRestartHost(restartHostDeps);
+  const restartHostAsk = restartHostFlow.offer;
+  const { ask: askRestart } = restartHostFlow;
   const askRestartHost = useCallback(() => {
     setStopHostError(null);
-    helm
-      .invoke("windowSessions:restartAsk")
-      .then(setRestartHostAsk, (error: unknown) =>
-        setStopHostError(
-          error instanceof Error ? error.message : String(error),
-        ),
-      );
-  }, []);
-  const restartHost = useCallback(() => {
-    setRestartHostAsk(null);
-    helm
-      .invoke("windowSessions:restartHost")
-      .catch((error: unknown) =>
-        setStopHostError(
-          error instanceof Error ? error.message : String(error),
-        ),
-      );
-  }, []);
+    askRestart();
+  }, [askRestart]);
 
   /**
    * Rendered by both branches below: main holds the window's `close` open on
@@ -3662,8 +3651,8 @@ export function App(): JSX.Element {
         detail={restartHostDetail(restartHostAsk)}
         confirmLabel="Restart host"
         sessionNames={[]}
-        onConfirm={restartHost}
-        onCancel={() => setRestartHostAsk(null)}
+        onConfirm={restartHostFlow.confirm}
+        onCancel={restartHostFlow.cancel}
       />
     );
 
