@@ -22,8 +22,12 @@ import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { createHostFiles, type HostFiles } from './files'
 import {
   flotiBinary,
+  localHostRestartFrame,
   openPageBridge,
+  restartLocalHost,
+  restartOffer,
   startLocalHost,
+  type LauncherDeps,
   type HostChild,
   type HostPlaces,
   type LocalHost,
@@ -41,7 +45,7 @@ import { createWslKeepAwake } from './wsl-awake'
 import { listWslDistros } from './wsl-distros'
 import { PROTOCOL_VERSION } from './protocol'
 import { RELEASES_DOWNLOAD } from '../update'
-import type { PluginBackgroundReport, RemoteHostStates } from '../../shared/ipc'
+import type { LocalHostRestartOffer, PluginBackgroundReport, RemoteHostStates } from '../../shared/ipc'
 import { LOCAL_HOST_KEY } from '@helm/core/types'
 import { createBackgroundNeeds, createRemotePlugins, type RemotePlugins } from './remote-plugins'
 import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
@@ -128,18 +132,32 @@ const programs = {
  * host is started when none answers, unless `startHost` is false.
  */
 export function connectLocalHost(log: (line: string) => void, startHost = true): Promise<LocalHost> {
-  return startLocalHost(
-    places(),
-    {
-      ...programs,
-      appVersion: app.getVersion(),
-      deviceName: hostname(),
-      log,
-      setTimeout: (run, ms) => setTimeout(run, ms),
-      clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
-    },
-    { startHost }
-  )
+  return startLocalHost(places(), launcherDeps(log), { startHost })
+}
+
+/** What the launcher runs this run's `floti` with. */
+function launcherDeps(log: (line: string) => void): LauncherDeps {
+  return {
+    ...programs,
+    appVersion: app.getVersion(),
+    deviceName: hostname(),
+    log,
+    setTimeout: (run, ms) => setTimeout(run, ms),
+    clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
+  }
+}
+
+/**
+ * What Restart host to update would do to this run's local host, asked in
+ * place of a `hello` so a host that refuses this Helm answers too: the floti
+ * there, its sessions, and how many the restart ends. Every one ends when the
+ * host's keeper speaks another link version than the floti this Helm
+ * carries (`KEEPER_LINK_VERSION`), or the host has no keeper; none otherwise.
+ */
+export async function askLocalHostRestart(log: (line: string) => void): Promise<LocalHostRestartOffer> {
+  const state = await localHostRestartFrame(places(), launcherDeps(log), false)
+  if (state === null) throw new Error('No local host answered on its socket, so there is nothing to restart.')
+  return restartOffer(state)
 }
 
 /**
@@ -158,7 +176,11 @@ export function createLocalPageLinks(
     deviceName: hostname(),
     isHelmPage,
     ready: () => link.connection(),
-    howEnded: () => ({ planned: link.endedOnPurpose(), restarts: link.restartsHost() }),
+    howEnded: () => ({
+      planned: link.endedOnPurpose(),
+      restarts: link.restartsHost(),
+      ...(link.restarting() ? { restarting: true } : {})
+    }),
     openBridge: (data) => openPageBridge(places(), programs, data),
     log
   })
@@ -334,6 +356,7 @@ export function createDesktopRemoteInstaller(log: (line: string) => void): Remot
 export function createLocalHostLink(settings: () => HostSettingsPatch, log: (line: string) => void): HostLink {
   return createHostLink({
     start: ({ startHost }) => connectLocalHost(log, startHost),
+    restart: () => restartLocalHost(places(), launcherDeps(log)),
     settings,
     log,
     setTimeout: (run, ms) => setTimeout(run, ms),

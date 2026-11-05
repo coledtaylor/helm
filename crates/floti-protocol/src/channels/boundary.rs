@@ -115,7 +115,7 @@ pub const CLIENT_ONLY: &[Outside] = &[
     ),
     outside(
         "windowSessions:*",
-        "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, the count before it stops the host, and the pane layout its last run saved; every client sees every session, and which have a tab is each device's own",
+        "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, the count before it stops the host, what restarting this PC's host for an update ends and the restart itself, which the client's main process sends in place of a hello through a bridge of its own, and the pane layout its last run saved; every client sees every session, and which have a tab is each device's own",
     ),
     outside(
         "pluginBackground:*",

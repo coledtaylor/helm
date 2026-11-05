@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  LocalHostRestartOffer,
   ArchiveStats,
   ArchivedConversation,
   CachedProject,
@@ -87,6 +88,8 @@ import type {
   SshConfigHosts,
   WslDistroList
 } from '@helm/core/types'
+
+export type { LocalHostRestartOffer }
 import type { BrowserCommand } from './browserKeys'
 import type { ProbeOp, TermCreateOptions } from './protocol'
 
@@ -682,7 +685,20 @@ export type HostLinkOpened =
       appVersion: string
       deviceName?: string
     }
-  | { unreachable: string }
+  | {
+      unreachable: string
+      /** The host refused this Helm's `hello`: the versions it named, and the side to update. */
+      refused?: RefusedVersions
+    }
+
+/** What a host's refusal of a `hello` named: its protocol version, the client's, and which side to update. */
+export interface RefusedVersions {
+  host: { major: number; minor: number }
+  client: { major: number; minor: number }
+  update: 'host' | 'client'
+}
+
+
 
 /**
  * Where each host on another computer stands with this device, by its id
@@ -866,6 +882,22 @@ export interface IpcRequests {
    * fresh host. Main holds the host link, so main sends the stop.
    */
   'windowSessions:stopHost': { request: void; response: void }
+  /**
+   * What Restart host to update would do to this PC's host, asked through a
+   * bridge of main's own in place of a `hello`, so it reaches a host that
+   * refuses this Helm: the floti there, its sessions, and how many the restart
+   * ends. Changes nothing. Rejects with the sentence saying why when no host
+   * answered.
+   */
+  'windowSessions:restartAsk': { request: void; response: LocalHostRestartOffer }
+  /**
+   * Restarts this PC's host on the floti this Helm carries, once the user has
+   * agreed to what `windowSessions:restartAsk` said it ends: the host leaves
+   * its sessions in its keeper and exits, main starts the carried floti and
+   * connects, and every page connects again with nothing marked lost. Only
+   * ever on the user's click; Helm never restarts the host on its own.
+   */
+  'windowSessions:restartHost': { request: void; response: void }
   /**
    * What the hidden plugin host window has reported of the background pages
    * it runs, which Settings lays over the
@@ -2123,13 +2155,16 @@ export interface IpcEvents {
    * the sentence saying why. `planned` when main's link ended the host on
    * purpose (Stop host, or a quit), which is no crash; `restarts` when Helm
    * starts a new host in place of one that is gone, rather than waiting for
-   * it to answer again.
+   * it to answer again; `restarting` when the end is the user's Restart host
+   * to update, after which the page connects again at once and nothing is
+   * lost.
    */
   'hostLink:ended': {
     connection: number
     why: string | null
     planned: boolean
     restarts: boolean
+    restarting?: boolean
   }
 }
 
@@ -2198,6 +2233,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'windowSessions:lostLayout': true,
   'windowSessions:hostSessionCount': true,
   'windowSessions:stopHost': true,
+  'windowSessions:restartAsk': true,
+  'windowSessions:restartHost': true,
   'pluginBackground:states': true,
   'discovery:cached': true,
   'discovery:scan': true,

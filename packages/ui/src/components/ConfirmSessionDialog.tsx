@@ -9,7 +9,7 @@ export interface ConfirmSessionDialogProps {
    * Ending one tab's session, ending sessions because Helm is quitting, or
    * stopping this PC's host, which ends every session in it.
    */
-  kind: 'close-session' | 'quit' | 'stop-host'
+  kind: 'close-session' | 'quit' | 'stop-host' | 'restart-host'
   message: string
   detail: string
   /** What the agreeing button says; main decides, because it counts them. */

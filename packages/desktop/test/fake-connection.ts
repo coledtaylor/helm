@@ -173,6 +173,7 @@ export class FakeConnection {
 export interface FakeHostEnd {
   planned: boolean
   restarts: boolean
+  restarting?: boolean
 }
 
 /**

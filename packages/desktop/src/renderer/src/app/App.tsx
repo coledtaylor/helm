@@ -67,6 +67,9 @@ import {
   LOCAL_HOST_LABEL,
   failedLastLine,
   lineToTryByHand,
+  localHostVersions,
+  restartHostDetail,
+  restartHostQuestion,
   quitChoice,
   quitEndsSessions,
   withoutRemoteHost,
@@ -87,6 +90,7 @@ import {
   type RestoreOffer,
   type SavedPaneLayout,
   type SessionRecord,
+  type LocalHostRestartOffer,
 } from "@helm/core/types";
 import {
   AppShell,
@@ -225,6 +229,7 @@ import {
   helm,
   hostSessionTabs,
   hostState,
+  seenHostVersion,
   localHostConnection,
   remoteHosts as remoteHostLinks,
 } from "./bridge";
@@ -670,6 +675,15 @@ export function App(): JSX.Element {
   const launcherProfiles = useProfiles(newSession.host);
   // Whether the window has its host: lost from a crash until it is back.
   const hostLink = useSyncExternalStore(hostState.subscribe, hostState.get);
+  const seenLocalVersion = useSyncExternalStore(
+    seenHostVersion.subscribe,
+    seenHostVersion.get,
+  );
+  /** Which of this PC's host and this Helm is behind, while they differ (`localHostVersions`). */
+  const localVersions =
+    seenLocalVersion === null || info === null
+      ? null
+      : localHostVersions(seenLocalVersion, info.version);
   // Each host on another computer: where its link stands and what runs there.
   // A remote host's drop is its own and shows no host-stopped notice.
   const remoteView = useSyncExternalStore(
@@ -3580,6 +3594,34 @@ export function App(): JSX.Element {
   }, []);
 
   /**
+   * Restart host to update, on the user's click only: what it ends is asked
+   * of the host first and said in the question, Cancel changes nothing, and
+   * only the confirm restarts it. Helm never restarts the host on its own.
+   */
+  const [restartHostAsk, setRestartHostAsk] =
+    useState<LocalHostRestartOffer | null>(null);
+  const askRestartHost = useCallback(() => {
+    setStopHostError(null);
+    helm
+      .invoke("windowSessions:restartAsk")
+      .then(setRestartHostAsk, (error: unknown) =>
+        setStopHostError(
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+  }, []);
+  const restartHost = useCallback(() => {
+    setRestartHostAsk(null);
+    helm
+      .invoke("windowSessions:restartHost")
+      .catch((error: unknown) =>
+        setStopHostError(
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+  }, []);
+
+  /**
    * Rendered by both branches below: main holds the window's `close` open on
    * this promise, so a branch that did not draw the dialog would be a branch
    * Helm could not quit from until the fallback timer ran out.
@@ -3610,6 +3652,18 @@ export function App(): JSX.Element {
         sessionNames={[]}
         onConfirm={stopHost}
         onCancel={() => setStopHostAsk(null)}
+      />
+    );
+  const restartDialog =
+    restartHostAsk === null || info === null ? null : (
+      <ConfirmSessionDialog
+        kind="restart-host"
+        message={restartHostQuestion(restartHostAsk, info.version)}
+        detail={restartHostDetail(restartHostAsk)}
+        confirmLabel="Restart host"
+        sessionNames={[]}
+        onConfirm={restartHost}
+        onCancel={() => setRestartHostAsk(null)}
       />
     );
 
@@ -3761,6 +3815,7 @@ export function App(): JSX.Element {
         {harnessDialog}
         {templateDialogs}
         {confirmDialog}
+        {restartDialog}
       </div>
     );
   }
@@ -3845,7 +3900,10 @@ export function App(): JSX.Element {
             id: LOCAL_HOST_KEY,
             name: LOCAL_HOST_LABEL,
             quitEnds: quitEndsSessions(currentSettings),
-            onOpen: () => openSettings("sessions"),
+            versions: localVersions,
+            onRestart: askRestartHost,
+            onOpen: () =>
+              openSettings(localVersions === null ? "sessions" : "hosts"),
           },
           ...remoteHosts.map((host) => {
             const lastLine = failedLastLine(
@@ -4122,6 +4180,11 @@ export function App(): JSX.Element {
       }
       hostUpdateRequest={hostUpdateRequest}
       onReconnectHost={(id) => remoteHostLinks.reconnect(id)}
+      localHost={
+        localVersions === null
+          ? null
+          : { versions: localVersions, onRestart: askRestartHost }
+      }
       devices={devicesSettings}
       filesWrap={filesWrap}
       onFilesWrapChange={setFilesWrap}
@@ -5556,6 +5619,7 @@ export function App(): JSX.Element {
         {harnessDialog}
         {templateDialogs}
         {confirmDialog}
+        {restartDialog}
         {configEntryDialog}
         {addingHost && (
           <AddHostDialog

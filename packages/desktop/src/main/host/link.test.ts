@@ -201,6 +201,77 @@ describe('the link to the local host', () => {
     expect(starts).toBe(2)
   })
 
+  describe('Restart host to update', () => {
+    it('S12: restarts the host, holds every connect until it has gone, plans the end, and connects to the new host', async () => {
+      const first = new FakeConnection()
+      const second = new FakeConnection()
+      const started = [fakeLocalHost(first, true), fakeLocalHost(second, true)]
+      const starts: boolean[] = []
+      let gone: () => void = () => undefined
+      const timers = steppedTimers()
+      const link = createHostLink({
+        start: ({ startHost }) => {
+          starts.push(startHost)
+          return Promise.resolve(started[starts.length - 1] as ReturnType<typeof fakeLocalHost>)
+        },
+        // The host closes the connection once it answered, then is gone.
+        restart: () =>
+          new Promise<void>((resolve) => {
+            first.close()
+            gone = resolve
+          }),
+        log: () => undefined,
+        ...timers
+      })
+      const connected: HostConnection[] = []
+      link.onConnected((connection) => {
+        connected.push(connection)
+      })
+      await link.connection()
+
+      const restarting = link.restartHost()
+      expect(link.restarting()).toBe(true)
+      expect(link.endedOnPurpose()).toBe(true)
+      // A page asking now waits for the new host, never the one exiting.
+      const asked = link.connection()
+      await Promise.resolve()
+      expect(starts).toEqual([true])
+      gone()
+      await restarting
+      await expect(asked).resolves.toBe(second.asConnection())
+
+      expect(starts).toEqual([true, true])
+      expect(connected).toEqual([first.asConnection(), second.asConnection()])
+      expect(link.restarting()).toBe(false)
+      // Nothing was retried as after a crash.
+      expect(timers.pending()).toEqual([])
+    })
+
+    it('S11: changes nothing and stays connected when the host could not be asked', async () => {
+      const first = new FakeConnection()
+      const link = createHostLink({
+        start: () => Promise.resolve(fakeLocalHost(first, true)),
+        restart: () => Promise.reject(new LocalHostError('No local host answered on its socket')),
+        log: () => undefined,
+        ...steppedTimers()
+      })
+      await link.connection()
+
+      await expect(link.restartHost()).rejects.toThrow('No local host answered')
+      expect(link.restarting()).toBe(false)
+      expect(link.current()).toBe(first.asConnection())
+    })
+
+    it('S11: a link with no restart never restarts its host', async () => {
+      const link = createHostLink({
+        start: () => Promise.resolve(fakeLocalHost(new FakeConnection(), true)),
+        log: () => undefined,
+        ...steppedTimers()
+      })
+      await expect(link.restartHost()).rejects.toThrow('Helm does not restart the local host.')
+    })
+  })
+
   describe('when the connection ends without a stop or a quit', () => {
     /** Lets every promise already settled run its callbacks. */
     const settle = async (): Promise<void> => {

@@ -32,6 +32,7 @@ import type {
   EventChannel,
   EventPayload,
   IpcRequests,
+  LocalHostRestartOffer,
   OwnAppInfo,
   RequestChannel,
   SendChannel,
@@ -197,6 +198,10 @@ export interface LocalHostControl {
   sessionCount(): Promise<number>
   /** Stops it with the plain-stop reason: every session ends, and none is offered back. */
   stop(): Promise<void>
+  /** What restarting it on the floti this Helm carries would end, asked without changing anything. */
+  restartAsk(): Promise<LocalHostRestartOffer>
+  /** Restarts it on the floti this Helm carries and connects to the new host; on the user's click only. */
+  restart(): Promise<void>
 }
 
 /**
@@ -341,6 +346,8 @@ export function registerIpc(ctx: IpcContext): void {
     'windowSessions:lostLayout': () => services.lost.layout,
     'windowSessions:hostSessionCount': () => ctx.localHost.sessionCount(),
     'windowSessions:stopHost': () => ctx.localHost.stop(),
+    'windowSessions:restartAsk': () => ctx.localHost.restartAsk(),
+    'windowSessions:restartHost': () => ctx.localHost.restart(),
     'pluginBackground:states': () => [...ctx.hostPlugins.reports(), ...ctx.remotePlugins.reports()],
 
     // The window keeps the host's half of the settings over its own

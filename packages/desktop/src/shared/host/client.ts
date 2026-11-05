@@ -9,6 +9,7 @@ import {
   type Message,
   type RequestChannels,
   type ProtocolVersion,
+  type RestartState,
   type StreamChannels,
   type UpdateSide,
   type Welcome
@@ -76,6 +77,11 @@ export interface ConnectOptions {
   deviceName?: string
   /** A line for Helm's log. Never given a payload, a frame or stream bytes. */
   log?: (line: string) => void
+  /**
+   * The protocol the `hello` names: `PROTOCOL_VERSION` when absent. Only a
+   * test names another, to meet a host on either side of a version.
+   */
+  protocol?: ProtocolVersion
 }
 
 /** The host refused the `hello`: a sentence naming both versions and which side to update. */
@@ -186,6 +192,67 @@ export function connectHost(options: ConnectOptions): Promise<HostConnection> {
   return new Connection(options).open()
 }
 
+export interface RestartFrameOptions {
+  transport: ByteTransport
+  /** Helm's own version, for the frame's client name. */
+  appVersion: string
+  deviceName?: string
+  /** False asks what a restart would mean (`restartAsk`); true restarts the host (`restart`). */
+  restart: boolean
+}
+
+/**
+ * Sends `restartAsk` or `restart` in place of a `hello` and resolves with the
+ * host's `restartState`, after which the host closes the connection. These
+ * frames are frozen across protocol versions, so they reach a host that
+ * would refuse this Helm's `hello`. Rejects with the sentence saying why when
+ * the host answers anything else or the connection ends first.
+ */
+export function restartFrame(options: RestartFrameOptions): Promise<RestartState> {
+  return new Promise((resolve, reject) => {
+    const decoder = new FrameDecoder()
+    let settled = false
+    const settle = (outcome: { state: RestartState } | { why: string }): void => {
+      if (settled) return
+      settled = true
+      options.transport.end()
+      if ('state' in outcome) resolve(outcome.state)
+      else reject(new HostConnectionEnded(outcome.why))
+    }
+    options.transport.start({
+      data(bytes) {
+        if (settled) return
+        decoder.push(bytes)
+        let next
+        try {
+          next = decoder.next()
+        } catch (error) {
+          settle({ why: `The local host sent a frame Helm cannot read: ${(error as FrameError).message}` })
+          return
+        }
+        if (next === null) return
+        if ('malformed' in next) {
+          settle({ why: `The local host sent a frame Helm cannot read: ${next.malformed.message}` })
+        } else if (next.message.type === 'restartState') {
+          const { type: _type, ...state } = next.message
+          settle({ state })
+        } else {
+          settle({ why: `The local host answered with ${next.message.type} rather than its restart state.` })
+        }
+      },
+      end(failure) {
+        settle({ why: failure ?? decoder.finish() ?? 'The local host closed the connection before it answered.' })
+      }
+    })
+    const client = {
+      name: `Helm ${options.appVersion}`,
+      kind: 'desktop' as const,
+      ...(options.deviceName !== undefined && options.deviceName !== '' ? { deviceName: options.deviceName } : {})
+    }
+    options.transport.write(encodeFrame(options.restart ? { type: 'restart', client } : { type: 'restartAsk', client }))
+  })
+}
+
 type Pending = {
   channel: string
   resolve: (value: unknown) => void
@@ -254,8 +321,8 @@ class Connection implements HostConnection {
     this.send({
       type: 'hello',
       protocol: {
-        major: PROTOCOL_VERSION.major,
-        minor: PROTOCOL_VERSION.minor
+        major: (this.options.protocol ?? PROTOCOL_VERSION).major,
+        minor: (this.options.protocol ?? PROTOCOL_VERSION).minor
       },
       client: {
         name: `Helm ${this.options.appVersion}`,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { HostRefusedError } from '../../../../shared/host/client'
 import { FrameDecoder, encodeFrame } from '../../../../shared/host/frame'
 import { PROTOCOL_VERSION, type Message } from '../../../../shared/host/protocol'
 import { RECONNECT_FIRST_MS } from '../../../../shared/host/reconnect'
@@ -311,6 +312,55 @@ describe('a Helm page’s own connection to the local host', () => {
     expect(ends).toEqual([{ planned: true, restarts: false }])
     expect(w.timers.pending()).toEqual([])
     expect(w.main.opens).toHaveLength(1)
+  })
+
+  it('S12: after a Restart host to update it connects to the new host at once, without waiting', async () => {
+    const w = world()
+    const ends: HostEnd[] = []
+    let connects = 0
+    w.link.onEnded((end) => ends.push(end))
+    w.link.onConnected(() => (connects += 1))
+    await w.link.connection()
+
+    w.main.end(1, null, { planned: true, restarts: true, restarting: true })
+    await settle()
+
+    expect(ends).toEqual([{ planned: true, restarts: true, restarting: true }])
+    expect(w.timers.pending()).toEqual([])
+    expect(w.main.opens).toHaveLength(2)
+    expect(connects).toBe(2)
+  })
+
+  it('S7: a refusal from this PC’s host keeps both versions and the side to update, from main or the host', async () => {
+    const w = world()
+    const refusals: unknown[] = []
+    w.link.onRefused?.((refused) => refusals.push(refused))
+    const versions = { host: { major: 2, minor: 0 }, client: { major: 2, minor: 1 }, update: 'host' as const }
+
+    // Main's own link was refused.
+    w.main.answer = () => ({ unreachable: 'This client speaks Floti protocol 2.1 and the host speaks 2.0.', refused: versions })
+    const fromMain = await w.link.connection().then(
+      () => null,
+      (error: unknown) => error
+    )
+    expect((fromMain as HostRefusedError).refused).toEqual(versions)
+
+    // The page's own hello was refused.
+    w.main.answer = () => ({ connection: 5, appVersion: '2.9.0' })
+    w.main.welcome = {
+      refused: {
+        type: 'refused',
+        ...versions,
+        message: 'This client speaks Floti protocol 2.1 and the host speaks 2.0. Update the host.'
+      }
+    }
+    const fromHost = await w.link.connection().then(
+      () => null,
+      (error: unknown) => error
+    )
+    expect(fromHost).toBeInstanceOf(HostRefusedError)
+    expect((fromHost as HostRefusedError).refused).toEqual(versions)
+    expect(refusals).toEqual([versions, versions])
   })
 
   it('takes a connection the page closed itself for no loss of the host', async () => {

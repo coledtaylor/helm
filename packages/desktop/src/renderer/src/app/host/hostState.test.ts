@@ -10,13 +10,13 @@ describe('whether the window has its host', () => {
     let changes = 0
     state.subscribe(() => (changes += 1))
     await link.connection()
-    expect(state.get()).toEqual({ lost: null, reconnects: 0 })
+    expect(state.get()).toEqual({ lost: null, restarting: false, reconnects: 0 })
 
     link.lose({ planned: false, restarts: true })
-    expect(state.get()).toEqual({ lost: { restarts: true }, reconnects: 0 })
+    expect(state.get()).toEqual({ lost: { restarts: true }, restarting: false, reconnects: 0 })
 
     await link.reconnect(new FakeConnection())
-    expect(state.get()).toEqual({ lost: null, reconnects: 1 })
+    expect(state.get()).toEqual({ lost: null, restarting: false, reconnects: 1 })
     expect(changes).toBe(2)
   })
 
@@ -28,6 +28,18 @@ describe('whether the window has its host', () => {
     link.lose({ planned: true, restarts: false })
     await link.reconnect(new FakeConnection())
 
-    expect(state.get()).toEqual({ lost: null, reconnects: 0 })
+    expect(state.get()).toEqual({ lost: null, restarting: false, reconnects: 0 })
+  })
+
+  it('S12: a restart for an update marks nothing lost, and the new host is asked for what it offers back', async () => {
+    const link = reconnectingReach(new FakeConnection())
+    const state = createHostState(link)
+    await link.connection()
+
+    link.lose({ planned: true, restarts: true, restarting: true })
+    expect(state.get()).toEqual({ lost: null, restarting: true, reconnects: 0 })
+
+    await link.reconnect(new FakeConnection())
+    expect(state.get()).toEqual({ lost: null, restarting: false, reconnects: 1 })
   })
 })

@@ -3,8 +3,9 @@ import { posix, win32 } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
 import { RECONNECT_FIRST_MS } from '../../shared/host/reconnect'
 import { unreachable } from '../../shared/host/sentences'
-import type { AppMode } from '../../shared/ipc'
-import { HostRefusedError, connectHost, type HostConnection } from './client'
+import { HostRefusedError, connectHost, restartFrame, streamTransport, type HostConnection } from './client'
+import { KEEPER_LINK_VERSION, type ProtocolVersion, type RestartState, type UpdateSide } from './protocol'
+import type { AppMode, LocalHostRestartOffer } from '../../shared/ipc'
 
 /**
  * Finds the local host and connects the desktop to it, through the `floti`
@@ -150,6 +151,8 @@ export interface LauncherDeps {
   log: (line: string) => void
   setTimeout: (run: () => void, ms: number) => unknown
   clearTimeout: (timer: unknown) => void
+  /** The protocol the `hello` names, only ever set by a test; `PROTOCOL_VERSION` otherwise. */
+  protocol?: ProtocolVersion
 }
 
 /** A connection to the local host. */
@@ -167,6 +170,27 @@ export interface LocalHost {
 /** Why the desktop could not reach the local host, as one sentence that says the setting can be turned off. */
 export class LocalHostError extends Error {
   override name = 'LocalHostError'
+}
+
+/** What a refused `hello` named: both protocol versions, and the side to update. */
+export interface RefusedVersions {
+  host: ProtocolVersion
+  client: ProtocolVersion
+  update: UpdateSide
+}
+
+/**
+ * The local host refused this Helm's `hello`: its sentence, and the versions
+ * it named, so the window can say which side to update and offer what fits.
+ */
+export class LocalHostRefusedError extends LocalHostError {
+  override name = 'LocalHostRefusedError'
+  constructor(
+    message: string,
+    readonly refused: RefusedVersions
+  ) {
+    super(message)
+  }
 }
 
 export function pathsFor(platform: NodeJS.Platform): typeof posix {
@@ -376,6 +400,7 @@ export async function startLocalHost(
         transport: { input: child.stdout, output: child.stdin },
         appVersion: deps.appVersion,
         ...(deps.deviceName !== undefined ? { deviceName: deps.deviceName } : {}),
+        ...(deps.protocol !== undefined ? { protocol: deps.protocol } : {}),
         log: deps.log
       })
       return { connection, exited, child }
@@ -383,7 +408,8 @@ export async function startLocalHost(
       closeInput(child)
       if (error instanceof HostRefusedError) {
         await exited
-        throw failure(clause(error.message))
+        const sentence = unreachable(clause(error.message))
+        throw error.refused === null ? new LocalHostError(sentence) : new LocalHostRefusedError(sentence, error.refused)
       }
       return { exit: await exited }
     }
@@ -446,6 +472,82 @@ export async function startLocalHost(
       })()
       return closing
     }
+  }
+}
+
+/**
+ * Sends the local host a restart frame through a `floti bridge` of its own,
+ * in place of a `hello`: `restartAsk` (what a restart would mean) or, with
+ * `restart`, `restart` itself. Resolves with the host's answer, or null when
+ * no host answered on the socket. Never starts a host. Rejects with a
+ * `LocalHostError` for any other failure.
+ */
+export async function localHostRestartFrame(
+  places: HostPlaces,
+  deps: Omit<LauncherDeps, 'setTimeout' | 'clearTimeout'>,
+  restart: boolean
+): Promise<RestartState | null> {
+  const binary = flotiBinary(places, deps)
+  if (!deps.exists(binary)) throw failure(`Helm could not find the local host program at ${binary}`)
+  const child = deps.spawn(binary, ['bridge', clientFolder(places, deps.platform)], {
+    env: hostEnvironment(places, deps),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true
+  })
+  const exited = exitOf(child)
+  child.stderr?.resume()
+  if (child.stdout === null || child.stdin === null) {
+    closeInput(child)
+    throw bridgeFailure(await exited, binary, false)
+  }
+  try {
+    const state = await restartFrame({
+      transport: streamTransport(child.stdout, child.stdin),
+      appVersion: deps.appVersion,
+      ...(deps.deviceName !== undefined ? { deviceName: deps.deviceName } : {}),
+      restart
+    })
+    closeInput(child)
+    await exited
+    return state
+  } catch {
+    closeInput(child)
+    const exit = await exited
+    if (exit.error === undefined && exit.code === BRIDGE_EXIT.unreachable) return null
+    throw bridgeFailure(exit, binary, false)
+  }
+}
+
+/**
+ * What a host's restart state means for the floti this Helm carries: its
+ * sessions are taken over, and none ends, only when its keeper speaks this
+ * floti's keeper link version; with no keeper, or another link, every one
+ * ends and the new host offers them back.
+ */
+export function restartOffer(state: RestartState): LocalHostRestartOffer {
+  const keeps = state.keeperLink === KEEPER_LINK_VERSION
+  return { hostVersion: state.hostVersion, sessions: state.sessions, ends: keeps ? 0 : state.sessions }
+}
+
+/**
+ * Restarts the local host for an update: sends it `restart`, which leaves
+ * every session running in its keeper when it has one and exits, then waits
+ * until no host answers on the socket, trying every `HOST_RETRY_MS` up to the
+ * start deadline. Resolves with the host's answer; the caller then starts the
+ * floti this Helm carries, which takes the sessions over when it speaks the
+ * keeper's link. Only ever on the user's click.
+ */
+export async function restartLocalHost(places: HostPlaces, deps: LauncherDeps): Promise<RestartState> {
+  const state = await localHostRestartFrame(places, deps, true)
+  if (state === null) throw failure('No local host answered on its socket, so there was nothing to restart')
+  deps.log(`host: restarting the local host on floti ${state.hostVersion} for an update`)
+  for (let waited = 0; ; waited += HOST_RETRY_MS) {
+    if (waited >= HOST_START_DEADLINE_MS) {
+      throw failure('The local host was asked to restart and was still answering after 30 seconds')
+    }
+    await new Promise<void>((resolve) => deps.setTimeout(resolve, HOST_RETRY_MS))
+    const still = await localHostRestartFrame(places, deps, false).catch(() => 'failed' as const)
+    if (still === null) return state
   }
 }
 

@@ -17,7 +17,11 @@ import type { HostSettingsPatch } from './protocol'
  * decides its own exit. Quitting is bounded: a host that does not answer in
  * time is let go of all the same, and a Helm that crashes or is killed tells
  * it nothing. The user can stop it from Settings (`stopHost`), which ends
- * every session; the next request then starts a fresh one.
+ * every session; the next request then starts a fresh one. Or, when this
+ * Helm carries a newer floti, they can restart it for the update
+ * (`restartHost`): the host leaves its sessions running in its keeper and
+ * exits, and the link starts the floti this Helm carries and connects to it.
+ * Neither end is a crash, so neither is retried or marked lost.
  *
  * A connection that ends without a stop or a quit is a host that crashed or
  * was killed. The link then connects again by itself, the first try after
@@ -92,8 +96,20 @@ export interface HostLink {
    */
   stopHost(): Promise<void>
   /**
+   * The user asked, and agreed to what it ends: restarts the host for an
+   * update (`deps.restart`), then connects to the new host this Helm starts,
+   * as after any ended connection. Every `onConnected` listener runs again
+   * on the new connection. While it runs, `connection()` waits for it rather
+   * than reaching the host that is exiting. Rejects with the sentence to show,
+   * and changes nothing, when the host could not be asked.
+   */
+  restartHost(): Promise<void>
+  /** Whether a restart for an update is under way: the connection's end is planned, and a new host follows at once. */
+  restarting(): boolean
+  /**
    * Whether the connection there is, or the last one, is ending or ended
-   * because Helm stopped the host or is quitting: an end that is no crash.
+   * because Helm stopped or restarted the host or is quitting: an end that is
+   * no crash.
    */
   endedOnPurpose(): boolean
   /** Whether Helm starts a new host if the one it reaches now, or last reached, is gone. */
@@ -112,6 +128,11 @@ export interface HostLinkDeps {
   name?: string
   /** Hears why each connect attempt failed, before any retry is scheduled. */
   onAttemptFailed?: (error: Error) => void
+  /**
+   * Restarts the host for an update and resolves once it has gone
+   * (`restartLocalHost`); absent for a host this link does not restart.
+   */
+  restart?: () => Promise<unknown>
   log: (line: string) => void
   setTimeout: (run: () => void, ms: number) => unknown
   clearTimeout: (timer: unknown) => void
@@ -125,6 +146,10 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
   let stopping: Promise<void> | null = null
   /** Set while the user's Stop host is under way, until the next connect. */
   let stoppingHost = false
+  /** Set while the user's Restart host to update is under way, until the new host is connected or the restart failed. */
+  let restartingHost = false
+  /** Settles once a restart's old host has gone; `connection()` waits on it. */
+  let restartGate: Promise<void> | null = null
   /** Whether the host reached now, or last, was started by a desktop. */
   let desktopHost = true
   /** Whether the next connect may start a host when none answers. */
@@ -190,8 +215,8 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
       if (local !== started) return
       local = null
       attempt = null
-      if (stopping !== null || stoppingHost) {
-        // Stopped on purpose: the next request starts a fresh host.
+      if (stopping !== null || stoppingHost || restartingHost) {
+        // Stopped or restarted on purpose: the next request starts a fresh host.
         mayStart = true
         return
       }
@@ -226,6 +251,7 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
   const link: HostLink = {
     connection() {
       if (stopping !== null) return Promise.reject(new Error('Helm is quitting.'))
+      if (restartGate !== null) return restartGate.then(() => link.connection())
       attempt ??= connect().catch((error: unknown) => {
         attempt = null
         deps.onAttemptFailed?.(error as Error)
@@ -269,7 +295,47 @@ export function createHostLink(deps: HostLinkDeps): HostLink {
       if (host !== null && host.connection === connection) await bounded(host.close())
     },
 
-    endedOnPurpose: () => stopping !== null || stoppingHost,
+    async restartHost() {
+      const { restart } = deps
+      if (restart === undefined) throw new Error(`Helm does not restart ${name}.`)
+      if (stopping !== null) throw new Error('Helm is quitting.')
+      if (restartGate !== null) return restartGate
+      let opened: () => void = () => undefined
+      restartGate = new Promise<void>((resolve) => {
+        opened = resolve
+      })
+      restartingHost = true
+      try {
+        await restart()
+        // The old host closed the connection; this makes sure the bridge went with it.
+        const before = local
+        if (before !== null) await bounded(before.close())
+        local = null
+        attempt = null
+        mayStart = true
+      } catch (error) {
+        restartingHost = false
+        // A host that went all the same is connected to again, as after a crash.
+        if (local === null) scheduleRetry()
+        throw error
+      } finally {
+        restartGate = null
+        opened()
+      }
+      try {
+        await link.connection()
+      } catch (error) {
+        // The new host did not start or answer: tried again, as after a crash.
+        scheduleRetry()
+        throw error
+      } finally {
+        restartingHost = false
+      }
+    },
+
+    restarting: () => restartingHost,
+
+    endedOnPurpose: () => stopping !== null || stoppingHost || restartingHost,
 
     restartsHost: () => (local === null ? mayStart : desktopHost),
 

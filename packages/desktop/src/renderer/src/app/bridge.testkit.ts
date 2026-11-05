@@ -1,6 +1,7 @@
 import { LOCAL_HOST_KEY } from '@helm/core/types'
 import type { ConnectedHosts } from './host/hostBridges'
 import type { HostState, HostStateStore } from './host/hostState'
+import type { SeenHostVersionStore } from './host/hostVersions'
 import type { Devices } from './host/devices'
 import type { RemoteHostsStore } from './host/remoteHosts'
 import type {
@@ -205,11 +206,17 @@ export const hostSessionTabs = {
   }
 }
 
-const CONNECTED: HostState = { lost: null, reconnects: 0 }
+const CONNECTED: HostState = { lost: null, restarting: false, reconnects: 0 }
 
 /** The window's host, as `bridge.ts` reports it: connected, never lost, unless a test says otherwise. */
 export const hostState: HostStateStore = {
   get: () => CONNECTED,
+  subscribe: () => () => undefined
+}
+
+/** This PC's host has named no version, so the window offers no restart, unless a test says otherwise. */
+export const seenHostVersion: SeenHostVersionStore = {
+  get: () => null,
   subscribe: () => () => undefined
 }
 

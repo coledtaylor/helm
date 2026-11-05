@@ -52,7 +52,7 @@ import {
 } from './SettingsKit'
 import { CheckIcon, CloseIcon, PlusIcon, RefreshIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
-import { HostsSettings, type HostInstallActions, type SettingsHost } from './HostsSettings'
+import { HostsSettings, type HostInstallActions, type HostsSettingsProps, type SettingsHost } from './HostsSettings'
 import { DevicesSettings, type DevicesSettingsProps } from './DevicesSettings'
 
 /**
@@ -266,6 +266,8 @@ export interface SettingsPaneProps {
   hostUpdateRequest?: { id: string; nonce: number } | null | undefined
   /** A host's Reconnect now: its link tries at once rather than after the wait. */
   onReconnectHost?: ((id: string) => void) | undefined
+  /** This PC's host, while it and this Helm are on different versions (`HostsSettings`' notice). */
+  localHost?: HostsSettingsProps['localHost']
   /** Settings > Devices: the devices attached to each connected host, and Disconnect. */
   devices: DevicesSettingsProps
 }
@@ -387,6 +389,7 @@ export function SettingsPane({
   onHostInstalled,
   hostUpdateRequest = null,
   onReconnectHost,
+  localHost = null,
   devices
 }: SettingsPaneProps): JSX.Element {
   const found = status !== null && status.path !== null && status.version !== null
@@ -697,6 +700,7 @@ export function SettingsPane({
               onInstalled={onHostInstalled}
               updateRequest={hostUpdateRequest}
               onReconnect={onReconnectHost}
+              localHost={localHost}
             />
           )}
 

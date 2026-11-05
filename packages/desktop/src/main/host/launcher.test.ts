@@ -1,17 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { PATIENCE } from '../../../../../test/patience'
-import { FakeChild, connects, type Program } from '../../../test/fake-child'
+import { FakeChild, answersRestart, connects, type Program } from '../../../test/fake-child'
 import { FrameDecoder, encodeFrame } from './frame'
+import { KEEPER_LINK_VERSION } from './protocol'
 import {
   HOST_ALREADY_RUNNING_EXIT,
   HOST_RETRY_MS,
   HOST_START_DEADLINE_MS,
   LocalHostError,
+  LocalHostRefusedError,
   SOCKET_PATH_MAX,
   clientFolder,
   desktopArgs,
   flotiBinary,
   hostEnvironment,
+  localHostRestartFrame,
+  restartLocalHost,
+  restartOffer,
   startLocalHost,
   type HostPlaces,
   type LauncherDeps
@@ -604,6 +609,88 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
       `This host speaks protocol 2.0 and Helm speaks 1.0: update Helm${END}`
     )
+  })
+
+  it('S7: keeps the versions a refusal named, and the side it said to update', async () => {
+    const refuses: Program = (child) => {
+      child.stdin.once('data', () => {
+        child.stdout.write(
+          encodeFrame({
+            type: 'refused',
+            host: { major: 2, minor: 0 },
+            client: { major: 2, minor: 1 },
+            update: 'host',
+            message: 'This client speaks Floti protocol 2.1 and the host speaks 2.0. Update the host.'
+          })
+        )
+      })
+      child.stdin.once('end', () => child.exit(6)).resume()
+    }
+    const world = new World({ bridges: [refuses] })
+    const error = await startLocalHost(WIN_PLACES, world.deps()).then(
+      () => null,
+      (caught: unknown) => caught
+    )
+    expect(error).toBeInstanceOf(LocalHostRefusedError)
+    expect((error as LocalHostRefusedError).refused).toEqual({
+      host: { major: 2, minor: 0 },
+      client: { major: 2, minor: 1 },
+      update: 'host'
+    })
+    expect((error as Error).message).toContain('2.1 and the host speaks 2.0. Update the host')
+    // Refused, it never starts a host of its own.
+    expect(world.programs()).toEqual([`bridge ${clientFolder(WIN_PLACES, 'win32')}`])
+  })
+
+  describe('Restart host to update', () => {
+    it('S14: asks in place of a hello, and a keeper on this floti\u2019s link version ends no session', async () => {
+      const asked: string[] = []
+      const world = new World({
+        bridges: [answersRestart({ hostVersion: '2.4.0', sessions: 3, keeperLink: KEEPER_LINK_VERSION }, asked)]
+      })
+      const state = await localHostRestartFrame(WIN_PLACES, world.deps(), false)
+      expect(asked).toEqual(['restartAsk'])
+      expect(state).not.toBeNull()
+      expect(restartOffer(state!)).toEqual({ hostVersion: '2.4.0', sessions: 3, ends: 0 })
+    })
+
+    it('S13: a keeper on another link version, or a host with none, ends every session', () => {
+      const protocol = { major: 2, minor: 0 }
+      expect(
+        restartOffer({ hostVersion: '2.4.0', protocol, sessions: 2, keeperLink: KEEPER_LINK_VERSION + 1 })
+      ).toEqual({ hostVersion: '2.4.0', sessions: 2, ends: 2 })
+      expect(restartOffer({ hostVersion: '2.4.0', protocol, sessions: 2, keeperLink: null })).toEqual({
+        hostVersion: '2.4.0',
+        sessions: 2,
+        ends: 2
+      })
+    })
+
+    it('says no host answered, rather than failing, when nothing is on the socket', async () => {
+      const world = new World({ bridges: [exits(3)] })
+      expect(await localHostRestartFrame(WIN_PLACES, world.deps(), false)).toBeNull()
+    })
+
+    it('S12: restarts the host, then waits until no host answers before the new one is started', async () => {
+      const asked: string[] = []
+      const world = new World({
+        bridges: [
+          answersRestart({ hostVersion: '2.4.0', sessions: 1, keeperLink: KEEPER_LINK_VERSION }, asked),
+          // Still exiting: it answers one more ask, then is gone.
+          answersRestart({ hostVersion: '2.4.0', sessions: 1, keeperLink: KEEPER_LINK_VERSION }, asked),
+          exits(3)
+        ]
+      })
+      const restarting = restartLocalHost(WIN_PLACES, world.deps())
+      await expect.poll(() => world.timers.length, { timeout: PATIENCE }).toBe(1)
+      world.timers[0]!()
+      await expect.poll(() => world.timers.length, { timeout: PATIENCE }).toBe(2)
+      world.timers[1]!()
+      expect((await restarting).hostVersion).toBe('2.4.0')
+      expect(asked).toEqual(['restart', 'restartAsk'])
+      // Only bridges: the new host is the link's to start.
+      expect(world.programs().every((program) => program.startsWith('bridge '))).toBe(true)
+    })
   })
 
   it('logs nothing either program prints', async () => {

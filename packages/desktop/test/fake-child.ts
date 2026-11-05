@@ -88,3 +88,35 @@ export const connects: Program = (child) => {
   child.stdin.once('end', () => child.exit(0))
 }
 
+/**
+ * A bridge to a host that answers a restart frame with `state`, records the
+ * frame's type in `asked`, then closes the connection as the host does.
+ */
+export function answersRestart(
+  state: { hostVersion: string; sessions: number; keeperLink: number | null },
+  asked: string[] = []
+): Program {
+  return (child) => {
+    const decoder = new FrameDecoder()
+    child.stdin.on('data', (chunk: Uint8Array) => {
+      decoder.push(chunk)
+      for (let next = decoder.next(); next !== null; next = decoder.next()) {
+        if (!('message' in next)) continue
+        const { type } = next.message
+        if (type !== 'restartAsk' && type !== 'restart') continue
+        asked.push(type)
+        child.stdout.write(
+          encodeFrame({
+            type: 'restartState',
+            hostVersion: state.hostVersion,
+            protocol: { major: PROTOCOL_VERSION.major, minor: PROTOCOL_VERSION.minor },
+            sessions: state.sessions,
+            keeperLink: state.keeperLink
+          })
+        )
+        child.exit(6)
+      }
+    })
+  }
+}
+
