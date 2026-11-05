@@ -3,7 +3,7 @@ import { FakeConnection, fakeLocalHost } from '../../../test/host-connection'
 import type { HostConnection } from '../../shared/host/client'
 import type * as P from '../../shared/host/protocol'
 import { RECONNECT_MOST_MS } from '../../shared/host/reconnect'
-import { HOST_RETRY_MS, LocalHostError } from './launcher'
+import { HOST_RETRY_MS, LocalHostError, LocalHostRefusedError } from './launcher'
 import { HOST_STOP_DEADLINE_MS, createHostLink } from './link'
 import { hostSettingsFor } from './sessions'
 
@@ -260,6 +260,56 @@ describe('the link to the local host', () => {
       await expect(link.restartHost()).rejects.toThrow('No local host answered')
       expect(link.restarting()).toBe(false)
       expect(link.current()).toBe(first.asConnection())
+    })
+
+    it('S15: a host on protocol 1.x that refuses is tried again with the backoff, never stopped or replaced, and once it is gone the carried floti is started and connected', async () => {
+      const timers = steppedTimers()
+      const carried = new FakeConnection()
+      const starts: boolean[] = []
+      let oldHostRunning = true
+      let restarts = 0
+      const link = createHostLink({
+        start: ({ startHost }) => {
+          starts.push(startHost)
+          // While the 1.x host runs it answers and refuses; once the user
+          // stopped it from its menu, the launcher starts the floti Helm carries.
+          return oldHostRunning
+            ? Promise.reject(
+                new LocalHostRefusedError(
+                  'This PC’s host speaks Floti protocol 1.4, older than this Helm’s 2.0.',
+                  { host: { major: 1, minor: 4 }, client: { major: 2, minor: 0 }, update: 'host' }
+                )
+              )
+            : Promise.resolve(fakeLocalHost(carried, true))
+        },
+        restart: () => {
+          restarts += 1
+          return Promise.resolve()
+        },
+        log: () => undefined,
+        ...timers
+      })
+      const settle = async (): Promise<void> => {
+        for (let i = 0; i < 20; i++) await Promise.resolve()
+      }
+      link.keepConnected()
+      await settle()
+      expect(timers.pending()).toEqual([HOST_RETRY_MS])
+      timers.fireAll()
+      await settle()
+      expect(timers.pending()).toEqual([HOST_RETRY_MS * 2])
+      expect(link.current()).toBeNull()
+
+      oldHostRunning = false
+      timers.fireAll()
+      await settle()
+
+      expect(link.current()).toBe(carried.asConnection())
+      expect(starts).toEqual([true, true, true])
+      expect(timers.pending()).toEqual([])
+      // Nothing restarted, stopped or quit the refusing host.
+      expect(restarts).toBe(0)
+      expect(carried.payloads('host:stop')).toEqual([])
     })
 
     it('S11: a link with no restart never restarts its host', async () => {

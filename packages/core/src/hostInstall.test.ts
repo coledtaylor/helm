@@ -246,7 +246,7 @@ describe('what is said of this PC’s host’s version', () => {
     )
   })
 
-  it('S15: a host on protocol 1.x is told to stop through Stop host in its notification-area menu, which ends its sessions, and where they are offered back', () => {
+  it('S15: a host on protocol 1.x is told to stop through Stop host in its notification-area menu, which ends its sessions, after which Helm starts the host it carries and History offers them to resume', () => {
     const sentence = localHostVersionsSentence({
       older: 'host',
       host: 'protocol 1.4',

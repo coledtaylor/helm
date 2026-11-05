@@ -3650,6 +3650,7 @@ export function App(): JSX.Element {
         message={restartHostQuestion(restartHostAsk, info.version)}
         detail={restartHostDetail(restartHostAsk)}
         confirmLabel="Restart host"
+        confirmTone={restartHostAsk.ends > 0 ? "danger" : "primary"}
         sessionNames={[]}
         onConfirm={restartHostFlow.confirm}
         onCancel={restartHostFlow.cancel}

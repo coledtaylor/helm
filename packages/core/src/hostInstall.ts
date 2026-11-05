@@ -209,7 +209,8 @@ export function hostFlotiOlder(hostVersion: string, helmVersion: string): boolea
  * - `older: 'host'`: the host runs an older floti, and is offered Restart
  *   host to update. With `stopFromMenu` it speaks protocol 1.x, which has no
  *   restart: it is stopped from the Stop host item in its notification-area
- *   menu, and the next Helm start starts the floti this Helm carries.
+ *   menu, which ends its sessions. Once it is gone Helm starts the floti it
+ *   carries and connects, and History offers each ended session to resume.
  * - `older: 'helm'`: this Helm is too old for the host, and is updated.
  */
 export type LocalHostVersions =

@@ -50,8 +50,9 @@ import { Action, Divider, Group, Select } from './SettingsKit'
  * versions, a notice says which is behind, naming both. An older host is
  * offered Restart host to update, which says what it ends before anything
  * happens; one on protocol 1.x is told to stop through its notification-area
- * menu, and a Helm behind its host to update Helm. Nothing is restarted
- * without the user's click.
+ * menu, which ends its sessions, after which Helm starts the host it carries
+ * and History offers them to resume. A Helm behind its host is told to update
+ * Helm. Nothing is restarted without the user's click.
  */
 
 /** What Settings > Hosts asks the desktop to check, install and cancel on a host's computer. */
