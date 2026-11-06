@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { FakeConnection, fakeReach, reconnectingReach } from '../../../../../test/fake-connection'
 import { CLAUDE_CODE_BACKEND } from '../../../../shared/host/backend'
-import type { HostConnection } from '../../../../shared/host/client'
+import { HostRefusedError, type HostConnection } from '../../../../shared/host/client'
 import type * as P from '../../../../shared/host/protocol'
 import type {
   EventChannel,
@@ -613,7 +613,13 @@ describe('sessions over the window’s own connection', () => {
         connection(): Promise<HostConnection> {
           const reached = carried
           if (reached === null) {
-            return Promise.reject(new Error('This client speaks Floti protocol 2.0 and the host speaks 1.4.'))
+            return Promise.reject(
+              new HostRefusedError('This client speaks Floti protocol 2.0 and the host speaks 1.4.', {
+                host: { major: 1, minor: 4 },
+                client: { major: 2, minor: 0 },
+                update: 'host'
+              })
+            )
           }
           attempt ??= Promise.resolve().then(() => {
             for (const listener of listeners) listener(reached.asConnection())
@@ -670,6 +676,35 @@ describe('sessions over the window’s own connection', () => {
       await expect(ask(w.adapters, 'session:restorable')).resolves.toBeNull()
       expect(carried.payloads('session:restore')).toEqual([])
       expect(carried.payloads('history:resume')).toEqual([])
+    })
+
+    it('S15: opens each shell its tabs asked for while refused on the carried host once it connects, with the screen the keeper kept', async () => {
+      const w = refusedWorld()
+      const data = hear(w.adapters, 'pterm:data')
+      // A folder's shell and a terminal tab's, mounted while the 1.x host refused the window.
+      const folder = ask(w.adapters, 'pterm:open', { path: '/work dir/app', cols: 80, rows: 24 })
+      const tab = ask(w.adapters, 'pterm:open', { path: '/work dir/app', cols: 80, rows: 24, separate: true })
+      await settle()
+
+      let next = 3
+      const carried = new FakeConnection()
+        .answer('session:list', () => [])
+        .answer('pterm:open', () => ({ id: next++, shell: 'pwsh', requested: null, problem: null }))
+      await w.replace(carried)
+
+      await expect(folder).resolves.toEqual({ id: 3, shell: 'pwsh', requested: null, problem: null })
+      await expect(tab).resolves.toEqual({ id: 4, shell: 'pwsh', requested: null, problem: null })
+      expect(carried.payloads('pterm:open')).toEqual([
+        { path: '/work dir/app', cols: 80, rows: 24, shell: null, separate: false },
+        { path: '/work dir/app', cols: 80, rows: 24, shell: null, separate: true }
+      ])
+      const three = carried.streamsFor('pterm:data', 3)
+      expect([three.length, carried.streamsFor('pterm:data', 4).length]).toEqual([1, 1])
+      // The folder's shell is the one the keeper kept running: its redraw comes, then it takes keys.
+      three[0]!.send('\x1bcPS> npm test')
+      expect(data).toEqual([{ id: 3, data: '\x1bcPS> npm test' }])
+      send(w.adapters, 'pterm:input', { id: 3, data: '\r' })
+      expect(three[0]!.text()).toBe('\r')
     })
 
     it('S15: hands the window the carried host’s offer of each session whose keeper it could not take back, and carries none of them', async () => {

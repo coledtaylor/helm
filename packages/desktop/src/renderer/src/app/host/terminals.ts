@@ -1,4 +1,4 @@
-import type { HostConnection, HostSubscription } from '../../../../shared/host/client'
+import { HostRefusedError, type HostConnection, type HostSubscription } from '../../../../shared/host/client'
 import type { TerminalStreams } from '../../../../shared/host/streams'
 import type { LocalEvents } from './events'
 import type { HostReach } from './history'
@@ -74,6 +74,23 @@ export function createTerminalsAdapter(deps: TerminalsAdapterDeps): TerminalsAda
   /** Terminal tabs' shells the last page had and this one has not asked for yet. */
   let waiting = readShelf(deps.shelf)
   let subscription: HostSubscription | null = null
+  /** Shells asked for while the host refused the window, each waiting for the next connection. */
+  let refusedWaiters: Array<(connection: HostConnection) => void> = []
+
+  /**
+   * The connection to open a shell on. While the host refuses this window's
+   * protocol (a protocol-1.x host before Restart host to update replaces it),
+   * a tab's shell waits for the host that connects next rather than failing:
+   * the tab mounted once, and its shell is opened, or the folder's shell the
+   * keeper kept running is reattached, when the carried host connects.
+   */
+  const reached = (): Promise<HostConnection> =>
+    link.connection().catch((error: unknown) => {
+      if (!(error instanceof HostRefusedError)) throw error
+      return new Promise<HostConnection>((resolve) => {
+        refusedWaiters.push(resolve)
+      })
+    })
 
   const keep = (): void => {
     if (deps.shelf === null) return
@@ -108,6 +125,9 @@ export function createTerminalsAdapter(deps: TerminalsAdapterDeps): TerminalsAda
       },
       error: (error) => deps.log(`host: pterm:exit ended (${error.message})`)
     })
+    const waiters = refusedWaiters
+    refusedWaiters = []
+    for (const resolve of waiters) resolve(connection)
   })
 
   // A host that went without a stop or a quit leaves its shells running in its
@@ -139,7 +159,7 @@ export function createTerminalsAdapter(deps: TerminalsAdapterDeps): TerminalsAda
         const separate = request.separate === true
         // Every shell's stream is opened on the window's connection, so that is
         // reached before a kept shell is taken: two asks then take two shells.
-        const connection = await link.connection()
+        const connection = await reached()
         const kept = separate ? waiting.find((shell) => samePath(shell.path, request.path)) : undefined
         if (kept !== undefined) {
           waiting = waiting.filter((shell) => shell !== kept)
