@@ -4,21 +4,17 @@ import { isClientOnly, isHostInternal } from '../../../crates/floti-protocol/gen
 import type { RecordedChannel } from '../src/main/ipc-recorder'
 import { bearerOf, callTool, readMcpConfig } from '../test/mcp-client'
 import { startBrowserFixture } from './browser-fixture'
-import { TOKEN, installSample, pluginFrame, startServer, type SampleFixture } from './plugin-fixture'
+import {
+  CLASSIC,
+  TOKEN,
+  inVersion1Background,
+  installSample,
+  installVersion1Plugin,
+  pluginFrame,
+  startServer,
+  type SampleFixture
+} from './plugin-fixture'
 import { claudeRunIn, expect, startSession, terminalText, test as base, typeLine, type Helm } from './helm'
-
-/** Runs `script` in the sample's background page, in Helm's hidden plugin host window. */
-function inBackground<T>(helm: Helm, script: string): Promise<T> {
-  return helm.app.evaluate(
-    async ({ BrowserWindow }, { script, url }) => {
-      const host = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('/plugin-host.html'))
-      const frame = host?.webContents.mainFrame.framesInSubtree.find((f) => f.url.startsWith(url))
-      if (frame === undefined) throw new Error('no background page')
-      return (await frame.executeJavaScript(script)) as T
-    },
-    { script, url: 'helm-plugin://sample/dist/background/index.html' }
-  )
-}
 
 /**
  * Electron IPC carries only what `boundary.rs` lists as client-only: the browser pane, clipboard, window,
@@ -28,8 +24,10 @@ function inBackground<T>(helm: Helm, script: string): Promise<T> {
  * Main records every channel used and which page used it (`ipc-recorder.ts`);
  * after each workflow the test fails naming any channel the generated
  * client-only list does not cover. A host-internal channel passes only on the
- * hidden window plugins' background pages run in, where API v1 runs them
- * inside the desktop. Main registers nothing else, so a channel it does not
+ * hidden window version 1 plugins' background pages run in, inside the
+ * desktop; a version 2 background is a module the host runs, and the sample
+ * is one. A small version 1 plugin beside it keeps the hidden window in the
+ * workflow. Main registers nothing else, so a channel it does not
  * list could only show up here as one main answered.
  */
 
@@ -45,6 +43,7 @@ const test = base.extend<{ sample: SampleFixture }>({
   ],
   world: async ({ world, sample }, use) => {
     sample.dir = installSample(world, sample.server)
+    installVersion1Plugin(world)
     const notes = join(world.projects.alpha, 'notes')
     mkdirSync(notes, { recursive: true })
     writeFileSync(join(notes, 'first.md'), '# First note\n\nWritten for the boundary.\n')
@@ -144,7 +143,7 @@ test('profiles use only client channels', async ({ helm }) => {
   await expectOnlyClientChannels(helm)
 })
 
-test('a plugin page, its tool called by a session, and the Browser tab use only client channels', async ({
+test('plugin pages of both versions, a version 1 background page, a tool called by a session, and the Browser tab use only client channels', async ({
   helm,
   sample,
   world
@@ -164,27 +163,38 @@ test('a plugin page, its tool called by a session, and the Browser tab use only 
   const item = await pluginFrame(window, 'dist/tabs/item.html')
   await expect(item.locator('h1')).toHaveText('Second item')
 
-  // A panel's post on a BroadcastChannel reaches the background page, through
-  // the host and the hidden window's own connection.
+  // Opening the item marked it read, and the page said so on the plugin's
+  // channel: the sample's background module heard it through the host and
+  // counted again.
+  await expect(window.locator('[data-status-plugin="sample"]')).toHaveText('1 unread')
+
+  // The version 1 plugin: its background page is running in the hidden window,
+  // and a post from its panel reaches it, through the host and the hidden
+  // window's own connection.
+  await expect(window.locator(`[data-status-plugin="${CLASSIC.id}"]`)).toHaveText('Classic: running')
+  await destination(helm, new RegExp(`^${CLASSIC.name}`)).click()
+  const classic = await pluginFrame(window, 'panel.html', CLASSIC.origin)
+  expect(await classic.evaluate('typeof window.helm')).toBe('object')
   const sent = { from: 'the panel' }
   await expect
     .poll(() =>
-      inBackground(
+      inVersion1Background(
         helm,
         `(() => { window.__heard = []; new BroadcastChannel('boundary').onmessage = (event) => window.__heard.push(event.data); return true })()`
       ).catch(() => false)
     )
     .toBe(true)
-  await panel.evaluate(`(() => { new BroadcastChannel('boundary').postMessage(${JSON.stringify(sent)}); return true })()`)
-  await expect.poll(() => inBackground(helm, 'window.__heard')).toEqual([sent])
+  await classic.evaluate(`(() => { new BroadcastChannel('boundary').postMessage(${JSON.stringify(sent)}); return true })()`)
+  await expect.poll(() => inVersion1Background(helm, 'window.__heard')).toEqual([sent])
 
   const run = await claudeRunIn(world, world.projects.alpha)
   const config = readMcpConfig(run.argv[run.argv.indexOf('--mcp-config') + 1] ?? '')
   const plugin = config.mcpServers['helm-plugin-sample']
   if (plugin === undefined) throw new Error(`no helm-plugin-sample in ${JSON.stringify(config)}`)
-  // The background page answers the session's call.
+  // The sample's background module answers the session's call.
   const answered = await callTool(plugin.url, bearerOf(plugin), 'list_items', { unreadOnly: true })
   expect(answered.isError).toBe(false)
+  expect(JSON.parse(answered.text)).toEqual([{ id: '1', title: 'Welcome', read: false }])
 
   const fixture = await startBrowserFixture()
   try {

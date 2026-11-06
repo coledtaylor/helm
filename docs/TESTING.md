@@ -449,7 +449,7 @@ over the window, or Electron's own guards on a page.
 | `files` | a file opened from the tree beside its session, its changed lines counted, its line numbers to the bottom, and the view following the session's next edit; Ctrl+P, and the hand-offs to VS Code, Explorer and the clipboard |
 | `browser` | browsing; the security posture; the refusals; a cookie surviving a restart |
 | `agent-tools` | a session drives the browser pane through its own token, and only its own tabs |
-| `plugins` | the sample plugin against a server of its own: its background page, a secret it asks for, its panel, badge, status and a tab with parameters; `helm.fetch` held to the manifest's origins on every redirect; Helm's shortcuts from inside a plugin page and its commands from Ctrl+Shift+P; a crashed plugin page and Reload; an unsupported `apiVersion` said in Settings, and a plugin turned off and on; a theme change reaching a page without reloading it; a session calling the plugin's tools, answered by its background page, and losing them when they are turned off in Settings |
+| `plugins` | the sample plugin, a version 2 plugin, against a server of its own: its background module, read through what it does (the badge, the status bar item, a command's effect, the tools' answers), a secret it asks for, its panel, badge, status and a tab with parameters, its pages on `floti-plugin://sample/` with `window.floti`; `floti.fetch` held to the manifest's origins on every redirect; Helm's shortcuts from inside a plugin page and its commands from Ctrl+Shift+P; a crashed plugin page and Reload; an unsupported `apiVersion` said in Settings, and a plugin turned off and on; a small version 1 plugin beside it, its page on `helm-plugin://` with `window.helm` and its background page in the hidden window; a theme change reaching a page without reloading it; a session calling the plugin's tools, answered by its background module, and losing them when they are turned off in Settings |
 | `host-sessions` | the first start pinning the host's key and served in full; a session and a project terminal in the host, drawn again after a reload; the sessions pane showing a host session's process tree and ports as the host read them; a host session's browser tools, a profile's and a plugin's sessions, and the plugin's and Helm's session tools through the host; quitting, and Helm killed outright; an ended session listed in history and archived by the host, nothing of it in `helm.db`, and resumed through the host where it ran; the status bar showing the usage the host read, and a rewritten reading reaching it |
 
 - **Each test gets a world** (`test/world.ts`): a temporary root with a space in
@@ -478,7 +478,12 @@ over the window, or Electron's own guards on a page.
   own.
 - **A plugin's page** is a frame of the window: `e2e/plugin-fixture.ts` copies
   the sample plugin into the world, registers it, starts its server, and finds
-  a page with `pluginFrame`. `test:e2e` builds the sample first. Once a plugin
+  a page with `pluginFrame`, on `floti-plugin://sample/` unless a test names
+  another origin. The sample's background is a module the host runs, which no
+  window frames, so a test reads it through what it does;
+  `installVersion1Plugin` writes a small version 1 plugin whose background
+  page is a frame in the hidden plugin window, which `inVersion1Background`
+  runs a script in. `test:e2e` builds the sample first. Once a plugin
   frame's process ends, Playwright counts the whole window as crashed and will
   not drive it again, so the crash test drives the window through the main
   process instead.

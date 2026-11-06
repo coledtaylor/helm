@@ -1,7 +1,8 @@
 import type { SettingValue } from '@coledtaylor/helm-plugin-sdk'
 
 /**
- * The sample server's API, through `helm.fetch`.
+ * The sample server's API, through `floti.fetch`: the pages' and the
+ * background module's, which take the same request.
  *
  * `{{sample-token}}` is written into the header as it is: Helm puts the stored
  * value there on its way out, and only for a host the user allowed it for.
@@ -28,7 +29,10 @@ export interface Options {
   order: string
 }
 
-/** Pages tell each other the items changed: the background page, the panel and every tab share an origin. */
+/**
+ * Pages tell each other the items changed, on a channel the host relays among
+ * the plugin's panel, every tab, on any client, and its background module.
+ */
 export const CHANNEL = 'sample-items'
 
 export function optionsOf(settings: Record<string, SettingValue>): Options {
@@ -46,7 +50,7 @@ export function optionsOf(settings: Record<string, SettingValue>): Options {
 async function call<T>(url: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('authorization', 'Bearer {{sample-token}}')
-  const response = await helm.fetch(url, { ...init, headers })
+  const response = await floti.fetch(url, { ...init, headers })
   if (!response.ok) throw new Error(`The server answered ${String(response.status)}.`)
   return (await response.json()) as T
 }

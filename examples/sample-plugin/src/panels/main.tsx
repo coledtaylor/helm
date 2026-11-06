@@ -49,11 +49,11 @@ function Panel(): JSX.Element {
 
   useHelmEvent('action', ({ id }) => {
     if (id === 'refresh') reload()
-    if (id === 'add') void helm.tabs.open('item', {}, { title: 'New item' })
+    if (id === 'add') void floti.tabs.open('item', {}, { title: 'New item' })
   })
 
   useEffect(() => {
-    void helm
+    void floti
       .fetch('service:/hello')
       .then((response) => response.json() as Promise<{ message: string; pid: number }>)
       .then(
@@ -102,8 +102,8 @@ function Panel(): JSX.Element {
                 data-sample-item={item.id}
                 // A click previews the item, as a click on a file in Helm does: the
                 // next click replaces it. A double click opens it to stay.
-                onClick={() => void helm.tabs.open('item', { id: item.id }, { title: item.title, preview: true })}
-                onDoubleClick={() => void helm.tabs.open('item', { id: item.id }, { title: item.title })}
+                onClick={() => void floti.tabs.open('item', { id: item.id }, { title: item.title, preview: true })}
+                onDoubleClick={() => void floti.tabs.open('item', { id: item.id }, { title: item.title })}
               >
                 <span className="helm-dot" data-tone={item.read ? undefined : 'accent'} />
                 <span className="grow">
@@ -133,7 +133,7 @@ function Sessions(): JSX.Element {
   const [sessions, setSessions] = useState<PluginSession[] | null>(null)
   useEffect(() => {
     let live = true
-    helm.sessions.list().then(
+    floti.sessions.list().then(
       (listed) => {
         if (live) setSessions(listed)
       },

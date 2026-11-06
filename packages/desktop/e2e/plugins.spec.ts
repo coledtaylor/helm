@@ -1,19 +1,34 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Frame, Locator, Page } from '@playwright/test'
-import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'
+import type { FlotiBridge, HelmBridge } from '@coledtaylor/helm-plugin-sdk'
 import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
 import { HOST_TEST_SEAL_MARKER, hostDataOf } from '../test/world'
 import { claudeRunIn, expect, startSession, terminalText, test as base, typeLine, type Helm } from './helm'
 import { startBrowserFixture } from './browser-fixture'
-import { TOKEN, installSample, pluginFrame, startServer, type SampleFixture } from './plugin-fixture'
+import {
+  CLASSIC,
+  TOKEN,
+  inVersion1Background,
+  installSample,
+  installVersion1Plugin,
+  pluginFrame,
+  startServer,
+  type SampleFixture
+} from './plugin-fixture'
 
 /**
  * Plugins, through the real window: the sample plugin (`examples/sample-plugin`)
  * against a sample server on this machine. Its rail panel, its tab, its
- * background page, the secret it asks for, the programs and service it runs,
+ * background module, the secret it asks for, the programs and service it runs,
  * and what Helm holds it to - the hosts it may reach, the shortcuts it may not
  * keep, the process it may crash without taking Helm with it.
+ *
+ * The sample is a version 2 plugin: its pages are on `floti-plugin://sample/`
+ * with `window.floti`, and its background is a module the host runs, read
+ * here through what it does - the badge, the status bar item, a command's
+ * effect and the tools' answers. A small version 1 plugin beside it shows
+ * version 1 still loading, on `helm-plugin://` with `window.helm`.
  *
  * The detail is in `main/plugins/*.test.ts` and the relay's and bridge's own
  * tests; these are the workflows.
@@ -39,8 +54,10 @@ const test = base.extend<{ sample: SampleFixture; sampleRegistered: boolean }>({
   }
 })
 
-/** The page's `window.helm`, in a frame's `evaluate`. */
-type PluginWindow = Window & { helm: HelmBridge }
+/** The sample page's `window.floti`, in a frame's `evaluate`. */
+type PluginWindow = Window & { floti: FlotiBridge }
+/** A version 1 page's `window.helm`. */
+type Version1Window = Window & { helm: HelmBridge }
 /** Helm's own window and its IPC bridge, as Settings uses it. */
 /** Helm's window and its routed bridge (`inspect.ts`), which asks for a host feature the way the window does. */
 type HelmWindow = Window & { __helmRouted: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
@@ -67,14 +84,14 @@ async function storeToken(ui: Page, url: string): Promise<void> {
   )
 }
 
-test('a plugin: its background page, a secret it asks for, its panel, badge, status and a tab of its own', async ({
+test('a plugin: its background module, a secret it asks for, its panel, badge, status and a tab of its own', async ({
   helm,
   sample,
   world
 }) => {
   const ui = helm.window
 
-  // The background page runs with nothing of the plugin's on screen.
+  // The background module runs with nothing of the plugin's on screen.
   await expect(statusItem(ui)).toHaveText('Sample: no token')
 
   // Its rail icon is drawn at the rail's size, as Helm's own are: the icon is
@@ -119,23 +136,22 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
   await panel.locator('[data-sample-item="2"]').click()
   await expect(ui.getByRole('tab', { name: /Second item/ })).toBeVisible()
   const tab = await pluginFrame(ui, 'dist/tabs/item.html')
-  expect(await tab.evaluate(() => (window as unknown as PluginWindow).helm.context.params)).toEqual({ id: '2' })
+  expect(await tab.evaluate(() => (window as unknown as PluginWindow).floti.context.params)).toEqual({ id: '2' })
 
-  // Every page is drawn on the computer the plugin runs on, with sessions in
-  // the local host or not.
-  const onHostComputer = 'window.helm.onHostComputer'
-  expect([await panel.evaluate(onHostComputer), await tab.evaluate(onHostComputer), await inBackground(helm, onHostComputer)]).toEqual([
-    true,
-    true,
-    true
+  // Every page is drawn on the computer the plugin runs on, with the version
+  // 2 bridge and no other.
+  const bridge = '[window.floti.onHostComputer, window.floti.apiVersion, typeof window.helm]'
+  expect([await panel.evaluate(bridge), await tab.evaluate(bridge)]).toEqual([
+    [true, 2, 'undefined'],
+    [true, 2, 'undefined']
   ])
 
-  // A post on a BroadcastChannel reaches the plugin's other pages and its
-  // background page, and every other channel of that name in the tab, but not
-  // the channel that posted it.
+  // A post on a BroadcastChannel reaches the plugin's other pages, and every
+  // other channel of that name in the tab, but not the channel that posted
+  // it. (That it reaches the background module is below: the module counts
+  // again when the tab says it marked its item read.)
   const sent = { from: 'the tab', at: [1, 2] }
   await panel.evaluate(LISTEN('sample-e2e'))
-  await inBackground(helm, LISTEN('sample-e2e'))
   await tab.evaluate(
     `(() => {
       window.__posterHeard = []
@@ -149,7 +165,6 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
     })()`
   )
   await expect.poll(() => panel.evaluate('window.__heard')).toEqual([sent])
-  await expect.poll(() => inBackground(helm, 'window.__heard')).toEqual([sent])
   await expect.poll(() => tab.evaluate('window.__siblingHeard')).toEqual([sent])
   // The sibling heard the same delivery the poster would have.
   expect(await tab.evaluate('window.__posterHeard')).toEqual([])
@@ -158,7 +173,8 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
   await tab.getByRole('button', { name: 'Run echo' }).click()
   await expect(tab.locator('[data-sample-echo-output]')).toHaveText('{"args":["2"],"token":"set"}')
 
-  // Reading it marked it read; the background page heard and the bar follows.
+  // Reading it marked it read, and the tab said so on the plugin's channel;
+  // the background module heard it through the host, and the bar follows.
   await expect(statusItem(ui)).toHaveText('1 unread')
   await expect(ui.locator('[data-rail-badge]')).toHaveText('1')
 
@@ -171,7 +187,7 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
   expect(await log.textContent()).not.toMatch(/[0-9a-f]{32}/)
 })
 
-test('helm.fetch reaches only the origins the manifest lists, and every redirect is checked again', async ({
+test('floti.fetch reaches only the origins the manifest lists, and every redirect is checked again', async ({
   helm,
   sample
 }) => {
@@ -181,7 +197,7 @@ test('helm.fetch reaches only the origins the manifest lists, and every redirect
 
   const outcomes = await panel.evaluate(
     async ({ base, port }) => {
-      const { helm: bridge } = window as unknown as PluginWindow
+      const { floti: bridge } = window as unknown as PluginWindow
       const attempt = async (url: string): Promise<string> => {
         try {
           const response = await bridge.fetch(url, { headers: { authorization: 'Bearer {{sample-token}}' } })
@@ -195,7 +211,7 @@ test('helm.fetch reaches only the origins the manifest lists, and every redirect
         outside: await attempt(`${base}/redirect/outside`),
         elsewhere: await attempt(`http://127.0.0.2:${String(port)}/items`),
         web: await attempt('https://example.com/'),
-        // The page's own network is closed: helm.fetch is the only way out.
+        // The page's own network is closed: floti.fetch is the only way out.
         direct: await fetch(`${base}/items`).then(
           () => 'reached',
           () => 'blocked'
@@ -243,14 +259,20 @@ test("Helm's shortcuts work from inside a plugin page, and its commands run from
   await expect(ui.getByRole('tab', { name: /From the palette/ })).toBeVisible()
   expect(sample.server.items.map((item) => item.title)).toContain('From the palette')
 
-  // A command with no tab is the background page's.
-  await inBackground(helm, `(() => { window.__commands = []; helm.on('command', ({ id }) => window.__commands.push(id)); return true })()`)
+  // The new item is counted: the tab said so on the plugin's channel.
+  await expect(statusItem(ui)).toHaveText('3 unread')
+
+  // A command with no tab is the background module's. An item added on the
+  // server behind the plugin's back is counted only once something asks the
+  // server again, and the module's refresh command does.
+  sample.server.items.push({ id: '9', title: 'Added on the server', body: '', read: false, created: Date.now() })
   await ui.keyboard.press('ControlOrMeta+Shift+P')
   await expect(palette).toBeVisible()
   await ui.keyboard.type('refresh')
   await ui.keyboard.press('Enter')
   await expect(palette).toBeHidden()
-  await expect.poll(() => inBackground(helm, 'window.__commands')).toEqual(['refresh'])
+  await expect(statusItem(ui)).toHaveText('4 unread')
+  await expect(ui.locator('[data-rail-badge]')).toHaveText('4')
 })
 
 /**
@@ -268,19 +290,6 @@ function inHelm<T>(helm: Helm, script: string, frameUrl?: string): Promise<T> {
       return (frame === undefined ? null : await frame.executeJavaScript(script)) as T
     },
     { script, frameUrl }
-  )
-}
-
-/** Runs `script` in the sample's background page, in Helm's hidden plugin host window. */
-function inBackground<T>(helm: Helm, script: string): Promise<T> {
-  return helm.app.evaluate(
-    async ({ BrowserWindow }, { script, url }) => {
-      const host = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('/plugin-host.html'))
-      const frame = host?.webContents.mainFrame.framesInSubtree.find((f) => f.url.startsWith(url))
-      if (frame === undefined) throw new Error('no background page')
-      return (await frame.executeJavaScript(script)) as T
-    },
-    { script, url: 'helm-plugin://sample/dist/background/index.html' }
   )
 }
 
@@ -335,7 +344,7 @@ test('a plugin page that crashes says so in its own place, and Reload brings it 
   )
   await expect.poll(() => inHelm<number>(helm, `document.querySelectorAll('[data-plugin-error]').length`)).toBe(0)
   // A page again, in a process of its own, with the bridge on it.
-  await expect.poll(() => inHelm<string | null>(helm, 'typeof helm', url)).toBe('object')
+  await expect.poll(() => inHelm<string | null>(helm, 'typeof floti', url)).toBe('object')
 })
 
 /**
@@ -352,17 +361,12 @@ async function chooseFolders(helm: Helm, folders: string[]): Promise<void> {
   }, folders)
 }
 
-/** Whether the plugin's background page is framed in Helm's hidden plugin host window, with the bridge on it. */
-function backgroundRunning(helm: Helm, plugin = 'sample', entry = 'dist/background/index.html'): Promise<boolean> {
-  return helm.app.evaluate(
-    async ({ BrowserWindow }, url) => {
-      const host = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('/plugin-host.html'))
-      const frame = host?.webContents.mainFrame.framesInSubtree.find((f) => f.url.startsWith(url))
-      if (frame === undefined) return false
-      return (await frame.executeJavaScript('typeof helm').catch(() => 'gone')) === 'object'
-    },
-    `helm-plugin://${plugin}/${entry}`
-  )
+/**
+ * The sample's background module is running: with no token stored, the first
+ * thing it does is say so in the status bar.
+ */
+async function expectBackgroundRunning(ui: Page): Promise<void> {
+  await expect(statusItem(ui)).toHaveText('Sample: no token')
 }
 
 async function openPluginSettings(ui: Page): Promise<void> {
@@ -373,7 +377,7 @@ async function openPluginSettings(ui: Page): Promise<void> {
 test.describe('a plugin folder the user adds', () => {
   test.use({ sampleRegistered: false })
 
-  test('a folder added in Settings > Plugins is read and listed, its rail icon, panel and background page appear, and it is still there after a restart', async ({
+  test('a folder added in Settings > Plugins is read and listed, its rail icon, panel and background module appear, and it is still there after a restart', async ({
     helm,
     sample,
     relaunch
@@ -388,11 +392,11 @@ test.describe('a plugin folder the user adds', () => {
     await expect(ui.locator('[data-plugin-add-error]')).toHaveCount(0)
     await expect(rail(ui).getByRole('button', { name: /^Sample/ })).toBeVisible()
     await openPanel(ui)
-    await expect.poll(() => backgroundRunning(helm)).toBe(true)
+    await expectBackgroundRunning(ui)
 
     ui = (await relaunch()).window
     await expect(rail(ui).getByRole('button', { name: /^Sample/ })).toBeVisible()
-    await expect.poll(() => backgroundRunning(helm)).toBe(true)
+    await expectBackgroundRunning(ui)
     await openPluginSettings(ui)
     await expect(ui.locator('[data-plugin-row="sample"]')).toBeVisible()
   })
@@ -414,9 +418,9 @@ test('Settings > Plugins: an unsupported apiVersion is said plainly, and turning
   await ui.locator('[data-plugin-row="future"]').click()
   await expect(ui.locator('[data-plugin-verdict="error"]')).toContainText('apiVersion')
 
-  // The sample, its background page running, its panel open and a tab of its
-  // own, opened from the command palette.
-  await expect.poll(() => backgroundRunning(helm)).toBe(true)
+  // The sample, its background module running, its panel open and a tab of
+  // its own, opened from the command palette.
+  await expectBackgroundRunning(ui)
   await openPanel(ui)
   await ui.keyboard.press('ControlOrMeta+Shift+P')
   await ui.keyboard.type('new item')
@@ -431,14 +435,51 @@ test('Settings > Plugins: an unsupported apiVersion is said plainly, and turning
   await expect(rail(ui).getByRole('button', { name: /^Sample/ })).toHaveCount(0)
   await expect(statusItem(ui)).toHaveCount(0)
   await expect(ui.getByRole('tab', { name: /^Item/ })).toHaveCount(0)
-  await expect.poll(() => ui.frames().filter((frame) => frame.url().startsWith('helm-plugin://sample/')).length).toBe(0)
-  await expect.poll(() => backgroundRunning(helm)).toBe(false)
+  await expect.poll(() => ui.frames().filter((frame) => frame.url().startsWith('floti-plugin://sample/')).length).toBe(0)
 
+  // Turned on, its background module starts again and says so.
   await ui.locator('[data-plugin-toggle]').click()
   await expect(rail(ui).getByRole('button', { name: /^Sample/ })).toBeVisible()
-  await expect.poll(() => backgroundRunning(helm)).toBe(true)
+  await expectBackgroundRunning(ui)
   await openPanel(ui)
 })
+
+/** The sample with a small version 1 plugin beside it. */
+const besideVersion1 = test.extend({
+  world: async ({ world }, use) => {
+    installVersion1Plugin(world)
+    await use(world)
+  }
+})
+
+besideVersion1(
+  'a version 1 plugin loads beside the sample: its page on helm-plugin:// with window.helm, its background page in the hidden window',
+  async ({ helm }) => {
+    const ui = helm.window
+    // Both backgrounds run: the sample's module in the host, the version 1
+    // page in the hidden window, and each says so in the status bar.
+    await expectBackgroundRunning(ui)
+    await expect(ui.locator(`[data-status-plugin="${CLASSIC.id}"]`)).toHaveText('Classic: running')
+
+    await rail(ui).getByRole('button', { name: new RegExp(`^${CLASSIC.name}`) }).click()
+    const classic = await pluginFrame(ui, 'panel.html', CLASSIC.origin)
+    expect(
+      await classic.evaluate(() => {
+        const page = window as unknown as Version1Window & { floti?: unknown }
+        return [page.helm.apiVersion, typeof page.floti]
+      })
+    ).toEqual([1, 'undefined'])
+
+    // A post from its page reaches its background page, through the host and
+    // the hidden window's own connection.
+    await inVersion1Background(helm, LISTEN('classic-e2e'))
+    await classic.evaluate(`(() => { new BroadcastChannel('classic-e2e').postMessage('hello'); return true })()`)
+    await expect.poll(() => inVersion1Background(helm, 'window.__heard')).toEqual(['hello'])
+
+    const sample = await openPanel(ui)
+    expect(await sample.evaluate(() => (window as unknown as PluginWindow).floti.apiVersion)).toBe(2)
+  }
+)
 
 test('a theme change reaches plugin pages without reloading them', async ({ helm, sample }) => {
   const ui = helm.window
@@ -447,7 +488,7 @@ test('a theme change reaches plugin pages without reloading them', async ({ helm
 
   const read = (): Promise<{ kind: string; bg: string; marked: boolean }> =>
     panel.evaluate(() => ({
-      kind: (window as unknown as PluginWindow).helm.theme.kind,
+      kind: (window as unknown as PluginWindow).floti.theme.kind,
       bg: getComputedStyle(document.documentElement).getPropertyValue('--helm-bg').trim(),
       marked: (window as unknown as { marked?: boolean }).marked === true
     }))
@@ -496,7 +537,7 @@ test("a plugin panel sees Helm's sessions start, work and end, and nothing of wh
   await expect(row).toHaveAttribute('data-state', 'ended')
   await expect(row.locator('[data-sample-session-says]')).toHaveText(`Ended · ${world.projects.alpha}`)
 
-  const listed = await panel.evaluate(() => (window as unknown as PluginWindow).helm.sessions.list())
+  const listed = await panel.evaluate(() => (window as unknown as PluginWindow).floti.sessions.list())
   expect(listed).toEqual([
     {
       id: expect.stringMatching(/^[0-9a-f]{32}$/),
@@ -512,7 +553,7 @@ test("a plugin panel sees Helm's sessions start, work and end, and nothing of wh
   expect(JSON.stringify(listed)).not.toContain(secret)
 })
 
-test("a session calls the plugin's tools, its background page answers, and turning them off in Settings takes them away", async ({
+test("a session calls the plugin's tools, its background module answers, and turning them off in Settings takes them away", async ({
   helm,
   sample,
   world
@@ -539,7 +580,7 @@ test("a session calls the plugin's tools, its background page answers, and turni
   expect(init.instructions).toContain('"Sample", a plugin the user added to Helm')
   expect(init.instructions).toContain('List them before adding one')
 
-  // The background page answers, through the plugin's own network and secret.
+  // The background module answers, through the plugin's own network and secret.
   const unread = await callTool(tools.url, token, 'list_items', { unreadOnly: true })
   expect(unread.isError).toBe(false)
   expect(JSON.parse(unread.text)).toEqual([
@@ -604,7 +645,7 @@ stripTest('a plugin with a page strip opens its tabs as pages in one tab, which 
   await expect(statusItem(ui)).toHaveText('1 unread')
   await second.evaluate(() => {
     ;(window as unknown as { marker: string }).marker = 'kept'
-    ;(window as unknown as PluginWindow).helm.surface.setTitle('Second, renamed')
+    ;(window as unknown as PluginWindow).floti.surface.setTitle('Second, renamed')
   })
   // setTitle names the page in the strip, not the plugin's tab.
   await expect(pages(ui).getByRole('tab')).toHaveText(['Second, renamed'])
@@ -653,7 +694,7 @@ async function itemFrame(ui: Page, id: string): Promise<Frame> {
   await expect
     .poll(async () => {
       for (const frame of ui.frames()) {
-        if (!frame.url().startsWith('helm-plugin://sample/dist/tabs/item.html')) continue
+        if (!frame.url().startsWith('floti-plugin://sample/dist/tabs/item.html')) continue
         if ((await frame.locator(`[data-sample-item-page="${id}"]`).count().catch(() => 0)) > 0) {
           found = frame
           return true
@@ -667,7 +708,7 @@ async function itemFrame(ui: Page, id: string): Promise<Frame> {
 
 /** How many of the sample's item pages are running, on screen or parked. */
 const itemPages = (ui: Page): number =>
-  ui.frames().filter((frame) => frame.url().startsWith('helm-plugin://sample/dist/tabs/item.html')).length
+  ui.frames().filter((frame) => frame.url().startsWith('floti-plugin://sample/dist/tabs/item.html')).length
 
 /** The tab, or page in a strip, `locator` names, drawn as the preview. */
 const asPreview = (locator: Locator): Locator => locator.locator('[data-tab-preview="true"]')
@@ -699,7 +740,7 @@ test("a plugin's tab opened as a preview is replaced by the next, and stays once
   await expect(asPreview(tab(/Second item/))).toHaveCount(1)
   await expect(tab(/Welcome/)).toBeVisible()
 
-  // Typing in the page keeps it too: the page calls helm.surface.keep.
+  // Typing in the page keeps it too: the page calls floti.surface.keep.
   const second = await itemFrame(ui, '2')
   await second.locator('[data-sample-link-address]').fill('https://example.com')
   await expect(asPreview(tab(/Second item/))).toHaveCount(0)
@@ -768,7 +809,7 @@ test('a plugin page starts a session from a click, once the user has seen what i
   await activationLapsed(helm)
   const unasked = await inHelm<string>(
     helm,
-    `helm.sessions.start({ cwd: ${JSON.stringify(world.projects.alpha)}, prompt: 'hello' }).then(() => 'started', (error) => error.code)`,
+    `floti.sessions.start({ cwd: ${JSON.stringify(world.projects.alpha)}, prompt: 'hello' }).then(() => 'started', (error) => error.code)`,
     item.url()
   )
   expect(unasked).toBe('not-allowed')
@@ -822,7 +863,7 @@ test('a plugin page opens a link in the Browser tab from a click, held to the re
     await activationLapsed(helm)
     const unasked = await inHelm<string>(
       helm,
-      `helm.open(${JSON.stringify(`${fixture.httpsLoopback}/two`)}).then(() => 'opened', (error) => error.code)`,
+      `floti.open(${JSON.stringify(`${fixture.httpsLoopback}/two`)}).then(() => 'opened', (error) => error.code)`,
       item.url()
     )
     expect(unasked).toBe('not-allowed')

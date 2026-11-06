@@ -12,7 +12,7 @@ import '../styles.css'
 function ItemTab(): JSX.Element {
   const settings = useHelmSettings()
   const options = useMemo(() => (settings === null ? null : optionsOf(settings)), [settings])
-  const id = helm.context.params['id']
+  const id = floti.context.params['id']
   if (options === null) return <p className="helm-meta page">Loading…</p>
   return typeof id === 'string' ? <ItemView options={options} id={id} /> : <NewItem options={options} />
 }
@@ -23,7 +23,7 @@ function ItemTab(): JSX.Element {
  * is half way through. A Helm without `keep` has no previews to keep.
  */
 function keepTab(): void {
-  if (typeof helm.surface.keep === 'function') helm.surface.keep()
+  if (typeof floti.surface.keep === 'function') floti.surface.keep()
 }
 
 function ItemView({ options, id }: { options: Options; id: string }): JSX.Element {
@@ -37,7 +37,7 @@ function ItemView({ options, id }: { options: Options; id: string }): JSX.Elemen
       async (found) => {
         if (!live) return
         setItem(found)
-        helm.surface.setTitle(found.title)
+        floti.surface.setTitle(found.title)
         if (!found.read) {
           await markRead(options, id)
           new BroadcastChannel(CHANNEL).postMessage('changed')
@@ -68,7 +68,7 @@ function ItemView({ options, id }: { options: Options; id: string }): JSX.Elemen
           type="button"
           className="helm-button"
           data-sample-echo
-          onClick={() => void helm.exec('echo', [item.id]).then(setEcho, (failure: unknown) => setError(messageOf(failure)))}
+          onClick={() => void floti.exec('echo', [item.id]).then(setEcho, (failure: unknown) => setError(messageOf(failure)))}
         >
           Run echo
         </button>
@@ -93,7 +93,7 @@ function OpenLink(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const open = (): void => {
     setError(null)
-    helm.open(address.trim()).catch((failure: unknown) => {
+    floti.open(address.trim()).catch((failure: unknown) => {
       const code = (failure as Partial<HelmError>).code
       setError(code === undefined ? messageOf(failure) : `${code}: ${messageOf(failure)}`)
     })
@@ -138,7 +138,7 @@ function StartSession({ item }: { item: Item }): JSX.Element {
   const start = (): void => {
     setOutcome(null)
     setError(null)
-    helm.sessions.start({ cwd: folder.trim(), prompt: `work on ${item.title}`, name: item.title }).then(setOutcome, (failure: unknown) => {
+    floti.sessions.start({ cwd: folder.trim(), prompt: `work on ${item.title}`, name: item.title }).then(setOutcome, (failure: unknown) => {
       const code = (failure as Partial<HelmError>).code
       setError(code === undefined ? messageOf(failure) : `${code}: ${messageOf(failure)}`)
     })
@@ -183,7 +183,7 @@ function NewItem({ options }: { options: Options }): JSX.Element {
     try {
       const item = await createItem(options, title)
       new BroadcastChannel(CHANNEL).postMessage('changed')
-      await helm.tabs.open('item', { id: item.id }, { title: item.title })
+      await floti.tabs.open('item', { id: item.id }, { title: item.title })
     } catch (failure) {
       setError(messageOf(failure))
     }

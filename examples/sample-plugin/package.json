@@ -9,7 +9,7 @@
     "build": "vite build",
     "watch": "vite build --watch",
     "serve": "node server.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.background.json"
   },
   "devDependencies": {
     "@coledtaylor/helm-plugin-sdk": "workspace:*",

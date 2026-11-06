@@ -1,0 +1,9 @@
+{
+  "//": "The background module, checked apart from the pages: it runs in the host's isolate, with no window and no DOM, and its floti is the background's (@coledtaylor/helm-plugin-sdk/background).",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "WebWorker"],
+    "types": []
+  },
+  "include": ["src/background", "src/lib"]
+}

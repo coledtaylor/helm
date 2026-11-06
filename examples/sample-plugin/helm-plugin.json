@@ -1,5 +1,5 @@
 {
-  "apiVersion": 1,
+  "apiVersion": 2,
   "id": "sample",
   "name": "Sample",
   "version": "1.0.0",
@@ -19,7 +19,7 @@
   "tabs": {
     "item": { "title": "Item", "entry": "dist/tabs/item.html" }
   },
-  "background": "dist/background/index.html",
+  "background": "dist/background/main.js",
   "commands": [
     { "id": "refresh", "title": "Refresh items" },
     { "id": "new", "title": "New item", "tab": "item" }
