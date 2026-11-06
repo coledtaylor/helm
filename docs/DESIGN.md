@@ -1042,6 +1042,34 @@ overrides the gate; keep it.
   exactly as hard as one of Helm's does - the reason the listing is
   machine-wide. It has no tab, so it opens the sessions pane on itself.
 
+  **A session another session started sits under that one**, one step in
+  (16px, the distance a session's dot sits from its project's name), whatever
+  folder it runs in, so a family is read in one place and not looked for across
+  the folders it works in. A hairline guide joins the rows: a vertical rule in
+  `border-strong` down the parent's dot, an elbow 7px long into each child's
+  row, and the last child's rule stopping at its elbow. A child that has
+  children of its own wears a caret where its elbow would be, and the rule
+  breaks around it. The guide is the whole of the mark - a child's row is an
+  ordinary session row, with its own dot and word.
+
+  **A parent folds its children the way a project folds its sessions.** The
+  caret sits in the column before its dot, a fold is absent-means-open, and
+  while the children are folded away the most pressing child's state shows as a
+  6px dot beside the parent's name, in the same order a folded project reads
+  (waiting, error, working, failed, then the rest) - so a folded family still
+  says one of its children needs you. A filter that matches a child keeps its
+  parent's project and opens the family.
+
+  **A child whose parent has ended stands on its own**, at the top level of the
+  folder it runs in, with "from" and the parent's name after its own in
+  `fg-subtle`, because it was started to outlive its parent and the row that
+  held it is gone.
+
+  **Pressing a child's row shows it where it is on screen here.** Its tab comes
+  forward if it has one in this window, otherwise its parent's does; only a
+  child with neither opens a tab, and only on that press. A child that starts
+  never adds a tab or a pane to the window.
+
 ## 5c. Plugin surfaces
 
 A plugin draws inside places Helm already has and never brings chrome of its

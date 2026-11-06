@@ -126,6 +126,15 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onBrowserMcpLocalOnlyChange: vi.fn(),
     sessionMcp: true,
     onSessionMcpChange: vi.fn(),
+    sessionAgents: true,
+    onSessionAgentsChange: vi.fn(),
+    agentLimits: {
+      agentChildrenPerParent: 4,
+      agentSessionsPerHost: 8,
+      agentDepth: 2,
+      agentStartsPerParent: 16
+    },
+    onAgentLimitsChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
     quitSessions: 'end',
@@ -162,6 +171,7 @@ describe('SettingsPane', () => {
       ['appearance', 'Appearance', ['Appearance']],
       ['terminal', 'Terminal', ['Terminal']],
       ['sessions', 'Sessions', ['Sessions']],
+      ['agents', 'Agents', ['Agents']],
       ['hosts', 'Hosts', ['Hosts']],
       ['devices', 'Devices', ['Devices']],
       ['workspace', 'Workspace', ['Workspace', 'Harness templates']],
@@ -214,6 +224,13 @@ describe('SettingsPane', () => {
         ['checkbox', 'Resume after a crash without asking'],
         ['combobox', 'When you quit Helm'],
         ['button', 'Stop host']
+      ],
+      Agents: [
+        ['checkbox', 'Sessions can start agents'],
+        ['textbox', 'Children per parent'],
+        ['textbox', 'Agent sessions per host'],
+        ['textbox', 'Depth'],
+        ['textbox', 'Starts per parent']
       ],
       Updates: [
         ['checkbox', 'Check for new releases on launch'],

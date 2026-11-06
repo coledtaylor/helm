@@ -250,7 +250,56 @@ export interface SessionRowProps {
   shown: 'focused' | 'visible' | null
   indent: number
   onOpen: (id: string) => void
+  /** Present on a session another session started, drawn under it: where its guide runs. */
+  guide?: SessionGuide | undefined
+  /**
+   * The name of the session that started this one, on a child drawn at the top
+   * level because that session has ended. Said beside the name.
+   */
+  parentName?: string | undefined
+  /**
+   * Whether the sessions this one started are showing. Null for a session that
+   * started none, which then has no caret.
+   */
+  expanded?: boolean | null | undefined
+  onToggle?: (() => void) | undefined
+  /**
+   * The most pressing state among the sessions it started, painted beside the
+   * name while they are folded away - so a folded parent still says one of its
+   * children needs you.
+   */
+  summary?: SessionState | null | undefined
 }
+
+/**
+ * The hairline that joins a child's row to the row above it: a vertical rule
+ * down the parent's dot, and an elbow into the child's. One step is `FAMILY_STEP_PX`.
+ */
+export interface SessionGuide {
+  /** The last of its parent's children: the rule stops at the elbow. */
+  last: boolean
+  /**
+   * For each ancestor further out than its parent, outermost first: whether
+   * that ancestor has more children below this branch, so its rule runs on
+   * through this row.
+   */
+  through: readonly boolean[]
+}
+
+/** How far a child's dot sits in from its parent's: one step. */
+export const FAMILY_STEP_PX = 16
+
+/** The rule sits a little right of the parent's dot's left edge, as the design draws it. */
+const GUIDE_OFFSET_PX = 11
+/** The elbow reaches from the rule to just short of the child's dot. */
+const ELBOW_PX = 7
+/** The room a fold caret takes out of a rule that runs through its row. */
+const CARET_GAP_PX = 7
+/**
+ * A fold caret's box starts this far left of the dot, which centres its
+ * 10px arrow on the rule above and below it and leaves the design's gap before the dot.
+ */
+const CARET_LEFT_PX = 19
 
 /**
  * A live session, under the project it is running in.
@@ -264,6 +313,12 @@ export interface SessionRowProps {
  * A session Helm did not start is listed too, muted and saying so, because it
  * holds a working tree exactly as hard as one of Helm's does - the reason the
  * sessions pane is machine-wide. It has no tab, so it opens that pane instead.
+ *
+ * A session another session started is drawn under that one, a step in, whatever
+ * folder it runs in, joined to it by a hairline guide. A session that started
+ * others has a caret to fold them away, as a project has for its sessions; the
+ * most pressing state among them shows beside its name while they are folded.
+ * A child whose parent has ended stands on its own and says whose it was.
  */
 export function SessionRow({
   id,
@@ -274,19 +329,29 @@ export function SessionRow({
   outside,
   shown,
   indent,
-  onOpen
+  onOpen,
+  guide,
+  parentName,
+  expanded = null,
+  onToggle,
+  summary
 }: SessionRowProps): JSX.Element {
   const waiting = state === 'waiting'
+  const folds = expanded !== null && onToggle !== undefined
+  const guideLeft = indent - GUIDE_OFFSET_PX
+  const rule = 'absolute border-l border-border-strong'
   return (
     // The hover text sits on a wrapper because this button is inside the
     // tree's `nav`: a `title` on it would make it one of the rows the drivers'
-    // `aside nav button[title]` means as "a project".
-    <div title={hint}>
+    // `aside nav button[title]` means as "a project". The wrapper is also what
+    // the caret is placed against, so the row's own button holds nothing but
+    // the row.
+    <div title={hint} className="relative">
       <button
         type="button"
         data-session-row={id}
         aria-current={shown === 'focused' ? 'true' : undefined}
-        aria-label={`${label}, ${state === null ? 'state unknown' : SESSION_STATE_LABEL[state]}${outside ? ', outside Helm' : ''}`}
+        aria-label={`${label}, ${state === null ? 'state unknown' : SESSION_STATE_LABEL[state]}${outside ? ', outside Helm' : ''}${parentName === undefined ? '' : `, started by ${parentName}`}`}
         onClick={() => onOpen(id)}
         style={{ paddingLeft: indent }}
         className={cn(
@@ -303,6 +368,52 @@ export function SessionRow({
             aria-hidden
             className="absolute top-1.5 bottom-1.5 left-0 w-[2px] rounded-full bg-accent"
           />
+        )}
+        {guide !== undefined && (
+          <>
+            {/* The rules of the ancestors further out, which run on through
+                this row while they have children below it. */}
+            {guide.through.map(
+              (runs, at) =>
+                runs && (
+                  <span
+                    key={`through-${String(at)}`}
+                    aria-hidden
+                    data-session-guide="through"
+                    className={cn(rule, 'inset-y-0')}
+                    style={{ left: guideLeft - FAMILY_STEP_PX * (guide.through.length - at) }}
+                  />
+                )
+            )}
+            {/* The parent's own rule: the whole row while more children follow,
+                down to the elbow for the last. A row with a caret of its own
+                leaves the caret's room clear, as the elbow's place. */}
+            <span
+              aria-hidden
+              data-session-guide={guide.last ? 'last' : 'more'}
+              className={cn(rule, 'top-0')}
+              style={{
+                left: guideLeft,
+                height: folds ? `calc(50% - ${String(CARET_GAP_PX)}px)` : guide.last ? '50%' : '100%'
+              }}
+            />
+            {folds && !guide.last && (
+              <span
+                aria-hidden
+                data-session-guide="more"
+                className={cn(rule, 'bottom-0')}
+                style={{ left: guideLeft, top: `calc(50% + ${String(CARET_GAP_PX)}px)` }}
+              />
+            )}
+            {!folds && (
+              <span
+                aria-hidden
+                data-session-guide="elbow"
+                className="absolute top-1/2 border-t border-border-strong"
+                style={{ left: guideLeft, width: ELBOW_PX }}
+              />
+            )}
+          </>
         )}
         <span
           aria-hidden
@@ -322,7 +433,19 @@ export function SessionRow({
           )}
         >
           {label}
+          {parentName !== undefined && (
+            <span data-session-parent={parentName} className="text-fg-subtle">
+              {` · from ${parentName}`}
+            </span>
+          )}
         </span>
+        {expanded === false && summary !== null && summary !== undefined && (
+          <span
+            aria-hidden
+            data-family-summary={summary}
+            className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[summary])}
+          />
+        )}
         {note !== '' && (
           <span
             className={cn(
@@ -340,6 +463,24 @@ export function SessionRow({
           </span>
         )}
       </button>
+
+      {folds && (
+        <button
+          type="button"
+          data-session-fold={id}
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? 'Fold' : 'Unfold'} the sessions started by ${label}`}
+          style={{ left: indent - CARET_LEFT_PX }}
+          className="absolute top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-xs text-fg-subtle transition-colors hover:text-fg"
+        >
+          <CaretIcon
+            width={10}
+            height={10}
+            className={cn('transition-transform', expanded && 'rotate-90')}
+          />
+        </button>
+      )}
     </div>
   )
 }

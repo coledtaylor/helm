@@ -41,6 +41,7 @@ import {
   replaceSessionTabs,
   reconcile,
   resizeSplit,
+  resolveFamilyPress,
   savedGroups,
   sendBeside,
   sessionLabel,
@@ -210,6 +211,7 @@ import {
   type AddHostActions,
 } from "@helm/ui";
 import { sidebarFor, type SidebarView } from "./sidebarFor";
+import { treeEntries } from "./treeFamilies";
 import type { PanelActionIcon } from "@coledtaylor/helm-plugin-sdk";
 import type {
   AppMode,
@@ -3046,7 +3048,7 @@ export function App(): JSX.Element {
       else byPath.set(key, [row]);
     };
 
-    for (const session of sessions) {
+    const rowOf = (session: SessionRecord): TreeSession => {
       const activity =
         session.status === "running"
           ? sessionActivity.get(session.id)
@@ -3055,10 +3057,9 @@ export function App(): JSX.Element {
       const live = liveByHelmId.get(session.id);
       const status = statusHint(activity);
       const id = `session:${String(session.id)}`;
-      const label = sessionLabel(session);
-      const row: TreeSession = {
+      return {
         id,
-        label,
+        label: sessionLabel(session),
         state,
         note: sessionNote(state, live?.statusSinceMs ?? null, now),
         hint: status === null ? session.cwd : `${session.cwd}\n${status}`,
@@ -3066,12 +3067,17 @@ export function App(): JSX.Element {
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
       };
+    };
+
+    // A child is drawn under its parent whatever folder it runs in; every
+    // other session is listed under the folder it runs in.
+    for (const { session, row } of treeEntries(sessions, rowOf)) {
       const key = (session.projectPath ?? session.cwd).toLowerCase();
       if (known.has(key)) add(key, row);
       else
         elsewhere.push({
           ...row,
-          label: `${label} · ${folderName(session.cwd)}`,
+          label: `${row.label} · ${folderName(session.cwd)}`,
         });
     }
 
@@ -3113,22 +3119,28 @@ export function App(): JSX.Element {
       ),
     );
     const tabbed = sessionTabIds(open, host.id);
-    for (const session of work?.sessions ?? []) {
-      if (session.status !== "running" && !tabbed.has(session.id)) continue;
+    // Listed: running, or ended with a tab here. A child whose parent is not
+    // among them stands on its own, naming the parent.
+    const listed = (work?.sessions ?? []).filter(
+      (session) =>
+        (session.status === "running" || tabbed.has(session.id)) &&
+        sessionAt({ id: session.id, host: host.id }) !== null,
+    );
+    const rowOf = (session: SessionRecord): TreeSession => {
       const there = sessionAt({ id: session.id, host: host.id });
-      if (there === null) continue;
       const id = paneId(sessionRef(session.id, host.id));
-      const label = sessionLabel(session);
-      const row: TreeSession = {
+      return {
         id,
-        label,
-        state: there.indicator,
-        note: sessionNote(there.indicator, null, now),
+        label: sessionLabel(session),
+        state: there?.indicator ?? null,
+        note: there === null ? "" : sessionNote(there.indicator, null, now),
         hint: session.cwd,
         outside: false,
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
       };
+    };
+    for (const { session, row } of treeEntries(listed, rowOf)) {
       const key = (session.projectPath ?? session.cwd).toLowerCase();
       if (known.has(key)) {
         const rows = byPath.get(key);
@@ -3137,7 +3149,7 @@ export function App(): JSX.Element {
       } else
         elsewhere.push({
           ...row,
-          label: `${label} · ${folderName(session.cwd)}`,
+          label: `${row.label} · ${folderName(session.cwd)}`,
         });
     }
     return {
@@ -3161,8 +3173,15 @@ export function App(): JSX.Element {
   const openTreeSession = useCallback(
     (id: string) => {
       if (id.startsWith("session:")) {
-        // One not open here opens in a tab here.
-        openSession(sessionIdOf(id));
+        // A child's tab comes forward if it has one here, else its parent's
+        // does; only a child with neither opens a tab, on this press. Any other
+        // session not open here opens in a tab here.
+        const press = resolveFamilyPress(
+          sessions,
+          sessionIdOf(id),
+          sessionTabIds(open, LOCAL_HOST_KEY),
+        );
+        openSession(press.id);
         return;
       }
       // Somebody else's session has no tab; its row in the sessions pane is
@@ -3170,7 +3189,7 @@ export function App(): JSX.Element {
       setSelectedLivePid(Number(id.slice("pid:".length)));
       openSessions();
     },
-    [openSession, openSessions],
+    [openSession, openSessions, sessions, open],
   );
 
   /** What each host's group in the tree asks for, through that host. */
@@ -3185,10 +3204,16 @@ export function App(): JSX.Element {
         openTreeSession(id);
         return;
       }
-      const session = hostWork.byHost
-        .get(host)
-        ?.sessions.find((each) => paneId(sessionRef(each.id, host)) === id);
-      if (session !== undefined) openRemoteSession(host, session.id);
+      const there = hostWork.byHost.get(host)?.sessions ?? [];
+      const session = there.find(
+        (each) => paneId(sessionRef(each.id, host)) === id,
+      );
+      if (session === undefined) return;
+      // The same press as on this PC: the child's tab, else its parent's.
+      openRemoteSession(
+        host,
+        resolveFamilyPress(there, session.id, sessionTabIds(open, host)).id,
+      );
     },
     onTogglePin: (host: string, path: string) =>
       host === LOCAL_HOST_KEY
@@ -4124,6 +4149,23 @@ export function App(): JSX.Element {
       }
       sessionMcp={settings?.sessionMcp ?? DEFAULT_SETTINGS.sessionMcp}
       onSessionMcpChange={(sessionMcp) => writeSettings({ sessionMcp })}
+      sessionAgents={settings?.sessionAgents ?? DEFAULT_SETTINGS.sessionAgents}
+      onSessionAgentsChange={(sessionAgents) =>
+        writeSettings({ sessionAgents })
+      }
+      agentLimits={{
+        agentChildrenPerParent:
+          settings?.agentChildrenPerParent ??
+          DEFAULT_SETTINGS.agentChildrenPerParent,
+        agentSessionsPerHost:
+          settings?.agentSessionsPerHost ??
+          DEFAULT_SETTINGS.agentSessionsPerHost,
+        agentDepth: settings?.agentDepth ?? DEFAULT_SETTINGS.agentDepth,
+        agentStartsPerParent:
+          settings?.agentStartsPerParent ??
+          DEFAULT_SETTINGS.agentStartsPerParent,
+      }}
+      onAgentLimitsChange={(limits) => writeSettings(limits)}
       restoreWithoutAsking={
         settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking
       }

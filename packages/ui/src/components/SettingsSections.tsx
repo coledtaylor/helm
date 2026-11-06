@@ -15,6 +15,8 @@ export type SettingsSectionId =
   | 'appearance'
   | 'terminal'
   | 'sessions'
+  /** Whether sessions start sessions of their own, and how many. */
+  | 'agents'
   /** The hosts on other computers. */
   | 'hosts'
   /** The devices attached to each connected host. */
@@ -46,6 +48,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'sessions', label: 'Sessions' },
+  { id: 'agents', label: 'Agents' },
   { id: 'hosts', label: 'Hosts' },
   { id: 'devices', label: 'Devices' },
   { id: 'workspace', label: 'Workspace', hint: 'The folders Helm scans, and what a new harness is written from.' },

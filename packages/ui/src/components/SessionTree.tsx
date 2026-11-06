@@ -1,12 +1,19 @@
 import type { JSX, MouseEvent, ReactNode } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
-import { isProjectPinned } from '@helm/core/types'
+import { isProjectPinned, mostPressingState } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import type { SessionState } from '../lib/sessionstate'
 import { EmptyState as EmptyWell } from './EmptyState'
 import { Menu, type MenuAnchor, type MenuEntry } from './Menu'
-import { baseName, MissingProjectRow, ProjectRow, SessionRow } from './ProjectRow'
+import {
+  baseName,
+  FAMILY_STEP_PX,
+  MissingProjectRow,
+  ProjectRow,
+  SessionRow,
+  type SessionGuide
+} from './ProjectRow'
 import { CaretIcon, FolderPlusIcon, PinIcon, PlusIcon, RefreshIcon, ServerIcon, TerminalIcon } from './icons'
 
 /** One session as the tree draws it; see `SessionRow` for each field. */
@@ -18,6 +25,17 @@ export interface TreeSession {
   hint: string
   outside: boolean
   shown: 'focused' | 'visible' | null
+  /**
+   * The sessions this one started, drawn under it a step in whatever folder
+   * each runs in, in the order given. Absent for a session that started none.
+   * A row appears either here or in the list of the folder it runs in, never both.
+   */
+  nested?: readonly TreeSession[] | undefined
+  /**
+   * The name of the session that started this one, on a child listed in a
+   * folder's own list because that session has ended and no longer holds it.
+   */
+  parentName?: string | undefined
 }
 
 /**
@@ -187,26 +205,41 @@ function matchesText(text: string, query: string): boolean {
 /**
  * Which of a project's sessions' states a folded project shows: the one that
  * most wants you. Waiting first, then a reported error, then working, then a
- * failure, then the rest.
+ * failure, then the rest. A folded parent reads the same order over the
+ * sessions it started (`mostPressingState` in core).
  */
-const URGENCY: readonly SessionState[] = [
-  'waiting',
-  'error',
-  'busy',
-  'failed',
-  'running',
-  'shell',
-  'idle',
-  'ended'
-]
-
 function mostUrgent(sessions: readonly TreeSession[]): SessionState | null {
-  let best: SessionState | null = null
-  for (const session of sessions) {
-    if (session.state === null) continue
-    if (best === null || URGENCY.indexOf(session.state) < URGENCY.indexOf(best)) best = session.state
+  return mostPressingState(sessions.map((session) => session.state))
+}
+
+/** Every row in `sessions` and under them, each parent before the sessions it started. */
+function withNested(sessions: readonly TreeSession[]): TreeSession[] {
+  const rows: TreeSession[] = []
+  const walk = (level: readonly TreeSession[]): void => {
+    for (const row of level) {
+      rows.push(row)
+      if (row.nested !== undefined) walk(row.nested)
+    }
   }
-  return best
+  walk(sessions)
+  return rows
+}
+
+/** The ids of the sessions above the one with id `id`, outermost first, or null when it is in none of `levels`. */
+function ancestorsOf(levels: Iterable<readonly TreeSession[]>, id: string): string[] | null {
+  const find = (level: readonly TreeSession[], above: string[]): string[] | null => {
+    for (const row of level) {
+      if (row.id === id) return above
+      const found = row.nested === undefined ? null : find(row.nested, [...above, row.id])
+      if (found !== null) return found
+    }
+    return null
+  }
+  for (const level of levels) {
+    const found = find(level, [])
+    if (found !== null) return found
+  }
+  return null
 }
 
 /**
@@ -601,6 +634,10 @@ function HostTree({
 }): JSX.Element {
   const [foldedGroups, setFoldedGroups] = useState<ReadonlySet<string>>(new Set())
   const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(new Set())
+  // A parent folds the sessions it started the way a project folds its own, and
+  // for the same reason is absent-means-open: a child that starts after this
+  // render should show, not hide behind a key nothing has written yet.
+  const [foldedFamilies, setFoldedFamilies] = useState<ReadonlySet<string>>(new Set())
   const [pinsFolded, setPinsFolded] = useState(false)
   const groups = useMemo(() => groupProjects(discovery, pinnedPaths), [discovery, pinnedPaths])
   const pins = useMemo(() => resolvePins(discovery, pinnedPaths), [discovery, pinnedPaths])
@@ -620,14 +657,22 @@ function HostTree({
     const key =
       reveal.kind === 'project'
         ? reveal.path.toLowerCase()
-        : ([...sessionsByPath].find(([, rows]) => rows.some((row) => row.id === reveal.id))?.[0] ?? null)
-    if (key !== null) {
-      const unfold = (current: ReadonlySet<string>, item: string): ReadonlySet<string> => {
-        if (!current.has(item)) return current
-        const next = new Set(current)
-        next.delete(item)
-        return next
+        : ([...sessionsByPath].find(([, rows]) => withNested(rows).some((row) => row.id === reveal.id))?.[0] ??
+          null)
+    const unfold = (current: ReadonlySet<string>, item: string): ReadonlySet<string> => {
+      if (!current.has(item)) return current
+      const next = new Set(current)
+      next.delete(item)
+      return next
+    }
+    if (reveal.kind === 'session') {
+      // A session folded away under the one that started it opens that one too.
+      const above = ancestorsOf([...sessionsByPath.values(), elsewhere], reveal.id) ?? []
+      if (above.some((parent) => foldedFamilies.has(parent))) {
+        setFoldedFamilies((current) => above.reduce(unfold, current))
       }
+    }
+    if (key !== null) {
       setFoldedProjects((current) => unfold(current, key))
       const group = groups.find(
         (each) =>
@@ -645,7 +690,7 @@ function HostTree({
   const matches = (project: Project): boolean =>
     matchesText(project.name, query) ||
     matchesText(project.path, query) ||
-    sessionsOf(project.path).some((session) => matchesText(session.label, query))
+    withNested(sessionsOf(project.path)).some((session) => matchesText(session.label, query))
 
   const filtered = groups
     .map((group) => ({
@@ -663,7 +708,9 @@ function HostTree({
       matchesText(pin.path, query) ||
       (pin.project !== null && matches(pin.project))
   )
-  const shownElsewhere = elsewhere.filter((session) => matchesText(session.label, query))
+  const shownElsewhere = elsewhere.filter((session) =>
+    withNested([session]).some((row) => matchesText(row.label, query))
+  )
 
   const toggle = (
     setter: (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => void,
@@ -680,7 +727,45 @@ function HostTree({
   const groupOpen = (key: string): boolean => query !== '' || !foldedGroups.has(key)
   const projectOpen = (path: string): boolean =>
     query !== '' || !foldedProjects.has(path.toLowerCase())
+  const familyOpen = (id: string): boolean => query !== '' || !foldedFamilies.has(id)
   const pinsOpen = query !== '' || !pinsFolded
+
+  /**
+   * A session's row and, while it is open, the sessions it started under it,
+   * each a step in (`FAMILY_STEP_PX`) whatever folder it runs in and joined to
+   * its parent by a hairline guide. `guide` is the row's own, absent at the top.
+   */
+  const renderSession = (session: TreeSession, indent: number, guide?: SessionGuide): JSX.Element => {
+    const started = session.nested ?? []
+    const expanded = started.length === 0 ? null : familyOpen(session.id)
+    // The rules of the ancestors further out run on through this row's
+    // children while the ancestors have more children below this branch.
+    const through = guide === undefined ? [] : [...guide.through, !guide.last]
+    return (
+      <Fragment key={session.id}>
+        <SessionRow
+          id={session.id}
+          label={session.label}
+          state={session.state}
+          note={session.note}
+          hint={session.hint}
+          outside={session.outside}
+          shown={session.shown}
+          parentName={session.parentName}
+          indent={indent}
+          onOpen={onOpenSession}
+          guide={guide}
+          expanded={expanded}
+          onToggle={() => toggle(setFoldedFamilies, session.id)}
+          summary={mostUrgent(withNested(started))}
+        />
+        {expanded === true &&
+          started.map((child, at) =>
+            renderSession(child, indent + FAMILY_STEP_PX, { last: at === started.length - 1, through })
+          )}
+      </Fragment>
+    )
+  }
 
   const renderProject = (project: Project, indent: number, pinned: boolean): JSX.Element => {
     const sessions = sessionsOf(project.path)
@@ -694,21 +779,13 @@ function HostTree({
           indent={indent}
           expanded={expanded}
           onToggle={() => toggle(setFoldedProjects, project.path.toLowerCase())}
-          summary={mostUrgent(sessions)}
+          summary={mostUrgent(withNested(sessions))}
           pinned={pinned}
           onTogglePin={(p) => onTogglePin(p.path)}
           onLaunch={onLaunch}
           launching={launchingPath === project.path}
         />
-        {expanded === true &&
-          sessions.map((session) => (
-            <SessionRow
-              key={session.id}
-              {...session}
-              indent={indent + 32}
-              onOpen={onOpenSession}
-            />
-          ))}
+        {expanded === true && sessions.map((session) => renderSession(session, indent + 32))}
       </div>
     )
   }
@@ -753,7 +830,7 @@ function HostTree({
         ? empty
         : filtered.map((group, index) => {
             const projects = group.root ? [group.root, ...group.members] : group.members
-            const running = projects.reduce((n, p) => n + sessionsOf(p.path).length, 0)
+            const running = projects.reduce((n, p) => n + withNested(sessionsOf(p.path)).length, 0)
             const open = groupOpen(group.key)
             const name = group.harness?.name ?? 'Folders'
             return (
@@ -812,10 +889,8 @@ function HostTree({
           {(filtered.length > 0 || shownPins.length > 0) && (
             <div aria-hidden className="island-rule mx-2 my-2 opacity-60" />
           )}
-          <Caption label="Elsewhere" count={shownElsewhere.length} />
-          {shownElsewhere.map((session) => (
-            <SessionRow key={session.id} {...session} indent={22} onOpen={onOpenSession} />
-          ))}
+          <Caption label="Elsewhere" count={withNested(shownElsewhere).length} />
+          {shownElsewhere.map((session) => renderSession(session, 22))}
         </section>
       )}
     </>

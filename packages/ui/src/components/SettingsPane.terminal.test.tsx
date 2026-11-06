@@ -98,6 +98,15 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     onBrowserMcpLocalOnlyChange: vi.fn(),
     sessionMcp: true,
     onSessionMcpChange: vi.fn(),
+    sessionAgents: true,
+    onSessionAgentsChange: vi.fn(),
+    agentLimits: {
+      agentChildrenPerParent: 4,
+      agentSessionsPerHost: 8,
+      agentDepth: 2,
+      agentStartsPerParent: 16
+    },
+    onAgentLimitsChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
     quitSessions: 'end',

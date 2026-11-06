@@ -1,6 +1,10 @@
 import { useState, type JSX } from 'react'
 import {
   ACCENT_SWATCHES,
+  AGENT_CHILDREN_PER_PARENT,
+  AGENT_DEPTH,
+  AGENT_SESSIONS_PER_HOST,
+  AGENT_STARTS_PER_PARENT,
   offerableUsageModes,
   CORNER_RADIUS,
   DEFAULT_THEME_ID,
@@ -240,6 +244,15 @@ export interface SettingsPaneProps {
    */
   sessionMcp: boolean
   onSessionMcpChange: (next: boolean) => void
+  /**
+   * Whether the sessions a host starts can start sessions of their own, and
+   * the limits that bound them. A profile can turn it off for its own sessions;
+   * this is what every other session follows. The host enforces all of it.
+   */
+  sessionAgents: boolean
+  onSessionAgentsChange: (next: boolean) => void
+  agentLimits: AgentLimitSettings
+  onAgentLimitsChange: (patch: Partial<AgentLimitSettings>) => void
   /** Reopen what a crash took without asking. Also ticked from the offer itself. */
   restoreWithoutAsking: boolean
   onRestoreWithoutAskingChange: (next: boolean) => void
@@ -310,6 +323,12 @@ export type TerminalSettings = Pick<
   | 'projectShellHeightPct'
 >
 
+/** The four limits on a family of agents, named once for the group that edits them. */
+export type AgentLimitSettings = Pick<
+  AppSettings,
+  'agentChildrenPerParent' | 'agentSessionsPerHost' | 'agentDepth' | 'agentStartsPerParent'
+>
+
 /** What a fact reads when there is nothing to put in it. */
 const NOTHING = '-'
 
@@ -375,6 +394,10 @@ export function SettingsPane({
   onBrowserMcpLocalOnlyChange,
   sessionMcp,
   onSessionMcpChange,
+  sessionAgents,
+  onSessionAgentsChange,
+  agentLimits,
+  onAgentLimitsChange,
   restoreWithoutAsking,
   onRestoreWithoutAskingChange,
   quitSessions,
@@ -687,6 +710,15 @@ export function SettingsPane({
               onQuitChange={onQuitSessionsChange}
               onStopHost={onStopHost}
               hostLogFile={hostLogFile}
+            />
+          )}
+
+          {section === 'agents' && (
+            <AgentsGroup
+              enabled={sessionAgents}
+              onEnabledChange={onSessionAgentsChange}
+              limits={agentLimits}
+              onLimitsChange={onAgentLimitsChange}
             />
           )}
 
@@ -1657,6 +1689,115 @@ function SessionsGroup({
           </span>
         </Row>
       )}
+    </Group>
+  )
+}
+
+/**
+ * Whether a session can start sessions of its own, and how far that may go.
+ *
+ * A group of its own beside Sessions: that one is about what a session may
+ * learn of the others, this one about what it may start, which is a different
+ * decision with different consequences (a session that starts others spends
+ * the user's agent time without being asked). The host enforces every number,
+ * whether or not a window is open, and sessions the user starts count toward
+ * none of them. A limit is a whole number inside the range the host accepts, so
+ * a value outside it is brought to the nearest end rather than refused by the
+ * host after the fact.
+ */
+function AgentsGroup({
+  enabled,
+  onEnabledChange,
+  limits,
+  onLimitsChange
+}: {
+  enabled: boolean
+  onEnabledChange: (next: boolean) => void
+  limits: AgentLimitSettings
+  onLimitsChange: (patch: Partial<AgentLimitSettings>) => void
+}): JSX.Element {
+  return (
+    <Group
+      name="agents"
+      title="Agents"
+      hint="Sessions that start sessions of their own. The host runs and limits them whether or not a window is open."
+    >
+      <Row
+        label="Sessions can start agents"
+        hint="Every session you start gets the floti-agents tools and floti agent. A profile can turn it off for its own sessions."
+      >
+        <span data-settings-session-agents={String(enabled)}>
+          <Checkbox
+            checked={enabled}
+            onChange={() => onEnabledChange(!enabled)}
+            label="Sessions can start agents"
+          />
+        </span>
+      </Row>
+
+      <Divider />
+
+      <Row
+        label="Children per parent"
+        hint="Sessions one session may have running at once that it started. A start past it is refused."
+      >
+        <NumberField
+          value={limits.agentChildrenPerParent}
+          min={AGENT_CHILDREN_PER_PARENT.min}
+          max={AGENT_CHILDREN_PER_PARENT.max}
+          label="Children per parent"
+          data-settings-agent-children-per-parent={String(limits.agentChildrenPerParent)}
+          onCommit={(agentChildrenPerParent) => onLimitsChange({ agentChildrenPerParent })}
+        />
+      </Row>
+
+      <Divider />
+
+      <Row
+        label="Agent sessions per host"
+        hint="Sessions started by agents that may run on one host at once. Sessions you start yourself count toward none of these limits."
+      >
+        <NumberField
+          value={limits.agentSessionsPerHost}
+          min={AGENT_SESSIONS_PER_HOST.min}
+          max={AGENT_SESSIONS_PER_HOST.max}
+          label="Agent sessions per host"
+          data-settings-agent-sessions-per-host={String(limits.agentSessionsPerHost)}
+          onCommit={(agentSessionsPerHost) => onLimitsChange({ agentSessionsPerHost })}
+        />
+      </Row>
+
+      <Divider />
+
+      <Row
+        label="Depth"
+        hint="How many generations a family may reach. 2 is a session, the sessions it starts and the ones they start, and no further."
+      >
+        <NumberField
+          value={limits.agentDepth}
+          min={AGENT_DEPTH.min}
+          max={AGENT_DEPTH.max}
+          label="Depth"
+          data-settings-agent-depth={String(limits.agentDepth)}
+          onCommit={(agentDepth) => onLimitsChange({ agentDepth })}
+        />
+      </Row>
+
+      <Divider />
+
+      <Row
+        label="Starts per parent"
+        hint="Sessions one session may start in its life, whether or not they are still running."
+      >
+        <NumberField
+          value={limits.agentStartsPerParent}
+          min={AGENT_STARTS_PER_PARENT.min}
+          max={AGENT_STARTS_PER_PARENT.max}
+          label="Starts per parent"
+          data-settings-agent-starts-per-parent={String(limits.agentStartsPerParent)}
+          onCommit={(agentStartsPerParent) => onLimitsChange({ agentStartsPerParent })}
+        />
+      </Row>
     </Group>
   )
 }

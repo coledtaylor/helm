@@ -19,14 +19,15 @@ describe('SettingsSections', () => {
     expect(onSelect).toHaveBeenCalledWith('browser')
   })
 
-  it('S1: always lists Hosts after Sessions, then Devices', () => {
+  it('S1: always lists Agents after Sessions, then Hosts, then Devices', () => {
     const onSelect = vi.fn()
     render(<SettingsSections current="general" onSelect={onSelect} />)
     const rows = [...screen.getByRole('navigation', { name: 'Settings sections' }).querySelectorAll('button')].map(
       (row) => row.textContent
     )
     expect(rows).toEqual(SETTINGS_SECTIONS.map((section) => section.label))
-    expect(rows[rows.indexOf('Sessions') + 1]).toBe('Hosts')
+    expect(rows[rows.indexOf('Sessions') + 1]).toBe('Agents')
+    expect(rows[rows.indexOf('Agents') + 1]).toBe('Hosts')
     expect(rows[rows.indexOf('Hosts') + 1]).toBe('Devices')
     fireEvent.click(screen.getByRole('button', { name: 'Hosts' }))
     expect(onSelect).toHaveBeenCalledWith('hosts')

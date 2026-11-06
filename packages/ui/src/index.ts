@@ -105,6 +105,7 @@ export {
 export {
   SettingsPane,
   updateOutcome,
+  type AgentLimitSettings,
   type SettingsPaneProps,
   type TerminalSettings,
   type UpdateCheckResult,
