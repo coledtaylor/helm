@@ -145,6 +145,13 @@ describe('ChildHeader on a card', () => {
     expect(container.querySelector('[data-family-role]')?.textContent).toBe('reviewer')
     expect(container.querySelector('[data-family-status]')?.textContent).toBe('Working · 4m')
 
+    // The small buttons take the font's own line height, so they stand about 17px tall in the 26px header.
+    for (const name of ['Open reviewer as a tab', 'Stop reviewer']) {
+      const button = within(row).getByRole('button', { name })
+      expect(button.className).toContain('leading-[normal]')
+      expect(button.className).not.toContain('leading-[1.55]')
+    }
+
     await userEvent.click(within(row).getByRole('button', { name: 'Open reviewer as a tab' }))
     expect(props.onOpenAsTab).toHaveBeenCalledTimes(1)
     await userEvent.click(within(row).getByRole('button', { name: 'Stop reviewer' }))

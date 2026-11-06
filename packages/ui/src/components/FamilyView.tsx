@@ -158,8 +158,9 @@ export interface ChildHeaderProps {
   onClose?: (() => void) | undefined
 }
 
+/** Line height is the font's own, as the frame's buttons have it: with 1px of padding and border they stand about 17px tall in the 26px header. */
 const SMALL_BUTTON =
-  'shrink-0 whitespace-nowrap rounded-well border px-[5px] py-px text-[10.5px] font-medium leading-[1.55] transition-colors'
+  'shrink-0 whitespace-nowrap rounded-well border px-[5px] py-px text-[10.5px] font-medium leading-[normal] transition-colors'
 
 /**
  * A child's one-line header.

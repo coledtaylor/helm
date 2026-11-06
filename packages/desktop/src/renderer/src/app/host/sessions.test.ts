@@ -279,6 +279,20 @@ describe('sessions over the window’s own connection', () => {
     expect(bridge.sent).toEqual([])
   })
 
+  it('adopts what the host lists before the window hears the activity that names a new session, so the window’s own list finds it', async () => {
+    const connection = new FakeConnection()
+    const { adapters } = world({ connection })
+    await ask(adapters, 'session:list')
+    const heard = hear(adapters, 'session:activity')
+    connection.answer('session:list', () => [row({ id: 12, name: 'reviewer' })])
+    connection.push('session:activity', [])
+    // The word is not out while the list is still being asked for.
+    expect(heard).toEqual([])
+    await settle()
+    expect(heard).toHaveLength(1)
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([expect.objectContaining({ id: 12 })])
+  })
+
   it('opens a session it had no tab for on a new stream that starts with its screen, and lets it go again when its tab closes and it keeps running', async () => {
     const { adapters, connection } = world({ listed: [row(), row({ id: 9, name: 'api' })] })
     const data = hear(adapters, 'session:data')

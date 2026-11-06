@@ -80,7 +80,27 @@ export function useSessions(onActivate: (id: number) => void, reconnects = 0): S
     activateRef.current = onActivate
   }, [onActivate])
 
+  // The ids this window holds, read when the host's activity names one, which
+  // is not inside a state updater: an updater runs when React gets to it.
+  const heldRef = useRef(new Set<number>())
   useEffect(() => {
+    heldRef.current = new Set(sessions.map((session) => session.id))
+  }, [sessions])
+
+  useEffect(() => {
+    // A session started elsewhere, such as a child a parent's agent tool
+    // started, is added once the host lists it; the ones held are not touched.
+    const relist = (): void => {
+      void helm.invoke('session:list').then(
+        (rows) =>
+          setSessions((current) => {
+            const held = new Set(current.map((session) => session.id))
+            const added = rows.filter((row) => !held.has(row.id))
+            return added.length === 0 ? current : [...current, ...added]
+          }),
+        () => undefined
+      )
+    }
     const offs = [
       helm.on('session:exit', (record) => {
         // Replaced rather than removed: an exited session keeps its tab and its
@@ -93,6 +113,7 @@ export function useSessions(onActivate: (id: number) => void, reconnects = 0): S
       // stale dot until that session happens to move again.
       helm.on('session:activity', (states) => {
         setActivity(new Map(states.map((state) => [state.id, state])))
+        if (listedRef.current && states.some((state) => !heldRef.current.has(state.id))) relist()
       })
     ]
     return () => {

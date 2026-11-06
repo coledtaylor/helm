@@ -64,6 +64,30 @@ describe('useSessions', () => {
     expect([...result.current.activity.keys()]).toEqual([1])
   })
 
+  it('adds a session the host started while the window is open, such as a child its parent started, once the activity names it', async () => {
+    hosting = [record(1)]
+    const { result } = await mounted()
+    await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1]))
+    bridge.clearRecords()
+
+    hosting = [record(1), record(2)]
+    const state = (id: number): SessionActivityState => ({
+      id,
+      activity: 'busy',
+      waitingFor: null,
+      message: null,
+      claudeSessionId: null
+    })
+    act(() => bridge.emit('session:activity', [state(1), state(2)]))
+    await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1, 2]))
+    expect(bridge.invoked('session:list')).toHaveLength(1)
+
+    // Known sessions moving ask for nothing.
+    bridge.clearRecords()
+    act(() => bridge.emit('session:activity', [state(1), state(2)]))
+    expect(bridge.invoked('session:list')).toHaveLength(0)
+  })
+
   it('S15: lists the sessions of the host that replaced one that refused the window, once it is connected, and only until listed', async () => {
     bridge.answer('session:list', () => {
       throw new Error('This client speaks Floti protocol 2.0 and the host speaks 1.4.')

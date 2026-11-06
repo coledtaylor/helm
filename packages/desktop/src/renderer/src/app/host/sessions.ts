@@ -215,27 +215,39 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
   const asking = (question: Question): Promise<boolean> =>
     new Promise((resolve) => ask(question, (agreed) => resolve(agreed)))
 
-  let relisting = false
+  let relisting: Promise<void> | null = null
   let relistAgain = false
-  /** Adopts what the host lists now: a session started elsewhere, such as one a plugin asked for. */
-  async function relist(): Promise<void> {
-    if (relisting) {
+  /**
+   * Adopts what the host lists now: a session started elsewhere, such as one a
+   * plugin asked for or a parent's agent tool. Settles once a list asked for
+   * after this call has been adopted, whoever else was already asking.
+   */
+  function relist(): Promise<void> {
+    if (relisting !== null) {
       relistAgain = true
-      return
+      return relisting
     }
-    relisting = true
-    try {
-      do {
-        relistAgain = false
-        const connection = current
-        if (connection === null) return
-        adoptAll(await connection.request('session:list', null), false)
-      } while (relistAgain)
-    } catch (error) {
-      log(`host: session:list failed (${(error as Error).message})`)
-    } finally {
-      relisting = false
-    }
+    let finished: () => void = () => undefined
+    const settled = new Promise<void>((resolve) => {
+      finished = resolve
+    })
+    relisting = settled
+    void (async (): Promise<void> => {
+      try {
+        do {
+          relistAgain = false
+          const connection = current
+          if (connection === null) return
+          adoptAll(await connection.request('session:list', null), false)
+        } while (relistAgain)
+      } catch (error) {
+        log(`host: session:list failed (${(error as Error).message})`)
+      } finally {
+        relisting = null
+        finished()
+      }
+    })()
+    return settled
   }
 
   const onExit = (row: P.SessionRecord): void => {
@@ -255,8 +267,10 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
     const failed = (channel: string) => (error: Error) => log(`host: ${channel} ended (${error.message})`)
     const setStates = (next: readonly P.SessionActivityState[], moved: boolean): void => {
       states = activityFromHost(next)
-      events.tell('session:activity', states)
-      if (moved) void relist()
+      // A window hearing of a session it does not know asks for the list at
+      // once, so what the host lists is adopted before the word goes out.
+      if (moved) void relist().then(() => events.tell('session:activity', states))
+      else events.tell('session:activity', states)
     }
     const setOverview = (next: P.SessionsOverview, moved: boolean): void => {
       overview = overviewFromHost(next)
