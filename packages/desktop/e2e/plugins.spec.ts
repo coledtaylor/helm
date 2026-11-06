@@ -259,8 +259,16 @@ test("Helm's shortcuts work from inside a plugin page, and its commands run from
   await expect(ui.getByRole('tab', { name: /From the palette/ })).toBeVisible()
   expect(sample.server.items.map((item) => item.title)).toContain('From the palette')
 
-  // The new item is counted: the tab said so on the plugin's channel.
-  await expect(statusItem(ui)).toHaveText('3 unread')
+  // The tab it opens reads the new item, which marks it read and says so on
+  // the plugin's channel; the background module asks the server again and
+  // counts the two unread items there were before.
+  const created = sample.server.items.find((item) => item.title === 'From the palette')
+  await expect.poll(() => created?.read).toBe(true)
+  const markedAt = sample.server.requests.findIndex((request) => request.method === 'POST' && request.path.endsWith('/read'))
+  await expect
+    .poll(() => sample.server.requests.slice(markedAt + 1).some((request) => request.method === 'GET' && request.path.startsWith('/items?')))
+    .toBe(true)
+  await expect(statusItem(ui)).toHaveText('2 unread')
 
   // A command with no tab is the background module's. An item added on the
   // server behind the plugin's back is counted only once something asks the
@@ -271,8 +279,8 @@ test("Helm's shortcuts work from inside a plugin page, and its commands run from
   await ui.keyboard.type('refresh')
   await ui.keyboard.press('Enter')
   await expect(palette).toBeHidden()
-  await expect(statusItem(ui)).toHaveText('4 unread')
-  await expect(ui.locator('[data-rail-badge]')).toHaveText('4')
+  await expect(statusItem(ui)).toHaveText('3 unread')
+  await expect(ui.locator('[data-rail-badge]')).toHaveText('3')
 })
 
 /**
