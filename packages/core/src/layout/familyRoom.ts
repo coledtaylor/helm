@@ -50,8 +50,31 @@ export function gridOf(size: PixelSize, cell: CellSize, scrollback: number): Ter
   }
 }
 
+/** `size` less `x` on each side across and `y` on each side down. */
+function inside(size: PixelSize, x: number, y: number): PixelSize {
+  return { width: size.width - 2 * x, height: size.height - 2 * y }
+}
+
 /** The share of the pane's long side the parent's terminal keeps while any child is in its family. */
 export const FAMILY_PARENT_SHARE = 0.55
+
+/**
+ * The hairline the family view draws between the parent and the children and
+ * between one card and the next. It is part of the pane the children share, so
+ * a card's terminal has that much less than an even split of the pane.
+ */
+export const FAMILY_HAIRLINE_PX = 1
+
+/**
+ * The gutter a session's terminal sits in, per side, in CSS pixels. The grid a
+ * terminal fits is the box inside it (`TerminalPane` draws it as padding on a
+ * wrapper), so a pane that is 80 columns wide by its own width holds fewer. A
+ * parent's terminal has it on every side; a card's has less above and below,
+ * to leave its header room.
+ */
+export const PARENT_GUTTER_PX = 10
+export const CARD_GUTTER_X_PX = 10
+export const CARD_GUTTER_Y_PX = 8
 
 /** The columns the parent keeps, at the device's terminal font, for the family view to show. */
 export const FAMILY_PARENT_MIN_COLS = 80
@@ -130,46 +153,59 @@ export function familyRoom(input: FamilyRoomInput): FamilyRoom {
   const axis = familyAxis(body)
   const share = FAMILY_PARENT_SHARE
   const parent = gridOf(
-    axis === 'column'
-      ? { width: body.width * share, height: body.height }
-      : { width: body.width, height: body.height * share },
+    inside(
+      axis === 'column'
+        ? { width: body.width * share, height: body.height }
+        : { width: body.width, height: body.height * share },
+      PARENT_GUTTER_PX,
+      PARENT_GUTTER_PX
+    ),
     cell,
     scrollback
   )
   if (parent.cols < FAMILY_PARENT_MIN_COLS) return { fits: false, axis, why: 'parent' }
 
   const children = Math.max(0, Math.floor(input.children))
-  const cardMinHeight = headerHeight + FAMILY_CARD_MIN_ROWS * cell.height
-  const rest = body.height * (1 - share)
+  // What a card's terminal needs below its header: 8 rows and its gutter.
+  const cardRows = FAMILY_CARD_MIN_ROWS * cell.height + 2 * CARD_GUTTER_Y_PX
+  const cardMinHeight = headerHeight + cardRows
+  /** The grid a card's terminal gets in `size`, the box under its header. */
+  const cardGrid = (size: PixelSize): TerminalGrid =>
+    gridOf(inside(size, CARD_GUTTER_X_PX, CARD_GUTTER_Y_PX), cell, scrollback)
+  const hairline = FAMILY_HAIRLINE_PX
+  // The children's side of the first hairline.
+  const rest = body.height * (1 - share) - hairline
 
   if (axis === 'column') {
-    const cardsWidth = body.width * (1 - share)
-    if (gridOf({ width: cardsWidth, height: body.height }, cell, scrollback).cols < FAMILY_CARD_MIN_COLS) {
+    const cardsWidth = body.width * (1 - share) - hairline
+    if (cardGrid({ width: cardsWidth, height: body.height }).cols < FAMILY_CARD_MIN_COLS) {
       return { fits: false, axis, why: 'cards' }
     }
     if (cardMinHeight > body.height) return { fits: false, axis, why: 'cards' }
     if (children === 0) return { fits: false, axis, why: 'children' }
-    // The most cards that leave a one-line header's room for every other child.
-    const byRoom = Math.floor((body.height - children * headerHeight) / (FAMILY_CARD_MIN_ROWS * cell.height))
+    // The most cards that leave a one-line header's room for every other child,
+    // each card after the first with a hairline above it.
+    const byRoom = Math.floor((body.height - children * headerHeight + hairline) / (cardRows + hairline))
     const cards = Math.min(children, Math.max(1, byRoom))
+    const between = (cards - 1) * hairline
     const headers = Math.min(
       children - cards,
-      Math.floor((body.height - cards * cardMinHeight) / headerHeight)
+      Math.floor((body.height - cards * cardMinHeight - between) / headerHeight)
     )
-    const each = (body.height - headers * headerHeight) / cards
+    const each = (body.height - headers * headerHeight - between) / cards
     return {
       fits: true,
       axis,
       parent,
       cards,
       headers,
-      card: gridOf({ width: cardsWidth, height: each - headerHeight }, cell, scrollback)
+      card: cardGrid({ width: cardsWidth, height: each - headerHeight })
     }
   }
 
   // A row below the parent: cards side by side, each at least 60 columns wide.
-  const cardMinWidth = FAMILY_CARD_MIN_COLS * cell.width + rulerReserve(scrollback)
-  const wide = Math.floor(body.width / cardMinWidth)
+  const cardMinWidth = FAMILY_CARD_MIN_COLS * cell.width + 2 * CARD_GUTTER_X_PX + rulerReserve(scrollback)
+  const wide = Math.floor((body.width + hairline) / (cardMinWidth + hairline))
   if (wide < 1 || cardMinHeight > rest) return { fits: false, axis, why: 'cards' }
   if (children === 0) return { fits: false, axis, why: 'children' }
   const cards = Math.min(children, wide)
@@ -181,10 +217,9 @@ export function familyRoom(input: FamilyRoomInput): FamilyRoom {
     parent,
     cards,
     headers,
-    card: gridOf(
-      { width: body.width / cards, height: rest - headers * headerHeight - headerHeight },
-      cell,
-      scrollback
-    )
+    card: cardGrid({
+      width: (body.width - (cards - 1) * hairline) / cards,
+      height: rest - headers * headerHeight - headerHeight
+    })
   }
 }

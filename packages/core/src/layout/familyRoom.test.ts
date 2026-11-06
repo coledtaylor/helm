@@ -3,6 +3,9 @@ import {
   familyAxis,
   familyRoom,
   gridOf,
+  CARD_GUTTER_X_PX,
+  CARD_GUTTER_Y_PX,
+  PARENT_GUTTER_PX,
   type CellSize,
   type FamilyRoom,
   type PixelSize
@@ -14,6 +17,8 @@ const DEFAULT_CELL: CellSize = { width: 8, height: 17 }
 const LARGE_CELL: CellSize = { width: 11, height: 24 }
 /** A card's header is one line, 28px. */
 const HEADER = 28
+/** What a card's terminal needs under its header besides 8 rows: the gutter it sits in. */
+const CARD_GUTTER = 2 * CARD_GUTTER_Y_PX
 
 const room = (
   body: PixelSize,
@@ -51,11 +56,11 @@ describe('familyAxis', () => {
 })
 
 describe('familyRoom', () => {
-  it('fits a pane the size of a 1920x1080 window’s, the parent at 55% keeping about 99 columns and up to five children showing as cards', () => {
-    const wide = room({ width: 1440, height: 860 }, 5)
-    expect(wide).toMatchObject({ fits: true, axis: 'column', cards: 5, headers: 0 })
+  it('fits a pane the size of a 1920x1080 window’s, the parent at 55% keeping about 94 columns in its gutter and four children showing as cards before any shrinks', () => {
+    const wide = room({ width: 1440, height: 860 }, 4)
+    expect(wide).toMatchObject({ fits: true, axis: 'column', cards: 4, headers: 0 })
     if (!wide.fits) return
-    expect(wide.parent.cols).toBeGreaterThanOrEqual(80)
+    expect(wide.parent.cols).toBe(94)
     expect(wide.card.cols).toBeGreaterThanOrEqual(60)
     expect(wide.card.rows).toBeGreaterThanOrEqual(8)
   })
@@ -64,32 +69,59 @@ describe('familyRoom', () => {
     expect(room({ width: 1000, height: 640 }, 3)).toEqual({ fits: false, axis: 'column', why: 'parent' })
   })
 
-  it('judges the parent’s 80 columns at their edge: 80 fits and 79 does not', () => {
-    // 55% of 1190 is 654.5 and 14 of it is the ruler's: 640.5 / 8 = 80.06 columns.
-    expect(room({ width: 1190, height: 700 }, 1).fits).toBe(true)
-    // 55% of 1188 is 653.4: 639.4 / 8 = 79.9 columns.
-    expect(room({ width: 1188, height: 700 }, 1)).toEqual({ fits: false, axis: 'column', why: 'parent' })
+  it('judges the parent’s 80 columns at their edge, inside its gutter and the ruler: 80 fits and 79 does not', () => {
+    // 55% of 1226 is 674.3; the gutter's 20 and the ruler's 14 leave 640.3 / 8 = 80.04 columns.
+    const fits = room({ width: 1226, height: 700 }, 1)
+    expect(fits.fits).toBe(true)
+    if (fits.fits) expect(fits.parent.cols).toBe(80)
+    // 55% of 1225 is 673.75: 639.75 / 8 = 79.97 columns.
+    expect(room({ width: 1225, height: 700 }, 1)).toEqual({ fits: false, axis: 'column', why: 'parent' })
+    expect(PARENT_GUTTER_PX).toBe(10)
   })
 
-  it('judges a child’s 8 rows at their edge: a header and 8 rows fit, a pixel less does not', () => {
-    const card = HEADER + 8 * DEFAULT_CELL.height
+  it('judges a child’s 8 rows at their edge: a header and 8 rows in the card’s gutter fit, a pixel less does not', () => {
+    const card = HEADER + CARD_GUTTER + 8 * DEFAULT_CELL.height
     expect(room({ width: 1500, height: card }, 1).fits).toBe(true)
     expect(room({ width: 1500, height: card - 1 }, 1)).toEqual({ fits: false, axis: 'column', why: 'cards' })
   })
 
   it('judges a child’s 60 columns in a row of cards at their edge: a card stands beside the others for each 60 columns and a ruler', () => {
-    const one = 60 * DEFAULT_CELL.width + 14
-    expect(room({ width: 2 * one - 1, height: 1800 }, 3)).toMatchObject({ fits: true, axis: 'row', cards: 1, headers: 2 })
-    expect(room({ width: 2 * one, height: 1800 }, 3)).toMatchObject({ fits: true, axis: 'row', cards: 2, headers: 1 })
+    const one = 60 * DEFAULT_CELL.width + 2 * CARD_GUTTER_X_PX + 14
+    // Two cards need the hairline between them as well.
+    expect(room({ width: 2 * one, height: 1800 }, 3)).toMatchObject({ fits: true, axis: 'row', cards: 1, headers: 2 })
+    expect(room({ width: 2 * one + 1, height: 1800 }, 3)).toMatchObject({ fits: true, axis: 'row', cards: 2, headers: 1 })
+  })
+
+  it('counts the hairline between cards in a column: two cards of a header and 8 rows need one pixel more than their own heights', () => {
+    const two = 2 * (HEADER + CARD_GUTTER + 8 * DEFAULT_CELL.height)
+    expect(room({ width: 1500, height: two }, 2)).toMatchObject({ fits: true, axis: 'column', cards: 1, headers: 1 })
+    const both = room({ width: 1500, height: two + 1 }, 2)
+    expect(both).toMatchObject({ fits: true, axis: 'column', cards: 2, headers: 0 })
+    if (both.fits) expect(both.card.rows).toBe(8)
+  })
+
+  it('gives every card it counts the 60 columns and 8 rows it was counted for', () => {
+    for (const body of [
+      { width: 1500, height: 329 },
+      { width: 1500, height: 860 },
+      { width: 1029, height: 1800 },
+      { width: 1400, height: 1900 }
+    ]) {
+      const answer = room(body, 6)
+      expect(answer.fits).toBe(true)
+      if (!answer.fits) continue
+      expect(answer.card.cols).toBeGreaterThanOrEqual(60)
+      expect(answer.card.rows).toBeGreaterThanOrEqual(8)
+    }
   })
 
   it('shows the parent alone in a tall pane that is under 80 columns wide, though a card would fit', () => {
-    const across = 60 * DEFAULT_CELL.width + 14
+    const across = 60 * DEFAULT_CELL.width + 2 * CARD_GUTTER_X_PX + 14
     expect(room({ width: across, height: 1800 }, 1)).toEqual({ fits: false, axis: 'row', why: 'parent' })
   })
 
   it('lays the cards in a row under the parent in a taller pane, side by side as far as 60 columns each allow', () => {
-    const tall = room({ width: 1000, height: 1400 }, 4)
+    const tall = room({ width: 1100, height: 1400 }, 4)
     expect(tall).toMatchObject({ fits: true, axis: 'row', cards: 2 })
     if (!tall.fits) return
     expect(tall.card.cols).toBeGreaterThanOrEqual(60)
@@ -116,7 +148,8 @@ describe('familyRoom', () => {
     expect(crowded.cards).toBeGreaterThanOrEqual(1)
     expect(crowded.cards).toBeLessThan(12)
     // Every header and every card's minimum height is inside the pane.
-    const used = crowded.cards * (HEADER + 8 * DEFAULT_CELL.height) + crowded.headers * HEADER
+    const used =
+      crowded.cards * (HEADER + CARD_GUTTER + 8 * DEFAULT_CELL.height) + crowded.headers * HEADER + crowded.cards - 1
     expect(used).toBeLessThanOrEqual(860)
   })
 

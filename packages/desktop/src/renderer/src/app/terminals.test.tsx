@@ -1,10 +1,17 @@
 import { render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_SETTINGS, type SessionRecord } from '@helm/core/types'
+import { DEFAULT_SETTINGS, familyRoom, gridOf, PARENT_GUTTER_PX, type SessionRecord } from '@helm/core/types'
 import { bridge, remoteBridge } from './bridge.testkit'
 import { FakeResizeObserver, layout, Terminal } from './terminal.testkit'
 import { TerminalPane } from './TerminalPane'
-import { disposeTerminal, estimateGrid, getTerminal, mountTerminal } from './terminals'
+import {
+  disposeTerminal,
+  estimateGrid,
+  getTerminal,
+  mountTerminal,
+  terminalCell,
+  terminalScrollback
+} from './terminals'
 import { applyTerminalSettings } from './termprefs'
 
 vi.mock('@xterm/xterm', () => import('./terminal.testkit'))
@@ -138,6 +145,49 @@ describe('estimateGrid', () => {
 
     layout.text(() => ({ width: 0, height: 0 }))
     expect(estimateGrid(pane(1000, 600))).toEqual({ cols: 100, rows: 30 })
+  })
+})
+
+describe('the cell the family view’s room rule reads', () => {
+  it('is the cell estimateGrid measures, so the rule and the terminal count the same columns and rows at the default font and a larger one', () => {
+    for (const [fontSize, ratio] of [
+      [14, 1],
+      [20, 1],
+      [20, 1.5]
+    ] as const) {
+      applyTerminalSettings({ ...DEFAULT_SETTINGS, terminalFontSize: fontSize })
+      setDevicePixelRatio(ratio)
+      const cell = terminalCell()
+      expect(cell).not.toBeNull()
+      expect(estimateGrid(pane(1440, 860))).toEqual(gridOf({ width: 1440, height: 860 }, cell!, terminalScrollback()))
+    }
+  })
+
+  it('is larger at a larger font, so the same floors in columns and rows take more pixels', () => {
+    const small = terminalCell()
+    applyTerminalSettings({ ...DEFAULT_SETTINGS, terminalFontSize: 20 })
+    const large = terminalCell()
+    expect(small).toEqual({ width: 8, height: 17 })
+    expect(large).toEqual({ width: 11, height: 24 })
+  })
+
+  it('judges a pane by the grid a terminal opened in its 55% gets: the parent keeps what estimateGrid says of that share, less its gutter', () => {
+    applyTerminalSettings({ ...DEFAULT_SETTINGS, terminalFontSize: 20 })
+    const room = familyRoom({
+      body: { width: 1800, height: 900 },
+      cell: terminalCell()!,
+      headerHeight: 26,
+      scrollback: terminalScrollback(),
+      children: 2
+    })
+    expect(room.fits).toBe(true)
+    if (!room.fits) return
+    expect(room.parent).toEqual(estimateGrid(pane(1800 * 0.55 - 2 * PARENT_GUTTER_PX, 900 - 2 * PARENT_GUTTER_PX)))
+  })
+
+  it('is null where nothing can be measured, so a pane is not judged by a guess', () => {
+    layout.text(() => ({ width: 0, height: 0 }))
+    expect(terminalCell()).toBeNull()
   })
 })
 

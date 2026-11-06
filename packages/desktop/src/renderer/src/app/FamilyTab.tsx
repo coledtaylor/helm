@@ -28,7 +28,7 @@ import { forgetFamilyRoom, reportFamilyRoom } from './familyRooms'
 import { childStatus } from './sessionView'
 import { TerminalPane, type HostLost } from './TerminalPane'
 import { terminalCell } from './terminals'
-import { useBodySize } from './useBodySize'
+import { useBodySize, useDevicePixelRatio } from './useBodySize'
 import { useTerminalPrefs } from './useTerminalPrefs'
 
 /** A child held by a parent's tab, with what the window knows of what it is doing. */
@@ -103,8 +103,12 @@ export function FamilyTab({
   const bodyRef = useRef<HTMLDivElement>(null)
   const size = useBodySize(bodyRef)
   const prefs = useTerminalPrefs()
-  // One cell of the terminal's font, measured again only when the font changes.
-  const cell = useMemo(() => terminalCell(prefs), [prefs])
+  // One cell of the terminal's font, measured again when the font changes or
+  // the window moves to a screen with another pixel ratio, which quantises it
+  // differently.
+  const ratio = useDevicePixelRatio()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the ratio is read by the measurement, not passed to it
+  const cell = useMemo(() => terminalCell(prefs), [prefs, ratio])
 
   const sessions = kids.map((kid) => kid.session)
   const held = familyChildren(sessions, family)

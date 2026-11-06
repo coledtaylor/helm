@@ -4,12 +4,15 @@ import { useState, type JSX } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   activeRef,
+  CARD_GUTTER_X_PX,
+  CARD_GUTTER_Y_PX,
   DEFAULT_SETTINGS,
   familiesHere,
   familyOf,
   fromSaved,
   LOCAL_HOST_KEY,
   paneId,
+  PARENT_GUTTER_PX,
   sessionRef,
   type PaneLayout,
   type SavedPane,
@@ -47,12 +50,14 @@ const SAMPLE = 'W'.repeat(32)
 /** Cells of 8 by 16 CSS pixels, so a pane's grid is worked out by hand. */
 const CELL = { width: 8, height: 16 }
 
-/** Wide enough for 80 columns at 55% and 60 beside it; four rows of 8 high cards fit three. */
-const WIDE: Box = { width: 1200, height: 640 }
+/** Wide enough for 80 columns at 55% in the terminal's gutter and 60 beside it; cards of 8 rows fit three. */
+const WIDE: Box = { width: 1300, height: 640 }
 /** The same width, too short for more than two cards and two headers of four children. */
-const SHORT: Box = { width: 1200, height: 420 }
+const SHORT: Box = { width: 1300, height: 420 }
 /** Taller than wide, with room for two cards side by side under the parent. */
-const TALL: Box = { width: 1000, height: 1400 }
+const TALL: Box = { width: 1100, height: 1400 }
+/** Fits the family at a cell of 8px across and not at one of 8.5. */
+const EDGE: Box = { width: 1250, height: 640 }
 /** Not wide enough for 80 columns at 55%. */
 const NARROW: Box = { width: 900, height: 600 }
 
@@ -469,5 +474,124 @@ describe('a parent’s tab with children', () => {
     expect(headerNames(view.container)).toEqual(['reviewer'])
     expect(getTerminal(1)!.element).toBe(parentElement)
     expect(Terminal.instances).toHaveLength(made)
+  })
+
+  it('draws terminals in the gutter the room rule counts: 10px around a parent’s, and 10 across by 8 down in a card’s', () => {
+    const { container } = mount(WIDE, [LEAD, child(2, 'reviewer')])
+    // Tailwind's spacing step is 4px.
+    const parentGutter = getTerminal(1)!.element.parentElement!.parentElement!
+    expect(parentGutter.className).toContain(`p-${String(PARENT_GUTTER_PX / 4)}`)
+    const cardGutter = card(container, 'reviewer').querySelector<HTMLElement>('[data-terminal-card]')!
+    expect(cardGutter.className).toContain(`px-${String(CARD_GUTTER_X_PX / 4)}`)
+    expect(cardGutter.className).toContain(`py-${String(CARD_GUTTER_Y_PX / 4)}`)
+  })
+
+  it('S11: shows the parent alone for lack of room, brings the family view back by itself when the pane gains room, and takes it away again when the room goes', () => {
+    const view = mount(NARROW, [LEAD, child(2, 'reviewer'), child(3, 'tester')])
+    expect(view.container.querySelector('[data-family-view]')).toBeNull()
+    const parentElement = getTerminal(1)!.element
+
+    // The window grew, the pane was maximized or a split beside it closed.
+    view.resize(WIDE)
+    expect(cardNames(view.container)).toEqual(['reviewer', 'tester'])
+    expect(familyRoomFits(TAB)).toBe(true)
+
+    // A split opened again.
+    view.resize(NARROW)
+    expect(view.container.querySelector('[data-family-view]')).toBeNull()
+    expect(familyRoomFits(TAB)).toBe(false)
+
+    view.resize(WIDE)
+    expect(cardNames(view.container)).toEqual(['reviewer', 'tester'])
+    expect(getTerminal(1)!.element).toBe(parentElement)
+  })
+
+  it('S11: judges a tab that is not in front by the last size it had, and again at the size it comes back at', () => {
+    const view = mount(WIDE, [LEAD, child(2, 'reviewer')])
+    const body = view.host.firstElementChild as HTMLElement
+
+    // A tab that is not drawn measures nothing, which is not news.
+    layout.set(body, { width: 0, height: 0 })
+    act(() => FakeResizeObserver.notifyAll())
+    expect(familyRoomFits(TAB)).toBe(true)
+    expect(cardNames(view.container)).toEqual(['reviewer'])
+
+    // The window shrank while it was hidden.
+    layout.set(body, NARROW)
+    act(() => FakeResizeObserver.notifyAll())
+    expect(view.container.querySelector('[data-family-view]')).toBeNull()
+    expect(familyRoomFits(TAB)).toBe(false)
+  })
+
+  it('S12: judges the room at the terminal font in Settings, so a larger font needs more pixels for the same floors and a pane that held the family shows the parent alone', () => {
+    // The font measures in proportion to its size; the default is 14px.
+    layout.text((element) => {
+      if (element.textContent !== SAMPLE) return null
+      const scale = Number.parseFloat(element.style.fontSize) / 14
+      return { width: CELL.width * SAMPLE.length * scale, height: CELL.height * scale }
+    })
+    const view = mount(WIDE, [LEAD, child(2, 'reviewer')])
+    expect(cardNames(view.container)).toEqual(['reviewer'])
+
+    act(() => applyTerminalSettings({ ...DEFAULT_SETTINGS, terminalFontSize: 20 }))
+    expect(view.container.querySelector('[data-family-view]')).toBeNull()
+    expect(familyRoomFits(TAB)).toBe(false)
+
+    act(() => applyTerminalSettings(DEFAULT_SETTINGS))
+    expect(cardNames(view.container)).toEqual(['reviewer'])
+    expect(familyRoomFits(TAB)).toBe(true)
+  })
+
+  it('judges the room again when the window moves to a screen with another pixel ratio, which changes the cell without changing the pane', () => {
+    layout.text((element) => (element.textContent === SAMPLE ? { width: 8.7 * SAMPLE.length, height: CELL.height } : null))
+    const changes = new Set<() => void>()
+    vi.stubGlobal('matchMedia', () => ({
+      matches: false,
+      addEventListener: (_type: string, listener: () => void) => changes.add(listener),
+      removeEventListener: (_type: string, listener: () => void) => changes.delete(listener)
+    }))
+    const ratio = (value: number): void => {
+      Object.defineProperty(window, 'devicePixelRatio', { value, configurable: true })
+      act(() => [...changes].forEach((listener) => listener()))
+    }
+
+    // At 1x a cell is 8px across and the parent keeps 81 columns; at 2x it is 8.5 and keeps 76.
+    const view = mount(EDGE, [LEAD, child(2, 'reviewer')])
+    expect(cardNames(view.container)).toEqual(['reviewer'])
+    ratio(2)
+    expect(view.container.querySelector('[data-family-view]')).toBeNull()
+    ratio(1)
+    expect(cardNames(view.container)).toEqual(['reviewer'])
+  })
+
+  it('S16: keeps the parent’s terminal at the same 55%, in the same place and at the same size as cards shrink, swap, end and close', async () => {
+    const sessions = [LEAD, child(2, 'alpha'), child(3, 'beta'), child(4, 'gamma'), child(5, 'delta')]
+    const view = mount(SHORT, sessions)
+    const parentElement = getTerminal(1)!.element
+    const parentResizes = (): number =>
+      bridge.sent('session:resize').filter((sent) => (sent as { id: number }).id === 1).length
+    const resizes = parentResizes()
+    const parentFlex = (): string => view.container.querySelector<HTMLElement>('[data-family-parent]')!.style.flex
+    const unchanged = (): void => {
+      expect(parentFlex()).toBe('0 0 55%')
+      expect(getTerminal(1)!.element).toBe(parentElement)
+      expect(parentElement.closest('[data-family-parent]')).toBe(view.container.querySelector('[data-family-parent]'))
+      expect(parentResizes()).toBe(resizes)
+    }
+    unchanged()
+
+    await userEvent.click(within(view.container).getByRole('button', { name: /^Show delta/ }))
+    unchanged()
+    await userEvent.click(within(card(view.container, 'alpha')).getByRole('button', { name: /^Shrink alpha/ }))
+    unchanged()
+
+    view.list([LEAD, stopped(2, 'alpha'), child(3, 'beta'), child(4, 'gamma'), child(5, 'delta')])
+    unchanged()
+    await userEvent.click(within(view.container).getByRole('button', { name: /^Show alpha, Stopped/ }))
+    await userEvent.click(within(card(view.container, 'alpha')).getByRole('button', { name: 'Close alpha' }))
+    unchanged()
+
+    view.list([LEAD, stopped(2, 'alpha'), child(3, 'beta')])
+    unchanged()
   })
 })
