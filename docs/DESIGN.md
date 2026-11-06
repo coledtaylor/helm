@@ -1031,7 +1031,12 @@ overrides the gate; keep it.
 - **Session rows in the tree**: indented under their project to start beneath
   its name - the state dot, the session's name, and one short word at the right
   in 11px: "needs you" in `warn`, how long it has been working ("4m"), "idle",
-  "ended". The session in front of the focused pane wears the selected-row
+  "ended". The name is in `fg-muted`, and in `fg` on hover, for the session in
+  front of the focused pane and for one that needs you; the word is in
+  `fg-subtle` unless it is "needs you", a failure in `danger`, or the focused
+  session's working time in `accent-text`. A child's row keeps these tones: a
+  family is told apart by the guide, never by brighter names. The session in
+  front of the focused pane wears the selected-row
   recipe with its accent edge, the ones in front of the other panes the
   `hover` fill - the same split the panes' tab strips make - so the tree and the
   panes agree about what you are looking at. Pressing one brings its tab
