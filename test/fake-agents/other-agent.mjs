@@ -36,12 +36,15 @@
 // Commands typed at its prompt:
 //   /exit        exit 0
 //   /crash       exit 3
+//   /shell <command>  run the command in the shell with the session's own
+//                environment and folder, and answer `shell <exit code>`. Its
+//                output and exit code are logged in `shell`.
 //   anything else  is a prompt: recorded and answered
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { fakeVersion, parseArgv, RunLog, UsageError, watchOwner } from './common.mjs'
+import { fakeVersion, parseArgv, RunLog, runShell, UsageError, watchOwner } from './common.mjs'
 
 const BACKEND = 'other-agent'
 const VERSION = fakeVersion('1.4.0')
@@ -215,6 +218,11 @@ function submit(line) {
   const [command] = line.trim().split(/\s+/, 1)
   if (command === '/exit') return exit(0)
   if (command === '/crash') return exit(3)
+  if (command === '/shell') {
+    const typed = line.trim().slice('/shell'.length).trim()
+    runShell(typed, log, saveLog, (ran) => answer(`shell ${String(ran.code)}`))
+    return
+  }
   if (line.trim() === '') return drawPrompt()
   answer(`Noted: ${line}`)
 }

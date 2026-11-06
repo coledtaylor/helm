@@ -36,6 +36,16 @@ pub struct OtherAgentServer {
     pub bearer: String,
 }
 
+/// One command a fake ran for a typed `/shell`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ShellRun {
+    pub command: String,
+    pub stdout: String,
+    pub stderr: String,
+    /// `None` while it runs.
+    pub code: Option<i32>,
+}
+
 /// What one run of the fake recorded.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +72,9 @@ pub struct OtherAgentRecord {
     pub opening_prompt: Option<String>,
     /// Every line typed at its prompt, in order.
     pub received: Vec<String>,
+    /// Every command a typed `/shell` ran, in order.
+    #[serde(default)]
+    pub shell: Vec<ShellRun>,
     /// `None` while it runs.
     pub exit_code: Option<i32>,
 }

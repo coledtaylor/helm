@@ -49,6 +49,7 @@ mod browser_tools;
 mod connection;
 mod events;
 mod features;
+mod floti_agents;
 mod hosted;
 pub mod idle;
 mod plugin_tools;
@@ -86,6 +87,7 @@ use crate::platform::private_files::sweep_stale_temps;
 use crate::platform::process_tree::{self, ProcessTree};
 use crate::platform::socket::{self, Endpoint, LocalListener, LocalSocket};
 use crate::platform::wsl::{self, WslProgram, WslSide};
+use crate::roles::RoleSource;
 use crate::session::ClientId;
 use crate::store::Store;
 use crate::{Error, Result};
@@ -454,6 +456,9 @@ impl Host {
         )?);
         // What the keeper still runs keeps the host busy from its start.
         hosted.settle();
+        if let Some(floti) = &run.keeper {
+            hosted.use_floti(floti);
+        }
         let features = Arc::new(Features::new(Arc::clone(&hosted), folders, run)?);
         let agent_tools = start_agent_tools(&hosted, &features)?;
 
@@ -497,6 +502,12 @@ impl Host {
             store: store_held,
             _lock: lock,
         })
+    }
+
+    /// Reads the roles a session may start children in from `roles` from now
+    /// on. The host starts with none named.
+    pub fn use_roles(&self, roles: Arc<dyn RoleSource>) {
+        self.hosted.use_roles(roles);
     }
 
     /// Every protocol channel this host serves, of every kind.
@@ -639,7 +650,17 @@ fn start_agent_tools(hosted: &Arc<Hosted>, features: &Features) -> Result<Arc<Ho
         Arc::downgrade(&tools),
         Arc::downgrade(hosted),
     ));
+    // The agents family starts, lists and stops children through the host, and
+    // a session's children end with it, with no client needed.
+    tools.act_through(Arc::downgrade(hosted));
+    tokio::spawn(hosted::end_children_at_exit(
+        hosted.ledger().exits(),
+        Arc::downgrade(hosted),
+    ));
     hosted.use_agent_tools(Arc::clone(&tools));
+    // Parents that ended while no host was running left children behind.
+    let sweeping = Arc::clone(hosted);
+    tokio::task::spawn_blocking(move || sweeping.end_orphans());
     Ok(tools)
 }
 

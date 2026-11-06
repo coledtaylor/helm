@@ -54,6 +54,13 @@ use crate::store::Store;
 use crate::workspace::discovery::git::read_git_branch;
 use crate::{Error, Result};
 
+mod children;
+
+use children::Children;
+pub(crate) use children::{
+    ChildEntry, ChildStopped, ChildrenListed, StartChild, end_children_at_exit,
+};
+
 /// How long a stop waits for each session to be reported ended after its
 /// tree was ended.
 const STOP_WAIT: Duration = Duration::from_secs(5);
@@ -92,6 +99,9 @@ pub(crate) struct Hosted {
     /// The host's agent tools, once it has built them. A launch before then,
     /// or on a host without them, is given none.
     agent_tools: OnceLock<Arc<HostAgentTools>>,
+    /// What starting children for the sessions that ask needs: roles, where
+    /// the `floti` executable is, and the one lock that takes starts in turn.
+    children: Children,
     /// Who is here: each attached client's device, and the device that
     /// started each running session and opened each plain terminal.
     devices: Mutex<Devices>,
@@ -148,6 +158,7 @@ impl Hosted {
                 "The Floti host has no agent backend to run sessions with.".to_owned(),
             ));
         }
+        let children = Children::new(&inherited_env);
         let ledger = Arc::new(HostLedger::new(store));
         let session_ledger = Arc::clone(&ledger) as Arc<dyn crate::session::SessionLedger>;
         let (sessions, terminals) = match &keeper {
@@ -194,6 +205,7 @@ impl Hosted {
             keeper,
             stopped: AtomicBool::new(false),
             agent_tools: OnceLock::new(),
+            children,
             devices: Mutex::new(devices),
             held_distros: AtomicUsize::new(0),
             occupancy: watch::Sender::new(Occupancy::default()),
@@ -363,11 +375,14 @@ impl Hosted {
     }
 
     /// A token and the families on for a launch on `backend`, when it takes
-    /// agent tools and any family is on. A listener that cannot bind is a
-    /// launch without tools and a warning saying so, not a launch refused.
+    /// agent tools and any family is on, without the families in `excluded`
+    /// (the ones the launch's profile turns off). A listener that cannot bind
+    /// is a launch without tools and a warning saying so, not a launch
+    /// refused.
     fn grant_agent_tools(
         &self,
         backend: &Arc<dyn AgentBackend>,
+        excluded: &[&str],
     ) -> (Option<(Arc<HostAgentTools>, Grant)>, Option<String>) {
         let Some(tools) = self.agent_tools.get() else {
             return (None, None);
@@ -375,7 +390,7 @@ impl Hosted {
         if backend.agent_tools().is_none() {
             return (None, None);
         }
-        match tools.grant() {
+        match tools.grant(excluded) {
             Ok(grant) => (grant.map(|grant| (Arc::clone(tools), grant)), None),
             Err(err) => (
                 None,
@@ -536,7 +551,7 @@ impl Hosted {
                 resume: None,
             },
             TermSize::new(request.cols, request.rows),
-            client,
+            Some(client),
         )
     }
 
@@ -590,7 +605,7 @@ impl Hosted {
                 composition,
             },
             TermSize::new(request.cols, request.rows),
-            client,
+            Some(client),
         )
     }
 
@@ -623,7 +638,7 @@ impl Hosted {
                 resume: None,
             },
             TermSize::new(request.cols, request.rows),
-            client,
+            Some(client),
         )?;
         Ok(LaunchedProfile {
             session: launched.session,
@@ -659,7 +674,7 @@ impl Hosted {
                 },
             },
             TermSize::new(request.cols, request.rows),
-            client,
+            Some(client),
         )?;
         Ok(ResumedSession {
             session: launched.session,
@@ -703,7 +718,7 @@ impl Hosted {
         &self,
         plan: Plan,
         size: TermSize,
-        client: ClientId,
+        client: Option<ClientId>,
     ) -> std::result::Result<LaunchedSession, String> {
         let Plan {
             backend,
@@ -727,12 +742,21 @@ impl Hosted {
         let name = unique_session_name(&name, taken.iter().map(String::as_str));
         // Granted before the backend composes the launch, which writes the
         // token into the launch's own folder.
-        let (grant, tools_warning) = self.grant_agent_tools(&backend);
+        let excluded = self.families_off_for(origin.profile_id);
+        let (grant, tools_warning) = self.grant_agent_tools(&backend, &excluded);
         composition.agent_tools = grant
             .as_ref()
             .map(|(_, grant)| grant.servers.clone())
             .unwrap_or_default();
         let grant = grant.map(|(tools, grant)| (tools, grant.id));
+        // What `floti agent` needs in the session's environment, added to the
+        // launch the backend composed.
+        let servers = composition.agent_tools.clone();
+        let with_agent_env = |mut launch: Launch| {
+            self.give_agent_env(&mut launch.spec.env, &servers);
+            launch
+        };
+        let reopened = resume.clone();
         let started = match resume {
             Some(conversation_id) => {
                 let request = ResumeRequest {
@@ -744,7 +768,7 @@ impl Hosted {
                     let resumer = backend.resumer().ok_or_else(|| {
                         Error::Refused(format!("{} cannot reopen a conversation.", backend.name()))
                     })?;
-                    resumer.resume(&request, launch_folder)
+                    resumer.resume(&request, launch_folder).map(with_agent_env)
                 })
             }
             None => {
@@ -755,12 +779,17 @@ impl Hosted {
                     composition,
                 };
                 self.launch_in_folder(&backend, name, size, client, origin, |launch_folder| {
-                    backend.launch(&request, launch_folder)
+                    backend.launch(&request, launch_folder).map(with_agent_env)
                 })
             }
         };
         match (started, grant) {
             (Ok((mut launched, id)), grant) => {
+                // A conversation reopened is the parent of the children its
+                // earlier session left running.
+                if let Some(conversation_id) = &reopened {
+                    self.readopt_children(id, conversation_id);
+                }
                 if let Some((tools, grant)) = grant {
                     // Kept with the row for a host after this one, should the
                     // session outlive this host.
@@ -794,7 +823,7 @@ impl Hosted {
         backend: &Arc<dyn AgentBackend>,
         name: String,
         size: TermSize,
-        client: ClientId,
+        client: Option<ClientId>,
         origin: SessionOrigin,
         compose: impl FnOnce(&LaunchFolder) -> Result<Launch>,
     ) -> Result<(LaunchedSession, SessionId)> {
@@ -808,12 +837,16 @@ impl Hosted {
                 not_taken,
             } = launch;
             let conversation_id = spec.conversation_id.clone();
-            let device = self.device_of(client).map(|device| device.fingerprint());
+            // A session an agent started has no client, so no device either:
+            // a quit ends what a device started, never what an agent did.
+            let device = client
+                .and_then(|client| self.device_of(client))
+                .map(|device| device.fingerprint());
             let session = self.sessions.start(StartSession {
                 spec,
                 name,
                 size,
-                client: Some(client),
+                client,
                 conversation_id,
                 backend: backend.id().clone(),
                 origin,
@@ -1105,7 +1138,7 @@ impl Hosted {
                 },
             },
             size,
-            client,
+            Some(client),
         )?;
         if row.profile_id.is_some() && profile.is_none() {
             launched.warnings.insert(

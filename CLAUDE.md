@@ -298,23 +298,28 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 
 The host serves its sessions' agent tools as MCP over HTTP
 (`crates/host/src/agent_tools`): `helm-browser` at `/mcp`, `helm-sessions` at
-`/mcp/sessions` and each plugin's tools at `/mcp/plugin/<id>`, on one port. It
-is the one inbound listener the host has besides its local socket. Main binds
-no listener for them, mints no token and writes no `--mcp-config`.
+`/mcp/sessions`, `floti-agents` at `/mcp/agents` and each plugin's tools at
+`/mcp/plugin/<id>`, on one port. It is the one inbound listener the host has
+besides its local socket. Main binds no listener for them, mints no token and
+writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
 
 - `127.0.0.1` on port 0 only. A request announcing a non-loopback `Origin`
   gets 403, and one without `Authorization: Bearer` gets 401 before its body
   is read. There is no unauthenticated route, not even a health check.
-- One token per session, minted at launch and revoked when it ends. The token
-  is the identity.
+- One token per session, minted at launch, given to its agent tools and to its
+  environment for `floti agent`, and revoked when it ends. The token is the
+  identity, however it arrives.
 - A tool family switched off has no route (404), no entry in `--mcp-config` and
   no tool. With no session holding a token and nothing a launch could be
   given, the host holds no port.
-- `helm-browser` and `helm-sessions` take name, route, instructions and tools
-  from `crates/host/src/server/browser_tools.json` and `session_tools.json`.
-  Main reads the browser table too, for the tools it answers.
-- Main tells the host `browserMcp`, `browserMcpLocalOnly` and `sessionMcp`
-  on each connect and each change (`hostSettingsFor`).
+- `helm-browser`, `helm-sessions` and `floti-agents` take name, route,
+  instructions and tools from `crates/host/src/server/browser_tools.json`,
+  `session_tools.json` and `floti_agents.json`. Main reads the browser table
+  too, for the tools it answers.
+- Main tells the host `browserMcp`, `browserMcpLocalOnly`, `sessionMcp`,
+  `sessionAgents` ("Sessions can start agents") and the four agent limits
+  (`agentChildrenPerParent`, `agentSessionsPerHost`, `agentDepth`,
+  `agentStartsPerParent`) on each connect and each change (`hostSettingsFor`).
 - Each plugin offering tools is a family, `helm-plugin-<id>`, on while the
   plugin is on and its tools are not switched off in Settings. The host
   checks the token, then hands the call on with its caller: an id it minted
@@ -355,8 +360,45 @@ no listener for them, mints no token and writes no `--mcp-config`.
 - Listing is machine-wide; detail exists only for sessions the host spawned.
   A status it could not read is "unknown", never omitted. No tool takes a
   session id.
-- These tools are awareness only. Nothing sends a session anything, waits on
-  one or hands one work.
+- `helm-sessions` is awareness only: it sends a session nothing, waits on
+  none, hands none work, and returns no part of any session's conversation.
+- `floti-agents` acts on sessions, and only on the caller's own children:
+  sessions started with `agents_start` by the session whose token made the
+  call. A parent may start its children, type into them, read their screens,
+  wait on them and stop them; a grandchild is reached only through its own
+  parent. A child reaches its parent only with `agents_report`, which the
+  parent receives as its child's report, never as its user's words. No tool
+  reaches a session the caller did not start, nothing is typed into a parent
+  or into a session waiting on a permission prompt, and no tool returns a
+  transcript, argv or conversation id.
+- `floti-agents` (`server/floti_agents.rs`, the work in
+  `server/hosted/children.rs`) is the host's own family: it works with no
+  client attached, a client quitting reaches a child only through its parent,
+  and a child never adds a tab or a pane to a window. It is given to a launch
+  while `sessionAgents` is on and the launch's profile does not turn it off;
+  off, or an excluded profile, is no route (404), no entry and no tool. Every
+  name a tool is given is resolved among the caller's own children only, and
+  anything else is not found. A start is judged before anything runs: the role
+  and the backend it allows (`AgentBackend`, which refuses a rule it cannot
+  enforce, naming the rule and the backend), a folder Floti tracks on the path
+  it leads to (a session's own folder does not make one tracked), a permission
+  mode never above the parent's, then the limits read afresh from the settings
+  and counted from the child rows, so they hold across a host restart. A
+  child ends when its parent ends, however it ends, and its own children with
+  it, unless it was started to `outlive`; its row keeps the parent's row and
+  conversation, so a restart restores the links and resuming the parent's
+  conversation gives its outliving children back.
+- `floti agent start` and `floti agent stop` run the same tools from a
+  session's own shell: the host puts its `floti` binary's folder first on the
+  session's `PATH` and the session's token and the family's address in its
+  environment (`FLOTI_AGENT_TOKEN`, `FLOTI_AGENT_URL`; any `FLOTI_AGENT_*` the
+  host inherited is stripped first). The command acts as that session, prints
+  the tool's text or, with `--json`, its JSON, exits non-zero on a refusal and
+  never prints the token. Each tool and each subcommand a launch may run
+  without asking is named on its own and passed through the backend's adapter
+  the way read-only tools are (for Claude Code `mcp__floti-agents__agents_start`
+  and `Bash(floti agent start:*)`); never a `floti agent:*` wildcard, and a
+  user's deny rule still wins.
 - A session's row keeps what its launch was granted (`agent_tools`: the
   port, the token's SHA-256 and the families), never the token. A host that
   takes back sessions from the keeper binds that port again and accepts each

@@ -109,6 +109,20 @@ pub trait ToolFamily: Send + Sync + 'static {
     /// is marked with `readOnlyHint`.
     fn tools(&self) -> Vec<Tool>;
 
+    /// The tools of [`Self::tools`] a launch calls without asking, by name.
+    /// The default is the ones marked `readOnlyHint`; a family whose every
+    /// tool is its caller's own to use says them all.
+    fn allowed_tools(&self) -> Vec<String> {
+        read_only_tools(&self.tools())
+    }
+
+    /// Shell commands a launch runs without asking beside those tools, each
+    /// one command named in full, such as `floti agent start`. Never a prefix
+    /// that would allow its siblings with it.
+    fn allowed_commands(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Answers one call to `name`, one of [`Self::tools`], for `caller`.
     /// A failure is an answer too: a failed call the model can read.
     /// Dropping the future abandons the call: nobody waits on it any more.
@@ -290,12 +304,20 @@ impl AgentToolsListener {
     /// grantable now, binding first when it is not bound. `None`, with no
     /// token minted and nothing bound, when there is no such family.
     pub fn grant(&self) -> Result<Option<Grant>> {
+        self.grant_without(&[])
+    }
+
+    /// As [`Self::grant`], leaving out the families named in `excluded`: the
+    /// token answers 404 on their routes exactly as one for a family that is
+    /// off, and a launch has no entry for them.
+    pub fn grant_without(&self, excluded: &[&str]) -> Result<Option<Grant>> {
         let mut socket = self.socket();
         let on: Vec<Arc<dyn ToolFamily>> = self
             .router
             .families_on()
             .into_iter()
             .filter(|family| family.grantable())
+            .filter(|family| !excluded.contains(&family.name()))
             .collect();
         if on.is_empty() {
             return Ok(None);
@@ -312,8 +334,8 @@ impl AgentToolsListener {
                 name: family.name().to_owned(),
                 url: format!("http://127.0.0.1:{port}{}", family.route()),
                 token: token.clone(),
-                allowed_tools: read_only_tools(family.as_ref()),
-                allowed_commands: Vec::new(),
+                allowed_tools: family.allowed_tools(),
+                allowed_commands: family.allowed_commands(),
             })
             .collect();
         Ok(Some(Grant { id, servers }))
@@ -437,18 +459,17 @@ fn release(socket: &mut Option<Bound>) {
     }
 }
 
-/// The tools `family` lists with `readOnlyHint`, by name: the ones a launch
+/// The tools in `tools` listed with `readOnlyHint`, by name: the ones a launch
 /// is allowed to call without asking.
-fn read_only_tools(family: &dyn ToolFamily) -> Vec<String> {
-    family
-        .tools()
-        .into_iter()
+fn read_only_tools(tools: &[Tool]) -> Vec<String> {
+    tools
+        .iter()
         .filter(|tool| {
             tool.annotations
                 .as_ref()
                 .and_then(|notes| notes.read_only_hint)
                 == Some(true)
         })
-        .map(|tool| tool.name.into_owned())
+        .map(|tool| tool.name.to_string())
         .collect()
 }

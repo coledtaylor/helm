@@ -31,6 +31,7 @@ use floti_protocol::channels::plugins::{
     PluginsSetTools,
 };
 use floti_protocol::channels::sessions::{SessionStart, StartSessionRequest};
+use floti_protocol::channels::workspace::{HostSettingsPatch, WriteSettings};
 use floti_protocol::{Knowable, Message};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -173,8 +174,19 @@ impl World {
         RunningHost::start(self.config())
     }
 
+    /// A bare client. The family that lets a session start agents is
+    /// switched off, so the tool files read here name the plugin and session
+    /// servers alone; `agents.rs` reads the agents family.
     async fn client(&self) -> TestClient {
-        TestClient::connect(&self.endpoint, TERMINAL).await
+        let mut client = TestClient::connect(&self.endpoint, TERMINAL).await;
+        client
+            .request::<WriteSettings>(&HostSettingsPatch {
+                session_agents: Some(false),
+                ..HostSettingsPatch::default()
+            })
+            .await
+            .expect("the settings are written");
+        client
     }
 
     fn folder(&self, name: &str) -> PathBuf {

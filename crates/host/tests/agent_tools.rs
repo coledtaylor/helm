@@ -115,7 +115,9 @@ impl World {
     }
 
     async fn client(&self) -> TestClient {
-        TestClient::connect(&self.endpoint, TERMINAL).await
+        let mut client = TestClient::connect(&self.endpoint, TERMINAL).await;
+        agents_off(&mut client).await;
+        client
     }
 
     fn folder(&self, name: &str) -> PathBuf {
@@ -212,6 +214,19 @@ impl World {
         };
         entries.flatten().map(|entry| entry.path()).collect()
     }
+}
+
+/// Switches off the family that lets a session start agents. These tests
+/// are about the session, browser and plugin families, whose lists they read
+/// whole; `agents.rs` is the one that reads the agents family.
+async fn agents_off(client: &mut TestClient) {
+    client
+        .request::<WriteSettings>(&HostSettingsPatch {
+            session_agents: Some(false),
+            ..HostSettingsPatch::default()
+        })
+        .await
+        .expect("the settings are written");
 }
 
 /// A session and the tools its `--mcp-config` file names.
@@ -1351,6 +1366,7 @@ impl World {
     /// window, as far as the host can tell.
     async fn browser_client(&self) -> TestClient {
         let mut client = TestClient::connect(&self.endpoint, BROWSER).await;
+        agents_off(&mut client).await;
         client
             .subscribe_quietly(CALLS, AgentBrowserCalls::NAME)
             .await;
@@ -1727,6 +1743,7 @@ impl World {
     /// each plugin offered, on with its tools on: it serves no other.
     async fn plugin_client(&self, servers: Vec<AgentPluginServer>) -> TestClient {
         let mut client = TestClient::connect(&self.endpoint, TERMINAL).await;
+        agents_off(&mut client).await;
         for server in &servers {
             self.install_plugin(&mut client, &server.plugin).await;
         }

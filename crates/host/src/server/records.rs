@@ -345,6 +345,11 @@ pub(crate) fn permission_mode_name(mode: PermissionMode) -> String {
         .unwrap_or_default()
 }
 
+/// The mode a stored name is, or `None` for a name this host does not know.
+pub(crate) fn permission_mode_from_name(text: &str) -> Option<PermissionMode> {
+    named(Some(text.to_owned()))
+}
+
 fn non_empty(text: Option<String>) -> Option<String> {
     text.filter(|text| !text.trim().is_empty())
 }

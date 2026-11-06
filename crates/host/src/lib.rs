@@ -72,6 +72,7 @@ macro_rules! log_line {
 }
 
 pub mod agent;
+pub mod agent_cli;
 pub mod agent_tools;
 pub mod bridge;
 pub mod carry;
@@ -88,6 +89,7 @@ pub mod keys;
 pub mod platform;
 pub mod plugins;
 pub mod resources;
+pub mod roles;
 pub mod server;
 pub mod session;
 pub mod setup;

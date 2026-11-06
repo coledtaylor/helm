@@ -1,0 +1,70 @@
+{
+  "name": "floti-agents",
+  "path": "/mcp/agents",
+  "instructions": "These tools start agents of your own, list them and stop them. agents_start runs a new agent on a task you give it and answers with its name; agents_list shows the agents you started and how many more you may start; agents_stop ends one of them and any it started. They reach only the agents you started: a name that is not one of yours is not found, no tool takes a session id, and none returns any part of a conversation.",
+  "tools": [
+    {
+      "name": "agents_start",
+      "description": "Start an agent of your own on a task. It is a full session that runs in the background with the task as its opening prompt, in your folder unless you name another that Floti tracks, and never with more permission than you have. Answers with its name, backend, folder and branch. A start can be refused because of a limit (children at once, agents on the host, depth, starts in your life), a folder Floti does not track, a role or backend that does not fit, or a rule its backend cannot enforce; the answer says which, and for a limit says to wait for news and start again.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "What the agent is to do. It is the agent's opening prompt, so write it as a complete brief."
+          },
+          "role": {
+            "type": "string",
+            "description": "The role the agent has, which says which backends may run it, how much it may do on its own and what it is called. Omit it for the default role, agent."
+          },
+          "backend": {
+            "type": "string",
+            "description": "The backend to run it on, one the role lists that is installed here. Omit it to use the first the role lists that is installed."
+          },
+          "folder": {
+            "type": "string",
+            "description": "The folder it works in, inside a project, harness or profile folder Floti tracks. Omit it to use your own folder."
+          },
+          "profile": {
+            "type": "string",
+            "description": "The name of the profile it runs under. Omit it for the role's profile, else the one whose folder holds its folder."
+          },
+          "name": {
+            "type": "string",
+            "description": "What you call it. Omit it to use its role's name. A name you already used gets a number after it."
+          },
+          "outlive": {
+            "type": "boolean",
+            "description": "Whether it keeps running if you end. Omit it, or pass false, and it ends when you do."
+          },
+          "can_start": {
+            "type": "boolean",
+            "description": "Whether it may start agents of its own. Omit it to use its role's choice."
+          }
+        },
+        "required": ["task"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "agents_list",
+      "description": "The agents you started that are running: each one's name, role, backend, state, folder and branch, then what is left of your limits. Only your own agents are listed.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "agents_stop",
+      "description": "End one of your agents and every agent it started. Pass the name agents_start answered with. A name that is not one of your running agents is not found.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "child": {
+            "type": "string",
+            "description": "The name of the agent to end."
+          }
+        },
+        "required": ["child"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

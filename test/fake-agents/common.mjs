@@ -7,6 +7,7 @@
 // to `<its config dir>/fake-agent/<pid>.json` in the shape `RunLog` below, so
 // the host's Rust tests and the desktop's TypeScript tests read one format.
 
+import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
@@ -190,6 +191,8 @@ export function parseArgv(argv, spec) {
  * - `openingPrompt`: the prompt it was started with, or null.
  * - `mcpServers`: the MCP servers it loaded, by name.
  * - `received`: every line typed at its prompt.
+ * - `shell`: every command `/shell` ran, as `{ command, stdout, stderr, code }`
+ *   (`runShell` below); `code` is null while it runs.
  * - `exitCode`: null while it runs.
  *
  * A fake adds fields of its own after these.
@@ -208,6 +211,7 @@ export class RunLog {
       openingPrompt: null,
       mcpServers: {},
       received: [],
+      shell: [],
       exitCode: null,
       ...fields
     }
@@ -216,6 +220,41 @@ export class RunLog {
   save() {
     writeJsonAtomically(this.file, this.data)
   }
+}
+
+/**
+ * Runs `command` in the shell with this process's own environment and working
+ * folder, as an agent's shell tool does, and records it in `log.shell` as
+ * `{ command, stdout, stderr, code }` (`code` is null until it ends). Calls
+ * `done` with the finished entry. What the session was given reaches the
+ * command, so a test sees what a program run from a session sees.
+ */
+export function runShell(command, log, save, done) {
+  const entry = { command, stdout: '', stderr: '', code: null }
+  log.shell.push(entry)
+  save()
+  const child = spawn(command, { shell: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => {
+    entry.stdout += chunk
+  })
+  child.stderr.on('data', (chunk) => {
+    entry.stderr += chunk
+  })
+  let finished = false
+  const finish = (code) => {
+    if (finished) return
+    finished = true
+    entry.code = code
+    save()
+    done(entry)
+  }
+  child.on('error', (error) => {
+    entry.stderr += String(error.message)
+    finish(-1)
+  })
+  child.on('close', (code) => finish(code ?? -1))
 }
 
 /** Writes `value` as JSON through a temporary file and a rename. */

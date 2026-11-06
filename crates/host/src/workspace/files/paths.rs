@@ -93,6 +93,39 @@ pub fn is_inside_root(root: &Path, path: &Path) -> bool {
     starts_with(&base, &target, true) && starts_with(&real_path(&base), &real_path(&target), false)
 }
 
+/// Whether `path` is inside `root` once both are resolved as the disk
+/// resolves them: junctions and symlinks followed, `..` taken after the links
+/// before it rather than folded away, and the case of a name ignored where
+/// the OS does (Windows). `path` is judged where it leads, not where it is
+/// spelled, so a link out of `root` is outside and a link into it is inside.
+/// A path that does not exist resolves through its deepest ancestor that does.
+pub fn resolves_inside(root: &Path, path: &Path) -> bool {
+    let walked = walk_dots_after_links(path);
+    let reached = std::fs::canonicalize(&walked).unwrap_or_else(|_| real_path(&walked));
+    starts_with(&real_path(root), &reached, cfg!(windows))
+}
+
+/// `path` with each `..` taken from where the walk has got to, links before
+/// it followed first. Windows folds `..` away before it looks at the disk, so
+/// `link\..\x` would be read as a sibling of `link` rather than as the folder
+/// above where `link` leads, as it is on macOS and Linux.
+fn walk_dots_after_links(path: &Path) -> PathBuf {
+    let mut walked = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                if let Ok(real) = std::fs::canonicalize(&walked) {
+                    walked = real;
+                }
+                walked.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => walked.push(other.as_os_str()),
+        }
+    }
+    walked
+}
+
 /// Whether `dir`, relative to `base` as written, climbs out of it.
 pub fn escapes(base: &Path, dir: &Path) -> bool {
     !starts_with(&normalize(base), &normalize(dir), true)
@@ -140,5 +173,40 @@ mod tests {
         ));
         assert!(!is_inside_root(&root, &outside.join("x")));
         crate::platform::links::remove_tree(&crate::platform::links::Native, &root).unwrap();
+    }
+
+    #[test]
+    fn a_path_resolves_inside_a_root_by_where_it_leads_not_how_it_is_spelled() {
+        let dirs = TestDirs::new();
+        let root = dirs.folder("project");
+        let inside = dirs.folder("project/src");
+        let outside = dirs.folder("outside");
+        link_folder(&outside, &root.join("escape"));
+        link_folder(&inside, &dirs.folder("elsewhere").join("shortcut"));
+        assert!(resolves_inside(&root, &root));
+        assert!(resolves_inside(&root, &inside));
+        assert!(!resolves_inside(&root, &outside));
+        // `..` is taken after the link before it, so this leads out of the
+        // project although it is spelled inside it.
+        assert!(!resolves_inside(
+            &root,
+            &root.join("escape").join("..").join("outside")
+        ));
+        assert!(!resolves_inside(&root, &root.join("escape")));
+        assert!(!resolves_inside(&root, &root.join("..").join("outside")));
+        // A link from elsewhere into the project leads inside it.
+        assert!(resolves_inside(
+            &root,
+            &dirs.folder("elsewhere").join("shortcut")
+        ));
+        // A folder not made yet resolves through the ancestor that exists.
+        assert!(resolves_inside(&root, &root.join("not").join("yet")));
+        assert!(!resolves_inside(&root, &outside.join("not").join("yet")));
+        crate::platform::links::remove_tree(&crate::platform::links::Native, &root).unwrap();
+        crate::platform::links::remove_tree(
+            &crate::platform::links::Native,
+            &dirs.folder("elsewhere"),
+        )
+        .unwrap();
     }
 }

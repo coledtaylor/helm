@@ -515,8 +515,8 @@ is: tests never launch a real agent. The pattern every fake follows:
 - **It writes one run log**, `<config dir>/fake-agent/<pid>.json`, in a shape
   every fake shares (`RunLog` in `common.mjs`): `backend`, `argv`, `cwd`,
   `settings` (each source in load order), `instructionFiles` (outermost
-  first), `composedInstructions`, `openingPrompt`, `mcpServers`, `received`
-  and `exitCode`, then fields of the backend's own.
+  first), `composedInstructions`, `openingPrompt`, `mcpServers`, `received`,
+  `shell` and `exitCode`, then fields of the backend's own.
 - **It exits once the test process that owns it is gone**: the one a
   `test-owner` file names in its config folder or a folder above it
   (`watchOwner` in `common.mjs`), which a world and a `TestDirs` write. It
@@ -565,7 +565,11 @@ long-running child process, `/serve <port>` starts a child serving HTTP on
 line naming it, as an HTML page, a POST with its body), `/flood <n>` writes `n` numbered lines
 then `flood done`, `/links` asks for the mouse as the fullscreen CLI
 does and prints a hyperlink and a bare address (logging the mouse reports it
-is sent), and anything else is a prompt it records and answers.
+is sent), `/shell <command>` runs the command in a shell with the session's own
+environment and folder, as the real CLI's shell tool does (a test reads what a
+program run from a session sees, such as `floti agent`), answers `shell <exit
+code>` and logs the command, its output and its exit code in `shell`, and
+anything else is a prompt it records and answers.
 
 ### Other agent (`other-agent.mjs`)
 
@@ -594,9 +598,10 @@ run-log shape, with `conversation`, `resumed`, `title`, `model`, `mode`,
 - It declares MCP tools, and neither moves a long call to the background nor
   supports MCP tasks.
 
-At its prompt: `/exit` and `/crash` end it with 0 and 3, and anything else is a
-prompt it records and answers. It exits once the test process that owns it is
-gone, as every fake does.
+At its prompt: `/exit` and `/crash` end it with 0 and 3, `/shell <command>` runs
+a shell command as Claude Code's fake does, and anything else is a prompt it
+records and answers. It exits once the test process that owns it is gone, as
+every fake does.
 
 A new backend gets its fake here, written to the same pattern, before its
 backend code: the backend's tests drive the fake, never the real CLI.

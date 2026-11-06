@@ -36,6 +36,11 @@ pub const STRIPPED_ENV: &[&str] = &[
     "NO_COLOR",
 ];
 
+/// Variables removed from every session's environment by their prefix: the
+/// agent tools' address and token are a session's own, put there by the host
+/// at launch, never a parent's passed on.
+pub const STRIPPED_PREFIXES: &[&str] = &["FLOTI_AGENT_"];
+
 /// Variables every session gets, replacing any the host had.
 pub const TERMINAL_ENV: &[(&str, &str)] = &[
     ("TERM", "xterm-256color"),
@@ -56,6 +61,7 @@ pub fn session_env(
             !STRIPPED_ENV
                 .iter()
                 .any(|stripped| same_name(name, stripped))
+                && !has_stripped_prefix(name)
                 && !TERMINAL_ENV.iter().any(|(set, _)| same_name(name, set))
         })
         .collect();
@@ -73,6 +79,13 @@ pub fn session_env(
 
 fn same_name(a: &OsStr, b: impl AsRef<OsStr>) -> bool {
     a.eq_ignore_ascii_case(b.as_ref())
+}
+
+fn has_stripped_prefix(name: &OsStr) -> bool {
+    let name = name.to_string_lossy().to_ascii_uppercase();
+    STRIPPED_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -121,6 +134,21 @@ mod tests {
         assert_eq!(value(&env, "COLORTERM"), ["truecolor"]);
         assert_eq!(value(&env, "FORCE_HYPERLINK"), ["1"]);
         assert_eq!(value(&env, "FLOTI_EXTRA"), ["yes"]);
+    }
+
+    #[test]
+    fn a_floti_agent_variable_the_host_inherited_never_reaches_a_session() {
+        let env = session_env(
+            pairs(&[
+                ("FLOTI_AGENT_TOKEN", "a parent's"),
+                ("floti_agent_url", "http://127.0.0.1:1/mcp/agents"),
+                ("FLOTI_AGENTS", "kept: not a FLOTI_AGENT_ name"),
+            ]),
+            pairs(&[("FLOTI_AGENT_TOKEN", "its own")]),
+        );
+        assert_eq!(value(&env, "FLOTI_AGENT_TOKEN"), ["its own"]);
+        assert!(value(&env, "FLOTI_AGENT_URL").is_empty());
+        assert_eq!(value(&env, "FLOTI_AGENTS").len(), 1);
     }
 
     #[test]

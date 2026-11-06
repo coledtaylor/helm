@@ -51,6 +51,10 @@
 //                for byte. It exits with the test that owns it.
 //   /flood <n>   write n numbered lines (`flood 000000 ...`) at once, then
 //                answer `flood done`
+//   /shell <command>  run the command in the shell, as the CLI's shell tool
+//                does, with the session's own environment and folder, and
+//                answer `shell <exit code>`. Its output and exit code are
+//                logged in `shell`.
 //   /clear       move to a new conversation id under the same process, and
 //                register under it, as the real CLI does
 //   /links       ask for mouse and focus reports, as the real CLI's fullscreen
@@ -75,7 +79,16 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { childScript, fakeVersion, parseArgv, RunLog, UsageError, watchOwner, writeJsonAtomically } from './common.mjs'
+import {
+  childScript,
+  fakeVersion,
+  parseArgv,
+  RunLog,
+  runShell,
+  UsageError,
+  watchOwner,
+  writeJsonAtomically
+} from './common.mjs'
 
 const BACKEND = 'claude-code'
 const VERSION = fakeVersion('2.1.999')
@@ -654,6 +667,11 @@ function submit(line) {
         answer(`serving ${port[1]}`)
       }
     })
+    return
+  }
+  if (command === '/shell') {
+    const typed = line.trim().slice('/shell'.length).trim()
+    runShell(typed, log, saveLog, (ran) => answer(`shell ${String(ran.code)}`))
     return
   }
   if (command === '/flood') {

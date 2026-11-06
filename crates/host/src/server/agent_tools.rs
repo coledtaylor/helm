@@ -17,7 +17,8 @@
 //! Today that is helm-browser ([`BrowserTools`]), on the `browserMcp`
 //! setting and given to a launch only while a client with a browser pane is
 //! attached; helm-sessions ([`SessionTools`]), on the `sessionMcp` setting;
-//! and `helm-plugin-<id>` for each plugin with its tools on: for a version 2
+//! floti-agents ([`FlotiAgents`]), on the `sessionAgents` setting, given to
+//! every launch whoever is attached unless its profile turns it off; and `helm-plugin-<id>` for each plugin with its tools on: for a version 2
 //! plugin, whose background module runs in the host's engine, served by the
 //! host itself from its manifest with no client attached
 //! ([`HostPluginFamilies`]), given to every launch while the plugin is on;
@@ -34,6 +35,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 
 use super::browser_tools::BrowserTools;
 use super::features::{BrowserRelay, PluginRelay};
+use super::floti_agents::FlotiAgents;
 use super::hosted::Hosted;
 use super::plugin_tools::{HostPluginFamilies, HostPluginTools, PluginFamilies};
 use super::records::ExitNotice;
@@ -46,6 +48,7 @@ pub(crate) struct HostAgentTools {
     listener: AgentToolsListener,
     browser: Arc<BrowserTools>,
     sessions: Arc<SessionTools>,
+    agents: Arc<FlotiAgents>,
     held: Mutex<Held>,
     /// Set by the first stop: from then on nothing is granted.
     stopped: AtomicBool,
@@ -76,9 +79,11 @@ impl HostAgentTools {
     ) -> Self {
         let browser = Arc::new(BrowserTools::new(relay));
         let sessions = Arc::new(SessionTools::new());
+        let agents = Arc::new(FlotiAgents::new());
         let families: Vec<Arc<dyn ToolFamily>> = vec![
             Arc::clone(&browser) as Arc<dyn ToolFamily>,
             Arc::clone(&sessions) as Arc<dyn ToolFamily>,
+            Arc::clone(&agents) as Arc<dyn ToolFamily>,
         ];
         // The host's own first: a client's server of the same name is
         // passed over.
@@ -93,6 +98,7 @@ impl HostAgentTools {
             ),
             browser,
             sessions,
+            agents,
             held: Mutex::new(Held::default()),
             stopped: AtomicBool::new(false),
         }
@@ -103,10 +109,16 @@ impl HostAgentTools {
         self.sessions.answer_from(world);
     }
 
+    /// What floti-agents acts through: the host's sessions.
+    pub fn act_through(&self, hosted: Weak<Hosted>) {
+        self.agents.act_through(hosted);
+    }
+
     /// Switches each family as `settings` say, then [`Self::settle`]s.
     pub fn follow(&self, settings: &HostSettings) {
         self.browser.switch(settings.browser_mcp);
         self.sessions.switch(settings.session_mcp);
+        self.agents.switch(settings.session_agents);
         self.settle();
     }
 
@@ -123,14 +135,14 @@ impl HostAgentTools {
 
     /// A token for a launch about to be composed, with an entry for each
     /// family on that can be given now (helm-browser only while a browser
-    /// client is attached); `None`, with nothing bound and no token minted,
-    /// when there is none or the host is stopping.
-    pub fn grant(&self) -> Result<Option<Grant>> {
+    /// client is attached) except those in `excluded`; `None`, with nothing
+    /// bound and no token minted, when there is none or the host is stopping.
+    pub fn grant(&self, excluded: &[&str]) -> Result<Option<Grant>> {
         if self.stopped.load(Ordering::SeqCst) {
             return Ok(None);
         }
         let mut held = self.held();
-        let grant = self.listener.grant()?;
+        let grant = self.listener.grant_without(excluded)?;
         if grant.is_some() {
             held.launching += 1;
         }
@@ -269,6 +281,7 @@ mod tests {
         HostSettings {
             browser_mcp: on,
             session_mcp: on,
+            session_agents: on,
             ..crate::workspace::settings::defaults()
         }
     }
@@ -286,13 +299,13 @@ mod tests {
     async fn s8_with_every_family_off_nothing_binds_and_no_token_is_minted() {
         let tools = tools();
         tools.follow(&settings(false));
-        assert!(tools.grant().unwrap().is_none());
+        assert!(tools.grant(&[]).unwrap().is_none());
         assert_eq!(tools.listener.address(), None);
 
         // On, but nothing binds until a launch is granted.
         tools.follow(&settings(true));
         assert_eq!(tools.listener.address(), None);
-        let grant = tools.grant().unwrap().expect("a grant with a family on");
+        let grant = tools.grant(&[]).unwrap().expect("a grant with a family on");
         assert!(tools.listener.address().is_some());
         tools.failed(grant.id);
 
@@ -306,11 +319,11 @@ mod tests {
     async fn s7_a_stopped_host_grants_nothing_and_holds_no_port() {
         let tools = tools();
         tools.follow(&settings(true));
-        let grant = tools.grant().unwrap().unwrap();
+        let grant = tools.grant(&[]).unwrap().unwrap();
         tools.started(grant.id, SessionId(1));
         tools.stop().await;
         assert_eq!(tools.listener.address(), None);
-        assert!(tools.grant().unwrap().is_none());
+        assert!(tools.grant(&[]).unwrap().is_none());
         // A settings change after the stop binds nothing.
         tools.follow(&settings(true));
         assert_eq!(tools.listener.address(), None);
@@ -320,7 +333,7 @@ mod tests {
     async fn a_session_that_ends_before_its_launch_returns_has_its_token_revoked_on_start() {
         let tools = tools();
         tools.follow(&settings(true));
-        let grant = tools.grant().unwrap().unwrap();
+        let grant = tools.grant(&[]).unwrap().unwrap();
         tools.ended(SessionId(4));
         tools.started(grant.id, SessionId(4));
         {

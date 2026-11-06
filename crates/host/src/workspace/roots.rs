@@ -105,6 +105,18 @@ impl KnownRoots {
         Ok(out)
     }
 
+    /// The folders Floti tracks: every known folder but a hosted session's
+    /// working directory. Running somewhere does not make a folder tracked,
+    /// so a session cannot widen what an agent it starts may reach by being
+    /// started elsewhere.
+    pub fn tracked(&self) -> Result<Vec<KnownRoot>> {
+        Ok(self
+            .all()?
+            .into_iter()
+            .filter(|root| root.kind != RootKind::Session)
+            .collect())
+    }
+
     /// The known folder `root` names, as its source spells it, or a sentence
     /// naming the folder when the host does not know it.
     pub fn known(&self, root: &str) -> std::result::Result<KnownRoot, String> {
@@ -277,6 +289,28 @@ mod tests {
                 RootKind::Session
             ]
         );
+    }
+
+    #[test]
+    fn a_sessions_own_folder_is_known_but_not_tracked() {
+        let world = World::new();
+        let project = world.dirs.folder("projects/alpha");
+        let session = world.dirs.folder("session folder");
+        world.scan(&project, ProjectKind::Folder);
+        world
+            .sessions
+            .write()
+            .unwrap()
+            .push(session.display().to_string());
+        assert!(world.known(&session).is_ok());
+        let tracked: Vec<PathBuf> = world
+            .roots
+            .tracked()
+            .unwrap()
+            .into_iter()
+            .map(|root| root.path)
+            .collect();
+        assert_eq!(tracked, [project]);
     }
 
     #[test]
