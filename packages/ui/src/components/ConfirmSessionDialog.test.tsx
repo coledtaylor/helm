@@ -50,6 +50,8 @@ describe('ConfirmSessionDialog', () => {
     const folder = dialog.querySelector('[data-confirm-folder]')
     expect(folder?.textContent).toBe('C:\\work\\shop')
     expect(folder?.className).toContain('font-mono')
+    expect(folder?.className).toContain('text-[11.5px]')
+    expect(folder?.className).toContain('[overflow-wrap:anywhere]')
     expect(folder?.className).toContain('text-fg')
     expect(folder?.className).not.toContain('text-fg-muted')
     expect(folder?.parentElement?.textContent).toBe(
