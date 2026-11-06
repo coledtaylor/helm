@@ -31,15 +31,17 @@ const USAGE = `helm-plugin - make a Helm plugin, and check one
 
 Usage:
   helm-plugin create <folder> [--id <id>] [--name <name>]
-      Writes a new plugin into <folder>, which must be new or empty: a rail
-      icon, a sidebar panel and a tab, in plain HTML and JavaScript.
+      Writes a new apiVersion 2 plugin into <folder>, which must be new or
+      empty: a rail icon, a sidebar panel, a tab and a background module, in
+      plain HTML and JavaScript.
       --id    the plugin's id: lower-case letters, digits and dashes
               (default: made from the folder's name)
       --name  what Helm calls it (default: made from the id)
 
   helm-plugin validate [folder]
       Checks the plugin in [folder] (default: this folder) as Helm does when
-      it loads it: the manifest, and every file it names. Exits 1 on errors.
+      it loads it: the manifest, at apiVersion 1 or 2, and every file it
+      names. Exits 1 on errors.
 
   helm-plugin --help
 `
@@ -223,7 +225,7 @@ function create(argv) {
   out('')
   out('Next:')
   out(`  1. In Helm, open Settings > Plugins > Add folder and pick ${target}`)
-  out('  2. Edit pages/panel.html and pages/panel.js. Helm reloads the plugin when you save.')
+  out('  2. Edit pages/panel.html, pages/panel.js and background/main.js. Helm reloads the plugin when you save.')
   out('  3. Run npm install there, for the manifest schema in your editor. Then')
   out('     npm run validate checks the plugin as Helm will.')
   return 0

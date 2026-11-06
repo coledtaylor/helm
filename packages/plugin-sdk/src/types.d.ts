@@ -1,23 +1,32 @@
 /**
- * The contract between a Helm plugin and the Helm running it, at apiVersion 1.
+ * The contract between a plugin and the Helm or Floti running it, at
+ * apiVersion 1 and 2.
  *
  * Types only. Everything here describes something the running Helm provides:
- * the `window.helm` bridge it injects into every page a plugin serves, and the
- * manifest it reads from `helm-plugin.json`. A plugin never carries a copy of
- * the runtime, so it cannot carry a stale one - `apiVersion` in the manifest is
- * what ties a plugin to the Helm it was built against.
+ * the bridge it injects into every page a plugin serves (`window.helm` at
+ * version 1, `window.floti` at 2), the `floti` global a version 2 background
+ * module runs with, and the manifest it reads from `helm-plugin.json`. A
+ * plugin never carries a copy of the runtime, so it cannot carry a stale one -
+ * `apiVersion` in the manifest is what ties a plugin to the Helm it was built
+ * against.
  *
- * `import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'`, and add
- * `/// <reference types="@coledtaylor/helm-plugin-sdk/global" />` once to have `window.helm`
- * typed everywhere.
+ * `import type { FlotiBridge } from '@coledtaylor/helm-plugin-sdk'`, and add
+ * `/// <reference types="@coledtaylor/helm-plugin-sdk/global" />` once to have
+ * `window.floti` and `window.helm` typed in every page. A version 2 background
+ * module references `@coledtaylor/helm-plugin-sdk/background` instead, for
+ * the `floti` it runs with.
  */
 
 // ---------------------------------------------------------------------------
 // The manifest
 // ---------------------------------------------------------------------------
 
-/** The bridge versions this SDK describes. */
-export type ApiVersion = 1
+/**
+ * The bridge versions this SDK describes. 1: pages get `window.helm`, and the
+ * background is a page a window frames. 2: pages get `window.floti`, and the
+ * background is a module the host runs in an isolate of its own.
+ */
+export type ApiVersion = 1 | 2
 
 /**
  * `helm-plugin.json`, at the root of a plugin's folder. Every surface is
@@ -30,7 +39,7 @@ export interface PluginManifest {
   /** For editors: `"./node_modules/@coledtaylor/helm-plugin-sdk/helm-plugin.schema.json"`. Ignored by Helm. */
   $schema?: string
   apiVersion: ApiVersion
-  /** Lower-case letters, digits and dashes. The plugin's origin is `helm-plugin://<id>`. */
+  /** Lower-case letters, digits and dashes. The plugin's origin is `helm-plugin://<id>` at version 1 and `floti-plugin://<id>` at 2. */
   id: string
   name: string
   version?: string
@@ -41,7 +50,11 @@ export interface PluginManifest {
   rail?: RailSpec
   panels?: Record<string, PanelSpec>
   tabs?: Record<string, TabSpec>
-  /** A page that runs from the moment the plugin is enabled, with no surface open. */
+  /**
+   * Code that runs from the moment the plugin is enabled, with no surface
+   * open. At version 1 a `.html` page a window frames; at version 2 a `.js` or
+   * `.mjs` module the host runs, with `floti` as `FlotiBackground` describes it.
+   */
   background?: string
   /** Entries in the command palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS). */
   commands?: CommandSpec[]
@@ -57,7 +70,8 @@ export interface PluginManifest {
   service?: ServiceSpec | null
   /**
    * Tools Helm offers the Claude Code sessions it starts, answered by the
-   * background page with `helm.tools.handle`. Needs `background`.
+   * background with `tools.handle` (`helm` at version 1, `floti` at 2).
+   * Needs `background`.
    */
   agent?: AgentSpec
   /**
@@ -237,7 +251,7 @@ export type PluginParams = Record<string, string | number | boolean>
 export interface HelmContext {
   plugin: string
   surface: SurfaceKind
-  /** The key in `panels` or `tabs`; `background` for the background page. */
+  /** The key in `panels` or `tabs`; `background` for the background. */
   name: string
   params: PluginParams
 }
@@ -362,7 +376,7 @@ export interface PluginSession {
 export interface HelmEvents {
   /** The theme changed. Tokens are already applied to the page when this fires. */
   theme: HelmTheme
-  /** The surface came on screen, or went off it. Always false for the background page. */
+  /** The surface came on screen, or went off it. Always false for the background. */
   visibility: boolean
   /** The user changed the plugin's settings. */
   settings: Record<string, SettingValue>
@@ -370,7 +384,7 @@ export interface HelmEvents {
   secrets: Record<string, SecretState>
   /**
    * A command with no `tab` was chosen in Quick Open. Delivered to the
-   * background page when there is one, and otherwise to the rail panel, which
+   * background when there is one, and otherwise to the rail panel, which
    * Helm opens first.
    */
   command: { id: string }
@@ -437,21 +451,24 @@ export interface ToolCall {
 export type ToolHandler = (args: Record<string, unknown>, call: ToolCall) => unknown
 
 /**
- * `window.helm`: everything a plugin page can ask of Helm.
+ * Everything a plugin page can ask of Helm, at either version: `window.helm`
+ * at version 1 (`HelmBridge`) and `window.floti` at 2 (`FlotiBridge`) have
+ * these same calls. Examples below say `helm.`; a version 2 page says
+ * `floti.`.
  *
  * Present before any of the page's own scripts run. Calls made before the
  * connection to Helm is up are queued, not dropped.
  */
-export interface HelmBridge {
+export interface PluginBridge {
   readonly apiVersion: ApiVersion
   readonly context: HelmContext
   /** The current theme. Also on the page as CSS variables. */
   readonly theme: HelmTheme
-  /** Whether the surface is on screen. Always false for the background page. */
+  /** Whether the surface is on screen. Always false for the background. */
   readonly visible: boolean
   /**
    * Whether this page is drawn on the computer the plugin runs on: where its
-   * service, its programs and its background page run, and where its data
+   * service, its programs and its background run, and where its data
    * lives. True in Helm on that computer. A page drawn on another computer
    * hides what only makes sense on the plugin's, such as revealing a file,
    * which would open a window there. Read synchronously, from the page's
@@ -551,7 +568,7 @@ export interface HelmBridge {
     list(): Promise<PluginSession[]>
   }
 
-  /** The tools `agent.tools` declares, answered. Background page only. */
+  /** The tools `agent.tools` declares, answered. In the background only. */
   tools: {
     /**
      * The handler for one tool. Registering a name again replaces its handler.
@@ -563,4 +580,76 @@ export interface HelmBridge {
 
   /** Subscribes to an event. Returns the function that unsubscribes. */
   on<K extends keyof HelmEvents>(event: K, listener: (data: HelmEvents[K]) => void): () => void
+}
+
+/** `window.helm`: the bridge a version 1 page gets. */
+export interface HelmBridge extends PluginBridge {
+  readonly apiVersion: 1
+}
+
+/**
+ * `window.floti`: the bridge a version 2 page gets. The same calls as
+ * `window.helm`, under the name the version 2 runtime gives them, on the
+ * page's `floti-plugin://<id>/` origin.
+ */
+export interface FlotiBridge extends PluginBridge {
+  readonly apiVersion: 2
+}
+
+/** What a version 2 background module hears, by event name: what is not about a page on screen. */
+export type BackgroundEvents = Pick<HelmEvents, 'settings' | 'secrets' | 'command' | 'sessions'>
+
+/**
+ * `floti` in a version 2 background module, which the host runs in a V8
+ * isolate of its own. It is the page bridge's shape, less what only a window
+ * has: no theme and no `onHostComputer`, `visible` always false, and the calls
+ * that need a window (`open`, `tabs.open`, `secrets.request`,
+ * `sessions.start`, `sessions.list`) reject with `code` `unavailable`. Hear
+ * the sessions through `floti.on('sessions')`.
+ *
+ * Besides `floti` the module has the language's own globals, `console`,
+ * BroadcastChannel, the timers and the web's data types (`URL`, `Headers`,
+ * `TextEncoder`, `AbortController` and the like). It has no DOM, no
+ * `localStorage`, no global `fetch` (`floti.fetch` is its way out), no file
+ * system, no processes but `floti.exec`'s, and it imports only its own
+ * plugin's files, by a relative path.
+ */
+export interface FlotiBackground {
+  readonly apiVersion: 2
+  readonly context: HelmContext & { readonly surface: 'background'; readonly name: 'background' }
+  readonly visible: false
+
+  /** As `PluginBridge.fetch`: the manifest's `network` and `service:/path`, sent by the host. */
+  fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>
+  /** As `PluginBridge.exec`, run on the host. */
+  exec(command: string, args?: readonly string[], options?: ExecOptions): Promise<ExecResult>
+
+  /** Rejects with `code` `unavailable`: a background script has no Browser tab to open a link in. */
+  open(url: string): Promise<never>
+  tabs: {
+    /** Rejects with `code` `unavailable`: a background script has no window to open a tab in. */
+    open(tab: string, params?: PluginParams, options?: { title?: string; preview?: boolean }): Promise<never>
+  }
+  /** Does nothing: a background has no surface. */
+  surface: {
+    setTitle(title: string | null): void
+    keep(): void
+  }
+  status: PluginBridge['status']
+  badge: PluginBridge['badge']
+  settings: PluginBridge['settings']
+  secrets: {
+    state(key: string): Promise<SecretState>
+    /** Rejects with `code` `unavailable`: only a plugin's page can show the dialog that asks the user for a secret. */
+    request(key: string): Promise<never>
+  }
+  sessions: {
+    /** Rejects with `code` `unavailable`: only a click in a plugin's page can ask the user to start a session. */
+    start(request: SessionStartRequest): Promise<never>
+    /** Rejects with `code` `unavailable`: a background hears the sessions through `floti.on('sessions')`. */
+    list(): Promise<never>
+  }
+  tools: PluginBridge['tools']
+  /** Subscribes to an event. Returns the function that unsubscribes. */
+  on<K extends keyof BackgroundEvents>(event: K, listener: (data: BackgroundEvents[K]) => void): () => void
 }

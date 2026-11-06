@@ -187,11 +187,36 @@ describe('secret', () => {
 describe('outside Helm', () => {
   it('imports without a bridge, says what is wrong on subscribe, and recovers once there is one', () => {
     removeBridge()
-    expect(() => settings.subscribe(() => undefined)).toThrow('window.helm is missing')
-    expect(() => theme.subscribe(() => undefined)).toThrow('window.helm is missing')
+    expect(() => settings.subscribe(() => undefined)).toThrow('window.floti and window.helm are both missing')
+    expect(() => theme.subscribe(() => undefined)).toThrow('window.floti and window.helm are both missing')
 
     fake = installBridge()
     expect(watch(settings).values).toEqual([null])
     expect(fake.settingsReads).toHaveLength(1)
+  })
+})
+
+describe.each([
+  ['a version 2 page', 'floti'],
+  ['a version 1 page', 'helm']
+] as const)('S5: in %s, the stores use window.%s', (_page, name) => {
+  it('read and follow that bridge', async () => {
+    fake = installBridge(name)
+    expect(Object.keys(globalThis)).toContain(name)
+    expect(Object.keys(globalThis)).not.toContain(name === 'floti' ? 'helm' : 'floti')
+
+    const themes = watch(theme)
+    const values = watch(settings)
+    fake.emit('theme', LIGHT)
+    expect(themes.values).toEqual([DARK, LIGHT])
+    await fake.settingsReads[0]!.answer({ query: 'is:open' })
+    expect(values.values).toEqual([null, { query: 'is:open' }])
+
+    const token = watch(secret('token'))
+    await fake.stateReads[0]!.answer('missing')
+    const asked = secret('token').request()
+    await fake.requests[0]!.answer('ready')
+    expect(await asked).toBe('ready')
+    expect(token.values).toEqual([null, 'missing', 'ready'])
   })
 })

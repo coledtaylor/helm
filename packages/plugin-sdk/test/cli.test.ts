@@ -37,7 +37,7 @@ afterEach(() => {
 })
 
 describe('helm-plugin create', () => {
-  it('writes a plugin Helm would load, named after its folder, and validate agrees', () => {
+  it('S3: writes a version 2 plugin Helm would load, named after its folder, and validate agrees', () => {
     const created = run(['create', 'Issue Tracker'], root)
     expect(created.stderr).toBe('')
     expect(created.status).toBe(0)
@@ -49,6 +49,15 @@ describe('helm-plugin create', () => {
     expect(manifest['id']).toBe('issue-tracker')
     expect(manifest['name']).toBe('Issue tracker')
     expect(manifest['rail']).toEqual({ title: 'Issue tracker', panel: 'main' })
+    // Version 2: a background module the manifest names, and pages that call floti.
+    expect(manifest['apiVersion']).toBe(2)
+    expect(manifest['background']).toBe('background/main.js')
+    for (const page of ['pages/panel.js', 'pages/tab.js']) {
+      const script = readFileSync(join(folder, page), 'utf8')
+      expect(script, page).toMatch(/\bfloti\./)
+      expect(script, page).not.toMatch(/\bhelm\./)
+    }
+    expect(readFileSync(join(folder, 'background', 'main.js'), 'utf8')).toMatch(/\bfloti\.badge\.set\(/)
     // The schema the plugin installs, never this copy's path: run through npx,
     // that is a cache folder.
     expect(manifest['$schema']).toBe(`./node_modules/${SDK.name}/helm-plugin.schema.json`)
@@ -63,7 +72,7 @@ describe('helm-plugin create', () => {
     })
     expect(readFileSync(join(folder, '.gitignore'), 'utf8')).toBe('node_modules/\n')
 
-    for (const file of ['icon.svg', 'README.md', 'pages/panel.html', 'pages/panel.js', 'pages/tab.html', 'pages/tab.js', 'pages/style.css']) {
+    for (const file of ['icon.svg', 'README.md', 'background/main.js', 'pages/panel.html', 'pages/panel.js', 'pages/tab.html', 'pages/tab.js', 'pages/style.css']) {
       expect(existsSync(join(folder, file)), file).toBe(true)
     }
     expect(readFileSync(join(folder, 'README.md'), 'utf8')).toMatch(/^# Issue tracker\n/)
@@ -132,7 +141,7 @@ describe('helm-plugin validate', () => {
     write(folder, { apiVersion: 7, id: 'broken', name: 'Broken' })
     const result = run(['validate', folder], root)
     expect(result.status).toBe(1)
-    expect(result.stderr).toContain('error: apiVersion 7 is not supported by this Helm, which supports 1')
+    expect(result.stderr).toContain('error: apiVersion 7 is not supported by this Helm, which supports 1 and 2')
     expect(result.stderr).toContain('1 error: Helm would not load this plugin.')
   })
 
@@ -169,6 +178,20 @@ describe('helm-plugin validate', () => {
     expect(result.status).toBe(0)
     expect(result.stderr).toContain('warning: "colour" is not a manifest field and is ignored')
     expect(result.stdout).toContain('Warned (warned): Helm would load it (1 warning).')
+  })
+
+  it('S2: passes a version 2 plugin whose background is a module, and refuses a version 2 background page', () => {
+    const folder = join(root, 'two')
+    write(folder, { apiVersion: 2, id: 'two', name: 'Two', background: 'bg.mjs' }, { 'bg.mjs': 'floti.badge.set(1)\n' })
+    const passed = run(['validate', folder], root)
+    expect(passed.status, passed.stderr).toBe(0)
+    expect(passed.stdout).toContain('Two (two): Helm would load it.')
+
+    const page = join(root, 'page')
+    write(page, { apiVersion: 2, id: 'page', name: 'Page', background: 'bg.html' }, { 'bg.html': '<!doctype html>' })
+    const refused = run(['validate', page], root)
+    expect(refused.status).toBe(1)
+    expect(refused.stderr).toContain('error: background must be a .js or .mjs module at apiVersion 2, and a .html page at apiVersion 1')
   })
 
   it('passes the template as it ships', () => {

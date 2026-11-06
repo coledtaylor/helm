@@ -15,6 +15,8 @@ on:
       - "rust-toolchain.toml"
       # The store embeds today's migrations at compile time.
       - "packages/core/drizzle/**"
+      # The plugin registry embeds the SDK's manifest validator at compile time.
+      - "packages/plugin-sdk/src/manifest.js"
       # The protocol's catalogue test reads the app's channel list.
       - "packages/desktop/src/shared/ipc.ts"
       # The agent backends' tests run these fake CLIs.
@@ -32,6 +34,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "packages/core/drizzle/**"
+      - "packages/plugin-sdk/src/manifest.js"
       - "packages/desktop/src/shared/ipc.ts"
       - "test/fake-agents/**"
       - "test/fake-ssh/**"

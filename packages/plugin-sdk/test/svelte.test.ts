@@ -71,3 +71,20 @@ describe('the stores in Svelte', () => {
     expect(fake.listeners('settings')).toBe(0)
   })
 })
+
+describe.each([
+  ['a version 2 page', 'floti'],
+  ['a version 1 page', 'helm']
+] as const)('S5: in %s, a Svelte component reads the stores from window.%s', (_page, name) => {
+  it('renders and follows that bridge', async () => {
+    fake = installBridge(name)
+    const panel = mount(Panel, { target })
+    await fake.settingsReads[0]!.answer({ query: 'is:open' })
+    fake.emit('theme', LIGHT)
+    flushSync()
+    expect(text('settings')).toBe('is:open')
+    expect(text('theme')).toBe('light')
+    await unmount(panel)
+    expect(fake.listeners('theme')).toBe(0)
+  })
+})

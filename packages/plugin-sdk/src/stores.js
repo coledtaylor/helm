@@ -37,7 +37,7 @@ function deliver(run, value) {
  * A value the bridge holds as a property, and the event that says it changed.
  *
  * @template {'theme' | 'visibility'} K
- * @param {(helm: import('./types').HelmBridge) => import('./types').HelmEvents[K]} read
+ * @param {(helm: import('./types').PluginBridge) => import('./types').HelmEvents[K]} read
  * @param {K} event
  * @returns {HelmStore<import('./types').HelmEvents[K]>}
  */
@@ -66,8 +66,8 @@ function property(read, event) {
  * request answered - so a read that answers after one is dropped.
  *
  * @template T
- * @param {(helm: import('./types').HelmBridge) => Promise<T>} read
- * @param {(helm: import('./types').HelmBridge, update: (value: T) => void) => () => void} listen
+ * @param {(helm: import('./types').PluginBridge) => Promise<T>} read
+ * @param {(helm: import('./types').PluginBridge, update: (value: T) => void) => () => void} listen
  * @returns {{ store: HelmStore<T | null>, update: (value: T) => void }}
  */
 function loaded(read, listen) {

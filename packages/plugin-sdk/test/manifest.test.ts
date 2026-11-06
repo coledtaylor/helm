@@ -7,6 +7,7 @@ import {
   originMatches,
   parseOrigin,
   placeholders,
+  SUPPORTED_API_VERSIONS,
   validateManifest,
   type ManifestResult,
   type NormalizedManifest
@@ -45,7 +46,10 @@ describe('validateManifest - plugins that ship', () => {
   it('accepts the template `helm-plugin create` writes, with nothing to warn about', () => {
     const result = validateManifest(TEMPLATE)
     expect(result.warnings).toEqual([])
-    expect(accepted(result).commands).toEqual([{ id: 'open', title: 'Open a tab', tab: 'page' }])
+    const manifest = accepted(result)
+    expect(manifest.apiVersion).toBe(2)
+    expect(manifest.background).toBe('background/main.js')
+    expect(manifest.commands).toEqual([{ id: 'open', title: 'Open a tab', tab: 'page' }])
   })
 })
 
@@ -134,48 +138,54 @@ describe('validateManifest - what a manifest leaves out', () => {
 })
 
 describe('validateManifest - apiVersion', () => {
-  it('says an unsupported version first and alone: a newer plugin fails everything else for reasons not its own', () => {
-    const result = validateManifest({ apiVersion: 2, id: 'NOT VALID', name: '', panels: 'nope' })
+  it('says an unsupported version first and alone, naming 1 and 2: a newer plugin fails everything else for reasons not its own', () => {
+    const result = validateManifest({ apiVersion: 3, id: 'NOT VALID', name: '', panels: 'nope' })
     expect(result.ok).toBe(false)
-    expect(result.ok ? [] : result.errors).toEqual(['apiVersion 2 is not supported by this Helm, which supports 1'])
+    expect(result.ok ? [] : result.errors).toEqual(['apiVersion 3 is not supported by this Helm, which supports 1 and 2'])
   })
 
   it('says a missing version, and a version that is not a number', () => {
-    expect(validateManifest({ id: 'x', name: 'X' })).toMatchObject({ ok: false, errors: ['apiVersion is missing; this Helm supports 1'] })
+    expect(validateManifest({ id: 'x', name: 'X' })).toMatchObject({ ok: false, errors: ['apiVersion is missing; this Helm supports 1 and 2'] })
     expect(validateManifest({ apiVersion: '1', id: 'x', name: 'X' })).toMatchObject({
       ok: false,
-      errors: ['apiVersion "1" is not supported by this Helm, which supports 1']
+      errors: ['apiVersion "1" is not supported by this Helm, which supports 1 and 2']
     })
   })
 
-  it('reads version 2 only for a caller that runs it, where background is a module', () => {
-    const host = { apiVersions: [2] }
+  it('S2: passes a version 2 manifest whose background is a .js or .mjs module', () => {
+    expect(SUPPORTED_API_VERSIONS).toEqual([1, 2])
     for (const background of ['dist/background.js', 'background.mjs']) {
-      const manifest = accepted(validateManifest({ ...MINIMAL, apiVersion: 2, background }, host))
+      const manifest = accepted(validateManifest({ ...MINIMAL, apiVersion: 2, background }))
       expect(manifest.apiVersion).toBe(2)
       expect(manifest.background).toBe(background)
     }
-    expect(validateManifest({ ...MINIMAL, apiVersion: 2, background: 'background.html' }, host).ok).toBe(false)
     // Every other field reads as in version 1.
     const { apiVersion: one, ...rest } = accepted(validateManifest(MINIMAL))
-    const { apiVersion: two, ...restTwo } = accepted(validateManifest({ ...MINIMAL, apiVersion: 2 }, host))
+    const { apiVersion: two, ...restTwo } = accepted(validateManifest({ ...MINIMAL, apiVersion: 2 }))
     expect([one, two]).toEqual([1, 2])
     expect(restTwo).toEqual(rest)
   })
 
-  it('tells a host that runs version 2 that a version 1 plugin is not one it runs', () => {
+  it('S2: refuses a version 2 background page and a version 1 background module, saying what each version takes', () => {
+    expect(errorsFor({ apiVersion: 2, background: 'background.html' })).toEqual([
+      'background must be a .js or .mjs module at apiVersion 2, and a .html page at apiVersion 1'
+    ])
+    expect(errorsFor({ apiVersion: 1, background: 'background.mjs' })).toEqual([
+      'background must be a .html page at apiVersion 1, and a .js or .mjs module at apiVersion 2'
+    ])
+    expect(accepted(validateManifest({ ...MINIMAL, background: 'background.html' })).background).toBe('background.html')
+  })
+
+  it("S2: says a version the caller does not run in the host's words, naming what it runs", () => {
+    // The host's own tests assert this sentence (crates/host/src/plugins/manifest.rs).
+    expect(validateManifest({ ...MINIMAL, apiVersion: 3 }, { apiVersions: [1, 2] })).toMatchObject({
+      ok: false,
+      errors: ['apiVersion 3 is not supported: this host runs apiVersion 1, 2 plugins']
+    })
     expect(validateManifest(MINIMAL, { apiVersions: [2] })).toMatchObject({
       ok: false,
       errors: ['apiVersion 1 is not supported: this host runs apiVersion 2 plugins']
     })
-  })
-
-  it('keeps Helm on version 1 when no caller says otherwise', () => {
-    expect(validateManifest({ ...MINIMAL, apiVersion: 2, background: 'background.js' })).toMatchObject({
-      ok: false,
-      errors: ['apiVersion 2 is not supported by this Helm, which supports 1']
-    })
-    expect(accepted(validateManifest({ ...MINIMAL, background: 'background.html' })).background).toBe('background.html')
   })
 
   it('refuses anything that is not an object', () => {
@@ -238,7 +248,7 @@ describe('validateManifest - every problem, in one pass', () => {
       { background: 'bg.html', commands: [{ id: 'go', title: 'Go', tab: 'missing' }] },
       'commands[0].tab must name one of the tabs'
     ],
-    ['a command nothing can receive', { commands: [{ id: 'go', title: 'Go' }] }, 'needs a background page or a rail panel'],
+    ['a command nothing can receive', { commands: [{ id: 'go', title: 'Go' }] }, 'needs a background or a rail panel'],
     [
       'a command id used twice',
       { background: 'bg.html', commands: [{ id: 'go', title: 'Go' }, { id: 'go', title: 'Again' }] },

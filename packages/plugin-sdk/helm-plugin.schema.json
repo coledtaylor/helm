@@ -9,6 +9,46 @@
     "name"
   ],
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "apiVersion"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "background": {
+            "$ref": "#/$defs/htmlEntry"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "apiVersion"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "background": {
+            "$ref": "#/$defs/moduleEntry"
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "$schema": {
       "type": "string",
@@ -16,14 +56,15 @@
     },
     "apiVersion": {
       "enum": [
-        1
+        1,
+        2
       ],
-      "description": "The bridge version the plugin was written against."
+      "description": "The bridge version the plugin was written against. 1: pages get window.helm and background is a .html page. 2: pages get window.floti and background is a .js or .mjs module the host runs in an isolate."
     },
     "id": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
-      "description": "Lower-case letters, digits and dashes. The plugin origin is helm-plugin://<id>."
+      "description": "Lower-case letters, digits and dashes. The plugin origin is helm-plugin://<id> at apiVersion 1 and floti-plugin://<id> at 2."
     },
     "name": {
       "type": "string",
@@ -167,8 +208,8 @@
       "description": "Open the tabs as pages in one tab of the plugin's own, with a strip of pages inside it, rather than a tab each among the pane's tabs."
     },
     "background": {
-      "$ref": "#/$defs/htmlEntry",
-      "description": "A page that runs from the moment the plugin is turned on, with no surface open."
+      "type": "string",
+      "description": "Code that runs from the moment the plugin is turned on, with no surface open: a .html page at apiVersion 1, a .js or .mjs module at apiVersion 2."
     },
     "commands": {
       "type": "array",
@@ -192,7 +233,7 @@
           },
           "tab": {
             "type": "string",
-            "description": "Opens this tab. Without it the command arrives as the command event, at the background page or else the rail panel."
+            "description": "Opens this tab. Without it the command arrives as the command event, at the background or else the rail panel."
           }
         }
       }
@@ -208,7 +249,7 @@
     "network": {
       "type": "array",
       "maxItems": 50,
-      "description": "The origins helm.fetch may reach.",
+      "description": "The origins the bridge's fetch (floti.fetch, or helm.fetch at apiVersion 1) may reach.",
       "items": {
         "type": "string",
         "pattern": "^([Hh][Tt][Tt][Pp][Ss]?):\\/\\/(\\*\\.)?([^/?#@\\s]+?)(?::(\\d{1,5}))?\\/?$",
@@ -228,7 +269,7 @@
     "exec": {
       "type": "object",
       "maxProperties": 50,
-      "description": "Programs helm.exec may run, by the name the plugin calls them.",
+      "description": "Programs the bridge's exec (floti.exec, or helm.exec at apiVersion 1) may run, by the name the plugin calls them.",
       "propertyNames": {
         "$ref": "#/$defs/name"
       },
@@ -258,7 +299,7 @@
       }
     },
     "service": {
-      "description": "A long-running process Helm starts, supervises and stops, reached as helm.fetch(\"service:/path\").",
+      "description": "A long-running process Helm starts, supervises and stops, reached as floti.fetch(\"service:/path\"), or helm.fetch at apiVersion 1.",
       "oneOf": [
         {
           "type": "null"
@@ -311,7 +352,7 @@
     },
     "agent": {
       "type": "object",
-      "description": "Tools Helm offers the Claude Code sessions it starts, as an MCP server named helm-plugin-<id>. The background page answers them with helm.tools.handle, so the manifest needs a background.",
+      "description": "Tools Helm offers the Claude Code sessions it starts, as an MCP server named helm-plugin-<id>. The background answers them with tools.handle (floti.tools.handle, or helm.tools.handle at apiVersion 1), so the manifest needs a background.",
       "required": [
         "tools"
       ],
@@ -374,6 +415,11 @@
       "type": "string",
       "pattern": "^(?!\\s)(?![\\\\/])(?![A-Za-z]:)(?!(?:[^\\\\/]*[\\\\/])*\\.\\.(?:[\\\\/]|$))(?!(?:\\.?[\\\\/])*__helm[\\\\/])[^\\u0000]*\\.(?:[Hh][Tt][Mm][Ll])(?:[\\\\/]\\.?)*$",
       "description": "An .html file, by a path relative to the plugin folder that stays inside it and is not under __helm/."
+    },
+    "moduleEntry": {
+      "type": "string",
+      "pattern": "^(?!\\s)(?![\\\\/])(?![A-Za-z]:)(?!(?:[^\\\\/]*[\\\\/])*\\.\\.(?:[\\\\/]|$))(?!(?:\\.?[\\\\/])*__helm[\\\\/])[^\\u0000]*\\.(?:[Jj][Ss]|[Mm][Jj][Ss])(?:[\\\\/]\\.?)*$",
+      "description": "A .js or .mjs module, by a path relative to the plugin folder that stays inside it and is not under __helm/: a version 2 background."
     },
     "iconEntry": {
       "type": "string",

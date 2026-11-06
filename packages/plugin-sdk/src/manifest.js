@@ -16,8 +16,13 @@
  * test holds the two to each other.
  */
 
-/** The bridge versions this Helm speaks. */
-export const SUPPORTED_API_VERSIONS = Object.freeze([1])
+/**
+ * The bridge versions this SDK speaks, and what `helm-plugin validate`
+ * accepts: 1, whose pages get `window.helm` and whose background is a page a
+ * window frames, and 2, whose pages get `window.floti` and whose background
+ * is a module the host runs in an isolate of its own.
+ */
+export const SUPPORTED_API_VERSIONS = Object.freeze([1, 2])
 
 /**
  * Where a plugin's background code is, by bridge version: a page Helm frames
@@ -26,6 +31,36 @@ export const SUPPORTED_API_VERSIONS = Object.freeze([1])
  * @type {Readonly<Record<number, readonly string[]>>}
  */
 const BACKGROUND_EXTENSIONS = Object.freeze({ 1: Object.freeze(['.html']), 2: Object.freeze(['.js', '.mjs']) })
+
+/** @type {Readonly<Record<number, string>>} */
+const BACKGROUND_KINDS = Object.freeze({ 1: 'page', 2: 'module' })
+
+/**
+ * What `background` must be, said for the manifest's own version first and
+ * then for the other, so an author who wrote the other kind sees which version
+ * takes it.
+ *
+ * @param {number} apiVersion
+ * @returns {string}
+ */
+function backgroundRule(apiVersion) {
+  const takes = (/** @type {number} */ version) =>
+    `a ${(BACKGROUND_EXTENSIONS[version] ?? []).join(' or ')} ${BACKGROUND_KINDS[version] ?? 'file'} at apiVersion ${String(version)}`
+  const others = Object.keys(BACKGROUND_EXTENSIONS)
+    .map(Number)
+    .filter((version) => version !== apiVersion)
+  return `background must be ${[apiVersion, ...others].map(takes).join(', and ')}`
+}
+
+/**
+ * The versions, as a sentence says them: `1`, `1 and 2`, `1, 2 and 3`.
+ *
+ * @param {readonly number[]} versions
+ */
+function versionList(versions) {
+  const said = versions.map(String)
+  return said.length < 2 ? said.join('') : `${said.slice(0, -1).join(', ')} and ${said[said.length - 1] ?? ''}`
+}
 
 /** A plugin's id: the host of its origin, which a standard scheme lower-cases. */
 export const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
@@ -277,10 +312,11 @@ export function manifestFiles(manifest) {
  * Reads a manifest. Every problem is reported, not only the first, so a
  * plugin author fixes them in one pass.
  *
- * `options.apiVersions` is for Floti's host, which runs version 2 plugins and
- * passes `[2]`. Left out, it is `SUPPORTED_API_VERSIONS`, what Helm speaks.
- * Version 2 reads every field as version 1 does, except that `background` is
- * a `.js` or `.mjs` module rather than a page.
+ * `options.apiVersions` is for a host that names the versions it runs, as
+ * Floti's host does with `[1, 2]`, and changes how a version it does not run
+ * is refused. Left out, it is `SUPPORTED_API_VERSIONS`. Version 2 reads every
+ * field as version 1 does, except that `background` is a `.js` or `.mjs`
+ * module rather than a page.
  *
  * @param {unknown} value the parsed `helm-plugin.json`
  * @param {import('./manifest').ValidateOptions} [options]
@@ -306,14 +342,15 @@ export function validateManifest(value, options = {}) {
   if (typeof apiVersion !== 'number' || !versions.includes(apiVersion) || BACKGROUND_EXTENSIONS[apiVersion] === undefined) {
     // Said first and on its own: a plugin from a newer Helm fails every other
     // check for reasons that are not its fault.
-    const supported = versions.join(', ')
     const said = apiVersion === undefined ? 'apiVersion is missing' : `apiVersion ${JSON.stringify(apiVersion)} is not supported`
+    // The host's sentence is asserted word for word by its own tests
+    // (crates/host/src/plugins/manifest.rs), so it keeps its comma list.
     const message =
       options.apiVersions === undefined
         ? apiVersion === undefined
-          ? `${said}; this Helm supports ${supported}`
-          : `${said} by this Helm, which supports ${supported}`
-        : `${said}: this host runs apiVersion ${supported} plugins`
+          ? `${said}; this Helm supports ${versionList(versions)}`
+          : `${said} by this Helm, which supports ${versionList(versions)}`
+        : `${said}: this host runs apiVersion ${versions.join(', ')} plugins`
     return { ok: false, errors: [message], warnings }
   }
 
@@ -451,7 +488,13 @@ export function validateManifest(value, options = {}) {
     }
   }
 
-  const background = optionalEntry(value['background'], 'background', BACKGROUND_EXTENSIONS[apiVersion] ?? ['.html'], fail)
+  const background = optionalEntry(
+    value['background'],
+    'background',
+    BACKGROUND_EXTENSIONS[apiVersion] ?? ['.html'],
+    fail,
+    backgroundRule(apiVersion)
+  )
 
   // --- commands
   /** @type {import('./manifest').NormalizedManifest['commands']} */
@@ -482,7 +525,7 @@ export function validateManifest(value, options = {}) {
           continue
         }
         if (tab === undefined && background === null && rail === null && rawRail === undefined && value['background'] === undefined) {
-          fail(`${at} has no tab, so it is delivered as an event - which needs a background page or a rail panel to receive it`)
+          fail(`${at} has no tab, so it is delivered as an event - which needs a background or a rail panel to receive it`)
         }
         if (title !== null) commands.push({ id: commandId, title, tab: typeof tab === 'string' ? tab : null })
       }
@@ -584,10 +627,11 @@ export function validateManifest(value, options = {}) {
     else {
       const instructions = optionalText(rawAgent['instructions'], 'agent.instructions', AGENT_TEXT_MAX, fail)
       const tools = readTools(rawAgent['tools'], typeof id === 'string' && ID_PATTERN.test(id) ? id : null, fail)
-      // The background page is the only code a plugin has running whenever a
-      // session might call: panels and tabs come and go with the screen.
+      // The background (a page at version 1, a module at 2) is the only code a
+      // plugin has running whenever a session might call: panels and tabs come
+      // and go with the screen.
       if (background === null && value['background'] === undefined) {
-        fail('agent.tools are answered by the background page, so the manifest needs a background')
+        fail("agent.tools are answered by the plugin's background, so the manifest needs a background")
       }
       if (tools !== null) agent = { instructions, tools }
     }
@@ -668,9 +712,10 @@ function optionalText(value, field, max, fail) {
  * @param {string} field
  * @param {readonly string[]} extensions
  * @param {(message: string) => void} fail
+ * @param {string} [wrongKind] what to say when the path names another kind of file
  * @returns {string | null}
  */
-function requiredEntry(value, field, extensions, fail) {
+function requiredEntry(value, field, extensions, fail, wrongKind) {
   if (typeof value !== 'string') {
     fail(`${field} must be a path inside the plugin folder`)
     return null
@@ -685,7 +730,7 @@ function requiredEntry(value, field, extensions, fail) {
     return null
   }
   if (!extensions.some((extension) => path.toLowerCase().endsWith(extension))) {
-    fail(`${field} must be a ${extensions.join(' or ')} file`)
+    fail(wrongKind ?? `${field} must be a ${extensions.join(' or ')} file`)
     return null
   }
   return path
@@ -696,10 +741,11 @@ function requiredEntry(value, field, extensions, fail) {
  * @param {string} field
  * @param {readonly string[]} extensions
  * @param {(message: string) => void} fail
+ * @param {string} [wrongKind]
  * @returns {string | null}
  */
-function optionalEntry(value, field, extensions, fail) {
-  return value === undefined ? null : requiredEntry(value, field, extensions, fail)
+function optionalEntry(value, field, extensions, fail, wrongKind) {
+  return value === undefined ? null : requiredEntry(value, field, extensions, fail, wrongKind)
 }
 
 /**

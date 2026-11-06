@@ -84,6 +84,10 @@ describe(`${NAME} as published`, () => {
     expect(packed).toContain('helm-plugin.schema.json')
     expect(packed).toContain('template/helm-plugin.json')
     expect(packed).toContain('template/pages/panel.js')
+    expect(packed).toContain('template/background/main.js')
+    // The page and background globals, types only.
+    expect(packed).toContain('src/global.d.ts')
+    expect(packed).toContain('src/background.d.ts')
     for (const file of ['folder', 'manifest', 'react', 'stores', 'vue']) {
       expect(packed).toContain(`src/${file}.js`)
       expect(packed).toContain(`src/${file}.d.ts`)

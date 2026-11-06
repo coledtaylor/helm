@@ -1,9 +1,9 @@
 {
-  "apiVersion": 1,
+  "apiVersion": 2,
   "id": "my-plugin",
   "name": "My plugin",
   "version": "0.1.0",
-  "description": "A rail icon, a sidebar panel and a tab.",
+  "description": "A rail icon, a sidebar panel, a tab and a background module.",
   "icon": "icon.svg",
   "rail": { "title": "My plugin", "panel": "main" },
   "panels": {
@@ -16,5 +16,6 @@
   "tabs": {
     "page": { "title": "Page", "entry": "pages/tab.html" }
   },
+  "background": "background/main.js",
   "commands": [{ "id": "open", "title": "Open a tab", "tab": "page" }]
 }

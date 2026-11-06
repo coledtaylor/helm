@@ -145,6 +145,8 @@ describe('the schema and the validator agree on manifests', () => {
     ['the smallest manifest', MINIMAL],
     ['a manifest with every field', FULL],
     ['a command service', { ...MINIMAL, service: { command: 'srv', start: 'demand' } }],
+    ['a version 2 manifest with a background module', { ...MINIMAL, apiVersion: 2, background: 'dist/background.mjs' }],
+    ['a version 2 manifest with a .js background', { ...MINIMAL, apiVersion: 2, background: 'background/main.js' }],
     ['no service', { ...MINIMAL, service: null }]
   ]
 
@@ -157,7 +159,10 @@ describe('the schema and the validator agree on manifests', () => {
 
   const invalid: Array<[string, Record<string, unknown>]> = [
     ['an unknown field (a warning in Helm)', { ...MINIMAL, tab: {} }],
-    ['apiVersion 2', { ...MINIMAL, apiVersion: 2 }],
+    ['apiVersion 3', { ...MINIMAL, apiVersion: 3 }],
+    ['a version 2 background page', { ...MINIMAL, apiVersion: 2, background: 'bg.html' }],
+    ['a version 1 background module', { ...MINIMAL, apiVersion: 1, background: 'bg.mjs' }],
+    ['a version 2 background outside the folder', { ...MINIMAL, apiVersion: 2, background: '../bg.mjs' }],
     ['no apiVersion', { id: 'x', name: 'X' }],
     ['an id with capitals', { ...MINIMAL, id: 'Minimal' }],
     ['no name', { apiVersion: 1, id: 'x' }],

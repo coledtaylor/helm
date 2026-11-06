@@ -1,7 +1,8 @@
 # My plugin
 
-A Helm plugin: a rail icon that opens a sidebar panel, and a tab the panel
-opens. Plain HTML and JavaScript, so there is nothing to build.
+A Helm plugin at apiVersion 2: a rail icon that opens a sidebar panel, a tab
+the panel opens, and a background module that counts the tabs on the rail
+icon. Plain HTML and JavaScript, so there is nothing to build.
 
 ```
 helm-plugin.json    the manifest
@@ -9,6 +10,7 @@ icon.svg            the rail icon, drawn in the rail's own colours
 pages/panel.*       the sidebar panel
 pages/tab.*         the tab
 pages/style.css     layout; colours and controls come from Helm
+background/main.js  the background module, run by the host with no page open
 package.json        the SDK, for the manifest schema and helm-plugin validate
 ```
 
@@ -22,8 +24,14 @@ the plugin reloads.
 
 ## Where it runs
 
-The plugin runs on one computer, and its pages can be drawn on another.
-`helm.onHostComputer` says whether this page is on the plugin's computer; hide
+The plugin runs on one computer, and its pages can be drawn on another. Its
+pages call the bridge as `floti`; `background/main.js` runs on the plugin's
+computer, in an isolate with `floti`, BroadcastChannel and timers and
+nothing else - no DOM, files, network or processes of its own. The panel
+tells it about each tab it opens on a BroadcastChannel, which reaches the
+background wherever the panel is drawn.
+
+`floti.onHostComputer` says whether this page is on the plugin's computer; hide
 what only makes sense there, such as revealing a file. From another computer
 every `service:` request is a network round trip, so load the data once and
 filter it in the page rather than calling the service on every keystroke.

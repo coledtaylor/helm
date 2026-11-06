@@ -85,3 +85,28 @@ describe('the React hooks', () => {
     expect(fake.listeners('action')).toBe(0)
   })
 })
+
+describe.each([
+  ['a version 2 page', 'floti'],
+  ['a version 1 page', 'helm']
+] as const)('S5: in %s, the React hooks use window.%s', (_page, name) => {
+  it('follow that bridge', async () => {
+    fake = installBridge(name)
+    const actions: string[] = []
+    const { result } = renderHook(() => {
+      useHelmEvent('action', ({ id }) => actions.push(id))
+      return { theme: useHelmTheme(), visible: useHelmVisible(), settings: useHelmSettings() }
+    })
+    expect(result.current.theme).toBe(DARK)
+    await act(async () => {
+      await fake.settingsReads[0]!.answer({ query: 'is:open' })
+    })
+    act(() => {
+      fake.emit('theme', LIGHT)
+      fake.emit('visibility', true)
+      fake.emit('action', { id: 'go' })
+    })
+    expect(result.current).toEqual({ theme: LIGHT, visible: true, settings: { query: 'is:open' } })
+    expect(actions).toEqual(['go'])
+  })
+})

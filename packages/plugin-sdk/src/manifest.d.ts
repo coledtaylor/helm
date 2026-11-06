@@ -1,13 +1,14 @@
 import type {
+  ApiVersion,
   PanelActionIcon,
   PanelActionSpec,
   RailSpec,
   SettingSpec,
   TabSpec
-} from './types'
+} from './types.js'
 
-/** The bridge versions this Helm speaks. */
-export const SUPPORTED_API_VERSIONS: readonly number[]
+/** The bridge versions this SDK speaks, 1 and 2: what `helm-plugin validate` accepts. */
+export const SUPPORTED_API_VERSIONS: readonly ApiVersion[]
 /** Every top-level field a manifest may have. Anything else is a warning. */
 export const MANIFEST_FIELDS: readonly string[]
 /** How many of each list or map a manifest may hold. */
@@ -93,8 +94,8 @@ export interface NormalizedAgent {
 
 /** A manifest that passed, with every optional part filled in and every path in one spelling. */
 export interface NormalizedManifest {
-  /** 1 for Helm; 2 for Floti's host, where `background` is a module rather than a page. */
-  apiVersion: 1 | 2
+  /** 1: pages get `window.helm` and `background` is a page. 2: pages get `window.floti` and `background` is a module the host runs. */
+  apiVersion: ApiVersion
   id: string
   name: string
   version: string | null
@@ -126,8 +127,9 @@ export type ManifestResult =
 
 export interface ValidateOptions {
   /**
-   * The bridge versions the caller runs. Floti's host passes `[2]`; left out,
-   * it is `SUPPORTED_API_VERSIONS`, what Helm speaks.
+   * The bridge versions the caller runs, for a host that says so in its
+   * refusal: Floti's host passes `[1, 2]`. Left out, it is
+   * `SUPPORTED_API_VERSIONS`.
    */
   apiVersions?: readonly number[]
 }

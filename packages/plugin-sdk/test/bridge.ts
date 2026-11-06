@@ -1,7 +1,8 @@
-import type { HelmBridge, HelmEvents, HelmTheme, SecretState, SettingValue } from '../src/types'
+import type { HelmEvents, HelmTheme, PluginBridge, SecretState, SettingValue } from '../src/types'
 
 /**
- * A `window.helm` the framework helpers' tests drive. Events fire when the
+ * A page bridge the framework helpers' tests drive: `window.floti`, as a
+ * version 2 page has it, or `window.helm`, as a version 1 page has it. Events fire when the
  * test says, and every read waits until the test answers it, so the order of
  * a read and an event is the test's to choose. Property and event behave as
  * the real bridge does: the property changes first, then the event fires.
@@ -44,8 +45,12 @@ function pending<T>(): { promise: Promise<T>; call: Pending<T> } {
   }
 }
 
-/** Puts a fake `window.helm` on the global object, in place of any before it. */
-export function installBridge(): FakeBridge {
+/** The global a page's bridge is: `floti` at apiVersion 2, `helm` at 1. */
+export type BridgeName = 'floti' | 'helm'
+
+/** Puts a fake bridge on the global object as `name`, in place of any before it. */
+export function installBridge(name: BridgeName = 'helm'): FakeBridge {
+  removeBridge()
   let theme = DARK
   let visible = false
   const listeners = new Map<keyof HelmEvents, Set<(data: never) => void>>()
@@ -87,7 +92,7 @@ export function installBridge(): FakeBridge {
       }
     }
   }
-  ;(globalThis as { helm?: unknown }).helm = helm as unknown as HelmBridge
+  ;(globalThis as Partial<Record<BridgeName, PluginBridge>>)[name] = helm as unknown as PluginBridge
 
   return {
     settingsReads,
@@ -104,4 +109,5 @@ export function installBridge(): FakeBridge {
 
 export function removeBridge(): void {
   delete (globalThis as { helm?: unknown }).helm
+  delete (globalThis as { floti?: unknown }).floti
 }

@@ -1,4 +1,4 @@
-import type { HelmTheme, SecretState, SettingValue } from './types'
+import type { HelmTheme, SecretState, SettingValue } from './types.js'
 
 /**
  * A value Helm keeps current. `subscribe` calls `run` with the value straight

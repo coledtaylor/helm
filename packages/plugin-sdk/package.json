@@ -1,7 +1,7 @@
 {
   "name": "@coledtaylor/helm-plugin-sdk",
   "version": "1.4.0",
-  "description": "Types, the manifest schema and helpers for building Helm plugins. The runtime - the window.helm bridge, theme tokens and primitives stylesheet - comes from the running Helm.",
+  "description": "Types, the manifest schema and helpers for building Helm plugins. The runtime - the window.floti and window.helm bridges, theme tokens and primitives stylesheet - comes from the running Helm.",
   "keywords": [
     "helm-plugin",
     "claude-code",
@@ -35,6 +35,9 @@
     },
     "./global": {
       "types": "./src/global.d.ts"
+    },
+    "./background": {
+      "types": "./src/background.d.ts"
     },
     "./manifest": {
       "types": "./src/manifest.d.ts",

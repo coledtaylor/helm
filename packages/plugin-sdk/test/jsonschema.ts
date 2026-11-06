@@ -30,7 +30,10 @@ const KNOWN = new Set([
   'additionalProperties',
   'propertyNames',
   'maxProperties',
-  'oneOf'
+  'oneOf',
+  'allOf',
+  'if',
+  'then'
 ])
 
 export function schemaErrors(root: Schema, value: unknown): string[] {
@@ -106,6 +109,18 @@ function check(root: Schema, schema: Schema, value: unknown, at: string, errors:
       const additional = schema['additionalProperties']
       if (additional === false) errors.push(`${at}: ${key} is not allowed`)
       else if (typeof additional === 'object' && additional !== null) check(root, additional as Schema, record[key], `${at}.${key}`, errors)
+    }
+  }
+
+  if (Array.isArray(schema['allOf'])) {
+    for (const option of schema['allOf'] as Schema[]) check(root, option, value, at, errors)
+  }
+
+  if (typeof schema['if'] === 'object' && schema['if'] !== null) {
+    const inner: string[] = []
+    check(root, schema['if'] as Schema, value, at, inner)
+    if (inner.length === 0 && typeof schema['then'] === 'object' && schema['then'] !== null) {
+      check(root, schema['then'] as Schema, value, at, errors)
     }
   }
 

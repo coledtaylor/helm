@@ -101,3 +101,26 @@ describe('the Vue composables', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 })
+
+describe.each([
+  ['a version 2 page', 'floti'],
+  ['a version 1 page', 'helm']
+] as const)('S5: in %s, the Vue composables use window.%s', (_page, name) => {
+  it('follow that bridge', async () => {
+    fake = installBridge(name)
+    const scope = effectScope()
+    const actions: string[] = []
+    const { theme, settings } = scope.run(() => {
+      useHelmEvent('action', ({ id }) => actions.push(id))
+      return { theme: useHelmTheme(), settings: useHelmSettings() }
+    })!
+    await fake.settingsReads[0]!.answer({ query: 'is:open' })
+    fake.emit('theme', LIGHT)
+    fake.emit('action', { id: 'go' })
+    expect(theme.value).toBe(LIGHT)
+    expect(settings.value).toEqual({ query: 'is:open' })
+    expect(actions).toEqual(['go'])
+    scope.stop()
+    expect(fake.listeners('action')).toBe(0)
+  })
+})

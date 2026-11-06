@@ -1,4 +1,4 @@
-import type { NormalizedManifest } from './manifest'
+import type { NormalizedManifest } from './manifest.js'
 
 export const MANIFEST_FILE: 'helm-plugin.json'
 export const MANIFEST_MAX_BYTES: number

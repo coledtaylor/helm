@@ -1,4 +1,4 @@
-import type { HelmEvents, HelmTheme, SecretState, SettingValue } from './types'
+import type { HelmEvents, HelmTheme, SecretState, SettingValue } from './types.js'
 
 /** Calls `listener` on every `event`, always the latest `listener` passed. */
 export function useHelmEvent<K extends keyof HelmEvents>(event: K, listener: (data: HelmEvents[K]) => void): void

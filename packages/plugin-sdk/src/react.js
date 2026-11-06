@@ -1,6 +1,7 @@
 // @ts-check
 /**
- * React hooks over `window.helm`, built on the stores in `./stores.js`.
+ * React hooks over the page's bridge (`window.floti` in a version 2 page,
+ * `window.helm` in a version 1 page), built on the stores in `./stores.js`.
  * Optional: everything here is a few lines over the bridge, which a plugin
  * can use directly.
  */

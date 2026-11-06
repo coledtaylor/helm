@@ -1,5 +1,5 @@
 import type { MaybeRefOrGetter, Ref } from 'vue'
-import type { HelmEvents, HelmTheme, SecretState, SettingValue } from './types'
+import type { HelmEvents, HelmTheme, SecretState, SettingValue } from './types.js'
 
 /** Calls `listener` on every `event` until the effect scope it was called in ends. */
 export function useHelmEvent<K extends keyof HelmEvents>(event: K, listener: (data: HelmEvents[K]) => void): void
