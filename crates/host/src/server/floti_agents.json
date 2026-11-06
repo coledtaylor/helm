@@ -5,7 +5,7 @@
   "tools": [
     {
       "name": "agents_start",
-      "description": "Start an agent of your own on a task. It is a full session that runs in the background with the task as its opening prompt, in your folder unless you name another that Floti tracks, and never with more permission than you have. Answers with its name, backend, folder and branch. A start can be refused because of a limit (children at once, agents on the host, depth, starts in your life), a folder Floti does not track, a role or backend that does not fit, or a rule its backend cannot enforce; the answer says which, and for a limit says to wait for news and start again.",
+      "description": "Start an agent of your own on a task. It is a full session that runs in the background with the task as its opening prompt, in your folder unless you name another that Floti tracks, and never with more permission than you have. Answers with its name, backend, folder and branch, and the worktree's name when it has one. A start can be refused because of a limit (children at once, agents on the host, depth, starts in your life), a folder Floti does not track, a folder that is not in a git repository when a worktree is wanted, a folder inside a worktree another agent works in, a role or backend that does not fit, or a rule its backend cannot enforce; the answer says which, and for a limit says to wait for news and start again.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -32,6 +32,10 @@
           "name": {
             "type": "string",
             "description": "What you call it. Omit it to use its role's name. A name you already used gets a number after it."
+          },
+          "worktree": {
+            "type": "string",
+            "description": "A one-word name for a git worktree Floti makes for it: it works in <repository>/.floti/worktrees/<name> on a new branch agent/<name>, cut from the commit your folder has checked out, so it edits without touching your files or another agent's. Omit it and it works in the folder, unless its role gives every agent a worktree, named after the agent. A name already taken gets a number after it; the answer names the one made. The worktree stays, with its branch, when the agent ends."
           },
           "outlive": {
             "type": "boolean",

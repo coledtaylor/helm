@@ -388,6 +388,21 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   it, unless it was started to `outlive`; its row keeps the parent's row and
   conversation, so a restart restores the links and resuming the parent's
   conversation gives its outliving children back.
+- A child gets a git worktree when its start names one (`worktree`) or its
+  role says `worktree: yes` (named after the child; there is no opt-out of a
+  role's), made by the host with git for every backend
+  (`workspace/worktrees.rs`) after the whole start has been judged, so a
+  refused start writes nothing. It is `<repo>/.floti/worktrees/<name>` on a
+  new branch `agent/<name>` cut from the commit the parent's folder has
+  checked out, under the repository's main working tree even when the parent
+  is itself in an agent worktree; the name is made unique among those folders
+  and `agent/*` branches (`name-2`), so no two children share a checkout.
+  `/.floti/` is added to the repository's `info/exclude` once, keeping its
+  other lines. A start is refused when its folder is not in a git repository,
+  or is inside an agent worktree that a running session other than the caller
+  works in (naming it). A launch that fails after the worktree was made
+  removes it and its branch; otherwise nothing removes a worktree when its
+  child ends, because its branch holds the work.
 - `floti agent start` and `floti agent stop` run the same tools from a
   session's own shell: the host puts its `floti` binary's folder first on the
   session's `PATH` and the session's token and the family's address in its

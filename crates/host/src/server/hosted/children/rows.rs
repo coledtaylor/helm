@@ -130,7 +130,7 @@ pub(super) struct ChildRow {
     pub running: bool,
     /// The resource class of the role it was started in.
     pub class: RoleClass,
-    /// Whether the role it was started in asks for a worktree of its own.
+    /// Whether it works in a worktree Floti made for it.
     pub worktree: bool,
 }
 
@@ -193,6 +193,35 @@ pub(super) fn agent_sessions_running(store: &Store) -> Result<Vec<SessionId>> {
         .query_map([], |row| row.get(0).map(SessionId))
         .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
         .map_err(sql("read the agent sessions running"))
+}
+
+/// A session the rows say is running, and where.
+pub(super) struct RunningSession {
+    pub id: SessionId,
+    pub cwd: String,
+    /// What to call it: its agent name when an agent started it, else its
+    /// session name.
+    pub label: String,
+}
+
+/// Every session the rows say is running, agent-started or not.
+pub(super) fn running_sessions(store: &Store) -> Result<Vec<RunningSession>> {
+    let mut select = store
+        .connection()
+        .prepare(
+            "SELECT id, cwd, COALESCE(child_name, name) FROM sessions WHERE status = 'running'",
+        )
+        .map_err(sql("read the sessions running"))?;
+    select
+        .query_map([], |row| {
+            Ok(RunningSession {
+                id: SessionId(row.get(0)?),
+                cwd: row.get(1)?,
+                label: row.get(2)?,
+            })
+        })
+        .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+        .map_err(sql("read the sessions running"))
 }
 
 /// The agent-started rows below `root`, nearest first, however deep.

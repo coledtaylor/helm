@@ -11,8 +11,9 @@
 //! path it leads to), the profile, the permission mode (never above the
 //! parent's), the backend's ability to enforce every rule, then the limits
 //! read afresh from the settings. Only a start that passes all of it spawns a
-//! process. Starts are taken one at a time, so two calls cannot both pass a
-//! limit that only one fits under.
+//! process, and only then is a worktree made, so a refused start writes
+//! nothing. Starts are taken one at a time, so two calls cannot both pass a
+//! limit that only one fits under, or choose the same worktree name.
 //!
 //! **A child's row carries its links** (parent row, parent conversation,
 //! name, role, outlive, can_start), written when the session is. Counts and
@@ -30,7 +31,7 @@ mod folders;
 mod rows;
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Duration;
 
@@ -47,7 +48,9 @@ use crate::roles::{
 use crate::server::floti_agents::FAMILY;
 use crate::server::records::{self, ExitNotice};
 use crate::session::{ParentLink, SessionId, SessionOrigin, TermSize};
+use crate::workspace::files::paths::resolves_inside;
 use crate::workspace::settings;
+use crate::workspace::worktrees::{self, Repository};
 
 /// How long ending a child waits for it to be reported ended.
 const STOP_WAIT: Duration = Duration::from_secs(5);
@@ -122,6 +125,9 @@ pub(crate) struct StartChild {
     pub folder: Option<String>,
     pub profile: Option<String>,
     pub name: Option<String>,
+    /// The one-word name of the worktree to make for it. A role that asks for
+    /// a worktree makes one named after the child when this is `None`.
+    pub worktree: Option<String>,
     pub outlive: bool,
     pub can_start: Option<bool>,
 }
@@ -133,6 +139,8 @@ pub(crate) struct ChildStarted {
     pub backend: String,
     pub folder: String,
     pub branch: Option<String>,
+    /// The name of the worktree made for it, when one was.
+    pub worktree: Option<String>,
 }
 
 /// One running child, as `agents_list` shows it.
@@ -149,7 +157,7 @@ pub(crate) struct ChildEntry {
     pub can_start: bool,
     /// The resource class of the role it was started in.
     pub class: RoleClass,
-    /// Whether the role it was started in asks for a worktree of its own.
+    /// Whether it works in a worktree Floti made for it.
     pub worktree: bool,
 }
 
@@ -277,6 +285,18 @@ impl Hosted {
             &base,
             request.folder.as_deref(),
         )?;
+        // A worktree is asked for by name or by the role. Anywhere in a
+        // repository a start must also leave alone a worktree another session
+        // works in.
+        let wants_worktree = request.worktree.is_some() || role.worktree;
+        let repository = if wants_worktree {
+            Some(Repository::of(&folder)?)
+        } else {
+            Repository::of(&folder).ok()
+        };
+        if let Some(repository) = &repository {
+            self.refuse_shared_worktree(repository, &folder, parent)?;
+        }
         let profile = {
             let store = self.ledger.store();
             let profiles = rows::profiles(&store).map_err(|err| err.to_string())?;
@@ -335,19 +355,29 @@ impl Hosted {
             return Err(refusal);
         }
 
-        let folder_text = folder.display().to_string();
+        // Everything is judged: only now is anything written.
+        let made = match (&repository, wants_worktree) {
+            (Some(repository), true) => {
+                Some(repository.make(&folder, request.worktree.as_deref().unwrap_or(&name))?)
+            }
+            _ => None,
+        };
+        let project_path = self.known_project(&folder.display().to_string());
+        let run_folder = made
+            .as_ref()
+            .map_or_else(|| folder.clone(), |made| made.folder.clone());
         let outlive = request.outlive;
         let backend_id = backend.id().clone();
         let launched = self.run(
             Plan {
                 backend,
-                folder,
+                folder: run_folder,
                 name: name.clone(),
                 prompt: Some(request.task),
                 composition,
                 resume: None,
                 origin: SessionOrigin {
-                    project_path: self.known_project(&folder_text),
+                    project_path,
                     profile_id: profile.as_ref().and_then(|p| i64::try_from(p.id).ok()),
                     permission_mode: mode.map(records::permission_mode_name),
                     branch: None,
@@ -359,13 +389,23 @@ impl Hosted {
                         outlive,
                         can_start,
                         heavy: role.class == RoleClass::Heavy,
-                        worktree: role.worktree,
+                        worktree: made.is_some(),
                     }),
                 },
             },
             TermSize::new(CHILD_SIZE.0, CHILD_SIZE.1),
             None,
-        )?;
+        );
+        let launched = match launched {
+            Ok(launched) => launched,
+            Err(refusal) => {
+                // A worktree made for a child that never started holds no work.
+                if let Some(Err(err)) = made.as_ref().map(worktrees::Made::discard) {
+                    log_line!("floti host: {err}");
+                }
+                return Err(refusal);
+            }
+        };
 
         // The parent may have ended while this started, after the exit
         // notice that would have ended the child had already been handled.
@@ -386,7 +426,36 @@ impl Hosted {
             backend: backend_id_text(&backend_id),
             folder: launched.session.cwd,
             branch: launched.session.branch,
+            worktree: made.map(|made| made.name),
         })
+    }
+
+    /// Refuses a start in a folder inside an agent worktree that a running
+    /// session other than `caller` works in: one checkout, one agent.
+    fn refuse_shared_worktree(
+        &self,
+        repository: &Repository,
+        folder: &Path,
+        caller: SessionId,
+    ) -> Result<(), String> {
+        let Some(root) = repository.worktree_holding(folder) else {
+            return Ok(());
+        };
+        let running =
+            rows::running_sessions(&self.ledger.store()).map_err(|err| err.to_string())?;
+        let holder = running
+            .into_iter()
+            .filter(|session| session.id != caller && self.sessions.get(session.id).is_some())
+            .find(|session| resolves_inside(&root, Path::new(&session.cwd)));
+        match holder {
+            Some(holder) => Err(format!(
+                "{} is inside the worktree {}, where the agent {} works, so no agent starts there. Start yours in a worktree of its own: name one with worktree.",
+                folder.display(),
+                root.display(),
+                holder.label
+            )),
+            None => Ok(()),
+        }
     }
 
     /// `parent`'s running children and what is left of its limits.

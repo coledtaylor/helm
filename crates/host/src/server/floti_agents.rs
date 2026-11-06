@@ -180,12 +180,15 @@ async fn start(
     match blocking(move || hosted.start_child(me, request)).await {
         Ok(started) => {
             let branch = started.branch.as_deref().unwrap_or("none");
-            let text = format!(
+            let mut text = format!(
                 "Started {name}.\nname: {name}\nbackend: {backend}\nfolder: {folder}\nbranch: {branch}",
                 name = started.name,
                 backend = started.backend,
                 folder = started.folder,
             );
+            if let Some(worktree) = &started.worktree {
+                text.push_str(&format!("\nworktree: {worktree}"));
+            }
             answer(
                 text,
                 json!({
@@ -193,6 +196,7 @@ async fn start(
                     "backend": started.backend,
                     "folder": started.folder,
                     "branch": started.branch,
+                    "worktree": started.worktree,
                 }),
             )
         }
@@ -273,7 +277,7 @@ fn start_request(arguments: &JsonObject) -> Result<StartChild, String> {
             Some(_) => Err(format!("{key} is true or false.")),
         }
     };
-    for key in ["role", "backend", "folder", "profile", "name"] {
+    for key in ["role", "backend", "folder", "profile", "name", "worktree"] {
         if !matches!(
             arguments.get(key),
             None | Some(Value::Null | Value::String(_))
@@ -288,6 +292,7 @@ fn start_request(arguments: &JsonObject) -> Result<StartChild, String> {
         folder: text_argument(arguments, "folder"),
         profile: text_argument(arguments, "profile"),
         name: text_argument(arguments, "name"),
+        worktree: text_argument(arguments, "worktree"),
         outlive: flag("outlive")?.unwrap_or(false),
         can_start: flag("can_start")?,
     })
