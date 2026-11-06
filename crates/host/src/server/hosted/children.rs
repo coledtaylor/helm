@@ -385,6 +385,7 @@ impl Hosted {
                         conversation_id: facts.conversation_id.clone(),
                         name: name.clone(),
                         role: Some(role.name.clone()),
+                        command: None,
                         outlive,
                         can_start,
                         heavy: role.class == RoleClass::Heavy,

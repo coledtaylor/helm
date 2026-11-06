@@ -178,5 +178,11 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "CREATE INDEX `agent_inbox_parent_idx` ON `agent_inbox` (`parent_session_id`,`seen_at`);",
       "CREATE INDEX `agent_inbox_conversation_idx` ON `agent_inbox` (`parent_conversation_id`,`seen_at`);"
     ]
+  },
+  {
+    "tag": "0022_concerned_gwen_stacy",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `command` text;"
+    ]
   }
 ]

@@ -34,7 +34,7 @@ const RECORD_COLUMNS: &str = "id, name, label, cwd, branch, project_path, profil
      parent_session_id, \
      (SELECT coalesce(nullif(parent.label, ''), parent.name) FROM sessions AS parent \
       WHERE parent.id = sessions.parent_session_id), \
-     role, stopped";
+     role, stopped, command";
 
 /// The backend a row ran on, from its `backend` column.
 ///
@@ -563,6 +563,9 @@ fn record_from(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
             (!role.is_empty()).then(|| role.to_owned())
         }),
         stopped: row.get(18)?,
+        command: row
+            .get::<_, Option<String>>(19)?
+            .filter(|line| !line.trim().is_empty()),
         last_report: None,
     })
 }

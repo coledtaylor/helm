@@ -267,7 +267,8 @@ export function registerIpc(ctx: IpcContext): void {
       patch.agentChildrenPerParent !== undefined ||
       patch.agentSessionsPerHost !== undefined ||
       patch.agentDepth !== undefined ||
-      patch.agentStartsPerParent !== undefined
+      patch.agentStartsPerParent !== undefined ||
+      patch.agentCommandsPerParent !== undefined
     ) {
       ctx.hostSettingsChanged()
     }

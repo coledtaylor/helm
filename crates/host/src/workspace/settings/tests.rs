@@ -266,6 +266,33 @@ fn the_agents_settings_default_to_on_with_4_children_8_on_the_host_depth_2_and_1
 }
 
 #[test]
+fn the_command_children_limit_defaults_to_4_and_is_kept_apart_from_the_agent_limits() {
+    let world = World::new();
+    assert_eq!(world.stored().agent_commands_per_parent, 4);
+
+    let written = world
+        .service
+        .write(&HostSettingsPatch {
+            agent_commands_per_parent: Some(7),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(written.agent_commands_per_parent, 7);
+    assert_eq!(world.told(), vec![written.clone()]);
+    assert_eq!(world.stored(), written, "a later read finds what was kept");
+    assert_eq!(
+        (
+            written.agent_children_per_parent,
+            written.agent_sessions_per_host,
+            written.agent_depth,
+            written.agent_starts_per_parent
+        ),
+        (4, 8, 2, 16),
+        "no agent limit moved"
+    );
+}
+
+#[test]
 fn a_new_limit_is_kept_reported_to_every_listener_and_read_by_the_next_judge() {
     let world = World::new();
     let written = world
@@ -337,6 +364,13 @@ fn a_limit_outside_its_range_is_refused_in_its_own_sentence_and_writes_nothing()
             },
             "agentStartsPerParent: expected 1 to 1000, got 0",
         ),
+        (
+            HostSettingsPatch {
+                agent_commands_per_parent: Some(33),
+                ..Default::default()
+            },
+            "agentCommandsPerParent: expected 1 to 32, got 33",
+        ),
     ] {
         assert_eq!(
             world.refusal(patch),
@@ -354,7 +388,12 @@ fn an_unreadable_or_out_of_range_agents_row_keeps_its_default() {
     world.raw("agentSessionsPerHost", "{ not json");
     world.raw("agentDepth", "99");
     world.raw("agentStartsPerParent", "30");
+    world.raw("agentCommandsPerParent", "0");
     let settings = world.stored();
+    assert_eq!(
+        settings.agent_commands_per_parent, 4,
+        "0 is below the range"
+    );
     assert!(settings.session_agents, "a string is not a boolean");
     assert_eq!(
         settings.agent_children_per_parent, 4,

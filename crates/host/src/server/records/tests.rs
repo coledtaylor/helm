@@ -58,6 +58,7 @@ fn link(parent: SessionId, name: &str) -> ParentLink {
         conversation_id: Some("conversation-of-lead".to_owned()),
         name: name.to_owned(),
         role: Some("reviewer".to_owned()),
+        command: None,
         outlive: false,
         can_start: false,
         heavy: false,
@@ -75,6 +76,49 @@ fn a_childs_record_names_its_parent_by_row_and_name_and_carries_its_role() {
     assert_eq!(child.parent_id, Some(parent.0 as u64));
     assert_eq!(child.parent_name.as_deref(), Some("lead"));
     assert_eq!(child.role.as_deref(), Some("reviewer"));
+}
+
+#[test]
+fn a_command_childs_record_carries_its_command_and_once_it_exited_its_exit_code() {
+    let world = World::new();
+    let parent = world.start("lead", None);
+    let mut running = link(parent, "tests");
+    running.role = None;
+    running.command = Some("pnpm test --filter core".to_owned());
+    let child = world.start("lead-tests", Some(running));
+
+    let record = world.record(child);
+    assert_eq!(record.command.as_deref(), Some("pnpm test --filter core"));
+    assert_eq!(record.role, None);
+    assert_eq!(record.exit_code, None, "still running: no code yet");
+
+    world
+        .store
+        .finished(
+            child,
+            &SessionExit {
+                code: 3,
+                signal: None,
+            },
+        )
+        .unwrap();
+    let record = world.record(child);
+    assert_eq!(record.command.as_deref(), Some("pnpm test --filter core"));
+    assert_eq!(record.exit_code, Some(3));
+    assert_eq!(record.status, SessionStatus::Exited);
+}
+
+#[test]
+fn an_agent_childs_record_and_a_session_started_by_a_person_carry_no_command() {
+    let world = World::new();
+    let parent = world.start("lead", None);
+    let child = world.start("lead-reviewer", Some(link(parent, "reviewer")));
+    assert_eq!(world.record(child).command, None);
+    assert_eq!(world.record(parent).command, None);
+
+    // A blank column reads as none, as a blank role does.
+    world.execute("UPDATE sessions SET command = '  ' WHERE id = ?1", child);
+    assert_eq!(world.record(child).command, None);
 }
 
 #[test]

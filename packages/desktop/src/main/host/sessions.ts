@@ -76,7 +76,8 @@ export { CLAUDE_CODE_BACKEND }
  * terminal opens, the ceiling its transcript archive is held to, whether its
  * sessions get the browser tools and whether those are held to this machine,
  * whether they get the session tools, and whether they can start agents of
- * their own, with the four limits on a family of them. The host serves that
+ * their own, with the limits on a family of them and on the commands it runs
+ * for watching. The host serves that
  * last family and judges every start against the numbers it was last told;
  * Helm's own process serves none of it.
  */
@@ -93,7 +94,8 @@ export function hostSettingsFor(settings: AppSettings, discovered: string | null
     agentChildrenPerParent: settings.agentChildrenPerParent,
     agentSessionsPerHost: settings.agentSessionsPerHost,
     agentDepth: settings.agentDepth,
-    agentStartsPerParent: settings.agentStartsPerParent
+    agentStartsPerParent: settings.agentStartsPerParent,
+    agentCommandsPerParent: settings.agentCommandsPerParent
   }
 }
 

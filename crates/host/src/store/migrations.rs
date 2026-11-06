@@ -79,6 +79,7 @@ pub static MIGRATIONS: &[Migration] = drizzle_migrations![
     "0019_cool_slayback",
     "0020_calm_smasher",
     "0021_busy_ultimates",
+    "0022_concerned_gwen_stacy",
 ];
 
 /// What opening a database applied.

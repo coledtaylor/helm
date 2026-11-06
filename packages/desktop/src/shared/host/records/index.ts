@@ -73,6 +73,8 @@ export function sessionFromHost(record: P.SessionRecord): SessionRecord {
     // record then has neither: a protocol before 2.1 says nothing of them.
     ...(record.parentId == null ? {} : { parentId: record.parentId, parentName: record.parentName ?? null }),
     ...(record.role == null ? {} : { role: record.role }),
+    // Set only for a command child; a protocol before 2.1 never says.
+    ...(record.command == null ? {} : { command: record.command }),
     // Set only when the host ended it; a protocol before 2.1 never says.
     ...(record.stopped === true ? { stopped: true } : {}),
     // Set only while the child has a report its next turn has not cleared.

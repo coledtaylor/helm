@@ -1568,7 +1568,12 @@ agentDepth: number,
 /**
  * How many children one session may start in its life.
  */
-agentStartsPerParent: number, };
+agentStartsPerParent: number, 
+/**
+ * How many command children one session may have running at once,
+ * counted apart from every agent limit above.
+ */
+agentCommandsPerParent: number, };
 
 /**
  * A change to some settings. A field left out is unchanged; a nullable
@@ -1578,7 +1583,7 @@ export type HostSettingsPatch = { scanRoots?: Array<string>, pinnedProjects?: Ar
 /**
  * Replaces the whole map.
  */
-backendPaths?: { [key in BackendId]?: string }, terminalShell?: string | null, transcriptArchiveMaxBytes?: number, browserMcp?: boolean, browserMcpLocalOnly?: boolean, sessionMcp?: boolean, restoreWithoutAsking?: boolean, sessionAgents?: boolean, agentChildrenPerParent?: number, agentSessionsPerHost?: number, agentDepth?: number, agentStartsPerParent?: number, };
+backendPaths?: { [key in BackendId]?: string }, terminalShell?: string | null, transcriptArchiveMaxBytes?: number, browserMcp?: boolean, browserMcpLocalOnly?: boolean, sessionMcp?: boolean, restoreWithoutAsking?: boolean, sessionAgents?: boolean, agentChildrenPerParent?: number, agentSessionsPerHost?: number, agentDepth?: number, agentStartsPerParent?: number, agentCommandsPerParent?: number, };
 
 /**
  * Why the host is being stopped, which decides what its sessions become.
@@ -2952,6 +2957,13 @@ parentName?: string | null,
  * with none.
  */
 role?: string | null, 
+/**
+ * The command line a command child runs, as its parent gave it after
+ * `--`, or null for every other session. A command child's exit code is
+ * `exit_code`, once it has exited. Absent from a host before protocol
+ * 2.1, which reads as null.
+ */
+command?: string | null, 
 /**
  * Whether the host ended the session itself - a client's Stop or End, an
  * agent's stop, its parent ending, a quit that ends it - and not the
