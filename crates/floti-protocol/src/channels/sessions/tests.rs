@@ -211,6 +211,7 @@ fn record(id: u64) -> SessionRecord {
         parent_name: Some("lead".into()),
         role: Some("reviewer".into()),
         stopped: false,
+        last_report: None,
     }
 }
 

@@ -264,6 +264,88 @@ pub(super) fn is_running(store: &Store, id: SessionId) -> Result<bool> {
         .map_err(sql("read whether a session runs"))
 }
 
+/// A child's place among its parent's agents: what the parent calls it and
+/// whose it is. Read when an event is written, never kept: a child may be
+/// handed to a resumed parent in between.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Link {
+    pub name: String,
+    pub parent: SessionId,
+    pub conversation: Option<String>,
+}
+
+const LINK_COLUMNS: &str = "child_name, parent_session_id, parent_conversation_id";
+
+fn link_row(row: &Row<'_>) -> rusqlite::Result<Link> {
+    Ok(Link {
+        name: row.get(0)?,
+        parent: SessionId(row.get(1)?),
+        conversation: row.get(2)?,
+    })
+}
+
+/// The link of session `id`, when it is a child with a parent.
+pub(super) fn link_of(store: &Store, id: SessionId) -> Result<Option<Link>> {
+    store
+        .connection()
+        .query_row(
+            &format!(
+                "SELECT {LINK_COLUMNS} FROM sessions WHERE id = ?1 \
+                 AND child_name IS NOT NULL AND parent_session_id IS NOT NULL"
+            ),
+            [id.0],
+            link_row,
+        )
+        .optional()
+        .map_err(sql("read an agent's parent"))
+}
+
+/// How a child's session ended, as its row says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Ended {
+    pub link: Link,
+    pub exit_code: Option<i32>,
+    /// The host ended it, rather than its program finishing on its own.
+    pub stopped: bool,
+}
+
+/// The link and ending of child `id`, when it is a child with a parent.
+pub(super) fn ended_of(store: &Store, id: SessionId) -> Result<Option<Ended>> {
+    store
+        .connection()
+        .query_row(
+            &format!(
+                "SELECT {LINK_COLUMNS}, exit_code, stopped FROM sessions WHERE id = ?1 \
+                 AND child_name IS NOT NULL AND parent_session_id IS NOT NULL"
+            ),
+            [id.0],
+            |row| {
+                Ok(Ended {
+                    link: link_row(row)?,
+                    exit_code: row
+                        .get::<_, Option<i64>>(3)?
+                        .and_then(|code| i32::try_from(code).ok()),
+                    stopped: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(sql("read how an agent ended"))
+}
+
+/// What session `id`'s tab says: its label, or its name when it has none.
+pub(super) fn label_of(store: &Store, id: SessionId) -> Result<Option<String>> {
+    store
+        .connection()
+        .query_row(
+            "SELECT coalesce(nullif(label, ''), name) FROM sessions WHERE id = ?1",
+            [id.0],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql("read a session's name"))
+}
+
 /// Makes the running children that name `conversation_id` as the
 /// conversation their parent was in the children of `session`, which is now
 /// in it: the ones whose parent is not running any more, and so would be

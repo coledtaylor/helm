@@ -299,6 +299,55 @@ export const sessions = sqliteTable(
 )
 
 /**
+ * What an agent's children have told it, kept until a wait returns it: one
+ * row per event, in the order they happened (`id`). Only the Floti host writes
+ * it. It is keyed by the parent's row and by the conversation the parent was
+ * in, the way the children's own rows are, so a host restart keeps it and a
+ * parent resumed in its conversation gets the news back.
+ *
+ * No row holds any part of a conversation: the text of a report an agent child
+ * made on purpose, a program's own message, a kind of prompt or an exit code.
+ * The parent's row is not a foreign key: news outlives a history row that was
+ * deleted, and is read by the conversation then.
+ */
+export const agentInbox = sqliteTable(
+  'agent_inbox',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** The parent's row when the event happened. */
+    parentSessionId: integer('parent_session_id').notNull(),
+    /** The parent's conversation then, when it had one. */
+    parentConversationId: text('parent_conversation_id'),
+    /** The child's row, or null for a launch that failed. */
+    childSessionId: integer('child_session_id'),
+    /** What the parent calls the child. */
+    childName: text('child_name').notNull(),
+    event: text('event', {
+      enum: ['report', 'needs_you', 'turn_ended', 'ended', 'error']
+    }).notNull(),
+    /**
+     * A report's state (`done`, `stuck`, `note`), or for `ended` whether the
+     * child `exited` or was `stopped`. Null for the others.
+     */
+    state: text('state'),
+    /**
+     * A report's text, the kind a child needs a person for, who stopped it, or
+     * the reason for an error. Null for `turn_ended` and a plain exit.
+     */
+    detail: text('detail'),
+    /** The exit code of an `ended` event. */
+    exitCode: integer('exit_code'),
+    at: text('at').notNull().default(now),
+    /** When a wait handed it to its caller in full, or null while unseen. */
+    seenAt: text('seen_at')
+  },
+  (t) => [
+    index('agent_inbox_parent_idx').on(t.parentSessionId, t.seenAt),
+    index('agent_inbox_conversation_idx').on(t.parentConversationId, t.seenAt)
+  ]
+)
+
+/**
  * Every prompt `~/.claude/history.jsonl` has ever recorded, on any project.
  *
  * A mirror of a file Helm does not own, kept in SQLite so it can be searched

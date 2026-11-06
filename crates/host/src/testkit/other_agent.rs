@@ -109,6 +109,32 @@ impl OtherAgent {
         OtherAgentBackend {
             id: BackendId::new(OtherAgentBackend::ID),
             agent: self.clone(),
+            tools: true,
+            program_exists: true,
+        }
+    }
+
+    /// A backend whose program is not on this computer: a session on it
+    /// fails to launch.
+    pub fn backend_that_cannot_start(&self) -> OtherAgentBackend {
+        OtherAgentBackend {
+            id: BackendId::new(OtherAgentBackend::MISSING_ID),
+            agent: self.clone(),
+            tools: true,
+            program_exists: false,
+        }
+    }
+
+    /// A backend that runs this agent as one with no MCP tools: it is given no
+    /// agent tools, whatever the host would offer, and reports what it does
+    /// only through its program's own status (OSC 7501). It still takes a
+    /// prompt, instructions and `--allow-*` rules, so it can be a child.
+    pub fn backend_without_tools(&self) -> OtherAgentBackend {
+        OtherAgentBackend {
+            id: BackendId::new(OtherAgentBackend::BARE_ID),
+            agent: self.clone(),
+            tools: false,
+            program_exists: true,
         }
     }
 
@@ -182,16 +208,30 @@ fn script_path() -> PathBuf {
 pub struct OtherAgentBackend {
     id: BackendId,
     agent: OtherAgent,
+    /// Whether it takes MCP tools. The variant that does not has none.
+    tools: bool,
+    /// Whether its program is there to run. The variant that cannot start
+    /// names one that is not.
+    program_exists: bool,
 }
 
 impl OtherAgentBackend {
     pub const ID: &'static str = "other-agent";
+    /// The id of the variant with no MCP tools.
+    pub const BARE_ID: &'static str = "other-agent-bare";
+    /// The id of the variant whose program is missing.
+    pub const MISSING_ID: &'static str = "other-agent-missing";
 
     /// The program a launch runs and what comes before the agent's own
     /// arguments.
     fn command(&self) -> (OsString, Vec<OsString>) {
+        let program = if self.program_exists {
+            "node"
+        } else {
+            "floti-test-program-that-is-not-installed"
+        };
         (
-            "node".into(),
+            program.into(),
             vec![self.agent.script.clone().into_os_string()],
         )
     }
@@ -219,11 +259,16 @@ impl OtherAgentBackend {
         // A role's body goes in a file of the launch's own, passed with the
         // flag it has for that; it is never typed to the session. It has no
         // effort setting, so a composition's effort is not passed.
-        if let Some(role) = &composition.instructions {
-            let file = folder.write(
-                "instructions.md",
-                format!("# Role: {}\n\n{}\n", role.role, role.body.trim()),
-            )?;
+        // Floti's own sections (a child's, the `floti agent` guide) follow it
+        // in the same file.
+        let role_section = composition
+            .instructions
+            .as_ref()
+            .map(|role| format!("# Role: {}\n\n{}\n", role.role, role.body.trim()));
+        if let Some(text) =
+            crate::agent::guidance::append(role_section, self.floti_instructions(composition))
+        {
+            let file = folder.write("instructions.md", text)?;
             args.extend(["--instructions-file".into(), file.into_os_string()]);
         }
         if let Some(mode) = composition.permission_mode {
@@ -421,7 +466,7 @@ impl AgentBackend for OtherAgentBackend {
     }
 
     fn agent_tools(&self) -> Option<&dyn AgentTools> {
-        Some(self)
+        self.tools.then_some(self as &dyn AgentTools)
     }
 
     fn permissions(&self) -> Option<&dyn Permissions> {
@@ -551,6 +596,7 @@ mod tests {
             world.backend.tool_support(),
             ToolSupport {
                 backgrounds_long_calls: false,
+                background_command_wakes: false,
                 mcp_tasks: false,
                 mcp_tools: true,
             }

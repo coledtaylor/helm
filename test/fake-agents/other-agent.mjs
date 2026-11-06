@@ -42,6 +42,12 @@
 //   /shell <command>  run the command in the shell with the session's own
 //                environment and folder, and answer `shell <exit code>`. Its
 //                output and exit code are logged in `shell`.
+//   /report <state> [text]  write the program status a CLI with no MCP tools
+//                reports itself with (OSC 7501): `/report working`,
+//                `/report idle`, `/report done All fixed.`, `/report blocked
+//                permission` (the text is the kind: permission, question or
+//                auth) and `/report error It broke.`. The text is the report's
+//                message, base64 as the protocol has it.
 //   anything else  is a prompt: recorded and answered
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -237,6 +243,15 @@ function submit(line) {
     const typed = line.trim().slice('/shell'.length).trim()
     runShell(typed, log, saveLog, (ran) => answer(`shell ${String(ran.code)}`))
     return
+  }
+  if (command === '/report') {
+    const [, state, ...rest] = line.trim().split(/\s+/)
+    const text = rest.join(' ')
+    const fields = [`state=${state ?? ''}`]
+    if (state === 'blocked' && text !== '') fields.push(`kind=${text}`)
+    else if (text !== '') fields.push(`msg=${Buffer.from(text, 'utf8').toString('base64')}`)
+    out(`\x1b]7501;${fields.join(':')}\x07`)
+    return answer(`reported ${state ?? ''}`)
   }
   if (line.trim() === '') return drawPrompt()
   answer(`Noted: ${line}`)

@@ -370,13 +370,13 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   none, hands none work, and returns no part of any session's conversation.
 - `floti-agents` acts on sessions, and only on the caller's own children:
   sessions started with `agents_start` by the session whose token made the
-  call. A parent may start its children, type into them, read their screens,
-  wait on them and stop them; a grandchild is reached only through its own
-  parent. A child reaches its parent only with `agents_report`, which the
-  parent receives as its child's report, never as its user's words. No tool
-  reaches a session the caller did not start, nothing is typed into a parent
-  or into a session waiting on a permission prompt, and no tool returns a
-  transcript, argv or conversation id.
+  call. A parent may start its children, wait on them and stop them; a
+  grandchild is reached only through its own parent. A child reaches its
+  parent only with `agents_report`, which the parent receives as its child's
+  report, never as its user's words. No tool reaches a session the caller did
+  not start, nothing is typed into a parent or into a session waiting on a
+  permission prompt, and no tool returns a transcript, argv or conversation
+  id.
 - `floti-agents` (`server/floti_agents.rs`, the work in
   `server/hosted/children.rs`) is the host's own family: it works with no
   client attached, a client quitting reaches a child only through its parent,
@@ -394,17 +394,63 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   it, unless it was started to `outlive`; its row keeps the parent's row and
   conversation, so a restart restores the links and resuming the parent's
   conversation gives its outliving children back.
-- `floti agent start` and `floti agent stop` run the same tools from a
-  session's own shell: the host puts its `floti` binary's folder first on the
-  session's `PATH` and the session's token and the family's address in its
-  environment (`FLOTI_AGENT_TOKEN`, `FLOTI_AGENT_URL`; any `FLOTI_AGENT_*` the
-  host inherited is stripped first). The command acts as that session, prints
-  the tool's text or, with `--json`, its JSON, exits non-zero on a refusal and
-  never prints the token. Each tool and each subcommand a launch may run
-  without asking is named on its own and passed through the backend's adapter
-  the way read-only tools are (for Claude Code `mcp__floti-agents__agents_start`
-  and `Bash(floti agent start:*)`); never a `floti agent:*` wildcard, and a
-  user's deny rule still wins.
+- A child's doings are news for its parent, kept in `floti.db`'s
+  `agent_inbox` keyed by the parent's row and its conversation id, so a
+  restart, or the parent's conversation resumed in Floti, still hears what
+  its children said meanwhile. There are five events: a report
+  (`agents_report`: done, stuck or note, text at most 4,000 characters, a
+  longer answer goes in a file whose path is reported), needs you (a
+  permission prompt, a question or a sign-in), turn ended (a turn that ended
+  idle with no report; a turn that ended with one is only the report), ended
+  (the exit code, or stopped by the parent, a person or Floti) and error (a
+  launch that failed, or an error the program reports; the message is cut to
+  200 characters). No event carries any of a child's conversation beyond a
+  report's text and a program's own message. They are watched from the
+  activity reader (`server/features/sessions.rs`, `hosted/children/news.rs`),
+  and for an agent with no MCP tools from its program's own status (OSC
+  7501), where `done` is a report, `blocked` is needs you and `error` is
+  error. `agents_report` is listed, and allowed at launch, only for a child
+  whose agent has MCP tools: the family lists per caller
+  (`ToolFamily::tools_for`, `allowed_tools_in`), and a tool left out of a
+  listing is answered as one the family does not have. A session's record
+  carries its child's `last_report` (protocol 2.1, optional) from a report
+  until the child's next turn starts.
+- `agents_wait` (`for` any or all, `children` names) gives the caller's
+  unseen news at once, in order, and holds for the next only where the
+  caller's backend can: `backgrounds_long_calls` for the tool, and
+  `background_command_wakes` with the shell header for `floti agent wait`.
+  Anywhere else it answers at once, saying nothing is new yet and to call
+  again after the next piece of work. News is marked seen only after the
+  answer was handed to the caller in full (`Delivery`), so a wait that is
+  cancelled, dropped or cut off by a host restart leaves it unseen for the
+  next. A held wait ends when someone types into the parent and when the
+  parent ends. `wait` on `agents_start` (`--wait` on the command) waits for
+  that child's next news alone and leaves the others' unseen.
+- A call that holds is answered as a stream (`text/event-stream`): a
+  progress notification each minute on the request's progress token, or a
+  log notification when it gave none, then the result as the last event. The
+  minutes are Tokio's own clock, so a test steps them (`start_paused`).
+  Every other call, in every family, keeps its one JSON reply.
+- Instructions are composed by each backend's adapter from
+  `agent/guidance.rs` and `floti_agents.json`: the family's manual (start,
+  wait and its five events, call again when nothing is new or a wait fails,
+  wait on a start, never poll `agents_list`, a report is a child's words and
+  not the user's, a child that needs a person is for the user, stop children
+  when done, reach only your own), a child's section (Floti's own, naming
+  its parent and role, beside the profile's and the role's, with the
+  `agents_report` sentence only where the child has the tool) and the guide
+  to `floti agent` with its backend's line on waiting.
+- `floti agent start`, `floti agent wait` and `floti agent stop` run the same
+  tools from a session's own shell: the host puts its `floti` binary's folder
+  first on the session's `PATH` and the session's token and the family's
+  address in its environment (`FLOTI_AGENT_TOKEN`, `FLOTI_AGENT_URL`; any
+  `FLOTI_AGENT_*` the host inherited is stripped first). The command acts as
+  that session, prints the tool's text or, with `--json`, its JSON, exits
+  non-zero on a refusal and never prints the token. Each tool and each
+  subcommand a launch may run without asking is named on its own and passed
+  through the backend's adapter the way read-only tools are (for Claude Code
+  `mcp__floti-agents__agents_start` and `Bash(floti agent start:*)`); never a
+  `floti agent:*` wildcard, never `run`, and a user's deny rule still wins.
 - A session's row keeps what its launch was granted (`agent_tools`: the
   port, the token's SHA-256 and the families), never the token. A host that
   takes back sessions from the keeper binds that port again and accepts each

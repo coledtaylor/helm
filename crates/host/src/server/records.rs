@@ -563,6 +563,7 @@ fn record_from(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
             (!role.is_empty()).then(|| role.to_owned())
         }),
         stopped: row.get(18)?,
+        last_report: None,
     })
 }
 

@@ -32,9 +32,30 @@
 //!   is refused 403 before its token is even compared.
 //!
 //! The checks are this module's own ([`front`]), in that order: Origin, token,
-//! route, method (POST only: nothing here pushes, so there is no SSE stream to
-//! GET), body size. Only a request that passed every one reaches `rmcp`, which
-//! speaks the MCP protocol for each family over stateless streamable HTTP.
+//! route, method (POST only: a session is never pushed to, so there is no
+//! stream to GET), body size. Only a request that passed every one reaches
+//! `rmcp`, which speaks the MCP protocol for each family over stateless
+//! streamable HTTP.
+//!
+//! **A reply is JSON, except a call that holds.** A family says a call holds
+//! ([`ToolFamily::holds`]: a wait on news, for the floti-agents family) and
+//! the listener answers it as a stream: a progress notification each minute
+//! on the request's progress token (a request without one gets a log
+//! notification instead, so the client's idle limit never ends the call), then
+//! the result as the last event. Every other call, in every family, keeps its
+//! one JSON reply. The minutes are Tokio's own, so a test steps them.
+//!
+//! **A family can ask to hear that its answer arrived.** An answer that
+//! consumes something, as a wait consumes news, is not given until it has
+//! reached the session in full: the family sets [`Delivery::on_delivered`]
+//! and the listener runs it when the last of the reply has been handed to the
+//! connection, never when the connection went first or the call was
+//! abandoned.
+//!
+//! **A listing can differ by caller.** [`ToolFamily::tools_for`] lists a
+//! caller what it may call, [`GrantScope`] says what a launch is allowed up
+//! front, and a tool left out of the listing is answered as one the family
+//! does not have.
 //!
 //! **Named families, one listener.** Each family is a name (such as
 //! `helm-browser`, the name the agent's permission rules use), a route, an
@@ -109,11 +130,35 @@ pub trait ToolFamily: Send + Sync + 'static {
     /// is marked with `readOnlyHint`.
     fn tools(&self) -> Vec<Tool>;
 
+    /// The tools `caller` is listed and may call: [`Self::tools`] for a
+    /// family that offers every caller the same. A tool left out is answered
+    /// exactly as one the family does not have.
+    fn tools_for(&self, caller: Caller) -> Vec<Tool> {
+        let _ = caller;
+        self.tools()
+    }
+
     /// The tools of [`Self::tools`] a launch calls without asking, by name.
     /// The default is the ones marked `readOnlyHint`; a family whose every
     /// tool is its caller's own to use says them all.
     fn allowed_tools(&self) -> Vec<String> {
         read_only_tools(&self.tools())
+    }
+
+    /// The tools of [`Self::allowed_tools`] a launch of this `scope` is
+    /// given to call without asking: the same as [`Self::tools_for`] lists it.
+    fn allowed_tools_in(&self, scope: GrantScope) -> Vec<String> {
+        let _ = scope;
+        self.allowed_tools()
+    }
+
+    /// Whether this call holds: it may stay unanswered for as long as it takes
+    /// something to happen, so it is answered as a stream that says it is
+    /// still there (a progress notification each minute) and then the result.
+    /// Decided from the request alone, before the call is run.
+    fn holds(&self, caller: Caller, name: &str, arguments: &JsonObject) -> bool {
+        let _ = (caller, name, arguments);
+        false
     }
 
     /// Shell commands a launch runs without asking beside those tools, each
@@ -127,6 +172,62 @@ pub trait ToolFamily: Send + Sync + 'static {
     /// A failure is an answer too: a failed call the model can read.
     /// Dropping the future abandons the call: nobody waits on it any more.
     fn call<'a>(&'a self, caller: Caller, name: &'a str, arguments: JsonObject) -> ToolFuture<'a>;
+
+    /// As [`Self::call`], for a family whose answer must only count as given
+    /// once it has reached the caller in full: it says what to do then with
+    /// [`Delivery::on_delivered`]. The default gives the answer and asks for
+    /// nothing.
+    fn call_with<'a>(
+        &'a self,
+        caller: Caller,
+        name: &'a str,
+        arguments: JsonObject,
+        delivery: Delivery,
+    ) -> ToolFuture<'a> {
+        let _ = delivery;
+        self.call(caller, name, arguments)
+    }
+}
+
+/// What a family wants done once a call's answer has been handed to the
+/// session that made it, whole: the listener runs it when the last of the
+/// reply has been given to the connection, and never when the connection
+/// went first or the call was abandoned.
+#[derive(Clone, Default)]
+pub struct Delivery(Arc<Mutex<Option<Hook>>>);
+
+/// What runs once a reply is delivered.
+type Hook = Box<dyn FnOnce() + Send + Sync>;
+
+impl Delivery {
+    /// What to run once the reply is delivered. The last one set wins.
+    pub fn on_delivered(&self, then: impl FnOnce() + Send + Sync + 'static) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Box::new(then));
+    }
+
+    /// What was set, taken out: the listener's.
+    fn take(&self) -> Option<Hook> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+    }
+}
+
+impl std::fmt::Debug for Delivery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Delivery")
+    }
+}
+
+/// What a launch is, as far as which of a family's tools it is given.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GrantScope {
+    /// The launch is a child of another session, which it reports to.
+    pub reports_to_parent: bool,
 }
 
 /// Families that come and go, read on every request and every grant.
@@ -165,7 +266,15 @@ pub struct Caller {
     /// The session holding it, once the host has bound one. A token is
     /// minted before its session starts, so a call can arrive before then.
     pub session: Option<SessionId>,
+    /// The request came from a command the session ran in its shell
+    /// (`floti agent`), not from the agent's own tool call. Said by the
+    /// request itself, so it is the caller's account of itself and never
+    /// more than a choice between two ways of waiting.
+    pub shell: bool,
 }
+
+/// The header `floti agent` marks its requests with: they come from the shell.
+pub const SHELL_HEADER: &str = "x-floti-shell";
 
 /// A launch's agent tools: one token, and an entry for each family on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,6 +420,12 @@ impl AgentToolsListener {
     /// token answers 404 on their routes exactly as one for a family that is
     /// off, and a launch has no entry for them.
     pub fn grant_without(&self, excluded: &[&str]) -> Result<Option<Grant>> {
+        self.grant_scoped(excluded, GrantScope::default())
+    }
+
+    /// As [`Self::grant_without`], for a launch of `scope`: each family
+    /// allows the tools that scope is given.
+    pub fn grant_scoped(&self, excluded: &[&str], scope: GrantScope) -> Result<Option<Grant>> {
         let mut socket = self.socket();
         let on: Vec<Arc<dyn ToolFamily>> = self
             .router
@@ -334,7 +449,7 @@ impl AgentToolsListener {
                 name: family.name().to_owned(),
                 url: format!("http://127.0.0.1:{port}{}", family.route()),
                 token: token.clone(),
-                allowed_tools: family.allowed_tools(),
+                allowed_tools: family.allowed_tools_in(scope),
                 allowed_commands: family.allowed_commands(),
             })
             .collect();

@@ -259,6 +259,7 @@ mod tests {
             parent_name: None,
             role: None,
             stopped: false,
+            last_report: None,
         }
     }
 

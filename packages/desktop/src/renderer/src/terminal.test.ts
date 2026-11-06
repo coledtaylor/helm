@@ -113,6 +113,16 @@ describe('createTerminal preferences', () => {
     expect(focus).toHaveBeenCalledTimes(1)
   })
 
+  it('shows the outline cursor of a card that never had the keyboard, ahead of its first output', () => {
+    createTerminal(container(), { cols: 80, rows: 24, fit: false }, hooks())
+    expect(latest().written).toEqual([])
+
+    createTerminal(container(), { cols: 80, rows: 24, fit: false, focus: false }, hooks())
+    // xterm draws no cursor until its terminal has had the keyboard or switched
+    // screens: this is the switch, there and back, and writes nothing to the screen.
+    expect(latest().written).toEqual(['\x1b[?47h\x1b[?47l'])
+  })
+
   it('uses the built-in defaults when it is handed none, whatever the settings say', () => {
     // The spike page's call: three arguments. A settings change reaching it
     // would make the fidelity drivers measure a configuration nobody proved.

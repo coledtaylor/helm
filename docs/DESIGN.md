@@ -847,9 +847,11 @@ overrides the gate; keep it.
   that is what stops it. A pane is named by its place in reading order, left to
   right and top to bottom: "First pane", "Second pane". A new tab opens in the **focused**
   pane, the one last pressed anywhere inside (taken in capture, so a terminal,
-  a list or the strip all count). A session's terminal fills the body edge to
-  edge on its own ground, and a page is drawn on the pane's own surface (§3,
-  "A page draws no island at all").
+  a list or the strip all count). A session tab can hold several terminals. Its
+  terminal fills the body edge to edge on its own ground, or, for a parent whose
+  pane has room, takes 55% of it beside its children's cards, each on the same
+  ground under a themed header (below). A page is drawn on the pane's own
+  surface (§3, "A page draws no island at all").
 
   A strip with more tabs than fit scrolls sideways under the wheel, and its
   only sign of that is a 4px thumb along its foot with no arrow buttons -

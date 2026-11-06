@@ -170,5 +170,13 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
     "statements": [
       "ALTER TABLE `sessions` ADD `stopped` integer DEFAULT false NOT NULL;"
     ]
+  },
+  {
+    "tag": "0021_busy_ultimates",
+    "statements": [
+      "CREATE TABLE `agent_inbox` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`parent_session_id` integer NOT NULL,\n\t`parent_conversation_id` text,\n\t`child_session_id` integer,\n\t`child_name` text NOT NULL,\n\t`event` text NOT NULL,\n\t`state` text,\n\t`detail` text,\n\t`exit_code` integer,\n\t`at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,\n\t`seen_at` text\n);",
+      "CREATE INDEX `agent_inbox_parent_idx` ON `agent_inbox` (`parent_session_id`,`seen_at`);",
+      "CREATE INDEX `agent_inbox_conversation_idx` ON `agent_inbox` (`parent_conversation_id`,`seen_at`);"
+    ]
   }
 ]

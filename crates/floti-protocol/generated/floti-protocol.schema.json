@@ -1327,6 +1327,29 @@
       },
       "type": "object"
     },
+    "ChildReport": {
+      "description": "A child's report to its parent: the words it was sent with, as its card\nshows them.",
+      "properties": {
+        "at": {
+          "description": "ISO 8601.",
+          "type": "string"
+        },
+        "state": {
+          "description": "`done`, `stuck` or `note`.",
+          "type": "string"
+        },
+        "text": {
+          "description": "The report's text, up to 4000 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "text",
+        "at"
+      ],
+      "type": "object"
+    },
     "ClaudeInventory": {
       "description": "What a project's `.claude/` folder holds, counted the way Claude Code\nresolves it.",
       "properties": {
@@ -8746,6 +8769,17 @@
             "string",
             "null"
           ]
+        },
+        "lastReport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChildReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What this child last told the session that started it with\n`agents_report`, until its next turn starts. Absent when it has told\nnothing since, for a session with no parent, and from a host before\nthis field, which reads as none."
         },
         "name": {
           "description": "The name handed to the agent, so the session can be found in its own\nresume list later. Never rewritten; a rename writes `label`.",

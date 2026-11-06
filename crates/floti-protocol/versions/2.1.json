@@ -2893,6 +2893,25 @@
       },
       "type": "object"
     },
+    "ChildReport": {
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "text",
+        "at"
+      ],
+      "type": "object"
+    },
     "ClaudeInventory": {
       "properties": {
         "agents": {
@@ -9802,6 +9821,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "lastReport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChildReport"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "name": {

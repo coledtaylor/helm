@@ -52,6 +52,14 @@ describe('a host session, as the window reads it', () => {
       expect(sessionFromHost(done)).not.toHaveProperty('stopped')
     }
   })
+
+  it('carries a child’s last report while it has one, and nothing otherwise', () => {
+    const lastReport = { state: 'done', text: 'Fixed both bugs.', at: '2026-11-06T10:00:00.000Z' }
+    expect(sessionFromHost(hostSession({ parentId: 4, parentName: 'lead', lastReport }))).toMatchObject({
+      lastReport
+    })
+    expect(sessionFromHost(hostSession({ parentId: 4, parentName: 'lead' }))).not.toHaveProperty('lastReport')
+  })
 })
 
 const hostProfile = (patch: Partial<P.Profile> = {}): P.Profile => ({

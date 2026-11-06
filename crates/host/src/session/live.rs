@@ -28,6 +28,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use floti_protocol::BackendId;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::watch;
 
 use super::env::session_env;
 use super::ledger::{NewSessionRow, SessionId, SessionLedger, SessionOrigin};
@@ -272,6 +273,7 @@ impl SessionHost {
                 opening: None,
             }),
             ended: Condvar::new(),
+            typed: watch::Sender::new(0),
             pty: Mutex::new(Some(Pty::Kept {
                 link: Arc::clone(&link),
                 handle: held.handle,
@@ -364,6 +366,7 @@ impl SessionHost {
                 opening: Some(Vec::new()),
             }),
             ended: Condvar::new(),
+            typed: watch::Sender::new(0),
             pty: Mutex::new(Some(Pty::Here { master, writer })),
         });
         // Before the output thread starts: a client attached here misses
@@ -469,6 +472,7 @@ impl SessionHost {
                 opening: None,
             }),
             ended: Condvar::new(),
+            typed: watch::Sender::new(0),
             pty: Mutex::new(Some(Pty::Kept {
                 link: Arc::clone(&link),
                 handle,
@@ -551,6 +555,9 @@ pub struct Session {
     launch_folder: Option<PathBuf>,
     state: Mutex<State>,
     ended: Condvar,
+    /// Counts the times a client has typed into it, so a wait on news can end
+    /// at once when a person does.
+    typed: watch::Sender<u64>,
     /// Taken when the session is closed or its program exits. Lock order:
     /// `state`, then `pty`.
     pty: Mutex<Option<Pty>>,
@@ -606,7 +613,8 @@ struct State {
     screen: Option<Screen>,
     clients: BTreeMap<ClientId, Attached>,
     size: TermSize,
-    /// The client that typed last, whose size the session has.
+    /// The client that typed last, whose size the session has. None until a
+    /// client types into a session none started.
     typist: Option<ClientId>,
     exit: Option<SessionExit>,
     /// What the program last reported about itself; cleared when it exits.
@@ -660,7 +668,8 @@ impl Session {
     /// Attaches `client`, whose terminal is `size`: it is sent the current
     /// screen, then everything after it. Attaching again replaces the
     /// earlier attachment. Attaching does not resize the session; typing
-    /// does.
+    /// does, and so does a terminal reporting its size before anyone has
+    /// typed ([`Session::resize`]).
     pub fn attach(&self, client: ClientId, size: TermSize) -> Result<Attachment> {
         let mut state = lock(&self.state);
         let session_size = state.size;
@@ -683,13 +692,16 @@ impl Session {
     }
 
     /// `client`'s terminal is now `size`. The session takes it when that
-    /// client is the one that typed last.
+    /// client is the one that typed last, or when nobody has typed yet: a
+    /// session no client started (a child an agent started, one taken back
+    /// from the keeper) has no size of a client's, and the terminal that
+    /// reports one first is the one its program is laid out for.
     pub fn resize(&self, client: ClientId, size: TermSize) -> Result<()> {
         let mut state = lock(&self.state);
         if let Some(attached) = state.clients.get_mut(&client) {
             attached.size = size;
         }
-        if state.typist == Some(client) {
+        if state.typist.is_none_or(|typist| typist == client) {
             self.apply_size(&mut state, size)?;
         }
         Ok(())
@@ -711,7 +723,16 @@ impl Session {
         let mut pty = lock(&self.pty);
         let pty = pty.as_mut().ok_or_else(|| self.has_ended())?;
         pty.write(bytes)
-            .map_err(|err| Error::io(format!("type into session {}", self.id), err))
+            .map_err(|err| Error::io(format!("type into session {}", self.id), err))?;
+        self.typed.send_modify(|typed| *typed += 1);
+        Ok(())
+    }
+
+    /// Changes each time a client types into the session. What the host
+    /// types itself (a prompt at launch) goes in another way and never moves
+    /// it.
+    pub fn typing(&self) -> watch::Receiver<u64> {
+        self.typed.subscribe()
     }
 
     /// Asks the program to end, as closing its tab does: its tree is asked

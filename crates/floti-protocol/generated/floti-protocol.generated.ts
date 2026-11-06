@@ -587,6 +587,24 @@ finishedAt: string | null, };
 export type CheckedShell = { shell: DetectedShell | null, problem: string | null, };
 
 /**
+ * A child's report to its parent: the words it was sent with, as its card
+ * shows them.
+ */
+export type ChildReport = { 
+/**
+ * `done`, `stuck` or `note`.
+ */
+state: string, 
+/**
+ * The report's text, up to 4000 characters.
+ */
+text: string, 
+/**
+ * ISO 8601.
+ */
+at: string, };
+
+/**
  * What a project's `.claude/` folder holds, counted the way Claude Code
  * resolves it.
  */
@@ -2941,7 +2959,14 @@ role?: string | null,
  * a finished child reads "Stopped" or "Done". Absent reads false, as it
  * does from a host before protocol 2.1.
  */
-stopped?: boolean, };
+stopped?: boolean, 
+/**
+ * What this child last told the session that started it with
+ * `agents_report`, until its next turn starts. Absent when it has told
+ * nothing since, for a session with no parent, and from a host before
+ * this field, which reads as none.
+ */
+lastReport?: ChildReport, };
 
 export type SessionResizeRequest = { id: number, cols: number, rows: number, };
 

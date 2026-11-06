@@ -381,6 +381,21 @@ export interface SessionRecord {
    * (`endedHeaderText`).
    */
   stopped?: boolean
+  /**
+   * What this child last told the session that started it with
+   * `agents_report`, until its next turn starts. Absent for a session that has
+   * told nothing since.
+   */
+  lastReport?: ChildReport
+}
+
+/** A child's report to its parent: its state, its words and when it was made. */
+export interface ChildReport {
+  /** `done`, `stuck` or `note`. */
+  state: string
+  text: string
+  /** ISO 8601. */
+  at: string
 }
 
 /**

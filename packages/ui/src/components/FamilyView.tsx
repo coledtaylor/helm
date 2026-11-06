@@ -159,7 +159,7 @@ export interface ChildHeaderProps {
 }
 
 const SMALL_BUTTON =
-  'shrink-0 whitespace-nowrap rounded-well border px-[5px] py-px text-[10.5px] font-medium leading-[1.55] transition-colors'
+  'shrink-0 whitespace-nowrap rounded-well border px-[5px] py-px text-[10.5px] font-medium leading-[1.2] transition-colors'
 
 /**
  * A child's one-line header.

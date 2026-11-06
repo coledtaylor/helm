@@ -202,6 +202,17 @@ export interface TerminalHost {
   dispose: () => void
 }
 
+/**
+ * Switches to the alternate screen and back, which changes nothing on screen.
+ *
+ * xterm draws no cursor, not even the outline of a terminal without the
+ * keyboard, until the terminal has first taken the keyboard or switched screens.
+ * A card in a family view does neither at first, so it is made to count as in
+ * use this way instead of taking the keyboard from its parent. Written ahead of
+ * the card's first output, so it is the first thing parsed.
+ */
+const CURSOR_IN_USE = '\x1b[?47h\x1b[?47l'
+
 export interface TerminalHooks {
   /** Host -> pty. Everything the user types funnels through here. */
   onInput: (data: string) => void
@@ -354,6 +365,7 @@ export function createTerminal(
   // A card in a family view is made beside a parent that has the keyboard, and
   // leaves it there: the cursor it draws is the outline of a terminal without it.
   if (opts.focus !== false) term.focus()
+  else term.write(CURSOR_IN_USE)
   return {
     term,
     serialize,

@@ -22,6 +22,8 @@ struct TestFamily {
     route: &'static str,
     on: AtomicBool,
     grantable: AtomicBool,
+    /// Whether a call of `echo` holds, which is answered as a stream.
+    holding: AtomicBool,
 }
 
 impl TestFamily {
@@ -31,7 +33,12 @@ impl TestFamily {
             route,
             on: AtomicBool::new(true),
             grantable: AtomicBool::new(true),
+            holding: AtomicBool::new(false),
         })
+    }
+
+    fn hold_echo(&self, holding: bool) {
+        self.holding.store(holding, Ordering::SeqCst);
     }
 
     fn switch(&self, on: bool) {
@@ -84,6 +91,10 @@ impl ToolFamily for TestFamily {
                 schema(json!({ "type": "object" })),
             ),
         ]
+    }
+
+    fn holds(&self, _caller: Caller, name: &str, _arguments: &JsonObject) -> bool {
+        name == "echo" && self.holding.load(Ordering::SeqCst)
     }
 
     fn call<'a>(&'a self, caller: Caller, name: &'a str, arguments: JsonObject) -> ToolFuture<'a> {
@@ -157,12 +168,57 @@ impl Reply {
             .unwrap_or_else(|err| panic!("{err}: {}", String::from_utf8_lossy(&self.body)))
     }
 
+    /// The server-sent events of an answer that is a stream, each one's JSON.
+    fn events(&self) -> Vec<Value> {
+        assert_eq!(self.header("content-type"), Some("text/event-stream"));
+        let body = if self
+            .header("transfer-encoding")
+            .is_some_and(|coding| coding.eq_ignore_ascii_case("chunked"))
+        {
+            dechunk(&self.body)
+        } else {
+            self.body.clone()
+        };
+        String::from_utf8(body)
+            .expect("text")
+            .split("\n\n")
+            .filter(|event| !event.is_empty())
+            .map(|event| {
+                let data = event.strip_prefix("data: ").expect("an event with data");
+                serde_json::from_str(data).expect("an event carries JSON")
+            })
+            .collect()
+    }
+
     /// A JSON-RPC answer's result, when it is a 200 with one.
     fn result(&self) -> Value {
         assert_eq!(self.status, 200, "{self:?}");
         let answer = self.json();
         assert!(answer.get("error").is_none(), "{answer}");
         answer["result"].clone()
+    }
+}
+
+/// The body of a chunked answer, without its chunk framing.
+fn dechunk(framed: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    let mut rest = framed;
+    loop {
+        let line_end = rest
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+            .expect("a chunk size line");
+        let size = usize::from_str_radix(
+            std::str::from_utf8(&rest[..line_end]).expect("text").trim(),
+            16,
+        )
+        .expect("a chunk size");
+        if size == 0 {
+            return body;
+        }
+        let start = line_end + 2;
+        body.extend_from_slice(&rest[start..start + size]);
+        rest = &rest[start + size + 2..];
     }
 }
 
@@ -1240,6 +1296,79 @@ async fn a_token_is_32_fresh_random_bytes_written_as_hex() {
         );
     }
     assert_ne!(token(&alpha), token(&beta));
+
+    world.listener.stop().await;
+}
+
+#[tokio::test]
+async fn a_call_that_holds_is_answered_as_an_event_stream_ending_in_its_result() {
+    let world = two_families();
+    world.test.hold_echo(true);
+    let grant = world.grant();
+    let address = world.address();
+    let token = token(&grant).to_owned();
+
+    let reply = rpc(
+        address,
+        "/mcp/test",
+        &token,
+        "tools/call",
+        json!({ "name": "echo", "arguments": { "word": "held" } }),
+    )
+    .await;
+    assert_eq!(reply.status, 200, "{reply:?}");
+    let events = reply.events();
+    // Answered before the first minute, it is its result alone.
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["id"], 1);
+    assert_eq!(
+        events[0]["result"]["content"][0]["text"],
+        r#"{"word":"held"}"#
+    );
+
+    world.listener.stop().await;
+}
+
+#[tokio::test]
+async fn a_call_that_does_not_hold_and_a_call_on_another_family_are_one_json_reply() {
+    let world = two_families();
+    world.test.hold_echo(true);
+    world.other.hold_echo(false);
+    let grant = world.grant();
+    let address = world.address();
+    let token = token(&grant).to_owned();
+
+    // The same family's other tool, which does not hold.
+    let whoami = rpc(
+        address,
+        "/mcp/test",
+        &token,
+        "tools/call",
+        json!({ "name": "whoami", "arguments": {} }),
+    )
+    .await;
+    // The other family's `echo`, which is the tool that holds on the first.
+    let other = rpc(
+        address,
+        "/mcp/other",
+        &token,
+        "tools/call",
+        json!({ "name": "echo", "arguments": {} }),
+    )
+    .await;
+    // A call that is not a tool call at all.
+    let listed = rpc(address, "/mcp/test", &token, "tools/list", json!({})).await;
+    for reply in [&whoami, &other, &listed] {
+        assert_eq!(reply.status, 200, "{reply:?}");
+        assert!(
+            reply
+                .header("content-type")
+                .is_some_and(|kind| kind.starts_with("application/json")),
+            "{reply:?}"
+        );
+        assert!(reply.header("transfer-encoding").is_none(), "{reply:?}");
+        assert!(reply.json().get("result").is_some(), "{reply:?}");
+    }
 
     world.listener.stop().await;
 }

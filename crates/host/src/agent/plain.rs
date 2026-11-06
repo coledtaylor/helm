@@ -172,6 +172,7 @@ mod tests {
             backend().tool_support(),
             ToolSupport {
                 backgrounds_long_calls: false,
+                background_command_wakes: false,
                 mcp_tasks: false,
                 mcp_tools: false,
             }

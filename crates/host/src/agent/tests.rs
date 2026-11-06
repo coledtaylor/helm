@@ -99,6 +99,7 @@ fn a_backend_that_only_runs_says_no_to_each_tool_call_question_and_enforces_no_r
         backend.tool_support(),
         ToolSupport {
             backgrounds_long_calls: false,
+            background_command_wakes: false,
             mcp_tasks: false,
             mcp_tools: false,
         }

@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
-use floti_protocol::channels::common::SessionRecord;
+use floti_protocol::channels::common::{ChildReport, SessionRecord};
 use floti_protocol::channels::host::{DeviceSession, HostStopReason};
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, HistorySession, LaunchProfileRequest, LaunchSessionRequest,
@@ -38,12 +38,13 @@ use floti_protocol::{BackendId, Knowable};
 use tokio::sync::watch;
 
 use super::agent_tools::HostAgentTools;
+use super::floti_agents::FAMILY;
 use super::records::{self, HostLedger, LostRow};
 use crate::agent::claude_code::{parse_instant, sanitize_session_name, unique_session_name};
 use crate::agent::{
     AgentBackend, Composition, Launch, LaunchFolder, LaunchRequest, LiveRecord, ResumeRequest,
 };
-use crate::agent_tools::{Grant, KeptGrant};
+use crate::agent_tools::{Grant, GrantScope, KeptGrant};
 use crate::keeper::{HeldKind, Keeper};
 use crate::platform::process_tree;
 use crate::session::{
@@ -58,9 +59,11 @@ mod children;
 
 use children::Children;
 pub(crate) use children::{
-    ChildEntry, ChildStopped, ChildrenListed, RoleEntry, RolesListed, StartChild,
-    end_children_at_exit,
+    ChildEntry, ChildStopped, ChildrenListed, RoleEntry, RolesListed, StartChild, WaitEnd, WaitFor,
+    WaitRequest, Waited, end_children_at_exit,
 };
+#[cfg(test)]
+pub(crate) use children::{EventKind, Facts, News};
 
 /// How long a stop waits for each session to be reported ended after its
 /// tree was ended.
@@ -184,6 +187,8 @@ impl Hosted {
             None => TakenBack::default(),
         };
         let lost = records::reconcile_running(&ledger.store(), &held)?;
+        // Children the keeper kept running are not news again.
+        children.adopt(held.iter().copied());
         let mut devices = Devices::default();
         for (kind, id, device) in opened {
             match kind {
@@ -384,6 +389,7 @@ impl Hosted {
         &self,
         backend: &Arc<dyn AgentBackend>,
         excluded: &[&str],
+        scope: GrantScope,
     ) -> (Option<(Arc<HostAgentTools>, Grant)>, Option<String>) {
         let Some(tools) = self.agent_tools.get() else {
             return (None, None);
@@ -391,7 +397,7 @@ impl Hosted {
         if backend.agent_tools().is_none() {
             return (None, None);
         }
-        match tools.grant(excluded) {
+        match tools.grant_scoped(excluded, scope) {
             Ok(grant) => (grant.map(|grant| (Arc::clone(tools), grant)), None),
             Err(err) => (
                 None,
@@ -457,7 +463,9 @@ impl Hosted {
 
     /// Session `id`'s row.
     pub fn record(&self, id: SessionId) -> Result<SessionRecord> {
-        records::read_record(&self.ledger.store(), id)
+        let mut record = records::read_record(&self.ledger.store(), id)?;
+        record.last_report = self.last_report_of(id).map(ChildReport::from);
+        Ok(record)
     }
 
     /// The rows of the sessions running now, oldest first.
@@ -744,11 +752,20 @@ impl Hosted {
         // Granted before the backend composes the launch, which writes the
         // token into the launch's own folder.
         let excluded = self.families_off_for(origin.profile_id);
-        let (grant, tools_warning) = self.grant_agent_tools(&backend, &excluded);
+        let scope = GrantScope {
+            reports_to_parent: origin.parent.is_some(),
+        };
+        let (grant, tools_warning) = self.grant_agent_tools(&backend, &excluded, scope);
         composition.agent_tools = grant
             .as_ref()
             .map(|(_, grant)| grant.servers.clone())
             .unwrap_or_default();
+        // A session given the agents family is told how to use `floti agent`,
+        // whatever started it.
+        composition.agent_guide = composition
+            .agent_tools
+            .iter()
+            .any(|server| server.name == FAMILY);
         let grant = grant.map(|(tools, grant)| (tools, grant.id));
         // What `floti agent` needs in the session's environment, added to the
         // launch the backend composed.
@@ -921,6 +938,9 @@ impl Hosted {
     /// politely, then ended. A session that has ended is closed already.
     pub fn end(&self, request: &CloseSessionRequest) {
         if let Ok(session) = self.running(request.id) {
+            // A child ended here is stopped by a person, as its parent will
+            // be told.
+            self.note_person_stop(session.id());
             session.close();
         }
     }
@@ -1331,6 +1351,9 @@ fn composition_of(profile: Option<&Profile>) -> Composition {
         allowed_tools: Vec::new(),
         disallowed_tools: Vec::new(),
         instructions: None,
+        // Set where the launch is made: they depend on who starts it.
+        child: None,
+        agent_guide: false,
     }
 }
 

@@ -1073,7 +1073,17 @@ async fn s4_a_roles_body_reaches_the_child_as_instructions_on_either_backend_and
         .await
         .done();
     let bare = world.child_of(&parent, "bare-kid").await;
-    assert_eq!(bare.run.instructions, None);
+    // Only what Floti adds to every child: the two sections it composes.
+    let told = bare.run.instructions.as_deref().unwrap_or_default();
+    let headings: Vec<&str> = told.lines().filter(|line| line.starts_with("# ")).collect();
+    assert_eq!(
+        headings,
+        [
+            "# Started by another session",
+            "# Starting and waiting on agents from your shell"
+        ],
+        "{told}"
+    );
     host.stop(HostStopReason::Stop).await;
 }
 
@@ -1435,7 +1445,8 @@ async fn s10_allowed_tools_become_each_backends_own_allow_form_beside_the_famili
             .iter()
             .filter(|arg| *arg == "--allow-shell")
             .count(),
-        3
+        // The role's `git status`, and floti agent start, stop and wait.
+        4
     );
     host.stop(HostStopReason::Stop).await;
 }
@@ -2092,6 +2103,8 @@ async fn s2_a_lost_child_is_reopened_in_its_role_as_the_file_reads_when_it_comes
     let reopened = world
         .agent_of(gone.launched.session.clone(), &[kids["gone"].run.pid])
         .await;
-    assert_eq!(reopened.run.instructions, None);
+    // Floti's own guide is all it is given: nothing of the deleted role's body.
+    let told = reopened.run.instructions.as_deref().unwrap_or_default();
+    assert!(!told.contains("Will be deleted."), "{told}");
     host.stop(HostStopReason::Stop).await;
 }

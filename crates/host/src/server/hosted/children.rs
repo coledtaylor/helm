@@ -27,7 +27,15 @@
 
 mod compose;
 mod folders;
+mod inbox;
+mod news;
 mod rows;
+mod wait;
+
+use inbox::StoppedBy;
+#[cfg(test)]
+pub(crate) use inbox::{EventKind, Facts, News};
+pub(crate) use wait::{WaitEnd, WaitFor, WaitRequest, Waited};
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -40,6 +48,7 @@ use floti_protocol::channels::sessions::Profile;
 use tokio::sync::broadcast::{self, error::RecvError};
 
 use super::{Hosted, Plan, lock};
+use crate::agent::guidance::ChildInstructions;
 use crate::agent::{AgentBackend, AgentToolServer, Composition};
 use crate::roles::{
     BadRole, DEFAULT_ROLE, NoRoles, Role, RoleClass, RoleLookup, RoleSource, default_role,
@@ -53,7 +62,7 @@ use crate::workspace::settings;
 const STOP_WAIT: Duration = Duration::from_secs(5);
 
 /// The size a child's terminal starts at: no client is attached to it, and the
-/// first one to attach resizes it.
+/// first terminal to report a size resizes it (`Session::resize`).
 const CHILD_SIZE: (u16, u16) = (120, 32);
 
 /// The variable that carries a session's token for `floti agent`.
@@ -72,11 +81,21 @@ pub(super) struct Children {
     /// The PATH the host's sessions inherit.
     inherited_path: Option<OsString>,
     starting: Mutex<()>,
+    /// What the children are doing, as news for their parents, and what a
+    /// wait sleeps on.
+    news: news::Desk,
 }
 
 impl Children {
+    /// Children running when the host started are taken from the keeper
+    /// with `adopted`: their first pass is where they were, not news.
+    pub(super) fn adopt(&self, adopted: impl IntoIterator<Item = SessionId>) {
+        self.news.adopt(adopted);
+    }
+
     pub(super) fn new(inherited_env: &[(OsString, OsString)]) -> Self {
         Self {
+            news: news::Desk::new(),
             roles: RwLock::new(Arc::new(NoRoles)),
             floti_dir: RwLock::new(
                 std::env::current_exe()
@@ -301,9 +320,19 @@ impl Hosted {
                 .or_else(|| profile.as_ref().and_then(|profile| profile.permission_mode)),
             facts.permission_mode,
         );
-        let composition =
+        let mut composition =
             compose::role_composition(&role, backend.as_ref(), profile.as_ref(), mode)
                 .map_err(|reason| format!("{reason}, so no agent was started."))?;
+        // What the child is told of the session that started it. An agent with
+        // no MCP tools has no `agents_report` and is not told of it.
+        composition.child = Some(ChildInstructions {
+            parent: rows::label_of(&self.ledger.store(), parent)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+            role: role.name.clone(),
+            reports: backend.tool_support().mcp_tools,
+        });
 
         let can_start = request.can_start.unwrap_or(role.can_start);
         let (name, limits_error) = {
@@ -338,7 +367,7 @@ impl Hosted {
         let folder_text = folder.display().to_string();
         let outlive = request.outlive;
         let backend_id = backend.id().clone();
-        let launched = self.run(
+        let launched = match self.run(
             Plan {
                 backend,
                 folder,
@@ -365,16 +394,32 @@ impl Hosted {
             },
             TermSize::new(CHILD_SIZE.0, CHILD_SIZE.1),
             None,
-        )?;
+        ) {
+            Ok(launched) => launched,
+            Err(reason) => {
+                // The parent is told in the answer, and again as news: a
+                // wait it is in hears that the agent never ran.
+                self.launch_failed(
+                    &rows::Link {
+                        name: name.clone(),
+                        parent,
+                        conversation: facts.conversation_id.clone(),
+                    },
+                    &reason,
+                );
+                return Err(reason);
+            }
+        };
 
         // The parent may have ended while this started, after the exit
         // notice that would have ended the child had already been handled.
         let child = launched.session.id;
         if !outlive && !self.parent_runs(parent) {
-            if let Some(session) = super::session_id(child).and_then(|id| self.sessions.get(id))
-                && let Err(err) = session.end_now()
-            {
-                log_line!("floti host: {err}");
+            if let Some(session) = super::session_id(child).and_then(|id| self.sessions.get(id)) {
+                self.note_stopped(session.id(), StoppedBy::Floti);
+                if let Err(err) = session.end_now() {
+                    log_line!("floti host: {err}");
+                }
             }
             return Err(
                 "Your session ended while the agent was starting, so the agent ended with it."
@@ -479,6 +524,16 @@ impl Hosted {
             .iter()
             .filter_map(|(id, _)| self.sessions.get(*id))
             .collect();
+        // The agent named is stopped by its parent; the ones it started end
+        // because it did, which is Floti's doing.
+        for session in &sessions {
+            let by = if session.id() == target {
+                StoppedBy::Parent
+            } else {
+                StoppedBy::Floti
+            };
+            self.note_stopped(session.id(), by);
+        }
         for session in &sessions {
             if let Err(err) = session.end_now() {
                 log_line!("floti host: {err}");
@@ -503,6 +558,7 @@ impl Hosted {
             }
         };
         for session in children.iter().filter_map(|id| self.sessions.get(*id)) {
+            self.note_stopped(session.id(), StoppedBy::Floti);
             if let Err(err) = session.end_now() {
                 log_line!("floti host: {err}");
             }
@@ -531,6 +587,7 @@ impl Hosted {
                 return;
             }
             for session in &sessions {
+                self.note_stopped(session.id(), StoppedBy::Floti);
                 if let Err(err) = session.end_now() {
                     log_line!("floti host: {err}");
                 }
@@ -538,6 +595,18 @@ impl Hosted {
             for session in &sessions {
                 session.wait_exit(STOP_WAIT);
             }
+        }
+    }
+
+    /// A person is stopping session `id` from a client. When it is an agent's
+    /// child, its parent is told a person did it.
+    pub(super) fn note_person_stop(&self, id: SessionId) {
+        if rows::link_of(&self.ledger.store(), id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            self.note_stopped(id, StoppedBy::Person);
         }
     }
 
@@ -962,6 +1031,9 @@ pub(crate) async fn end_children_at_exit(
         match received {
             Ok(notice) => {
                 let _ = tokio::task::spawn_blocking(move || {
+                    // Its parent hears how it ended; then it ends what it
+                    // started.
+                    hosted.child_ended(notice.session);
                     hosted.end_children_of(notice.session);
                 })
                 .await;

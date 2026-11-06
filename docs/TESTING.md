@@ -559,7 +559,10 @@ config dir is `CLAUDE_CONFIG_DIR`, or `~/.claude`.
   real CLI does.
 
 At its prompt: `/exit` and `/crash` end it with 0 and 3, `/wait` reports
-"waiting" until `y` or `n`, `/busy <ms>` reports "busy", `/child` starts a
+"waiting" (a permission prompt) until `y` or `n`, `/busy <ms>` reports "busy"
+for that long and `/busy hold` until `/idle` ends the turn (a test that must
+see a turn begin, or end it when it means to, holds it: a busy period shorter
+than the host's 750 ms read can pass unseen), `/child` starts a
 long-running child process, `/serve <port>` starts a child serving HTTP on
 127.0.0.1 at that port and answers `serving <port>` (a GET is answered with a
 line naming it, as an HTML page, a POST with its body), `/flood <n>` writes `n` numbered lines
@@ -568,8 +571,17 @@ does and prints a hyperlink and a bare address (logging the mouse reports it
 is sent), `/shell <command>` runs the command in a shell with the session's own
 environment and folder, as the real CLI's shell tool does (a test reads what a
 program run from a session sees, such as `floti agent`), answers `shell <exit
-code>` and logs the command, its output and its exit code in `shell`, and
-anything else is a prompt it records and answers.
+code>` and logs the command, its output and its exit code in `shell`,
+`/mcp <server> <tool> [json]` calls a tool of an MCP server it loaded, with a
+progress token, and holds the session busy until it answers, `/bg <command>`
+runs a command as a background command and takes its output as a new turn when
+it finishes, and anything else is a prompt it records and answers. A tool call
+still unanswered after `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS` (two minutes unless
+the environment says) is moved to the background as the real CLI moves a long
+MCP call: the session goes idle, and the result is taken as a new turn once it
+arrives. `mcpCalls` (server, tool, arguments, whether it was moved, how many
+progress notifications it was sent, the answer), `background` and `turns` log
+what it did.
 
 ### Other agent (`other-agent.mjs`)
 
@@ -603,9 +615,20 @@ run-log shape, with `conversation`, `resumed`, `title`, `model`, `mode`,
   supports MCP tasks.
 
 At its prompt: `/exit` and `/crash` end it with 0 and 3, `/shell <command>` runs
-a shell command as Claude Code's fake does, and anything else is a prompt it
-records and answers. It exits once the test process that owns it is gone, as
-every fake does.
+a shell command as Claude Code's fake does, `/report <state> [text]` writes its
+program status (OSC 7501: `working`, `idle`, `done` with a message, `blocked`
+with a kind such as `question` or `auth`, or `error` with a message) and
+answers `reported <state>`, and anything else is a prompt it records and
+answers. It exits once the test process that owns it is gone, as every fake
+does.
+
+A backend with the same fake and no MCP tools is `OtherAgentBackend::BARE_ID`
+(`OtherAgent::backend_without_tools`): it is given no agent tools, whatever the
+host would offer, so what it tells its parent is only its program's status.
+`backend_that_cannot_start` names a program that is not installed, for a launch
+that fails. `crates/host/tests/hearing.rs` drives all of these: a child reports
+and a parent waits on its children, over HTTP with the URL and token each
+session was given, and from a session's own shell with the real `floti`.
 
 A new backend gets its fake here, written to the same pattern, before its
 backend code: the backend's tests drive the fake, never the real CLI.

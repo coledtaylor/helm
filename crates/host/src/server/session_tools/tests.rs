@@ -76,6 +76,7 @@ async fn ask(
     let caller = Caller {
         grant: crate::agent_tools::GrantId::for_tests(0),
         session: session.map(SessionId),
+        shell: false,
     };
     let Value::Object(arguments) = arguments else {
         panic!("arguments are an object");

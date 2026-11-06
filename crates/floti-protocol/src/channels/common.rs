@@ -94,6 +94,26 @@ pub struct SessionRecord {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub stopped: bool,
+    /// What this child last told the session that started it with
+    /// `agents_report`, until its next turn starts. Absent when it has told
+    /// nothing since, for a session with no parent, and from a host before
+    /// this field, which reads as none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_report: Option<ChildReport>,
+}
+
+/// A child's report to its parent: the words it was sent with, as its card
+/// shows them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildReport {
+    /// `done`, `stuck` or `note`.
+    pub state: String,
+    /// The report's text, up to 4000 characters.
+    pub text: String,
+    /// ISO 8601.
+    pub at: String,
 }
 
 /// How a session asks before it acts. The values are the ones the launcher

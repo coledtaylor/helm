@@ -64,6 +64,29 @@ describe('useSessions', () => {
     expect([...result.current.activity.keys()]).toEqual([1])
   })
 
+  it('lists a session an agent started once the host’s activity names it, takes no ended one, and asks again for none it holds', async () => {
+    hosting = [record(1)]
+    const { result } = await mounted()
+    await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1]))
+
+    const state = (id: number): SessionActivityState => ({
+      id,
+      activity: 'idle',
+      waitingFor: null,
+      message: null,
+      claudeSessionId: null
+    })
+    hosting = [record(1), record(2, { parentId: 1, parentName: 'session 1' }), record(3, { status: 'exited', exitCode: 0 })]
+    act(() => bridge.emit('session:activity', [state(1), state(2), state(3)]))
+    await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1, 2]))
+    expect(result.current.sessions[1]).toMatchObject({ parentId: 1 })
+
+    // Everything it names is held now: another push lists nothing.
+    const listed = bridge.invoked('session:list').length
+    act(() => bridge.emit('session:activity', [state(1), state(2)]))
+    expect(bridge.invoked('session:list')).toHaveLength(listed)
+  })
+
   it('S15: lists the sessions of the host that replaced one that refused the window, once it is connected, and only until listed', async () => {
     bridge.answer('session:list', () => {
       throw new Error('This client speaks Floti protocol 2.0 and the host speaks 1.4.')

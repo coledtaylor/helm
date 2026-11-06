@@ -1071,6 +1071,7 @@ mod tests {
         let agent = FakeAgent::new("fake agent.exe", &dirs);
         let support = |has_tools: bool| crate::agent::ToolSupport {
             backgrounds_long_calls: false,
+            background_command_wakes: false,
             mcp_tasks: false,
             mcp_tools: has_tools,
         };

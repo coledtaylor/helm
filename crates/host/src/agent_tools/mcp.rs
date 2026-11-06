@@ -17,7 +17,7 @@ use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use tokio::sync::watch;
 
-use super::{Caller, ToolFamily};
+use super::{Caller, Delivery, ToolFamily};
 
 /// Set once nobody waits on a call any more: the session cancelled it, or
 /// its token was revoked. Put in the request's extensions by the listener.
@@ -85,9 +85,13 @@ impl ServerHandler for FamilyServer {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(self.family.tools()))
+        let tools = match caller_of(&context) {
+            Some(caller) => self.family.tools_for(caller),
+            None => self.family.tools(),
+        };
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -103,12 +107,20 @@ impl ServerHandler for FamilyServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let parts = context.extensions.get::<http::request::Parts>();
-        let caller = parts
-            .and_then(|parts| parts.extensions.get::<Caller>())
-            .copied()
+        let caller = caller_of(&context)
             .ok_or_else(|| ErrorData::internal_error("a call arrived with no caller", None))?;
         let abandoned = parts.and_then(|parts| parts.extensions.get::<Abandoned>().cloned());
-        if self.get_tool(&request.name).is_none() {
+        let delivery = parts
+            .and_then(|parts| parts.extensions.get::<Delivery>().cloned())
+            .unwrap_or_default();
+        // The tools this caller is listed: one it is not listed is one the
+        // family does not have.
+        if !self
+            .family
+            .tools_for(caller)
+            .iter()
+            .any(|tool| tool.name == request.name)
+        {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "{} has no tool named {}.",
                 self.family.name(),
@@ -117,7 +129,9 @@ impl ServerHandler for FamilyServer {
             .into());
         }
         let arguments = request.arguments.unwrap_or_default();
-        let call = self.family.call(caller, &request.name, arguments);
+        let call = self
+            .family
+            .call_with(caller, &request.name, arguments, delivery);
         // Dropping the family's future is how a call learns nobody waits on
         // it: its connection closed (rmcp cancels the request), the session
         // cancelled it, or its token was revoked.
@@ -133,6 +147,15 @@ impl ServerHandler for FamilyServer {
             () = abandoned => Err(abandoned_error()),
         }
     }
+}
+
+/// Who is calling, as the listener put it in the request's extensions.
+fn caller_of(context: &RequestContext<RoleServer>) -> Option<Caller> {
+    context
+        .extensions
+        .get::<http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<Caller>())
+        .copied()
 }
 
 /// What a call nobody waits on is answered with, should the answer still

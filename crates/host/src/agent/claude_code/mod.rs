@@ -238,11 +238,15 @@ impl ClaudeCodeBackend {
         });
         let built = overlay::build_overlays(&overlays, folder, &mut warnings)?;
 
-        // The project's instructions, then the role's own section after them:
+        // The project's instructions, then the role's own section after them
+        // and Floti's own (a child's, the `floti agent` guide) after that:
         // written even with no overlays, and never typed to the session.
-        let instructions = overlay::with_role_section(
-            overlay::compose_instructions(&built, cwd),
-            composition.instructions.as_ref(),
+        let instructions = super::guidance::append(
+            overlay::with_role_section(
+                overlay::compose_instructions(&built, cwd),
+                composition.instructions.as_ref(),
+            ),
+            self.floti_instructions(composition),
         );
         let instructions_file = match &instructions {
             Some(text) => Some(folder.write("instructions.md", text)?),
@@ -436,6 +440,7 @@ impl AgentBackend for ClaudeCodeBackend {
     fn tool_support(&self) -> ToolSupport {
         ToolSupport {
             backgrounds_long_calls: true,
+            background_command_wakes: true,
             mcp_tasks: self
                 .version_check()
                 .version()

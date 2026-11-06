@@ -421,6 +421,8 @@ fn read_activity(hosted: &Hosted, tracker: &mut ActivityTracker) -> Activity {
     for (id, conversation) in &pass.moved {
         hosted.note_conversation(*id, conversation);
     }
+    // What each agent's child is doing is news for its parent.
+    hosted.observe_activity(&views, &pass.states);
     Activity {
         states: pass.states,
         overview: pass.overview,

@@ -414,6 +414,18 @@ impl Fixture {
     }
 
     fn start(&self, folder: &Path, args: &[&str], size: TermSize) -> Arc<Session> {
+        self.start_for(folder, args, size, Some(A))
+    }
+
+    /// Starts a session for `client`, or for nobody, as a child an agent
+    /// started is.
+    fn start_for(
+        &self,
+        folder: &Path,
+        args: &[&str],
+        size: TermSize,
+        client: Option<ClientId>,
+    ) -> Arc<Session> {
         let launch_folder = LaunchFolder::create(&self.dirs.data).expect("create a launch folder");
         let backend = self.agent.backend(args.iter().copied());
         let spec = backend
@@ -431,7 +443,7 @@ impl Fixture {
                 spec,
                 name: "fake 1".into(),
                 size,
-                client: Some(A),
+                client,
                 conversation_id: Some("conversation-1".into()),
                 backend: backend.id().clone(),
                 origin: Default::default(),
@@ -681,6 +693,39 @@ fn s17_a_session_takes_the_size_of_the_client_that_typed_last() {
     session.input(B, b"again\r").unwrap();
     assert_eq!(session.size(), TermSize::new(132, 50));
     assert_eq!(session.pty_size(), Some(TermSize::new(132, 50)));
+
+    session.end_now().unwrap();
+    assert!(session.wait_exit(PATIENCE).is_some());
+}
+
+#[test]
+fn a_session_nobody_has_typed_into_takes_the_size_its_clients_terminal_reports() {
+    let fx = Fixture::new();
+    let folder = fx.dirs.folder("project");
+    let started = TermSize::new(120, 32);
+    let card = TermSize::new(85, 17);
+    let session = fx.start_for(&folder, &[], started, None);
+    let _a = Watcher::attach(&session, A, card);
+    assert_eq!(session.size(), started, "attaching does not resize");
+
+    // A child an agent started has no size of a client's: the first terminal to
+    // report one gets the program laid out for it, without typing.
+    session.resize(A, card).unwrap();
+    assert_eq!(session.size(), card);
+    assert_eq!(
+        session.pty_size(),
+        Some(card),
+        "the pty took the card's size"
+    );
+    assert_eq!(session.with_screen(|screen| screen.size()), Some(card));
+
+    // Once a client has typed, only its resizes apply.
+    let large = TermSize::new(132, 50);
+    let _b = Watcher::attach(&session, B, large);
+    session.input(B, b"hello\r").unwrap();
+    assert_eq!(session.size(), large);
+    session.resize(A, card).unwrap();
+    assert_eq!(session.size(), large, "A's report waits until A types");
 
     session.end_now().unwrap();
     assert!(session.wait_exit(PATIENCE).is_some());

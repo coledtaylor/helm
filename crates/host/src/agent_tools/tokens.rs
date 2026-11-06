@@ -142,6 +142,7 @@ impl Tokens {
                     caller: Caller {
                         grant: held.grant,
                         session: held.session,
+                        shell: false,
                     },
                     families: Arc::clone(&held.families),
                 });

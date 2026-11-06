@@ -1,14 +1,25 @@
 //! `floti agent`: the agents family from a session's own shell.
 //!
 //! `floti agent start --task <text>` starts an agent of the session's own and
-//! prints its name; `floti agent stop <name>` ends it. Both are the
-//! `agents_start` and `agents_stop` tools called over the same endpoint a
-//! session's agent tools use, so the host answers one way whoever asks and
-//! the same limits, folder rule and own-children rule apply. The session is
+//! prints its name; `floti agent stop <name>` ends it; `floti agent wait`
+//! prints the news its agents have for the session. Each is the
+//! `agents_start`, `agents_stop` or `agents_wait` tool called over the same
+//! endpoint a session's agent tools use, so the host answers one way whoever
+//! asks and the same limits, folder rule and own-children rule apply. The session is
 //! known by the bearer token in `FLOTI_AGENT_TOKEN` and the address in
 //! `FLOTI_AGENT_URL`, which the host puts in the environment of every session
 //! it gave the agents family. Nothing here names a session: the token is the
 //! whole of who is asking.
+//!
+//! **A wait is a command that stays.** `floti agent wait` and
+//! `floti agent start --wait` hold until there is news where the session's
+//! agent is woken by a finished background command (the host decides: a
+//! request says only that it comes from a shell, by the `x-floti-shell`
+//! header), and the host keeps the connection alive with an event each minute.
+//! The command prints what the tool returned and exits; one that is cut off
+//! (the host restarted, the connection went) says so and exits 1, and runs
+//! again to get the news, which the host keeps until an answer has reached
+//! its caller.
 //!
 //! The token goes only to a loopback address and is never printed or put in
 //! an error. A refusal is printed to standard error and the exit status is 1,
@@ -21,6 +32,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::agent_tools::SHELL_HEADER;
+
 /// The variable that carries the family's address.
 pub const URL_VAR: &str = "FLOTI_AGENT_URL";
 
@@ -28,13 +41,14 @@ pub const URL_VAR: &str = "FLOTI_AGENT_URL";
 pub const TOKEN_VAR: &str = "FLOTI_AGENT_TOKEN";
 
 /// What `floti agent` accepts.
-pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--outlive] [--can-start] [--json]\n       floti agent stop <name> [--json]";
+pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
 
 /// How long a connection waits to be made.
 const CONNECT_WAIT: Duration = Duration::from_secs(10);
 
-/// How long an answer is waited for: a start composes a launch and a stop
-/// waits for each process to end.
+/// How long the host may say nothing before it is taken as gone: a start
+/// composes a launch and a stop waits for each process to end, and a wait
+/// that holds is answered with an event each minute.
 const ANSWER_WAIT: Duration = Duration::from_secs(120);
 
 /// A subcommand, as parsed.
@@ -42,6 +56,7 @@ const ANSWER_WAIT: Duration = Duration::from_secs(120);
 pub enum Command {
     Start(Start),
     Stop(Stop),
+    Wait(Wait),
 }
 
 /// `floti agent start`.
@@ -56,6 +71,20 @@ pub struct Start {
     pub outlive: bool,
     /// Whether `--can-start` was given; without it the role chooses.
     pub can_start: bool,
+    /// Whether `--wait` was given: the command then also prints the child's
+    /// next news.
+    pub wait: bool,
+    pub json: bool,
+}
+
+/// `floti agent wait`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Wait {
+    /// Whether `--all` was given: wait until none of the agents is working,
+    /// not for the first news.
+    pub all: bool,
+    /// The agents to wait on; none for all of the session's.
+    pub children: Vec<String>,
     pub json: bool,
 }
 
@@ -103,11 +132,12 @@ impl Outcome {
 /// A sentence naming what is missing or not understood.
 pub fn parse(args: &[String]) -> Result<Command, String> {
     let Some((subcommand, rest)) = args.split_first() else {
-        return Err("Say what to do: start or stop.".to_owned());
+        return Err("Say what to do: start, wait or stop.".to_owned());
     };
     match subcommand.as_str() {
         "start" => parse_start(rest).map(Command::Start),
         "stop" => parse_stop(rest).map(Command::Stop),
+        "wait" => parse_wait(rest).map(Command::Wait),
         other => Err(format!("`{other}` is not a floti agent command.")),
     }
 }
@@ -136,6 +166,7 @@ fn parse_start(args: &[String]) -> Result<Start, String> {
             "--name" => start.name = Some(value(flag)?),
             "--outlive" if inline.is_none() => start.outlive = true,
             "--can-start" if inline.is_none() => start.can_start = true,
+            "--wait" if inline.is_none() => start.wait = true,
             "--json" if inline.is_none() => start.json = true,
             other => return Err(format!("`{other}` is not a floti agent start option.")),
         }
@@ -144,6 +175,22 @@ fn parse_start(args: &[String]) -> Result<Start, String> {
         .filter(|task| !task.trim().is_empty())
         .ok_or_else(|| "--task is what the agent is to do, and is required.".to_owned())?;
     Ok(start)
+}
+
+fn parse_wait(args: &[String]) -> Result<Wait, String> {
+    let mut wait = Wait::default();
+    for arg in args {
+        match arg.as_str() {
+            "--all" => wait.all = true,
+            "--json" => wait.json = true,
+            flag if flag.starts_with("--") => {
+                return Err(format!("`{flag}` is not a floti agent wait option."));
+            }
+            name if !name.trim().is_empty() => wait.children.push(name.trim().to_owned()),
+            _ => return Err("An agent's name is not blank.".to_owned()),
+        }
+    }
+    Ok(wait)
 }
 
 fn parse_stop(args: &[String]) -> Result<Stop, String> {
@@ -193,6 +240,7 @@ pub fn execute(command: &Command, url: &str, token: &str) -> Outcome {
     let (tool, arguments, json) = match command {
         Command::Start(start) => ("agents_start", start_arguments(start), start.json),
         Command::Stop(stop) => ("agents_stop", json!({ "child": stop.child }), stop.json),
+        Command::Wait(wait) => ("agents_wait", wait_arguments(wait), wait.json),
     };
     match call(url, token, tool, arguments) {
         Ok(answer) => present(command, &answer, json),
@@ -220,6 +268,17 @@ fn start_arguments(start: &Start) -> Value {
     if start.can_start {
         map.insert("can_start".to_owned(), json!(true));
     }
+    if start.wait {
+        map.insert("wait".to_owned(), json!(true));
+    }
+    arguments
+}
+
+fn wait_arguments(wait: &Wait) -> Value {
+    let mut arguments = json!({ "for": if wait.all { "all" } else { "any" } });
+    if !wait.children.is_empty() {
+        arguments["children"] = json!(wait.children);
+    }
     arguments
 }
 
@@ -241,14 +300,21 @@ fn present(command: &Command, answer: &Answer, json: bool) -> Outcome {
         return Outcome::done(structured.cloned().unwrap_or(first));
     }
     match command {
-        // The child's name alone, so a script can keep it.
-        Command::Start(_) => {
+        // The child's name alone, so a script can keep it; with --wait, the
+        // name and then the news the host gave.
+        Command::Start(start) => {
             let name = structured
                 .and_then(|text| serde_json::from_str::<Value>(text).ok())
                 .and_then(|value| value["name"].as_str().map(str::to_owned));
-            Outcome::done(name.unwrap_or(first))
+            match (start.wait, name) {
+                (true, Some(name)) => match first.split_once("\n\n") {
+                    Some((_, news)) => Outcome::done(format!("{name}\n{news}")),
+                    None => Outcome::done(name),
+                },
+                (_, name) => Outcome::done(name.unwrap_or(first)),
+            }
         }
-        Command::Stop(_) => Outcome::done(first),
+        Command::Stop(_) | Command::Wait(_) => Outcome::done(first),
     }
 }
 
@@ -352,7 +418,7 @@ fn rpc(
         }
         other => return Err(format!("The Floti host answered {other}.")),
     }
-    let answer = json_of(&reply.body)?;
+    let answer = json_of(&reply.body, id)?;
     if let Some(error) = answer.get("error") {
         let message = error["message"].as_str().unwrap_or("it gave no reason");
         return Err(format!("The Floti host refused {method}: {message}"));
@@ -360,9 +426,10 @@ fn rpc(
     Ok(answer["result"].clone())
 }
 
-/// The JSON a body holds: itself, or the last `data:` line of an event
-/// stream.
-fn json_of(body: &[u8]) -> Result<Value, String> {
+/// The answer to request `id` that a body holds: the body itself, or the
+/// event of an event stream that answers it (the progress events before it
+/// answer nothing). A stream that ends without one was cut off.
+fn json_of(body: &[u8], id: u64) -> Result<Value, String> {
     let text = String::from_utf8_lossy(body);
     if let Ok(value) = serde_json::from_str::<Value>(text.trim()) {
         return Ok(value);
@@ -370,9 +437,16 @@ fn json_of(body: &[u8]) -> Result<Value, String> {
     text.lines()
         .filter_map(|line| line.strip_prefix("data:"))
         .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
-        .next_back()
-        .ok_or_else(|| "The Floti host's answer was not understood.".to_owned())
+        .find(|event| {
+            event["id"] == json!(id)
+                && (event.get("result").is_some() || event.get("error").is_some())
+        })
+        .ok_or_else(|| CUT_OFF.to_owned())
 }
+
+/// What is said when the host's answer ended before it was whole.
+const CUT_OFF: &str =
+    "The Floti host's answer was cut off. Nothing was lost: run the command again.";
 
 #[derive(Debug)]
 struct Reply {
@@ -395,7 +469,7 @@ fn post(endpoint: &Endpoint, token: &str, body: &str) -> Result<Reply, String> {
     let head = format!(
         "POST {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\
          Accept: application/json, text/event-stream\r\nContent-Type: application/json\r\n\
-         Authorization: Bearer {token}\r\nContent-Length: {length}\r\n\r\n",
+         {SHELL_HEADER}: 1\r\nAuthorization: Bearer {token}\r\nContent-Length: {length}\r\n\r\n",
         path = endpoint.path,
         address = endpoint.address,
         length = body.len(),
@@ -409,7 +483,7 @@ fn post(endpoint: &Endpoint, token: &str, body: &str) -> Result<Reply, String> {
 
 /// The status and body of an HTTP/1.1 response read to its end.
 fn parse_reply(answer: &[u8]) -> Result<Reply, String> {
-    let malformed = || "The Floti host's answer was not understood.".to_owned();
+    let malformed = || CUT_OFF.to_owned();
     let end = answer
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -492,9 +566,57 @@ mod tests {
                 name: Some("rev".to_owned()),
                 outlive: true,
                 can_start: true,
+                wait: false,
                 json: true,
             })
         );
+    }
+
+    #[test]
+    fn start_takes_wait_and_wait_takes_all_json_and_names() {
+        let Ok(Command::Start(start)) = parse(&args(&["start", "--task", "x", "--wait"])) else {
+            panic!("a start");
+        };
+        assert!(start.wait);
+        assert!(parse(&args(&["start", "--task", "x", "--wait=yes"])).is_err());
+
+        assert_eq!(parse(&args(&["wait"])), Ok(Command::Wait(Wait::default())));
+        assert_eq!(
+            parse(&args(&[
+                "wait",
+                "--all",
+                "--json",
+                "reviewer",
+                "reviewer-2"
+            ])),
+            Ok(Command::Wait(Wait {
+                all: true,
+                children: vec!["reviewer".to_owned(), "reviewer-2".to_owned()],
+                json: true,
+            }))
+        );
+        assert!(parse(&args(&["wait", "--any"])).is_err());
+        assert!(parse(&args(&["wait", " "])).is_err());
+    }
+
+    #[test]
+    fn a_wait_asks_for_any_or_all_and_names_only_the_children_given() {
+        assert_eq!(wait_arguments(&Wait::default()), json!({ "for": "any" }));
+        assert_eq!(
+            wait_arguments(&Wait {
+                all: true,
+                children: vec!["a".to_owned(), "b".to_owned()],
+                json: false,
+            }),
+            json!({ "for": "all", "children": ["a", "b"] })
+        );
+        let start = Start {
+            task: "t".to_owned(),
+            wait: true,
+            ..Start::default()
+        };
+        assert_eq!(start_arguments(&start)["wait"], json!(true));
+        assert!(start_arguments(&Start::default()).get("wait").is_none());
     }
 
     #[test]
@@ -547,9 +669,31 @@ mod tests {
             (reply.status, reply.body.as_slice()),
             (200, &b"hello world"[..])
         );
-        let stream = json_of(b"event: message\ndata: {\"result\":{\"ok\":1}}\n\n").expect("data");
+        let stream = json_of(
+            b"event: message\ndata: {\"id\":2,\"result\":{\"ok\":1}}\n\n",
+            2,
+        )
+        .expect("data");
         assert_eq!(stream["result"]["ok"], 1);
         assert!(parse_reply(b"HTTP/1.1 200 OK").is_err());
+    }
+
+    #[test]
+    fn the_answer_in_an_event_stream_is_the_event_for_this_request_not_a_progress_event() {
+        let progress =
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{}}\n\n";
+        let result = "data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"ok\":1}}\n\n";
+        let stream = format!("{progress}{result}");
+        assert_eq!(
+            json_of(stream.as_bytes(), 2).expect("the result")["result"]["ok"],
+            1
+        );
+
+        // A stream cut off after its progress events has no answer, and says
+        // that the command can be run again, never an empty success.
+        assert_eq!(json_of(progress.as_bytes(), 2), Err(CUT_OFF.to_owned()));
+        // An answer to another request is not this one's.
+        assert_eq!(json_of(result.as_bytes(), 3), Err(CUT_OFF.to_owned()));
     }
 
     /// A host that answers `answers` in turn over loopback and records what it
@@ -646,6 +790,81 @@ mod tests {
                 .all(|request| request.contains("Authorization: Bearer secret-token"))
         );
         assert!(seen[1].contains("\"agents_start\"") && seen[1].contains("\"do it\""));
+    }
+
+    fn wait_command(all: bool, json: bool) -> Command {
+        Command::Wait(Wait {
+            all,
+            children: vec!["reviewer".to_owned()],
+            json,
+        })
+    }
+
+    #[test]
+    fn wait_prints_the_news_or_with_json_the_tools_answer_and_marks_the_request_as_from_a_shell() {
+        let news = "reviewer reported done: Fixed both bugs.";
+        let structured = r#"{"news":[{"child":"reviewer","event":"report","state":"done","text":"Fixed both bugs."}],"working":[],"ended":"news"}"#;
+        let host = host(vec![
+            rpc_result(json!({})),
+            tool_answer(false, &[news, structured]),
+            rpc_result(json!({})),
+            tool_answer(false, &[news, structured]),
+        ]);
+        assert_eq!(
+            execute(&wait_command(true, false), &host.url, "t"),
+            Outcome::done(news.to_owned())
+        );
+        assert_eq!(
+            execute(&wait_command(false, true), &host.url, "t"),
+            Outcome::done(structured.to_owned())
+        );
+        let seen = host.seen.lock().unwrap().clone();
+        assert!(seen[1].contains("\"agents_wait\""));
+        assert!(seen[1].contains("\"for\":\"all\"") && seen[1].contains("\"reviewer\""));
+        assert!(seen[3].contains("\"for\":\"any\""));
+        assert!(
+            seen.iter()
+                .all(|request| request.contains("x-floti-shell: 1")),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_refused_wait_exits_non_zero_with_the_reason() {
+        let host = host(vec![
+            rpc_result(json!({})),
+            tool_answer(
+                true,
+                &["ghost is not one of your agents. Yours are: reviewer."],
+            ),
+        ]);
+        let outcome = execute(&wait_command(false, false), &host.url, "t");
+        assert_eq!(outcome.code, 1);
+        assert_eq!(outcome.out, None);
+        assert_eq!(
+            outcome.err.as_deref(),
+            Some("ghost is not one of your agents. Yours are: reviewer.")
+        );
+    }
+
+    #[test]
+    fn start_with_wait_prints_the_name_and_then_the_news() {
+        let text = "Started reviewer.\nname: reviewer\n\nreviewer reported done: ok";
+        let structured = r#"{"name":"reviewer","news":[],"working":[],"ended":"news"}"#;
+        let host = host(vec![
+            rpc_result(json!({})),
+            tool_answer(false, &[text, structured]),
+        ]);
+        let command = Command::Start(Start {
+            task: "t".to_owned(),
+            wait: true,
+            ..Start::default()
+        });
+        assert_eq!(
+            execute(&command, &host.url, "t"),
+            Outcome::done("reviewer\nreviewer reported done: ok".to_owned())
+        );
+        assert!(host.seen.lock().unwrap()[1].contains("\"wait\":true"));
     }
 
     #[test]

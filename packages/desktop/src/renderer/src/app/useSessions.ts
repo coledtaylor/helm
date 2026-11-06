@@ -80,6 +80,12 @@ export function useSessions(onActivate: (id: number) => void, reconnects = 0): S
     activateRef.current = onActivate
   }, [onActivate])
 
+  // The sessions the window holds, for the push below to tell which one is new.
+  const heldRef = useRef(new Set<number>())
+  useEffect(() => {
+    heldRef.current = new Set(sessions.map((session) => session.id))
+  }, [sessions])
+
   useEffect(() => {
     const offs = [
       helm.on('session:exit', (record) => {
@@ -93,6 +99,21 @@ export function useSessions(onActivate: (id: number) => void, reconnects = 0): S
       // stale dot until that session happens to move again.
       helm.on('session:activity', (states) => {
         setActivity(new Map(states.map((state) => [state.id, state])))
+        // The set names every session the host runs, so one this window does not
+        // hold - a child an agent started, one started from another device - is
+        // listed. Only a running one is taken: a session ended and closed here
+        // is not brought back by the host still remembering it.
+        if (states.some((state) => !heldRef.current.has(state.id))) {
+          void helm.invoke('session:list').then(
+            (rows) =>
+              setSessions((current) => {
+                const held = new Set(current.map((session) => session.id))
+                const started = rows.filter((row) => row.status === 'running' && !held.has(row.id))
+                return started.length === 0 ? current : [...current, ...started]
+              }),
+            () => undefined
+          )
+        }
       })
     ]
     return () => {

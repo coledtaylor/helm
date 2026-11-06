@@ -41,7 +41,9 @@ use super::plugin_tools::{HostPluginFamilies, HostPluginTools, PluginFamilies};
 use super::records::ExitNotice;
 use super::session_tools::{SessionTools, SessionsWorld};
 use crate::Result;
-use crate::agent_tools::{AgentToolsListener, FamilySource, Grant, GrantId, KeptGrant, ToolFamily};
+use crate::agent_tools::{
+    AgentToolsListener, FamilySource, Grant, GrantId, GrantScope, KeptGrant, ToolFamily,
+};
 use crate::session::SessionId;
 
 pub(crate) struct HostAgentTools {
@@ -135,14 +137,15 @@ impl HostAgentTools {
 
     /// A token for a launch about to be composed, with an entry for each
     /// family on that can be given now (helm-browser only while a browser
-    /// client is attached) except those in `excluded`; `None`, with nothing
-    /// bound and no token minted, when there is none or the host is stopping.
-    pub fn grant(&self, excluded: &[&str]) -> Result<Option<Grant>> {
+    /// client is attached) except those in `excluded`, each allowing the tools
+    /// a launch of `scope` is given; `None`, with nothing bound and no token
+    /// minted, when there is none or the host is stopping.
+    pub fn grant_scoped(&self, excluded: &[&str], scope: GrantScope) -> Result<Option<Grant>> {
         if self.stopped.load(Ordering::SeqCst) {
             return Ok(None);
         }
         let mut held = self.held();
-        let grant = self.listener.grant_without(excluded)?;
+        let grant = self.listener.grant_scoped(excluded, scope)?;
         if grant.is_some() {
             held.launching += 1;
         }
@@ -299,13 +302,21 @@ mod tests {
     async fn s8_with_every_family_off_nothing_binds_and_no_token_is_minted() {
         let tools = tools();
         tools.follow(&settings(false));
-        assert!(tools.grant(&[]).unwrap().is_none());
+        assert!(
+            tools
+                .grant_scoped(&[], GrantScope::default())
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(tools.listener.address(), None);
 
         // On, but nothing binds until a launch is granted.
         tools.follow(&settings(true));
         assert_eq!(tools.listener.address(), None);
-        let grant = tools.grant(&[]).unwrap().expect("a grant with a family on");
+        let grant = tools
+            .grant_scoped(&[], GrantScope::default())
+            .unwrap()
+            .expect("a grant with a family on");
         assert!(tools.listener.address().is_some());
         tools.failed(grant.id);
 
@@ -319,11 +330,19 @@ mod tests {
     async fn s7_a_stopped_host_grants_nothing_and_holds_no_port() {
         let tools = tools();
         tools.follow(&settings(true));
-        let grant = tools.grant(&[]).unwrap().unwrap();
+        let grant = tools
+            .grant_scoped(&[], GrantScope::default())
+            .unwrap()
+            .unwrap();
         tools.started(grant.id, SessionId(1));
         tools.stop().await;
         assert_eq!(tools.listener.address(), None);
-        assert!(tools.grant(&[]).unwrap().is_none());
+        assert!(
+            tools
+                .grant_scoped(&[], GrantScope::default())
+                .unwrap()
+                .is_none()
+        );
         // A settings change after the stop binds nothing.
         tools.follow(&settings(true));
         assert_eq!(tools.listener.address(), None);
@@ -333,7 +352,10 @@ mod tests {
     async fn a_session_that_ends_before_its_launch_returns_has_its_token_revoked_on_start() {
         let tools = tools();
         tools.follow(&settings(true));
-        let grant = tools.grant(&[]).unwrap().unwrap();
+        let grant = tools
+            .grant_scoped(&[], GrantScope::default())
+            .unwrap()
+            .unwrap();
         tools.ended(SessionId(4));
         tools.started(grant.id, SessionId(4));
         {

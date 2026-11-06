@@ -605,6 +605,7 @@ fn it_moves_long_calls_to_the_background_has_mcp_tools_and_supports_mcp_tasks_fr
  {
     let declared = |tasks: bool| ToolSupport {
         backgrounds_long_calls: true,
+        background_command_wakes: true,
         mcp_tasks: tasks,
         mcp_tools: true,
     };

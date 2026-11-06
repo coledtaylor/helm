@@ -34,6 +34,7 @@
 // Everything it was given, loaded and received is written to
 // `<config>/fake-agent/<pid>.json` in the shared run-log shape (`common.mjs`),
 // so a test can assert what reached the session without reading the screen.
+// The results it took as new turns are in `turns`, as `{ kind, text }`.
 //
 // An interactive run, and the child `/child` starts, exit once the test
 // process that owns them is gone: the one a `test-owner` file names in the
@@ -44,6 +45,9 @@
 //   /crash       exit 3
 //   /wait        report status "waiting" until y or n is pressed
 //   /busy <ms>   report status "busy" for that long
+//   /busy hold   report status "busy" until `/idle` is typed, so a test ends
+//                the turn when it means to and not after a time
+//   /idle        end the oldest turn `/busy hold` began and answer `Done.`
 //   /child       start a long-running child process, for process-tree tests
 //   /serve <port>  start a child serving HTTP on 127.0.0.1 at that port (any
 //                free one for 0) and answer `serving <port>`: a GET is
@@ -55,6 +59,21 @@
 //                does, with the session's own environment and folder, and
 //                answer `shell <exit code>`. Its output and exit code are
 //                logged in `shell`.
+//   /mcp <server> <tool> [json]  call a tool of an MCP server it loaded from
+//                `--mcp-config`, with the JSON object as its arguments and a
+//                progress token, and answer the tool's text. It is busy while
+//                the call is out. A call still unanswered after
+//                `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS` (two minutes unless the
+//                environment says) is moved to the background, as the real
+//                CLI moves a long MCP call: the session goes idle, and the
+//                result is taken as a new turn once it arrives and the
+//                session is idle. Each call is logged in `mcpCalls`, with
+//                whether it was moved and how many progress notifications it
+//                was sent.
+//   /bg <command>  run the command in the shell as a background command: the
+//                session is idle at once, and its output is taken as a new
+//                turn when it finishes, as the real CLI wakes a session. Each
+//                is logged in `background`.
 //   /clear       move to a new conversation id under the same process, and
 //                register under it, as the real CLI does
 //   /links       ask for mouse and focus reports, as the real CLI's fullscreen
@@ -321,7 +340,10 @@ const runLog = new RunLog(configDir, {
   current: sessionId,
   resumed: resume !== undefined,
   resized: [],
-  mouse: []
+  mouse: [],
+  mcpCalls: [],
+  background: [],
+  turns: []
 })
 const log = runLog.data
 const saveLog = () => runLog.save()
@@ -599,12 +621,191 @@ function exit(code) {
 let buffer = ''
 let asking = false
 let lastInterrupt = 0
+/** Turns in progress: `/busy` and a foreground MCP call each hold one. */
+let working = 0
+/** Turns `/busy hold` began that `/idle` has not ended. */
+let heldTurns = 0
+/** Results waiting for the session to be idle, to be taken as new turns. */
+const waitingTurns = []
 
 const drawPrompt = () => out(`\r\x1b[2K> ${buffer}`)
 
 function answer(text) {
   out(`\r\n${text}\r\n\r\n`)
   drawPrompt()
+}
+
+/**
+ * Takes `text` as a new turn, as the real CLI hands a session the result of
+ * something it moved to the background: now when the session is idle, else when
+ * the turn in progress ends.
+ */
+function takeAsTurn(kind, text) {
+  waitingTurns.push({ kind, text })
+  drainTurns()
+}
+
+function drainTurns() {
+  while (waitingTurns.length > 0 && !asking && working === 0) {
+    const turn = waitingTurns.shift()
+    log.turns.push(turn)
+    saveLog()
+    setStatus('busy')
+    recordPrompt(turn.text)
+    setStatus('idle')
+    answer(`You said: ${turn.text}`)
+  }
+}
+
+/** What an MCP call is moved to the background after. */
+const AUTO_BACKGROUND_MS = Number(process.env.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS) || 120000
+
+/**
+ * Calls tool `tool` of the MCP server `server` it loaded, with `args`, over
+ * streamable HTTP, and resolves to `{ text, isError }`. Progress notifications
+ * the server sends on the call's token are counted in `entry.progress`.
+ */
+async function callMcpTool(server, tool, args, entry) {
+  const config = log.mcpServers[server]
+  if (config === undefined || typeof config.url !== 'string') {
+    return { text: `No MCP server named ${server}.`, isError: true }
+  }
+  const token = `fake-${String(process.pid)}-${String(log.mcpCalls.length)}`
+  const response = await fetch(config.url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...(config.headers ?? {})
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: tool, arguments: args, _meta: { progressToken: token } }
+    })
+  })
+  const messages = []
+  const take = (text) => {
+    for (const block of text.split(/\r?\n\r?\n/)) {
+      const data = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice('data:'.length).trim())
+        .join('')
+      if (data === '') continue
+      try {
+        const message = JSON.parse(data)
+        if (message.method === 'notifications/progress') {
+          entry.progress += 1
+          saveLog()
+        } else {
+          messages.push(message)
+        }
+      } catch {
+        // A line that is not a message is not one.
+      }
+    }
+  }
+  if ((response.headers.get('content-type') ?? '').includes('text/event-stream')) {
+    // Events are taken as they arrive, so progress is counted while the call is out.
+    const decoder = new TextDecoder()
+    let pending = ''
+    for await (const chunk of response.body) {
+      pending += decoder.decode(chunk, { stream: true })
+      const end = pending.lastIndexOf('\n\n')
+      if (end >= 0) {
+        take(pending.slice(0, end + 2))
+        pending = pending.slice(end + 2)
+      }
+    }
+    take(pending)
+  } else {
+    const body = await response.text()
+    try {
+      messages.push(JSON.parse(body))
+    } catch {
+      return { text: `The server answered ${String(response.status)}.`, isError: true }
+    }
+  }
+  const answered = messages.find((message) => message.id === 1)
+  if (answered === undefined) return { text: 'The server answered nothing.', isError: true }
+  if (answered.error !== undefined) return { text: String(answered.error.message), isError: true }
+  const blocks = answered.result?.content ?? []
+  return { text: blocks.map((block) => block.text ?? '').join('\n'), isError: answered.result?.isError === true }
+}
+
+/** `/mcp`: a call that holds the session busy until it answers or is moved. */
+async function mcpCommand(server, tool, argumentsText) {
+  let args = {}
+  if (argumentsText !== '') {
+    try {
+      args = JSON.parse(argumentsText)
+    } catch {
+      return answer(`mcp: the arguments are not JSON: ${argumentsText}`)
+    }
+  }
+  const entry = { server, tool, arguments: args, backgrounded: false, progress: 0, isError: null, text: null }
+  log.mcpCalls.push(entry)
+  working += 1
+  setStatus('busy')
+  saveLog()
+  let moved = false
+  const timer = setTimeout(() => {
+    moved = true
+    entry.backgrounded = true
+    working -= 1
+    setStatus('idle')
+    saveLog()
+    answer(`${tool} is running in the background`)
+    drainTurns()
+  }, AUTO_BACKGROUND_MS)
+  let result
+  try {
+    result = await callMcpTool(server, tool, args, entry)
+  } catch (error) {
+    result = { text: `The call failed: ${String(error.message)}`, isError: true }
+  }
+  clearTimeout(timer)
+  entry.text = result.text
+  entry.isError = result.isError
+  saveLog()
+  if (moved) return takeAsTurn('mcp', `${tool} finished: ${result.text}`)
+  working -= 1
+  setStatus('idle')
+  answer(`${result.isError ? 'error' : 'ok'} ${result.text}`)
+  drainTurns()
+}
+
+/** `/bg`: a shell command whose output comes back as a new turn. */
+function backgroundCommand(command) {
+  const entry = { command, stdout: '', stderr: '', code: null }
+  log.background.push(entry)
+  saveLog()
+  const child = spawn(command, { shell: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  children.push(child)
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => {
+    entry.stdout += chunk
+  })
+  child.stderr.on('data', (chunk) => {
+    entry.stderr += chunk
+  })
+  let finished = false
+  const finish = (code) => {
+    if (finished) return
+    finished = true
+    entry.code = code
+    saveLog()
+    takeAsTurn('background', `Background command finished (exit ${String(code)}): ${entry.stdout.trim()}`)
+  }
+  child.on('error', (error) => {
+    entry.stderr += String(error.message)
+    finish(-1)
+  })
+  child.on('close', (code) => finish(code ?? -1))
+  answer(`running in the background: ${command}`)
 }
 
 function submit(line) {
@@ -629,12 +830,39 @@ function submit(line) {
     return
   }
   if (command === '/busy') {
+    working += 1
     setStatus('busy')
+    if (arg === 'hold') {
+      heldTurns += 1
+      return
+    }
     setTimeout(() => {
+      working -= 1
       setStatus('idle')
       answer('Done.')
+      drainTurns()
     }, Number(arg) || 1000)
     return
+  }
+  if (command === '/idle') {
+    if (heldTurns === 0) return answer('no turn is held')
+    heldTurns -= 1
+    working -= 1
+    setStatus(working === 0 ? 'idle' : 'busy')
+    answer('Done.')
+    drainTurns()
+    return
+  }
+  if (command === '/mcp') {
+    const typed = /^\/mcp\s+(\S+)\s+(\S+)\s*([\s\S]*)$/.exec(line.trim())
+    if (typed === null) return answer('usage: /mcp <server> <tool> [json arguments]')
+    void mcpCommand(typed[1], typed[2], typed[3])
+    return
+  }
+  if (command === '/bg') {
+    const typed = line.trim().slice('/bg'.length).trim()
+    if (typed === '') return answer('usage: /bg <command>')
+    return backgroundCommand(typed)
   }
   if (command === '/links') {
     // The real CLI's rule, from `supports-hyperlinks`: a non-empty value other
@@ -694,7 +922,8 @@ function onKey(key) {
     if (key !== 'y' && key !== 'n') return
     asking = false
     setStatus('idle')
-    return answer(key === 'y' ? 'Allowed.' : 'Denied.')
+    answer(key === 'y' ? 'Allowed.' : 'Denied.')
+    return drainTurns()
   }
   if (key === '\x03') {
     if (buffer !== '') {

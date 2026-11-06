@@ -74,7 +74,9 @@ export function sessionFromHost(record: P.SessionRecord): SessionRecord {
     ...(record.parentId == null ? {} : { parentId: record.parentId, parentName: record.parentName ?? null }),
     ...(record.role == null ? {} : { role: record.role }),
     // Set only when the host ended it; a protocol before 2.1 never says.
-    ...(record.stopped === true ? { stopped: true } : {})
+    ...(record.stopped === true ? { stopped: true } : {}),
+    // Set only while the child has a report its next turn has not cleared.
+    ...(record.lastReport == null ? {} : { lastReport: record.lastReport })
   }
 }
 

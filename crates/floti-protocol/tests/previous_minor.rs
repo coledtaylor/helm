@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use floti_protocol::channel::{from_payload, to_payload};
-use floti_protocol::channels::common::{PermissionMode, SessionRecord, SessionStatus};
+use floti_protocol::channels::common::{ChildReport, PermissionMode, SessionRecord, SessionStatus};
 use floti_protocol::channels::sessions::{EffortLevel, Profile, ProfileDraft};
 use floti_protocol::channels::workspace::{
     DEFAULT_AGENT_CHILDREN_PER_PARENT, DEFAULT_AGENT_DEPTH, DEFAULT_AGENT_SESSIONS_PER_HOST,
@@ -283,6 +283,42 @@ fn a_2_0_client_reads_every_field_it_knows_of_a_stopped_childs_record() {
 }
 
 #[test]
+fn a_childs_last_report_is_on_its_record_only_while_it_has_one() {
+    let parent = session_v21();
+    let reported = SessionRecord {
+        last_report: Some(ChildReport {
+            state: "done".into(),
+            text: "Fixed both bugs in ledger.rs.".into(),
+            at: "2026-11-06T10:00:00Z".into(),
+        }),
+        ..child_of(&parent)
+    };
+
+    let read: SessionRecord = from_payload(&to_payload(&reported).unwrap()).unwrap();
+    assert_eq!(read.last_report, reported.last_report);
+    assert_eq!(
+        serde_json::to_value(&reported).unwrap()["lastReport"],
+        json!({ "state": "done", "text": "Fixed both bugs in ledger.rs.", "at": "2026-11-06T10:00:00Z" })
+    );
+
+    // With none, the field is absent: the record is the record of a host
+    // before it, and one from such a host reads as none.
+    assert!(
+        serde_json::to_value(child_of(&parent))
+            .unwrap()
+            .get("lastReport")
+            .is_none()
+    );
+    let old: SessionRecord = from_payload(&to_payload(&session_v20()).unwrap()).unwrap();
+    assert_eq!(old.last_report, None);
+
+    // A 2.0 client reads everything it knows of a record that carries one.
+    let v20: SessionRecordV20 = from_payload(&to_payload(&reported).unwrap())
+        .expect("a 2.0 client reads a record that carries a last report");
+    assert_eq!(v20.id, reported.id);
+}
+
+#[test]
 fn s31_a_2_1_host_negotiates_the_version_a_2_0_client_speaks() {
     assert_eq!(PROTOCOL_VERSION, ProtocolVersion::new(2, 1));
     assert_eq!(negotiate(PROTOCOL_VERSION, V2_0), Ok(V2_0));
@@ -450,7 +486,7 @@ fn protocol_2_1_adds_only_optional_fields_and_these_are_all_of_them() {
     let added = [
         (
             "SessionRecord",
-            vec!["parentId", "parentName", "role", "stopped"],
+            vec!["lastReport", "parentId", "parentName", "role", "stopped"],
         ),
         (
             "HostSettings",

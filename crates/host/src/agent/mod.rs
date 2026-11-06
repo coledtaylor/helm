@@ -28,6 +28,7 @@
 //! ([`AgentTools::command_rule`]).
 
 pub mod claude_code;
+pub mod guidance;
 pub mod harness;
 pub mod launch_folder;
 mod plain;
@@ -132,9 +133,30 @@ pub trait AgentBackend: Send + Sync {
     fn tool_support(&self) -> ToolSupport {
         ToolSupport {
             backgrounds_long_calls: false,
+            background_command_wakes: false,
             mcp_tasks: false,
             mcp_tools: self.agent_tools().is_some(),
         }
+    }
+
+    /// The sentence of Floti's `floti agent` guide on waiting, which is the
+    /// one thing about waiting that differs by agent: an agent woken by a
+    /// finished background command is told to wait in one, and any other is
+    /// told the wait answers at once and to call it again.
+    fn waiting_guidance(&self) -> &'static str {
+        if self.tool_support().background_command_wakes {
+            guidance::WAKES_ON_BACKGROUND_COMMAND
+        } else {
+            guidance::ANSWERS_AT_ONCE
+        }
+    }
+
+    /// The instructions Floti adds on its own for `composition`: what a child
+    /// is told about its parent and the `floti agent` guide, or `None` when
+    /// it adds none. An adapter that takes instructions composes this beside
+    /// the role's body.
+    fn floti_instructions(&self, composition: &Composition) -> Option<String> {
+        guidance::floti_sections(composition, self.waiting_guidance())
     }
 
     /// Whether the agent can enforce each of `rules`, and if it cannot, a
@@ -320,6 +342,11 @@ pub struct ToolSupport {
     /// Whether the agent moves a long tool call to the background on its own,
     /// so a call that has not answered is not a call that failed.
     pub backgrounds_long_calls: bool,
+    /// Whether a background shell command the agent started wakes it when it
+    /// finishes, with its output as a new turn. A wait run from the shell
+    /// holds only for an agent that does, since only then is a held command
+    /// not a stuck turn.
+    pub background_command_wakes: bool,
     /// Whether the agent supports MCP tasks, which let a long call answer
     /// later.
     pub mcp_tasks: bool,
@@ -487,6 +514,13 @@ pub struct Composition {
     /// session. An adapter that takes none fails the launch rather than
     /// dropping it.
     pub instructions: Option<RoleInstructions>,
+    /// What a child is told about the session that started it, composed into
+    /// the session's instructions beside the role's body. Floti's own words,
+    /// so an adapter that takes none drops it and the launch still runs.
+    pub child: Option<guidance::ChildInstructions>,
+    /// Whether the session is given Floti's agents family, and so the guide to
+    /// `floti agent`, composed into its instructions the same way.
+    pub agent_guide: bool,
 }
 
 /// A role's body, and the name of the role it belongs to.

@@ -279,6 +279,23 @@ describe('sessions over the window’s own connection', () => {
     expect(bridge.sent).toEqual([])
   })
 
+  it('answers the window’s list with the session the host’s activity just named, however soon the window asks', async () => {
+    const connection = new FakeConnection()
+    const { adapters } = world({ connection })
+    await ask(adapters, 'session:list')
+    connection.answer('session:list', () => [row({ id: 12, name: 'mapper', parentId: 7, parentName: 'app' })])
+    const heard = hear(adapters, 'session:activity')
+    // The window asks as the push reaches it, before any pass of the event loop.
+    const answered = new Promise<unknown>((resolve) => {
+      routeOf<(listener: () => void) => () => void>(adapters, 'events', 'session:activity')(() => {
+        resolve(ask(adapters, 'session:list'))
+      })
+    })
+    connection.push('session:activity', [])
+    await expect(answered).resolves.toEqual([expect.objectContaining({ id: 12, parentId: 7 })])
+    expect(heard).toHaveLength(1)
+  })
+
   it('opens a session it had no tab for on a new stream that starts with its screen, and lets it go again when its tab closes and it keeps running', async () => {
     const { adapters, connection } = world({ listed: [row(), row({ id: 9, name: 'api' })] })
     const data = hear(adapters, 'session:data')

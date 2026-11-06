@@ -26,7 +26,9 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -37,17 +39,17 @@ use http::request::Parts;
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
-use hyper::body::{Body as _, Incoming};
+use hyper::body::{Body, Frame, Incoming, SizeHint};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 
 use super::mcp::{self, Abandoned, FamilyService};
 use super::tokens::Tokens;
-use super::{Caller, FamilySource, GrantId, ToolFamily};
+use super::{Caller, Delivery, FamilySource, GrantId, Hook, JsonObject, SHELL_HEADER, ToolFamily};
 
 /// The largest request body read: far past any tool call's arguments.
 pub(super) const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
@@ -160,15 +162,22 @@ impl Router {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    async fn answer(&self, request: Request<Incoming>) -> Answer {
+    async fn answer(self: &Arc<Self>, request: Request<Incoming>) -> Answer {
         let (mut parts, body) = request.into_parts();
-        let (family, caller) = match self.admit(&parts) {
+        let (family, mut caller) = match self.admit(&parts) {
             Ok(admitted) => admitted,
             Err(refused) => {
                 discard(body);
                 return *refused;
             }
         };
+        // `floti agent` says it is a command in the session's shell. It is
+        // the request's own account of itself, which only chooses how a wait
+        // is held, and the token above is what says who is calling.
+        caller.shell = parts
+            .headers
+            .get(SHELL_HEADER)
+            .is_some_and(|value| value.as_bytes() == b"1");
 
         let body = match Limited::new(body, MAX_BODY_BYTES).collect().await {
             Ok(collected) => collected.to_bytes(),
@@ -186,25 +195,26 @@ impl Router {
         }
         // A call is registered so it can be abandoned; a cancel abandons the
         // one it names, of this token's calls only.
-        let _waiting = match cancellation_of(&body) {
-            Cancellation::Call(key) => {
+        let message = cancellation_of(&body);
+        let waiting = match &message {
+            Cancellation::Call(call) => {
                 let (abandoned, watching) = watch::channel(false);
                 self.in_flight()
                     .entry(caller.grant)
                     .or_default()
-                    .insert(key.clone(), abandoned);
+                    .insert(call.key.clone(), abandoned);
                 parts.extensions.insert(Abandoned(watching));
                 Some(Waiting {
-                    router: self,
+                    router: Arc::clone(self),
                     grant: caller.grant,
-                    key,
+                    key: call.key.clone(),
                 })
             }
             Cancellation::Cancel(key) => {
                 if let Some(abandoned) = self
                     .in_flight()
                     .get(&caller.grant)
-                    .and_then(|calls| calls.get(&key))
+                    .and_then(|calls| calls.get(key))
                 {
                     let _ = abandoned.send(true);
                 }
@@ -212,19 +222,41 @@ impl Router {
             }
             Cancellation::None => None,
         };
-        // Every answer here is JSON, so what the caller says it accepts
-        // changes nothing; `rmcp` would refuse a client that left
-        // `text/event-stream` out, which no rule here asks for.
+        // `rmcp` would refuse a client that left `text/event-stream` out of
+        // what it accepts, which no rule here asks for.
         parts
             .headers
             .insert(ACCEPT, HeaderValue::from_static(MCP_ACCEPT));
         parts.extensions.insert(caller);
-        let mut answer = family
-            .service
-            .handle(Request::from_parts(parts, Full::new(body)))
-            .await;
+        let delivery = Delivery::default();
+        parts.extensions.insert(delivery.clone());
+        let request = Request::from_parts(parts, Full::new(body));
+        // A call that holds is answered as a stream, so it can say it is
+        // still there; every other call is one JSON reply.
+        if let Cancellation::Call(call) = &message
+            && family.def.holds(caller, &call.name, &call.arguments)
+        {
+            return stream_call(
+                family,
+                request,
+                call.id.clone(),
+                call.progress_token.clone(),
+                delivery,
+                waiting,
+            );
+        }
+        let mut answer = family.service.handle(request).await;
         no_store(answer.headers_mut());
-        answer
+        match delivery.take() {
+            Some(hook) => answer.map(|inner| {
+                Confirmed {
+                    inner,
+                    delivered: Some(hook),
+                }
+                .boxed()
+            }),
+            None => answer,
+        }
     }
 
     /// The first four checks, made on the head alone: the family a request
@@ -283,13 +315,13 @@ impl Router {
 }
 
 /// Takes a call out of the waiting ones once it is answered or dropped.
-struct Waiting<'a> {
-    router: &'a Router,
+struct Waiting {
+    router: Arc<Router>,
     grant: GrantId,
     key: String,
 }
 
-impl Drop for Waiting<'_> {
+impl Drop for Waiting {
     fn drop(&mut self) {
         let mut in_flight = self.router.in_flight();
         if let Some(calls) = in_flight.get_mut(&self.grant) {
@@ -301,13 +333,220 @@ impl Drop for Waiting<'_> {
     }
 }
 
+/// How often a held call says it is still there. Well inside the five
+/// minutes of silence after which an agent gives up on an HTTP tool call.
+pub(super) const PROGRESS_EVERY: Duration = Duration::from_secs(60);
+
+/// What a held call says each [`PROGRESS_EVERY`]: a progress notification on
+/// the request's token, or, for a request that gave none, a log notification,
+/// since a progress notification without a token names nothing. Tokio's own
+/// clock, so a test steps it.
+pub(super) struct Progress {
+    ticks: tokio::time::Interval,
+    token: Option<serde_json::Value>,
+    sent: u64,
+}
+
+impl Progress {
+    /// A ticker whose first notification is one `every` from now.
+    pub(super) fn new(every: Duration, token: Option<serde_json::Value>) -> Self {
+        let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        Self {
+            ticks,
+            token,
+            sent: 0,
+        }
+    }
+
+    /// Resolves at the next notification, as the server-sent event that
+    /// carries it. Cancel-safe.
+    pub(super) async fn next(&mut self) -> Bytes {
+        self.ticks.tick().await;
+        self.sent += 1;
+        let notification = match &self.token {
+            Some(token) => serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/progress",
+                "params": {
+                    "progressToken": token,
+                    "progress": self.sent,
+                    "message": "Still waiting.",
+                },
+            }),
+            None => serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/message",
+                "params": { "level": "info", "logger": "floti", "data": "Still waiting." },
+            }),
+        };
+        event(&notification.to_string())
+    }
+}
+
+/// `json` as one server-sent event.
+fn event(json: &str) -> Bytes {
+    Bytes::from(format!("data: {json}\n\n"))
+}
+
+/// What a streamed reply is made of.
+enum Chunk {
+    /// A progress notification.
+    Event(Bytes),
+    /// The result, with what to run once the connection has taken it.
+    Last(Bytes, Option<Hook>),
+}
+
+/// A streamed reply: what the call sends as it holds, until its result.
+struct Streamed {
+    events: mpsc::Receiver<Chunk>,
+    /// Run when the stream ends after its result was handed over.
+    on_end: Option<Hook>,
+}
+
+impl Body for Streamed {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+        match self.events.poll_recv(cx) {
+            Poll::Ready(Some(Chunk::Event(bytes))) => Poll::Ready(Some(Ok(Frame::data(bytes)))),
+            Poll::Ready(Some(Chunk::Last(bytes, hook))) => {
+                self.on_end = hook;
+                Poll::Ready(Some(Ok(Frame::data(bytes))))
+            }
+            Poll::Ready(None) => {
+                if let Some(hook) = self.on_end.take() {
+                    hook();
+                }
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+/// A reply body that runs a hook once its last frame has been handed to the
+/// connection: when the family asked to hear that its answer arrived. A body
+/// dropped before that, because the connection went, never runs it.
+struct Confirmed {
+    inner: BoxBody<Bytes, Infallible>,
+    delivered: Option<Hook>,
+}
+
+impl Body for Confirmed {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+        let polled = Pin::new(&mut self.inner).poll_frame(cx);
+        let last = match &polled {
+            Poll::Ready(Some(Ok(_))) => self.inner.is_end_stream(),
+            Poll::Ready(None) => true,
+            _ => false,
+        };
+        if last && let Some(hook) = self.delivered.take() {
+            hook();
+        }
+        polled
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+/// Answers a call that holds as a stream: a notification each
+/// [`PROGRESS_EVERY`] while `request` is being answered, then its result as
+/// the last event. The call runs in a task of its own that ends, and so
+/// abandons the call, the moment nobody reads the stream any more.
+fn stream_call(
+    family: Arc<Family>,
+    request: Request<Full<Bytes>>,
+    id: serde_json::Value,
+    token: Option<serde_json::Value>,
+    delivery: Delivery,
+    waiting: Option<Waiting>,
+) -> Answer {
+    let (events, reader) = mpsc::channel(4);
+    tokio::spawn(async move {
+        let _waiting = waiting;
+        let mut progress = Progress::new(PROGRESS_EVERY, token);
+        let handled = family.service.handle(request);
+        tokio::pin!(handled);
+        let answered = loop {
+            tokio::select! {
+                answered = &mut handled => break answered,
+                notification = progress.next() => {
+                    if events.send(Chunk::Event(notification)).await.is_err() {
+                        return;
+                    }
+                }
+                () = events.closed() => return,
+            }
+        };
+        let json = answered
+            .into_body()
+            .collect()
+            .await
+            .map(|collected| collected.to_bytes())
+            .ok()
+            .filter(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).is_ok())
+            .unwrap_or_else(|| {
+                Bytes::from(
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32603, "message": "Floti could not answer that call." },
+                    })
+                    .to_string(),
+                )
+            });
+        let last = event(&String::from_utf8_lossy(&json));
+        let _ = events.send(Chunk::Last(last, delivery.take())).await;
+    });
+    let mut answer = Response::new(
+        Streamed {
+            events: reader,
+            on_end: None,
+        }
+        .boxed(),
+    );
+    answer
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+    no_store(answer.headers_mut());
+    answer
+}
+
 /// What a body says about cancellation.
 enum Cancellation {
-    /// A `tools/call` request, by its id: one that can be abandoned.
-    Call(String),
+    /// A `tools/call` request: one that can be abandoned.
+    Call(Box<CallInfo>),
     /// `notifications/cancelled`, naming the request it gives up on.
     Cancel(String),
     None,
+}
+
+/// A `tools/call` request as the listener reads it before `rmcp` does.
+struct CallInfo {
+    /// Its JSON-RPC id, as the text a cancel names it by.
+    key: String,
+    id: serde_json::Value,
+    name: String,
+    arguments: JsonObject,
+    /// What the client asked progress to be reported on, when it did.
+    progress_token: Option<serde_json::Value>,
 }
 
 fn cancellation_of(body: &[u8]) -> Cancellation {
@@ -319,7 +558,28 @@ fn cancellation_of(body: &[u8]) -> Cancellation {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     match message.get("id").filter(|id| !id.is_null()) {
-        Some(id) if method == "tools/call" => Cancellation::Call(id.to_string()),
+        Some(id) if method == "tools/call" => {
+            let params = message.get("params");
+            Cancellation::Call(Box::new(CallInfo {
+                key: id.to_string(),
+                id: id.clone(),
+                name: params
+                    .and_then(|params| params.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                arguments: params
+                    .and_then(|params| params.get("arguments"))
+                    .and_then(serde_json::Value::as_object)
+                    .cloned()
+                    .unwrap_or_default(),
+                progress_token: params
+                    .and_then(|params| params.get("_meta"))
+                    .and_then(|meta| meta.get("progressToken"))
+                    .filter(|token| token.is_string() || token.is_number())
+                    .cloned(),
+            }))
+        }
         Some(_) => Cancellation::None,
         None if method == "notifications/cancelled" => message
             .get("params")
@@ -526,7 +786,265 @@ fn no_store(headers: &mut HeaderMap) {
 
 #[cfg(test)]
 mod tests {
-    use super::is_loopback_origin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
+    use serde_json::{Value, json};
+    use tokio::sync::Notify;
+
+    use super::super::{Caller, Delivery, GrantId, ToolFamily, ToolFuture};
+    use super::*;
+
+    /// A family with one tool, `hold`, that holds until the test releases it,
+    /// and says whether it was dropped before that or delivered.
+    struct Holdup {
+        release: Notify,
+        finished: AtomicBool,
+        dropped: AtomicBool,
+        delivered: Arc<AtomicBool>,
+    }
+
+    impl Holdup {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                release: Notify::new(),
+                finished: AtomicBool::new(false),
+                dropped: AtomicBool::new(false),
+                delivered: Arc::new(AtomicBool::new(false)),
+            })
+        }
+    }
+
+    /// Notes that the call it lives in was dropped.
+    struct DropNote<'a>(&'a AtomicBool);
+
+    impl Drop for DropNote<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl ToolFamily for Holdup {
+        fn name(&self) -> &str {
+            "floti-holdup"
+        }
+
+        fn route(&self) -> &str {
+            "/mcp/holdup"
+        }
+
+        fn instructions(&self) -> &str {
+            "Tools that hold."
+        }
+
+        fn is_on(&self) -> bool {
+            true
+        }
+
+        fn tools(&self) -> Vec<Tool> {
+            let Value::Object(schema) = json!({ "type": "object", "properties": {} }) else {
+                unreachable!("a schema is an object")
+            };
+            vec![Tool::new("hold", "Holds until released.", schema)]
+        }
+
+        fn holds(&self, _caller: Caller, _name: &str, _arguments: &JsonObject) -> bool {
+            true
+        }
+
+        fn call<'a>(
+            &'a self,
+            _caller: Caller,
+            _name: &'a str,
+            _arguments: JsonObject,
+        ) -> ToolFuture<'a> {
+            Box::pin(async move {
+                let _note = DropNote(&self.dropped);
+                self.release.notified().await;
+                self.finished.store(true, Ordering::SeqCst);
+                CallToolResult::success(vec![ContentBlock::text("released")])
+            })
+        }
+
+        fn call_with<'a>(
+            &'a self,
+            caller: Caller,
+            name: &'a str,
+            arguments: JsonObject,
+            delivery: Delivery,
+        ) -> ToolFuture<'a> {
+            let delivered = Arc::clone(&self.delivered);
+            delivery.on_delivered(move || delivered.store(true, Ordering::SeqCst));
+            self.call(caller, name, arguments)
+        }
+    }
+
+    /// A `tools/call` of `hold` with id 7, carrying `token` as its progress
+    /// token when there is one.
+    fn hold_request(token: Option<&str>, delivery: &Delivery) -> Request<Full<Bytes>> {
+        let mut params = json!({ "name": "hold", "arguments": {} });
+        if let Some(token) = token {
+            params["_meta"] = json!({ "progressToken": token });
+        }
+        let body = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/mcp/holdup")
+            .header(http::header::HOST, "127.0.0.1:1")
+            .header(ACCEPT, MCP_ACCEPT)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(body.to_string())))
+            .expect("a request");
+        request.extensions_mut().insert(Caller {
+            grant: GrantId::for_tests(1),
+            session: None,
+            shell: false,
+        });
+        request.extensions_mut().insert(delivery.clone());
+        request
+    }
+
+    /// The held call of `family`, as the listener answers it.
+    fn held(family: &Arc<Holdup>, token: Option<&str>) -> BoxBody<Bytes, Infallible> {
+        let delivery = Delivery::default();
+        let answer = stream_call(
+            Family::new(Arc::clone(family) as Arc<dyn ToolFamily>),
+            hold_request(token, &delivery),
+            json!(7),
+            token.map(|token| json!(token)),
+            delivery,
+            None,
+        );
+        assert_eq!(answer.headers()[CONTENT_TYPE], "text/event-stream");
+        answer.into_body()
+    }
+
+    /// The next server-sent event of a stream, or none at its end.
+    async fn next_event(body: &mut BoxBody<Bytes, Infallible>) -> Option<Value> {
+        let frame = body.frame().await?.ok()?;
+        let data = frame.into_data().ok()?;
+        let text = String::from_utf8(data.to_vec()).expect("text");
+        let json = text.strip_prefix("data: ")?.strip_suffix("\n\n")?;
+        Some(serde_json::from_str(json).expect("an event carries JSON"))
+    }
+
+    /// Lets the family's call be answered `after` from now.
+    fn release_after(family: &Arc<Holdup>, after: Duration) {
+        let family = Arc::clone(family);
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            family.release.notify_one();
+        });
+    }
+
+    /// `elapsed` is `expected`, give or take the clock's millisecond.
+    fn is_about(elapsed: Duration, expected: Duration) -> bool {
+        elapsed >= expected && elapsed < expected + Duration::from_millis(50)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_call_says_it_is_still_there_each_minute_and_then_gives_its_result() {
+        let family = Holdup::new();
+        let mut body = held(&family, Some("tok"));
+        let start = tokio::time::Instant::now();
+        // The call is answered halfway through the third minute.
+        release_after(&family, Duration::from_secs(150));
+
+        for minute in 1..=2u64 {
+            let progress = next_event(&mut body).await.expect("a notification");
+            assert_eq!(progress["method"], "notifications/progress");
+            assert_eq!(progress["params"]["progressToken"], "tok");
+            assert_eq!(progress["params"]["progress"], minute);
+            assert!(
+                is_about(start.elapsed(), Duration::from_secs(60 * minute)),
+                "minute {minute} came at {:?}",
+                start.elapsed()
+            );
+        }
+        let result = next_event(&mut body).await.expect("the result");
+        assert_eq!(result["id"], 7);
+        assert_eq!(result["result"]["content"][0]["text"], "released");
+        assert!(
+            is_about(start.elapsed(), Duration::from_secs(150)),
+            "the result came with nothing between the second minute and it: {:?}",
+            start.elapsed()
+        );
+        assert!(
+            next_event(&mut body).await.is_none(),
+            "the result is the last event"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_call_that_gave_no_progress_token_is_told_with_a_log_notification() {
+        let family = Holdup::new();
+        let mut body = held(&family, None);
+        release_after(&family, Duration::from_secs(90));
+
+        let notice = next_event(&mut body).await.expect("a notification");
+        assert_eq!(notice["method"], "notifications/message");
+        assert_eq!(notice["params"]["level"], "info");
+        assert!(notice["params"].get("progressToken").is_none(), "{notice}");
+        let result = next_event(&mut body).await.expect("the result");
+        assert_eq!(result["result"]["content"][0]["text"], "released");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_call_answered_before_the_first_minute_is_only_its_result() {
+        let family = Holdup::new();
+        let mut body = held(&family, Some("tok"));
+        family.release.notify_one();
+
+        let result = next_event(&mut body).await.expect("the result");
+        assert_eq!(result["id"], 7);
+        assert!(next_event(&mut body).await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_hook_runs_once_the_result_has_been_handed_over() {
+        let family = Holdup::new();
+        let mut body = held(&family, Some("tok"));
+        release_after(&family, Duration::from_secs(70));
+
+        next_event(&mut body).await.expect("a notification");
+        assert!(
+            !family.delivered.load(Ordering::SeqCst),
+            "a notification is not the answer"
+        );
+        next_event(&mut body).await.expect("the result");
+        assert!(next_event(&mut body).await.is_none());
+        assert!(
+            family.delivered.load(Ordering::SeqCst),
+            "the answer was handed over in full"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stream_dropped_before_its_result_abandons_the_call_and_never_delivers() {
+        let family = Holdup::new();
+        let mut body = held(&family, Some("tok"));
+        next_event(&mut body).await.expect("a notification");
+        drop(body);
+
+        // The call's task ends when nobody reads, and drops the call with it.
+        for _ in 0..100 {
+            if family.dropped.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            family.dropped.load(Ordering::SeqCst),
+            "the call was dropped"
+        );
+        family.release.notify_one();
+        tokio::task::yield_now().await;
+        assert!(!family.finished.load(Ordering::SeqCst), "it never finished");
+        assert!(
+            !family.delivered.load(Ordering::SeqCst),
+            "an answer nobody took is not delivered"
+        );
+    }
 
     #[test]
     fn a_loopback_origin_is_localhost_127_0_0_1_or_ipv6_loopback_and_nothing_wider() {

@@ -217,25 +217,34 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
 
   let relisting = false
   let relistAgain = false
-  /** Adopts what the host lists now: a session started elsewhere, such as one a plugin asked for. */
-  async function relist(): Promise<void> {
+  /** Settles when the list now being taken, and any asked for while it runs, has been adopted. */
+  let relistRun: Promise<void> = Promise.resolve()
+  /**
+   * Adopts what the host lists now: a session started elsewhere, such as one a
+   * plugin asked for or a child an agent started. Resolves once it has been
+   * adopted, so the window's own `session:list` can wait for it.
+   */
+  function relist(): Promise<void> {
     if (relisting) {
       relistAgain = true
-      return
+      return relistRun
     }
     relisting = true
-    try {
-      do {
-        relistAgain = false
-        const connection = current
-        if (connection === null) return
-        adoptAll(await connection.request('session:list', null), false)
-      } while (relistAgain)
-    } catch (error) {
-      log(`host: session:list failed (${(error as Error).message})`)
-    } finally {
-      relisting = false
-    }
+    relistRun = (async () => {
+      try {
+        do {
+          relistAgain = false
+          const connection = current
+          if (connection === null) return
+          adoptAll(await connection.request('session:list', null), false)
+        } while (relistAgain)
+      } catch (error) {
+        log(`host: session:list failed (${(error as Error).message})`)
+      } finally {
+        relisting = false
+      }
+    })()
+    return relistRun
   }
 
   const onExit = (row: P.SessionRecord): void => {
@@ -253,15 +262,17 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
     // new stream with a redraw of the screen as it is.
     for (const record of records.values()) streams.close('session:data', record.id)
     const failed = (channel: string) => (error: Error) => log(`host: ${channel} ended (${error.message})`)
+    // Listed again before the window is told, so that a window which asks for the
+    // list because of what it is told is answered by the list taken for it.
     const setStates = (next: readonly P.SessionActivityState[], moved: boolean): void => {
       states = activityFromHost(next)
-      events.tell('session:activity', states)
       if (moved) void relist()
+      events.tell('session:activity', states)
     }
     const setOverview = (next: P.SessionsOverview, moved: boolean): void => {
       overview = overviewFromHost(next)
-      events.tell('sessions:overview', overview)
       if (moved) void relist()
+      events.tell('sessions:overview', overview)
     }
     subscriptions = [
       connection.subscribe('session:exit', { event: onExit, error: failed('session:exit') }),
@@ -426,6 +437,9 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
       'session:list': async () => {
         await host()
         await listed
+        // A window asking because the host's activity named a session it does not hold
+        // is answered with that session, not with the list from before it started.
+        await relistRun
         return [...records.values()]
       },
       'session:activity': async () => {
