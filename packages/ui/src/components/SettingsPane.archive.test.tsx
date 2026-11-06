@@ -110,6 +110,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
       agentStartsPerParent: 16
     },
     onAgentLimitsChange: vi.fn(),
+    showChildrenInParentTab: true,
+    onShowChildrenInParentTabChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
     quitSessions: 'end',

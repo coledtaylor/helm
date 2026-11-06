@@ -187,6 +187,7 @@ describe('settings', () => {
       agentSessionsPerHost: 12,
       agentDepth: 3,
       agentStartsPerParent: 20,
+      showChildrenInParentTab: false,
       quitSessions: { local: 'keep' },
       hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
       profilesCopiedToHostAt: '2026-10-29T08:00:00.000Z',
@@ -870,6 +871,12 @@ describe('settings validation', () => {
       bad: [0, -1, 1001, 16.5, '16', null, NaN, Infinity, true, {}]
     },
     {
+      // `'false'` would show the children while the pane read it as off.
+      key: 'showChildrenInParentTab',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
       // A string that reads as off would reopen sessions unasked.
       key: 'restoreWithoutAsking',
       good: [true, false],
@@ -1101,6 +1108,7 @@ describe('settings validation', () => {
       agentSessionsPerHost: 12,
       agentDepth: 3,
       agentStartsPerParent: 20,
+      showChildrenInParentTab: false,
       quitSessions: { local: 'keep' },
       hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
       profilesCopiedToHostAt: null,
@@ -1156,6 +1164,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   agentSessionsPerHost: 12,
   agentDepth: 3,
   agentStartsPerParent: 20,
+  showChildrenInParentTab: false,
   quitSessions: { local: 'keep' },
   hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
   profilesCopiedToHostAt: null,

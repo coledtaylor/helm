@@ -1682,6 +1682,14 @@ export interface AppSettings {
   agentDepth: number
   /** Children one session may start in its life, running or not. */
   agentStartsPerParent: number
+  /**
+   * Whether a parent's tab shows its running children beside its terminal while
+   * its pane has room, or the parent shows alone with its children in the tree
+   * and in its crumb. Kept on this device with the rest of its layout and never
+   * told to a host: which children a window shows is that window's own choice.
+   * On by default, because watching children work is what starting them is for.
+   */
+  showChildrenInParentTab: boolean
 
   /**
    * What quitting Helm does to the sessions it started on a host, by host:
@@ -1827,6 +1835,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   agentSessionsPerHost: AGENT_SESSIONS_PER_HOST.default,
   agentDepth: AGENT_DEPTH.default,
   agentStartsPerParent: AGENT_STARTS_PER_PARENT.default,
+  showChildrenInParentTab: true,
   // Empty: this PC's host then ends the sessions Helm started when it quits,
   // which is what a session on your own computer usually wants, and a host on
   // another computer keeps them running (`quitChoice`).

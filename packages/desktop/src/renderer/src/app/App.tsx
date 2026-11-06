@@ -4166,6 +4166,13 @@ export function App(): JSX.Element {
           DEFAULT_SETTINGS.agentStartsPerParent,
       }}
       onAgentLimitsChange={(limits) => writeSettings(limits)}
+      showChildrenInParentTab={
+        settings?.showChildrenInParentTab ??
+        DEFAULT_SETTINGS.showChildrenInParentTab
+      }
+      onShowChildrenInParentTabChange={(showChildrenInParentTab) =>
+        writeSettings({ showChildrenInParentTab })
+      }
       restoreWithoutAsking={
         settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking
       }

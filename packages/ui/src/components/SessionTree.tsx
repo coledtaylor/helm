@@ -36,6 +36,8 @@ export interface TreeSession {
    * folder's own list because that session has ended and no longer holds it.
    */
   parentName?: string | undefined
+  /** A command the session that started it ran as a child, drawn with a terminal glyph in place of a dot. */
+  command?: boolean | undefined
 }
 
 /**
@@ -758,6 +760,8 @@ function HostTree({
           expanded={expanded}
           onToggle={() => toggle(setFoldedFamilies, session.id)}
           summary={mostUrgent(withNested(started))}
+          command={session.command}
+          needs={started.filter((child) => child.state === 'waiting').length}
         />
         {expanded === true &&
           started.map((child, at) =>

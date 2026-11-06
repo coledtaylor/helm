@@ -591,6 +591,7 @@ export const SETTING_VALIDATORS: SettingValidators = {
   agentSessionsPerHost: boundedInteger(AGENT_SESSIONS_PER_HOST),
   agentDepth: boundedInteger(AGENT_DEPTH),
   agentStartsPerParent: boundedInteger(AGENT_STARTS_PER_PARENT),
+  showChildrenInParentTab: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
 
   /**
    * What quitting does, by host: a plain object of host keys to `end` or

@@ -150,6 +150,34 @@ export function Row({
   )
 }
 
+/**
+ * A tick with its sentence beside it: the tick at the left, then what it
+ * switches and what that means, and the whole row is the tick's label. For a
+ * choice that is the page's subject, where `Row` puts the control at the right
+ * as the answer to a question. The tick is passed in, as `Row` takes its
+ * control, so a caller keeps the hook its driver reaches it by.
+ */
+export function CheckRow({
+  label,
+  hint,
+  children
+}: {
+  label: string
+  hint: string
+  /** The `Checkbox`, named by `label`. */
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <label className="grid cursor-pointer grid-cols-[16px_minmax(0,1fr)] items-start gap-x-2 py-[5px]">
+      <span className="mt-0.5 grid">{children}</span>
+      <span className="min-w-0">
+        <span className="block text-[13px] text-fg">{label}</span>
+        <span className="block max-w-[68ch] text-[12px] leading-[1.5] text-fg-muted">{hint}</span>
+      </span>
+    </label>
+  )
+}
+
 /** Between rows in a group. Fades at the ends - DESIGN.md, `.island-rule`. */
 export function Divider(): JSX.Element {
   return <div aria-hidden className="island-rule my-1.5" />

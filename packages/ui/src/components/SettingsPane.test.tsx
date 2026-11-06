@@ -135,6 +135,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
       agentStartsPerParent: 16
     },
     onAgentLimitsChange: vi.fn(),
+    showChildrenInParentTab: true,
+    onShowChildrenInParentTabChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
     quitSessions: 'end',
@@ -171,7 +173,7 @@ describe('SettingsPane', () => {
       ['appearance', 'Appearance', ['Appearance']],
       ['terminal', 'Terminal', ['Terminal']],
       ['sessions', 'Sessions', ['Sessions']],
-      ['agents', 'Agents', ['Agents']],
+      ['agents', 'Agents', ['Agents', 'Limits']],
       ['hosts', 'Hosts', ['Hosts']],
       ['devices', 'Devices', ['Devices']],
       ['workspace', 'Workspace', ['Workspace', 'Harness templates']],
@@ -227,6 +229,9 @@ describe('SettingsPane', () => {
       ],
       Agents: [
         ['checkbox', 'Sessions can start agents'],
+        ['checkbox', "Show children in their parent's tab"]
+      ],
+      Limits: [
         ['textbox', 'Children per parent'],
         ['textbox', 'Agent sessions per host'],
         ['textbox', 'Depth'],

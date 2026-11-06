@@ -326,3 +326,139 @@ describe('SessionTree: sessions that started sessions', () => {
     expect(screen.getByTitle('5 sessions running here')).toBeTruthy()
   })
 })
+
+const dotOf = (id: number): HTMLElement => {
+  const found = rowOf(id).querySelector<HTMLElement>('[data-session-dot]')
+  if (found === null) throw new Error(`no dot on session ${String(id)}`)
+  return found
+}
+
+/**
+ * What the design draws on a parent's row and a child's: the caret and where
+ * the parent's dot sits beside it, the count of children that need you, a
+ * command's terminal glyph in place of a dot, and a shell's hollow ring.
+ */
+describe('SessionTree: a parent’s row and a child’s as the design draws them', () => {
+  it('draws the fold caret as the triangle glyph in the column before the parent’s dot, and that dot three pixels in from where a plain session’s sits', async () => {
+    renderTree(family())
+    const fold = screen.getByRole('button', { name: 'Fold the sessions started by api-refactor' })
+    expect(fold.textContent).toBe('▾')
+    // A 16px target centred on the 10px glyph, which sits 14px to 4px before the dot.
+    expect(fold.style.left).toBe(`${String(indentOf(1) - 17)}px`)
+    expect(fold.className).toContain('size-4')
+
+    // The caret's column pushes the parent's dot in by three pixels; a session
+    // with no children, and a child, keep theirs where the row's padding puts it.
+    expect(dotOf(1).style.marginLeft).toBe('3px')
+    expect(dotOf(5).style.marginLeft).toBe('')
+    expect(dotOf(2).style.marginLeft).toBe('')
+
+    await userEvent.click(fold)
+    expect(screen.getByRole('button', { name: 'Unfold the sessions started by api-refactor' }).textContent).toBe('▸')
+  })
+
+  it('draws the same caret on a child that started children of its own', () => {
+    renderTree(
+      new Map([
+        [
+          HELM.toLowerCase(),
+          [row(1, 'api-refactor', 'idle', { nested: [row(2, 'lead', 'busy', { nested: [row(3, 'helper', 'busy')] })] })]
+        ]
+      ])
+    )
+    const fold = screen.getByRole('button', { name: 'Fold the sessions started by lead' })
+    expect(fold.textContent).toBe('▾')
+    expect(fold.style.left).toBe(`${String(indentOf(2) - 17)}px`)
+    expect(dotOf(2).style.marginLeft).toBe('3px')
+  })
+
+  it('counts on the parent’s row the children that need you, and says nothing when none does', async () => {
+    renderTree(family())
+    const pill = rowOf(1).querySelector('[data-session-needs]')
+    expect(pill?.textContent).toBe('1')
+    expect(pill?.getAttribute('data-session-needs')).toBe('1')
+    expect(pill?.className).toContain('text-warn')
+    expect(rowOf(1).getAttribute('aria-label')).toBe('api-refactor, ready, 1 of its sessions waiting for you')
+    // Only a parent counts, and only its own children.
+    expect(rowOf(4).querySelector('[data-session-needs]')).toBeNull()
+    expect(rowOf(5).querySelector('[data-session-needs]')).toBeNull()
+
+    // Still said while the family is folded away, beside the dot of the most pressing child.
+    await userEvent.click(screen.getByRole('button', { name: 'Fold the sessions started by api-refactor' }))
+    expect(rowOf(1).querySelector('[data-session-needs]')?.textContent).toBe('1')
+  })
+
+  it('counts every child that needs you, and shows no count for a family that waits on nobody', () => {
+    renderTree(
+      new Map([
+        [
+          HELM.toLowerCase(),
+          [
+            row(1, 'api-refactor', 'idle', {
+              nested: [row(2, 'a', 'waiting'), row(3, 'b', 'waiting'), row(4, 'c', 'busy')]
+            }),
+            row(5, 'calm', 'idle', { nested: [row(6, 'd', 'busy'), row(7, 'e', 'idle')] })
+          ]
+        ]
+      ])
+    )
+    expect(rowOf(1).querySelector('[data-session-needs]')?.textContent).toBe('2')
+    expect(rowOf(5).querySelector('[data-session-needs]')).toBeNull()
+  })
+
+  it('draws a command child with the terminal glyph where a session has its dot', () => {
+    renderTree(
+      new Map([
+        [
+          HELM.toLowerCase(),
+          [
+            row(1, 'api-refactor', 'idle', {
+              nested: [
+                row(2, 'reviewer', 'busy'),
+                row(3, 'tests', 'running', { command: true }),
+                row(4, 'lint', 'ended', { command: true }),
+                row(5, 'build', 'failed', { command: true })
+              ]
+            })
+          ]
+        ]
+      ])
+    )
+    const glyph = (id: number): HTMLElement | null =>
+      rowOf(id).querySelector<HTMLElement>('[data-session-command]')
+    expect(glyph(3)?.querySelector('svg')).not.toBeNull()
+    expect(glyph(3)?.getAttribute('data-session-command')).toBe('running')
+    expect(rowOf(3).querySelector('[data-session-dot]')).toBeNull()
+    // A session that is not a command keeps its dot and has no glyph.
+    expect(glyph(2)).toBeNull()
+    expect(rowOf(2).querySelector('[data-session-dot]')).not.toBeNull()
+    // The glyph takes the tone a dot would: success while it runs, subtle once ended, danger when it failed.
+    expect(glyph(3)?.className).toContain('text-success')
+    expect(glyph(4)?.className).toContain('text-fg-subtle')
+    expect(glyph(5)?.className).toContain('text-danger')
+    // It is still a child of its parent: a step in, with the guide.
+    expect(indentOf(3)).toBe(indentOf(1) + 16)
+    expect(guides(3)).toEqual(['more', 'elbow'])
+  })
+
+  it('draws a hollow ring for a session whose agent is back at the shell, and on a folded parent for a child that is', async () => {
+    renderTree(
+      new Map([
+        [
+          HELM.toLowerCase(),
+          [row(1, 'api-refactor', 'shell', { nested: [row(2, 'worker', 'shell')] })]
+        ]
+      ])
+    )
+    // A ring is an outline with no fill.
+    const ring = dotOf(1)
+    expect(ring.getAttribute('data-session-dot')).toBe('shell')
+    expect(ring.className).toContain('border-success')
+    expect(ring.className).not.toContain('bg-success')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Fold the sessions started by api-refactor' }))
+    const summary = rowOf(1).querySelector('[data-family-summary]')
+    expect(summary?.getAttribute('data-family-summary')).toBe('shell')
+    expect(summary?.className).toContain('border-success')
+  })
+})

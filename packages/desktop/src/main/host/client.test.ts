@@ -106,7 +106,7 @@ describe('the host client', { timeout: PATIENCE }, () => {
     })
     expect(await host.next()).toEqual({
       type: 'hello',
-      protocol: { major: 2, minor: 0 },
+      protocol: { major: PROTOCOL_VERSION.major, minor: PROTOCOL_VERSION.minor },
       client: { name: 'Helm 2.4.0', kind: 'desktop' },
       capabilities: ['terminal', 'files', 'browser', 'pluginPages']
     })

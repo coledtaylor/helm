@@ -1050,10 +1050,18 @@ overrides the gate; keep it.
   row, and the last child's rule stopping at its elbow. A child that has
   children of its own wears a caret where its elbow would be, and the rule
   breaks around it. The guide is the whole of the mark - a child's row is an
-  ordinary session row, with its own dot and word.
+  ordinary session row, with its own dot and word, except that a command a
+  session ran as a child wears a 12px terminal glyph where the dot would be, in
+  `success` while it runs, `fg-subtle` once it has ended and `danger` if it
+  failed. A session row's dot and name are 7px apart.
 
   **A parent folds its children the way a project folds its sessions.** The
-  caret sits in the column before its dot, a fold is absent-means-open, and
+  caret is a `fg-subtle` triangle in 9px type, pointing down while the children
+  show and right while they are folded away, in a 10px column 14px before the
+  dot; the column pushes the parent's dot 3px further in than the dot of a
+  session with nothing to fold. A parent counts the children waiting for you
+  after its name, in a 16px outline pill in `warn`, and says nothing when none
+  is. A fold is absent-means-open, and
   while the children are folded away the most pressing child's state shows as a
   6px dot beside the parent's name, in the same order a folded project reads
   (waiting, error, working, failed, then the rest) - so a folded family still

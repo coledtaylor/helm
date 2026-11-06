@@ -43,6 +43,7 @@ import { Checkbox } from './Checkbox'
 import {
   Action,
   Actions,
+  CheckRow,
   Divider,
   Fact,
   Group,
@@ -253,6 +254,9 @@ export interface SettingsPaneProps {
   onSessionAgentsChange: (next: boolean) => void
   agentLimits: AgentLimitSettings
   onAgentLimitsChange: (patch: Partial<AgentLimitSettings>) => void
+  /** Whether a parent's tab shows its running children beside its terminal. Kept on this device. */
+  showChildrenInParentTab: boolean
+  onShowChildrenInParentTabChange: (next: boolean) => void
   /** Reopen what a crash took without asking. Also ticked from the offer itself. */
   restoreWithoutAsking: boolean
   onRestoreWithoutAskingChange: (next: boolean) => void
@@ -398,6 +402,8 @@ export function SettingsPane({
   onSessionAgentsChange,
   agentLimits,
   onAgentLimitsChange,
+  showChildrenInParentTab,
+  onShowChildrenInParentTabChange,
   restoreWithoutAsking,
   onRestoreWithoutAskingChange,
   quitSessions,
@@ -420,10 +426,10 @@ export function SettingsPane({
   const offerable = offerableUsageModes(hasCostEstimate)
 
   const meta = SETTINGS_SECTIONS.find((entry) => entry.id === section) ?? SETTINGS_SECTIONS[0]!
-  // General and Workspace hold two groups each and keep their headings; every
-  // other section is one group, whose title is the page's and whose hint is
-  // the line under it.
-  const sole = section !== 'general' && section !== 'workspace'
+  // General, Workspace and Agents hold two groups each and keep their headings;
+  // every other section is one group, whose title is the page's and whose hint
+  // is the line under it.
+  const sole = section !== 'general' && section !== 'workspace' && section !== 'agents'
 
   return (
     <SettingsPage
@@ -714,12 +720,15 @@ export function SettingsPane({
           )}
 
           {section === 'agents' && (
-            <AgentsGroup
-              enabled={sessionAgents}
-              onEnabledChange={onSessionAgentsChange}
-              limits={agentLimits}
-              onLimitsChange={onAgentLimitsChange}
-            />
+            <>
+              <AgentsGroup
+                enabled={sessionAgents}
+                onEnabledChange={onSessionAgentsChange}
+                inParentTab={showChildrenInParentTab}
+                onInParentTabChange={onShowChildrenInParentTabChange}
+              />
+              <AgentLimitsGroup limits={agentLimits} onLimitsChange={onAgentLimitsChange} />
+            </>
           )}
 
           {section === 'hosts' && (
@@ -1694,35 +1703,30 @@ function SessionsGroup({
 }
 
 /**
- * Whether a session can start sessions of its own, and how far that may go.
+ * Whether a session can start sessions of its own, and whether a parent's tab
+ * shows them.
  *
  * A group of its own beside Sessions: that one is about what a session may
  * learn of the others, this one about what it may start, which is a different
  * decision with different consequences (a session that starts others spends
- * the user's agent time without being asked). The host enforces every number,
- * whether or not a window is open, and sessions the user starts count toward
- * none of them. A limit is a whole number inside the range the host accepts, so
- * a value outside it is brought to the nearest end rather than refused by the
- * host after the fact.
+ * the user's agent time without being asked). Both choices are drawn as the
+ * design draws them, a tick with its sentence beside it; the first is told to
+ * the host, the second is this device's alone.
  */
 function AgentsGroup({
   enabled,
   onEnabledChange,
-  limits,
-  onLimitsChange
+  inParentTab,
+  onInParentTabChange
 }: {
   enabled: boolean
   onEnabledChange: (next: boolean) => void
-  limits: AgentLimitSettings
-  onLimitsChange: (patch: Partial<AgentLimitSettings>) => void
+  inParentTab: boolean
+  onInParentTabChange: (next: boolean) => void
 }): JSX.Element {
   return (
-    <Group
-      name="agents"
-      title="Agents"
-      hint="Sessions that start sessions of their own. The host runs and limits them whether or not a window is open."
-    >
-      <Row
+    <Group name="agents" title="Agents">
+      <CheckRow
         label="Sessions can start agents"
         hint="Every session you start gets the floti-agents tools and floti agent. A profile can turn it off for its own sessions."
       >
@@ -1733,10 +1737,47 @@ function AgentsGroup({
             label="Sessions can start agents"
           />
         </span>
-      </Row>
+      </CheckRow>
 
-      <Divider />
+      <CheckRow
+        label="Show children in their parent's tab"
+        hint="On this device. A parent's tab shows its running children beside its terminal while its pane has room, and never takes the focus from it. Off, the parent shows alone, with its children as chips in its crumb and rows in the tree."
+      >
+        <span data-settings-children-in-parent-tab={String(inParentTab)}>
+          <Checkbox
+            checked={inParentTab}
+            onChange={() => onInParentTabChange(!inParentTab)}
+            label="Show children in their parent's tab"
+          />
+        </span>
+      </CheckRow>
+    </Group>
+  )
+}
 
+/**
+ * The four limits on a family of agents.
+ *
+ * Its own group under the two choices, because the design puts every number in
+ * Settings, Agents, and the choices above are drawn alone as a pair. The host
+ * enforces every number, whether or not a window is open, and sessions the user
+ * starts count toward none of them. A limit is a whole number inside the range
+ * the host accepts, so a value outside it is brought to the nearest end rather
+ * than refused by the host after the fact.
+ */
+function AgentLimitsGroup({
+  limits,
+  onLimitsChange
+}: {
+  limits: AgentLimitSettings
+  onLimitsChange: (patch: Partial<AgentLimitSettings>) => void
+}): JSX.Element {
+  return (
+    <Group
+      name="agent-limits"
+      title="Limits"
+      hint="The host enforces each of these whether or not a window is open. Sessions you start yourself count toward none of them."
+    >
       <Row
         label="Children per parent"
         hint="Sessions one session may have running at once that it started. A start past it is refused."

@@ -269,6 +269,17 @@ export interface SessionRowProps {
    * children needs you.
    */
   summary?: SessionState | null | undefined
+  /**
+   * A command a session ran as a child (a test run, a build) rather than an
+   * agent: its mark is a terminal glyph where a session has its state dot, since
+   * a command has no conversation to be busy or waiting in.
+   */
+  command?: boolean | undefined
+  /**
+   * How many of the sessions it started are waiting for you, counted after its
+   * name so a parent says who needs you before anyone opens it.
+   */
+  needs?: number | undefined
 }
 
 /**
@@ -296,10 +307,26 @@ const ELBOW_PX = 7
 /** The room a fold caret takes out of a rule that runs through its row. */
 const CARET_GAP_PX = 7
 /**
- * A fold caret's box starts this far left of the dot, which centres its
- * 10px arrow on the rule above and below it and leaves the design's gap before the dot.
+ * A fold caret's 16px target starts this far left of the dot's column, which
+ * centres the design's 10px triangle 14px to 4px before it.
  */
-const CARET_LEFT_PX = 19
+const CARET_LEFT_PX = 17
+/**
+ * What the caret's column costs the dot beside it. The design lays the caret
+ * out in the row, 14px back from the padding with a 10px box and the row's 7px
+ * gap after it, so a parent's dot sits this far in from where the dot of a
+ * session with nothing to fold keeps its own.
+ */
+const CARET_DOT_SHIFT_PX = 3
+/** A command's glyph, in the 12px box a dot's column is given beside it. */
+const COMMAND_GLYPH_PX = 12
+
+/** A command's glyph takes the tone a dot would: it runs, it has ended, or it failed. */
+function commandTone(state: SessionState | null): string {
+  if (state === 'failed') return 'text-danger'
+  if (state === null || state === 'ended') return 'text-fg-subtle'
+  return 'text-success'
+}
 
 /**
  * A live session, under the project it is running in.
@@ -316,9 +343,11 @@ const CARET_LEFT_PX = 19
  *
  * A session another session started is drawn under that one, a step in, whatever
  * folder it runs in, joined to it by a hairline guide. A session that started
- * others has a caret to fold them away, as a project has for its sessions; the
- * most pressing state among them shows beside its name while they are folded.
- * A child whose parent has ended stands on its own and says whose it was.
+ * others has a triangle caret before its dot to fold them away, as a project
+ * has for its sessions; the most pressing state among them shows beside its
+ * name while they are folded, and a count says how many are waiting for you. A
+ * command a session ran as a child wears a terminal glyph where a session has
+ * its dot. A child whose parent has ended stands on its own and says whose it was.
  */
 export function SessionRow({
   id,
@@ -334,12 +363,16 @@ export function SessionRow({
   parentName,
   expanded = null,
   onToggle,
-  summary
+  summary,
+  command = false,
+  needs = 0
 }: SessionRowProps): JSX.Element {
   const waiting = state === 'waiting'
   const folds = expanded !== null && onToggle !== undefined
   const guideLeft = indent - GUIDE_OFFSET_PX
   const rule = 'absolute border-l border-border-strong'
+  // A row with a caret has the caret's column before its mark.
+  const lead = folds ? { marginLeft: CARET_DOT_SHIFT_PX } : undefined
   return (
     // The hover text sits on a wrapper because this button is inside the
     // tree's `nav`: a `title` on it would make it one of the rows the drivers'
@@ -351,11 +384,11 @@ export function SessionRow({
         type="button"
         data-session-row={id}
         aria-current={shown === 'focused' ? 'true' : undefined}
-        aria-label={`${label}, ${state === null ? 'state unknown' : SESSION_STATE_LABEL[state]}${outside ? ', outside Helm' : ''}${parentName === undefined ? '' : `, started by ${parentName}`}`}
+        aria-label={`${label}, ${state === null ? 'state unknown' : SESSION_STATE_LABEL[state]}${outside ? ', outside Helm' : ''}${parentName === undefined ? '' : `, started by ${parentName}`}${needs === 0 ? '' : `, ${String(needs)} of its sessions waiting for you`}`}
         onClick={() => onOpen(id)}
         style={{ paddingLeft: indent }}
         className={cn(
-          'group/row relative flex h-line w-full items-center gap-2 rounded-raised pr-2 text-left transition-colors',
+          'group/row relative flex h-line w-full items-center gap-[7px] rounded-raised pr-2 text-left transition-colors',
           shown === 'focused'
             ? ROW_SELECTED
             : shown === 'visible'
@@ -415,18 +448,34 @@ export function SessionRow({
             )}
           </>
         )}
+        {command ? (
+          <span
+            aria-hidden
+            data-session-command={state ?? 'unknown'}
+            style={lead}
+            className={cn(
+              'grid shrink-0 place-items-center',
+              commandTone(state),
+              outside && 'opacity-70'
+            )}
+          >
+            <TerminalIcon width={COMMAND_GLYPH_PX} height={COMMAND_GLYPH_PX} />
+          </span>
+        ) : (
+          <span
+            aria-hidden
+            data-session-dot={state ?? 'unknown'}
+            style={lead}
+            className={cn(
+              'size-1.5 shrink-0 rounded-full',
+              state === null ? 'border-[1.5px] border-fg-subtle' : SESSION_STATE_DOT[state],
+              outside && 'opacity-70'
+            )}
+          />
+        )}
         <span
-          aria-hidden
-          data-session-dot={state ?? 'unknown'}
           className={cn(
-            'size-1.5 shrink-0 rounded-full',
-            state === null ? 'border-[1.5px] border-fg-subtle' : SESSION_STATE_DOT[state],
-            outside && 'opacity-70'
-          )}
-        />
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-[12.5px] leading-[15px]',
+            'min-w-0 truncate text-[12.5px] leading-[15px]',
             shown === 'focused' || waiting
               ? 'text-fg'
               : 'text-fg-muted group-hover/row:text-fg'
@@ -446,10 +495,19 @@ export function SessionRow({
             className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[summary])}
           />
         )}
+        {needs > 0 && (
+          <span
+            aria-hidden
+            data-session-needs={needs}
+            className="grid h-4 min-w-4 shrink-0 place-items-center rounded-full border border-warn/45 px-1 text-[10px] leading-[14px] font-medium text-warn tabular-nums"
+          >
+            {needs}
+          </span>
+        )}
         {note !== '' && (
           <span
             className={cn(
-              'shrink-0 text-[11px] leading-[15px] tabular-nums',
+              'ml-auto shrink-0 text-[11px] leading-[15px] tabular-nums',
               waiting
                 ? 'text-warn'
                 : state === 'failed'
@@ -472,13 +530,10 @@ export function SessionRow({
           aria-expanded={expanded}
           aria-label={`${expanded ? 'Fold' : 'Unfold'} the sessions started by ${label}`}
           style={{ left: indent - CARET_LEFT_PX }}
-          className="absolute top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-xs text-fg-subtle transition-colors hover:text-fg"
+          className="absolute top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-xs text-[9px] leading-none text-fg-subtle transition-colors hover:text-fg"
         >
-          <CaretIcon
-            width={10}
-            height={10}
-            className={cn('transition-transform', expanded && 'rotate-90')}
-          />
+          {/* The design's glyphs: a triangle down while the children show, right while they are folded away. */}
+          <span aria-hidden>{expanded ? '▾' : '▸'}</span>
         </button>
       )}
     </div>

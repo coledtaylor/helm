@@ -93,6 +93,8 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
       agentStartsPerParent: s.agentStartsPerParent
     },
     onAgentLimitsChange: vi.fn(),
+    showChildrenInParentTab: s.showChildrenInParentTab,
+    onShowChildrenInParentTabChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
     quitSessions: 'end',
@@ -125,6 +127,7 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
 function Kept({ props }: { props: SettingsPaneProps }): JSX.Element {
   const [sessionAgents, setSessionAgents] = useState(props.sessionAgents)
   const [agentLimits, setAgentLimits] = useState(props.agentLimits)
+  const [inParentTab, setInParentTab] = useState(props.showChildrenInParentTab)
   return (
     <SettingsPane
       {...props}
@@ -132,6 +135,11 @@ function Kept({ props }: { props: SettingsPaneProps }): JSX.Element {
       onSessionAgentsChange={(next) => {
         setSessionAgents(next)
         props.onSessionAgentsChange(next)
+      }}
+      showChildrenInParentTab={inParentTab}
+      onShowChildrenInParentTabChange={(next) => {
+        setInParentTab(next)
+        props.onShowChildrenInParentTabChange(next)
       }}
       agentLimits={agentLimits}
       onAgentLimitsChange={(patch) => {
@@ -149,10 +157,58 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}): SettingsPanePro
 }
 
 const group = (): HTMLElement => screen.getByRole('region', { name: 'Agents' })
+const limits = (): HTMLElement => screen.getByRole('region', { name: 'Limits' })
 const limit = (name: string): HTMLInputElement =>
-  within(group()).getByRole('textbox', { name }) as HTMLInputElement
+  within(limits()).getByRole('textbox', { name }) as HTMLInputElement
 
 describe('SettingsPane - Agents', () => {
+  it('shows the two choices the design draws, each a tick with its sentence beside it, and nothing else in the group', () => {
+    renderPane()
+
+    const rows = [...group().querySelectorAll('label')]
+    expect(rows).toHaveLength(2)
+    expect(rows.map((row) => row.querySelector('input[type="checkbox"]')?.getAttribute('aria-label'))).toEqual([
+      'Sessions can start agents',
+      "Show children in their parent's tab"
+    ])
+    // The tick leads the row and the text follows it, so it sits to the left of its words.
+    for (const row of rows) {
+      const tick = row.querySelector('input[type="checkbox"]') as HTMLElement
+      const words = row.querySelector('span.block') as HTMLElement
+      expect(tick.compareDocumentPosition(words) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(row.firstElementChild?.contains(tick)).toBe(true)
+    }
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'Sessions can start agentsEvery session you start gets the floti-agents tools and floti agent. A profile can turn it off for its own sessions.',
+      "Show children in their parent's tabOn this device. A parent's tab shows its running children beside its terminal while its pane has room, and never takes the focus from it. Off, the parent shows alone, with its children as chips in its crumb and rows in the tree."
+    ])
+    // No limit field and no hint of the group's own in it.
+    expect(within(group()).queryAllByRole('textbox')).toHaveLength(0)
+    expect(group().querySelector('header p')).toBeNull()
+  })
+
+  it('keeps the choice to show children in their parent’s tab, on by default and kept for this device', async () => {
+    const props = renderPane()
+    const tick = within(group()).getByRole('checkbox', { name: "Show children in their parent's tab" }) as HTMLInputElement
+    expect(tick.checked).toBe(true)
+    await userEvent.click(tick)
+    expect(props.onShowChildrenInParentTabChange).toHaveBeenCalledWith(false)
+    expect(tick.checked).toBe(false)
+    cleanup()
+
+    const off = renderPane({ showChildrenInParentTab: false })
+    const offTick = within(group()).getByRole('checkbox', { name: "Show children in their parent's tab" }) as HTMLInputElement
+    expect(offTick.checked).toBe(false)
+    await userEvent.click(offTick)
+    expect(off.onShowChildrenInParentTabChange).toHaveBeenCalledWith(true)
+  })
+
+  it('a tick is also switched by pressing its words', async () => {
+    const props = renderPane()
+    await userEvent.click(within(group()).getByText('Sessions can start agents', { selector: 'span.block' }))
+    expect(props.onSessionAgentsChange).toHaveBeenCalledWith(false)
+  })
+
   it('S16: shows Sessions can start agents and each limit with its default', () => {
     renderPane()
 

@@ -107,6 +107,8 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
       agentStartsPerParent: 16
     },
     onAgentLimitsChange: vi.fn(),
+    showChildrenInParentTab: true,
+    onShowChildrenInParentTabChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
     quitSessions: 'end',
