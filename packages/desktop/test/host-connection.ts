@@ -54,6 +54,8 @@ export function fakeLink(
     stopHost: () => Promise.resolve(),
     endedOnPurpose: () => false,
     restartsHost: () => true,
+    restartHost: () => Promise.resolve(),
+    restarting: () => false,
     async connect() {
       await link.connection()
     }
@@ -85,6 +87,8 @@ export function reconnectingLink(first: FakeConnection): HostLink & { reconnect(
     stopHost: () => Promise.resolve(),
     endedOnPurpose: () => false,
     restartsHost: () => true,
+    restartHost: () => Promise.resolve(),
+    restarting: () => false,
     async reconnect(next) {
       current = next
       attempt = connect()

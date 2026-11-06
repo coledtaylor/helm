@@ -131,6 +131,82 @@ describe("StatusBar: the hosts sessions run in", () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it("S9: says this PC’s host runs an older floti, naming both versions, and a press offers Restart host to update", () => {
+    const onOpen = vi.fn();
+    const onRestart = vi.fn();
+    renderBar({
+      hosts: [
+        {
+          id: "local",
+          name: "This PC",
+          quitEnds: true,
+          versions: { older: "host", host: "2.4.0", helm: "2.4.1", beforeRestart: false },
+          onRestart,
+          onOpen,
+        },
+      ],
+    });
+    const item = screen.getByRole("button", {
+      name: "This PC · older host · Restart host to update",
+    });
+    expect(item.getAttribute("data-status-host")).toBe("older");
+    expect(item.getAttribute("title")).toContain("floti 2.4.0, older than the floti 2.4.1");
+    item.click();
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("S17: a host on protocol 1.x names both versions and a press offers Restart host to update, which keeps every session running", () => {
+    const onOpen = vi.fn();
+    const onRestart = vi.fn();
+    renderBar({
+      hosts: [
+        {
+          id: "local",
+          name: "This PC",
+          quitEnds: true,
+          versions: { older: "host", host: "protocol 1.4", helm: "protocol 2.0", beforeRestart: true },
+          onRestart,
+          onOpen,
+        },
+      ],
+    });
+    const item = screen.getByRole("button", {
+      name: "This PC · older host · Restart host to update",
+    });
+    const title = item.getAttribute("title") ?? "";
+    expect(title).toContain("Floti protocol 1.4, older than the Floti protocol 2.0");
+    expect(title).toContain("keeps every session and terminal running");
+    expect(title).not.toMatch(/History|notification-area|Stop host/);
+    item.click();
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("S8: a Helm behind its host says to update Helm", () => {
+    renderBar({
+      hosts: [
+        {
+          id: "local",
+          name: "This PC",
+          quitEnds: true,
+          versions: { older: "helm", host: "protocol 2.2", helm: "protocol 2.0" },
+          onOpen: vi.fn(),
+        },
+      ],
+    });
+    const item = screen.getByRole("button", { name: "This PC · update Helm" });
+    expect(item.getAttribute("title")).toContain("Update Helm on this PC.");
+  });
+
+  it("S10: with the same floti there is no offer", () => {
+    renderBar({
+      hosts: [{ id: "local", name: "This PC", quitEnds: true, versions: null, onRestart: vi.fn(), onOpen: vi.fn() }],
+    });
+    expect(screen.getByRole("button", { name: "This PC · quit ends sessions" })).toBeTruthy();
+    expect(screen.queryByText(/Restart host to update/)).toBeNull();
+  });
+
   it("says quitting keeps them when the setting does", () => {
     renderBar({
       hosts: [

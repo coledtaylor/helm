@@ -50,6 +50,7 @@ import { maybeCheckForUpdate } from './update'
 import { quitConfirm, sessionConfirm } from './host/confirm'
 import type { Confirm, SessionHost } from './host/session-host'
 import {
+  askLocalHostRestart,
   createDesktopHost,
   createDesktopRemoteAdder,
   createDesktopRemoteHosts,
@@ -622,7 +623,9 @@ function startApp(options: AppOptions = {}): void {
         const rows = await (await desktopHost.link.connection()).request('session:list', null)
         return rows.filter((row) => row.status === 'running').length
       },
-      stop: () => desktopHost.link.stopHost()
+      stop: () => desktopHost.link.stopHost(),
+      restartAsk: () => askLocalHostRestart((line) => console.log(line)),
+      restart: () => desktopHost.link.restartHost()
     },
     window: () => win,
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),

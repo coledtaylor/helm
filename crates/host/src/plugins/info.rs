@@ -45,6 +45,19 @@ pub struct Live<'a> {
 
 /// A page's address on the plugin's origin under `scheme`, each segment of
 /// its entry encoded as `encodeURIComponent` encodes it.
+/// Whether the host's own engine runs `plugin`'s background: a version 2
+/// module ([`super::manifest::Manifest::host_background`]), the only kind
+/// listed on [`PLUGIN_SCHEME`]. A version 1 background page is listed on
+/// `helm-plugin` and runs in a client.
+pub fn host_runs_background(plugin: &PluginInfo) -> bool {
+    plugin.background.as_ref().is_some_and(|background| {
+        background
+            .url
+            .strip_prefix(PLUGIN_SCHEME)
+            .is_some_and(|rest| rest.starts_with("://"))
+    })
+}
+
 pub fn page_url(scheme: &str, id: &str, entry: &str) -> String {
     let path: Vec<String> = entry.split('/').map(encode_component).collect();
     format!("{scheme}://{id}/{}", path.join("/"))

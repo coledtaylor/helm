@@ -8,6 +8,7 @@ import {
   type HostBridge
 } from './host/hostBridges'
 import { createHostState, type HostStateStore } from './host/hostState'
+import { createSeenHostVersion, type SeenHostVersionStore } from './host/hostVersions'
 import { WINDOW_CAPABILITIES, createPageLink } from './host/link'
 import { createRemoteHosts, type RemoteHostsStore } from './host/remoteHosts'
 import type { HostAdapter } from './host/router'
@@ -72,6 +73,9 @@ const local = hostBridges.hostBridge(LOCAL_HOST_KEY)
 /** Whether the window has its host: lost from a crash until it is connected again (`host/hostState.ts`). */
 export const hostState: HostStateStore = createHostState(link)
 
+/** The floti version this PC's host last named, or the versions it refused this Helm with (`host/hostVersions.ts`). */
+export const seenHostVersion: SeenHostVersionStore = createSeenHostVersion(link)
+
 /**
  * Each host on another computer this device added: where main's link to it
  * stands, and its running sessions over the window's connection to it, the
@@ -105,6 +109,9 @@ export const devices: Devices = createDevices({ log })
 
 /** The window's own connection to this PC's host, for Settings > Devices. */
 export const localHostConnection = (): ReturnType<typeof link.connection> => link.connection()
+
+/** Drops the window's wait to connect to this PC's host again, and connects now (`PageLink.reconnectNow`). */
+export const reconnectLocalHost = (): void => link.reconnectNow()
 
 /**
  * Which of a host's sessions have a tab in this window: the layout is this

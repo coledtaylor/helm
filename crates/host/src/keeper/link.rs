@@ -23,7 +23,9 @@ use serde_bytes::ByteBuf;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Notify, mpsc};
 
-use super::wire::{FromKeeper, Label, Spawned, ToKeeper, read_frame, write_frame};
+use super::wire::{
+    FromKeeper, Label, Spawned, ToKeeper, UNNAMED_LINK_VERSION, read_frame, write_frame,
+};
 use crate::platform::socket::{Endpoint, LocalSocket};
 use crate::session::{SessionExit, TermSize};
 use crate::{Error, Result};
@@ -68,10 +70,12 @@ pub struct Held {
 
 /// What the keeper said as the host connected.
 pub(crate) enum Greeting {
-    /// A keeper of this version, and what it holds.
+    /// A keeper that speaks this host's link version, whatever floti version
+    /// built it, and what it holds.
     Ours(Vec<Held>),
-    /// A keeper of another version, which this host does not use.
-    Other { version: String },
+    /// A keeper of a link version this host does not speak: the floti
+    /// version that built it and its link version.
+    Other { version: String, link: u32 },
 }
 
 /// Whether the host still wants the connection.
@@ -104,6 +108,9 @@ pub struct KeeperLink {
     starts: Mutex<HashMap<u64, std_mpsc::Sender<std::result::Result<Spawned, String>>>>,
     /// Labels sent and not yet answered, by request.
     labels: Mutex<HashMap<u64, std_mpsc::Sender<()>>>,
+    /// The link version the keeper speaks: the one its greeting named, or
+    /// [`UNNAMED_LINK_VERSION`] for a greeting that named none.
+    link_version: u32,
     next_request: AtomicU64,
     state: Mutex<LinkState>,
     /// Signalled when the connection ends.
@@ -115,17 +122,17 @@ pub struct KeeperLink {
 
 impl KeeperLink {
     /// Connects to the keeper at `endpoint`, on a thread of its own, and
-    /// reads its greeting. A keeper of `version` says what it holds, each of
+    /// reads its greeting. A keeper of link version `link` says what it
+    /// holds, each of
     /// which waits for [`KeeperLink::route`], [`KeeperLink::discard`] or
     /// [`KeeperLink::forget`].
     pub(crate) fn connect(
         socket: impl LocalSocket + Send + 'static,
         endpoint: &Endpoint,
-        version: &str,
+        link: u32,
     ) -> Result<(Arc<Self>, Greeting)> {
         let (greeted, greeting) = std_mpsc::channel();
         let endpoint = endpoint.clone();
-        let version = version.to_owned();
         std::thread::Builder::new()
             .name("session keeper link".to_owned())
             .spawn(move || {
@@ -147,13 +154,19 @@ impl KeeperLink {
                             return;
                         }
                     };
-                    serve(stream, &version, greeted).await;
+                    serve(stream, link, greeted).await;
                 });
             })
             .map_err(|err| Error::io("start the keeper link", err))?;
         greeting
             .recv_timeout(ANSWER_WAIT)
             .map_err(|_| Error::Refused("The session keeper did not answer.".to_owned()))?
+    }
+
+    /// The link version the keeper speaks: the one its greeting named, or 1
+    /// for a keeper whose greeting named none ([`UNNAMED_LINK_VERSION`]).
+    pub fn link_version(&self) -> u32 {
+        self.link_version
     }
 
     /// The keeper's process id.
@@ -428,15 +441,20 @@ impl KeeperLink {
 /// connection until either side ends it.
 async fn serve<S>(
     stream: S,
-    version: &str,
+    wanted: u32,
     greeted: std_mpsc::Sender<Result<(Arc<KeeperLink>, Greeting)>>,
 ) where
     S: AsyncRead + AsyncWrite + Send,
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
     let refused = |why: String| Error::Refused(format!("The session keeper {why}."));
-    let (pid, theirs) = match read_frame::<_, FromKeeper>(&mut reader).await {
-        Ok(Some(FromKeeper::Hello { version, pid })) => (pid, version),
+    let (pid, theirs, their_link) = match read_frame::<_, FromKeeper>(&mut reader).await {
+        // A keeper whose greeting names no link version was built before
+        // the greeting carried one (2.4.1-preview.7's), and speaks link
+        // version 1: a host on that link version takes it back.
+        Ok(Some(FromKeeper::Hello { version, pid, link })) => {
+            (pid, version, link.unwrap_or(UNNAMED_LINK_VERSION))
+        }
         Ok(_) => {
             let _ = greeted.send(Err(refused("did not say which it is".to_owned())));
             return;
@@ -453,13 +471,14 @@ async fn serve<S>(
         routes: Mutex::new(HashMap::new()),
         starts: Mutex::new(HashMap::new()),
         labels: Mutex::new(HashMap::new()),
+        link_version: their_link,
         next_request: AtomicU64::new(1),
         state: Mutex::new(LinkState::Open),
         ended: Condvar::new(),
         bye: Mutex::new(false),
         stop: Notify::new(),
     });
-    let greeting = if theirs == version {
+    let greeting = if their_link == wanted {
         let mut held = Vec::new();
         loop {
             match read_frame::<_, FromKeeper>(&mut reader).await {
@@ -498,7 +517,10 @@ async fn serve<S>(
         }
         Greeting::Ours(held)
     } else {
-        Greeting::Other { version: theirs }
+        Greeting::Other {
+            version: theirs,
+            link: their_link,
+        }
     };
     if greeted.send(Ok((Arc::clone(&link), greeting))).is_err() {
         return;

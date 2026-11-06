@@ -20,7 +20,7 @@ use crate::channels::boundary::{CLIENT_ONLY, HOST_INTERNAL, Outside};
 use crate::flow::DEFAULT_INITIAL_CREDIT;
 use crate::frame::MAX_FRAME_LEN;
 use crate::message::Message;
-use crate::version::PROTOCOL_VERSION;
+use crate::version::{KEEPER_LINK_VERSION, PROTOCOL_VERSION};
 
 mod frames;
 
@@ -123,6 +123,10 @@ pub fn typescript(catalogue: &Catalogue) -> String {
         out,
         "/** The protocol version these declarations describe. */\nexport const PROTOCOL_VERSION = {{ major: {}, minor: {} }} as const;\n",
         PROTOCOL_VERSION.major, PROTOCOL_VERSION.minor
+    );
+    let _ = writeln!(
+        out,
+        "/** The link version of the session keeper a host of this build takes back. */\nexport const KEEPER_LINK_VERSION = {KEEPER_LINK_VERSION};\n"
     );
     let _ = writeln!(
         out,
@@ -241,6 +245,43 @@ fn outside_typescript() -> String {
 /// A JSON Schema with every message and payload type under `$defs`, and the
 /// channel table under `x-channels`.
 pub fn json_schema(catalogue: &Catalogue) -> String {
+    let SchemaParts {
+        message,
+        channels,
+        defs,
+    } = schema_parts(catalogue);
+    let document = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Floti protocol",
+        "description": format!("{HEADER} Each frame is a 4-byte big-endian length and one CBOR value that is a Message."),
+        "x-protocolVersion": PROTOCOL_VERSION.to_string(),
+        "x-maxFrameLen": MAX_FRAME_LEN,
+        "x-defaultInitialCredit": DEFAULT_INITIAL_CREDIT,
+        "$ref": message,
+        "x-channels": channels,
+        "$defs": defs,
+    });
+    pretty(document)
+}
+
+/// `value` as pretty JSON with its keys sorted and a final newline.
+pub(crate) fn pretty(value: Value) -> String {
+    let mut text =
+        serde_json::to_string_pretty(&sorted_keys(value)).expect("a JSON value always serialises");
+    text.push('\n');
+    text
+}
+
+/// What the schema is made of: the reference to `Message`, each channel's
+/// entry (its name, kind, capability and the types it carries) and every
+/// type's schema by name.
+pub(crate) struct SchemaParts {
+    pub message: Value,
+    pub channels: Vec<Value>,
+    pub defs: BTreeMap<String, Value>,
+}
+
+pub(crate) fn schema_parts(catalogue: &Catalogue) -> SchemaParts {
     let mut generator = SchemaGenerator::default();
     let message = generator.subschema_for::<Message>();
     let mut channels = Vec::new();
@@ -277,22 +318,15 @@ pub fn json_schema(catalogue: &Catalogue) -> String {
         (info.schema)(&mut generator);
     }
     let defs: BTreeMap<String, Value> = generator.take_definitions(true).into_iter().collect();
-
-    let document = json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Floti protocol",
-        "description": format!("{HEADER} Each frame is a 4-byte big-endian length and one CBOR value that is a Message."),
-        "x-protocolVersion": PROTOCOL_VERSION.to_string(),
-        "x-maxFrameLen": MAX_FRAME_LEN,
-        "x-defaultInitialCredit": DEFAULT_INITIAL_CREDIT,
-        "$ref": message.to_value().get("$ref").cloned().unwrap_or(Value::Null),
-        "x-channels": channels,
-        "$defs": defs,
-    });
-    let mut text = serde_json::to_string_pretty(&sorted_keys(document))
-        .expect("a JSON value always serialises");
-    text.push('\n');
-    text
+    SchemaParts {
+        message: message
+            .to_value()
+            .get("$ref")
+            .cloned()
+            .unwrap_or(Value::Null),
+        channels,
+        defs,
+    }
 }
 
 /// The value with every object's keys in sorted order. serde_json keeps

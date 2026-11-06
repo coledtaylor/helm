@@ -1,7 +1,10 @@
 // Generated from the floti-protocol crate by `cargo run -p floti-protocol --bin generate`. Do not edit.
 
 /** The protocol version these declarations describe. */
-export const PROTOCOL_VERSION = { major: 1, minor: 0 } as const;
+export const PROTOCOL_VERSION = { major: 2, minor: 0 } as const;
+
+/** The link version of the session keeper a host of this build takes back. */
+export const KEEPER_LINK_VERSION = 1;
 
 /** The largest frame body, in bytes. */
 export const MAX_FRAME_LEN = 16777216;
@@ -1540,7 +1543,7 @@ backendPaths?: { [key in BackendId]?: string }, terminalShell?: string | null, t
 /**
  * Why the host is being stopped, which decides what its sessions become.
  */
-export type HostStopReason = "stop" | "update";
+export type HostStopReason = "stop" | "update" | "restart";
 
 export type HostStopRequest = { reason: HostStopReason, };
 
@@ -1773,7 +1776,7 @@ snapshotId: number | null, };
 
 export type McpScope = "local" | "user" | "project";
 
-export type Message = { "type": "hello" } & Hello | { "type": "welcome" } & Welcome | { "type": "refused" } & Refused | { "type": "request" } & Request | { "type": "response" } & Response | { "type": "error" } & ErrorReply | { "type": "subscribe" } & Subscribe | { "type": "unsubscribe" } & Unsubscribe | { "type": "subscriptionError" } & SubscriptionError | { "type": "snapshot" } & Snapshot | { "type": "event" } & Event | { "type": "streamOpen" } & StreamOpen | { "type": "streamData" } & StreamData | { "type": "streamCredit" } & StreamCredit | { "type": "streamClose" } & StreamClose;
+export type Message = { "type": "hello" } & Hello | { "type": "welcome" } & Welcome | { "type": "refused" } & Refused | { "type": "request" } & Request | { "type": "response" } & Response | { "type": "error" } & ErrorReply | { "type": "subscribe" } & Subscribe | { "type": "unsubscribe" } & Unsubscribe | { "type": "subscriptionError" } & SubscriptionError | { "type": "snapshot" } & Snapshot | { "type": "event" } & Event | { "type": "streamOpen" } & StreamOpen | { "type": "streamData" } & StreamData | { "type": "streamCredit" } & StreamCredit | { "type": "streamClose" } & StreamClose | { "type": "restartAsk" } & RestartAsk | { "type": "restart" } & Restart | { "type": "restartState" } & RestartState;
 
 /**
  * Milliseconds, as a number that may have a fraction: a file's modification
@@ -2507,6 +2510,47 @@ id: number, channel: string, payload: unknown, };
  * The answer to a request.
  */
 export type Response = { id: number, payload: unknown, };
+
+/**
+ * Sent in place of `hello`: the host lets go of its session keeper, leaving
+ * every session and plain terminal running in it, answers with
+ * [`RestartState`], closes the connection and exits, as a crash would leave
+ * things, so the next host takes the keeper back. A host without a keeper
+ * stops as a stop for an update does. Frozen across majors.
+ */
+export type Restart = { client: ClientInfo, };
+
+/**
+ * Sent in place of `hello`: asks the host what restarting it for an update
+ * would mean, answered with [`RestartState`], after which the host closes
+ * the connection. It takes no protocol version, so a client on any version
+ * the host would refuse can still ask. Frozen across majors.
+ */
+export type RestartAsk = { client: ClientInfo, };
+
+/**
+ * The host's answer to [`RestartAsk`] and [`Restart`]. Frozen across
+ * majors.
+ */
+export type RestartState = { 
+/**
+ * The host program's own version, such as "2.4.1".
+ */
+hostVersion: string, 
+/**
+ * The protocol version the host speaks.
+ */
+protocol: ProtocolVersion, 
+/**
+ * How many sessions it runs.
+ */
+sessions: number, 
+/**
+ * The link version of the session keeper it holds them in, or none when
+ * it runs no keeper. A host built with this link version takes that
+ * keeper back.
+ */
+keeperLink: number | null, };
 
 /**
  * A session the host's last run was hosting when it stopped without shutting
@@ -3769,7 +3813,7 @@ export const CLIENT_ONLY: readonly OutsideEntry[] = [
   { channels: "ownApp:info", reason: "the client's own build, data folder and runtime versions" },
   { channels: "ownData:*", reason: "where the copy of the client's own database into the host stands: only the client's main process reads that database, and it sends the rows over carry:*" },
   { channels: "profileDialog:*", reason: "the client's own dialogs for deleting, exporting and importing a profile, and the file it writes or reads on its machine; the profile itself is the host's" },
-  { channels: "windowSessions:*", reason: "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, the count before it stops the host, and the pane layout its last run saved; every client sees every session, and which have a tab is each device's own" },
+  { channels: "windowSessions:*", reason: "what the client's main process keeps of its sessions for its window: the OS notification for an exit nobody saw, the question before it quits with sessions running, the count before it stops the host, what restarting this PC's host for an update ends and the restart itself, which the client's main process sends in place of a hello through a bridge of its own, and the pane layout its last run saved; every client sees every session, and which have a tab is each device's own" },
   { channels: "pluginBackground:*", reason: "what the client's hidden plugin window saw of the background pages it runs under plugin API v1, which its main process alone hears and tells its window" },
   { channels: "pluginWindow:*", reason: "what a background page in the client's hidden plugin window asks that only the client's own window can draw (a plugin tab, a secret dialog), passed between its two windows by its main process" },
 ];

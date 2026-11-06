@@ -453,6 +453,18 @@ impl Hosted {
             .collect()
     }
 
+    /// How many sessions run now, and the link version of the keeper they
+    /// run in (none while the host holds no keeper): what a `restartAsk` is
+    /// answered with.
+    pub fn restart_counts(&self) -> (u32, Option<u32>) {
+        let sessions = u32::try_from(self.sessions.list().len()).unwrap_or(u32::MAX);
+        let link = self
+            .keeper
+            .as_ref()
+            .and_then(|keeper| keeper.running_link_version());
+        (sessions, link)
+    }
+
     /// What each running session's tab says, except `except`'s: the names a
     /// new name or a rename is made unique against.
     fn taken_labels(&self, except: Option<SessionId>) -> Vec<String> {
@@ -1111,11 +1123,25 @@ impl Hosted {
     /// plain stop records each row as exited first, so none is offered for
     /// restore; a stop for an update leaves the rows running, for the next
     /// start to find lost and offer once. Either way each whole process tree
-    /// ends. Only the first stop does anything.
+    /// ends. A restart for an update lets go of the keeper instead, leaving
+    /// every session and plain terminal running there with its row, for the
+    /// next host to take back; without a keeper it is a stop for an update.
+    /// Only the first stop does anything.
     pub fn stop(&self, reason: HostStopReason) {
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
+        let reason = match (reason, &self.keeper) {
+            (HostStopReason::Restart, Some(keeper)) => {
+                // From here no exit writes its row: what the keeper holds
+                // runs on, and the next host records what ends meanwhile.
+                self.ledger.freeze();
+                keeper.let_go();
+                return;
+            }
+            (HostStopReason::Restart, None) => HostStopReason::Update,
+            (reason, _) => reason,
+        };
         // From here no session starts and no exit writes its row.
         self.ledger.freeze();
         self.terminals.end_all();

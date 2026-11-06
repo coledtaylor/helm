@@ -1,5 +1,5 @@
 import { LOCAL_HOST_KEY } from '@helm/core/types'
-import type { EventPayload, HostLinkOpened } from '../../shared/ipc'
+import type { EventPayload, HostLinkOpened, RefusedVersions } from '../../shared/ipc'
 import type { PageBridge } from './launcher'
 
 /**
@@ -42,7 +42,7 @@ export interface PageLinksDeps {
   /** Settles once main's own link has connected; rejects with the sentence saying why it could not. */
   ready: () => Promise<unknown>
   /** Whether main's link ended the host on purpose, and whether Helm starts a new one if it is gone. */
-  howEnded: () => { planned: boolean; restarts: boolean }
+  howEnded: () => { planned: boolean; restarts: boolean; restarting?: boolean }
   /** Starts a bridge whose host bytes go to `data`. */
   openBridge: (data: (bytes: Uint8Array) => void) => PageBridge
   /**
@@ -111,7 +111,9 @@ export function createPageLinks(deps: PageLinksDeps): PageLinks {
         await deps.ready()
       } catch (error) {
         if (byPage.get(page.id) === connection) byPage.delete(page.id)
-        return { unreachable: (error as Error).message }
+        // A refused hello keeps the versions it named (`LocalHostRefusedError`).
+        const refused = (error as { refused?: RefusedVersions }).refused
+        return { unreachable: (error as Error).message, ...(refused !== undefined ? { refused } : {}) }
       }
       if (stopped) return { unreachable: 'Helm is quitting.' }
       // The page went, or opened again, while main's link connected.

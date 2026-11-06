@@ -47,6 +47,7 @@ use crate::plugins::runtime::{ChannelMessage, IsolateRuntime};
 use crate::plugins::services::{ProcessServices, ServicesConfig};
 use crate::plugins::{Registry, RegistryParts, WeakRegistry};
 use crate::server::events::Publication;
+use crate::server::plugin_tools::HostPluginTools;
 use crate::session::ClientId;
 pub(crate) use sessions::PluginSessions;
 use sessions::now_ms;
@@ -60,8 +61,10 @@ pub(crate) struct Plugins {
 impl Plugins {
     /// Builds the registry and starts every plugin that is on. `activity`
     /// is read again when a plugin starts a session; `sessions` is what
-    /// plugins are told of the host's sessions; `tools` is told which plugins
-    /// have their tools served here each time the list moves. Call it from inside a Tokio
+    /// plugins are told of the host's sessions; `tools` (the version 1
+    /// plugins' tools, answered by clients) and `hosted` (the version 2
+    /// plugins', answered by the host's engine through this registry) are
+    /// told the list each time it moves. Call it from inside a Tokio
     /// runtime: it starts the tasks that carry sessions and background
     /// posts to plugins.
     pub fn new(
@@ -69,9 +72,11 @@ impl Plugins {
         activity: ActivityHandle,
         sessions: Arc<PluginSessions>,
         tools: Arc<PluginRelay>,
+        hosted: Arc<HostPluginTools>,
     ) -> crate::Result<Self> {
         let events = Arc::clone(&context.events);
         let serving = Arc::clone(&tools);
+        let hosting = Arc::clone(&hosted);
         let delivering = Arc::clone(&context.events);
         context.events.serve_events::<PluginsDeliver>();
         let secrets = secrets::Secrets::new(context)?;
@@ -91,6 +96,7 @@ impl Plugins {
             services: Arc::clone(&services) as _,
             logs,
             publish: Box::new(move |list| {
+                hosting.installed(list);
                 serving.installed(list);
                 // A list nobody could be sent is not a reason to fail the
                 // change that made it: the next one carries it.
@@ -102,6 +108,7 @@ impl Plugins {
             }),
         });
         runtime.connect(&registry);
+        hosted.answer_with(registry.downgrade());
         let pages = Arc::new(pages::Pages::new(
             &context.events,
             &context.hosted,
@@ -117,6 +124,7 @@ impl Plugins {
         registry.watch_folders();
         registry.start()?;
         let list = registry.list();
+        hosted.installed(&list);
         tools.installed(&list);
         context.events.serve_state::<PluginsChanged, _>(&list)?;
         tokio::spawn(tell_sessions(

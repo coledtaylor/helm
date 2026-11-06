@@ -256,7 +256,10 @@ renderer and waits (`session:confirm`). The native box stays as the fallback
 for when there is no window to ask, because a Helm that cannot be quit is worse
 than an unbranded dialog. A destructive confirmation focuses **Cancel**, and
 its accepting button carries `border-danger/50 text-danger` with a
-`bg-danger/10` hover - never a solid fill, same rule the accent follows. The
+`bg-danger/10` hover - never a solid fill, same rule the accent follows. A
+confirmation whose answer ends nothing (a host restart that hands every
+session over) still focuses **Cancel**, and its accepting button is the
+primary button. The
 **Cancel** button takes its focus ring on plain `:focus` rather than the global
 `:focus-visible`: focus is placed there by script when the dialog opens,
 Chromium does not count that as visible focus, and a default action nothing

@@ -3,7 +3,7 @@ import { FakeConnection, fakeLocalHost } from '../../../test/host-connection'
 import type { HostConnection } from '../../shared/host/client'
 import type * as P from '../../shared/host/protocol'
 import { RECONNECT_MOST_MS } from '../../shared/host/reconnect'
-import { HOST_RETRY_MS, LocalHostError } from './launcher'
+import { HOST_RETRY_MS, LocalHostError, LocalHostRefusedError } from './launcher'
 import { HOST_STOP_DEADLINE_MS, createHostLink } from './link'
 import { hostSettingsFor } from './sessions'
 
@@ -199,6 +199,134 @@ describe('the link to the local host', () => {
     expect(link.current()).toBeNull()
     await expect(link.connection()).resolves.toBe(second.asConnection())
     expect(starts).toBe(2)
+  })
+
+  describe('Restart host to update', () => {
+    it('S12: restarts the host, holds every connect until it has gone, plans the end, and connects to the new host', async () => {
+      const first = new FakeConnection()
+      const second = new FakeConnection()
+      const started = [fakeLocalHost(first, true), fakeLocalHost(second, true)]
+      const starts: boolean[] = []
+      let gone: () => void = () => undefined
+      const timers = steppedTimers()
+      const link = createHostLink({
+        start: ({ startHost }) => {
+          starts.push(startHost)
+          return Promise.resolve(started[starts.length - 1] as ReturnType<typeof fakeLocalHost>)
+        },
+        // The host closes the connection once it answered, then is gone.
+        restart: () =>
+          new Promise<void>((resolve) => {
+            first.close()
+            gone = resolve
+          }),
+        log: () => undefined,
+        ...timers
+      })
+      const connected: HostConnection[] = []
+      link.onConnected((connection) => {
+        connected.push(connection)
+      })
+      await link.connection()
+
+      const restarting = link.restartHost()
+      expect(link.restarting()).toBe(true)
+      expect(link.endedOnPurpose()).toBe(true)
+      // A page asking now waits for the new host, never the one exiting.
+      const asked = link.connection()
+      await Promise.resolve()
+      expect(starts).toEqual([true])
+      gone()
+      await restarting
+      await expect(asked).resolves.toBe(second.asConnection())
+
+      expect(starts).toEqual([true, true])
+      expect(connected).toEqual([first.asConnection(), second.asConnection()])
+      expect(link.restarting()).toBe(false)
+      // Nothing was retried as after a crash.
+      expect(timers.pending()).toEqual([])
+    })
+
+    it('S11: changes nothing and stays connected when the host could not be asked', async () => {
+      const first = new FakeConnection()
+      const link = createHostLink({
+        start: () => Promise.resolve(fakeLocalHost(first, true)),
+        restart: () => Promise.reject(new LocalHostError('No local host answered on its socket')),
+        log: () => undefined,
+        ...steppedTimers()
+      })
+      await link.connection()
+
+      await expect(link.restartHost()).rejects.toThrow('No local host answered')
+      expect(link.restarting()).toBe(false)
+      expect(link.current()).toBe(first.asConnection())
+    })
+
+    it('S15: a host on protocol 1.x that refuses is tried again with the backoff and never ended unasked; Restart host to update ends it, then the carried floti is started and connected', async () => {
+      const timers = steppedTimers()
+      const carried = new FakeConnection()
+      const starts: boolean[] = []
+      let oldHostRunning = true
+      let restarts = 0
+      const link = createHostLink({
+        start: ({ startHost }) => {
+          starts.push(startHost)
+          // While the 1.x host runs it answers and refuses; once Restart host
+          // to update ended its process, the launcher starts the floti Helm carries.
+          return oldHostRunning
+            ? Promise.reject(
+                new LocalHostRefusedError(
+                  'This PC’s host speaks Floti protocol 1.4, older than this Helm’s 2.0.',
+                  { host: { major: 1, minor: 4 }, client: { major: 2, minor: 0 }, update: 'host' }
+                )
+              )
+            : Promise.resolve(fakeLocalHost(carried, true))
+        },
+        // `restartLocalHost` with the 1.x refusal: `floti end-old-host` ends its process alone.
+        restart: () => {
+          restarts += 1
+          oldHostRunning = false
+          return Promise.resolve(null)
+        },
+        log: () => undefined,
+        ...timers
+      })
+      const settle = async (): Promise<void> => {
+        for (let i = 0; i < 20; i++) await Promise.resolve()
+      }
+      link.keepConnected()
+      await settle()
+      expect(timers.pending()).toEqual([HOST_RETRY_MS])
+      timers.fireAll()
+      await settle()
+      expect(timers.pending()).toEqual([HOST_RETRY_MS * 2])
+      expect(link.current()).toBeNull()
+      // Without the user's click nothing ends it.
+      expect(restarts).toBe(0)
+
+      await link.restartHost()
+
+      expect(restarts).toBe(1)
+      expect(link.current()).toBe(carried.asConnection())
+      expect(starts).toEqual([true, true, true])
+      expect(link.restarting()).toBe(false)
+      // The carried host is never asked to stop.
+      expect(carried.payloads('host:stop')).toEqual([])
+      // The retry still pending finds the carried host connected and does nothing.
+      timers.fireAll()
+      await settle()
+      expect(starts).toEqual([true, true, true])
+      expect(link.current()).toBe(carried.asConnection())
+    })
+
+    it('S11: a link with no restart never restarts its host', async () => {
+      const link = createHostLink({
+        start: () => Promise.resolve(fakeLocalHost(new FakeConnection(), true)),
+        log: () => undefined,
+        ...steppedTimers()
+      })
+      await expect(link.restartHost()).rejects.toThrow('Helm does not restart the local host.')
+    })
   })
 
   describe('when the connection ends without a stop or a quit', () => {

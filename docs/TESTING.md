@@ -222,7 +222,14 @@ the desktop reads too. Its plugin tests attach a `TestClient` that listens on
 tools a session lists and the read-only one in `--allowedTools`, a call
 answered by that client, a server left out of the next offer refused to a
 running session at once, calls failing at once when the client leaves, and a
-call withdrawn from the client when the session cancels it or ends. The relays
+call withdrawn from the client when the session cancels it or ends.
+`crates/host/tests/host_plugin_tools.rs` does the same for the tools the host
+serves itself: a version 2 plugin of the test's own, its background module
+answering its tools with the caller it was told, painting a badge and a status
+item at load and fetching from its Node service on demand, with no client
+attached during the launches and calls; the plugin turned off, removed and
+with its tools off; a client's offer under its name passed over; and a version
+1 plugin's tool still answered by the client offering it. The relays
 themselves (`src/server/features/agent_browser.rs`, `agent_plugin.rs`) have
 unit tests with no listener.
 

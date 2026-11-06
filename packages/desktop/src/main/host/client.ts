@@ -1,6 +1,6 @@
 import type { Readable, Writable } from 'node:stream'
 import { connectHost as connectOver, type ByteTransport, type HostConnection } from '../../shared/host/client'
-import type { Capability } from './protocol'
+import type { Capability, ProtocolVersion } from './protocol'
 
 /**
  * Main's own connection to the host, over `floti bridge`'s standard output
@@ -26,6 +26,8 @@ export interface MainConnectOptions {
   deviceName?: string
   /** A line for Helm's log. Never given a payload, a frame or stream bytes. */
   log?: (line: string) => void
+  /** The protocol the `hello` names, only ever set by a test (`ConnectOptions.protocol`). */
+  protocol?: ProtocolVersion
 }
 
 /**
@@ -65,6 +67,7 @@ export function connectHost(options: MainConnectOptions): Promise<HostConnection
     appVersion: options.appVersion,
     capabilities: MAIN_CAPABILITIES,
     ...(options.deviceName !== undefined ? { deviceName: options.deviceName } : {}),
-    ...(options.log !== undefined ? { log: options.log } : {})
+    ...(options.log !== undefined ? { log: options.log } : {}),
+    ...(options.protocol !== undefined ? { protocol: options.protocol } : {})
   })
 }

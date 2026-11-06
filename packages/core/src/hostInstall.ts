@@ -133,9 +133,13 @@ export function formatProtocol(version: ProtocolVersionNumbers): string {
  * The floti `floti version` names (`floti 2.6.0 protocol 1.0 linux x64`), or
  * null for anything else. The OS and CPU are that floti's build.
  */
-export function parseVersionLine(
-  output: string
-): (FlotiFound & { protocolNumbers: ProtocolVersionNumbers; os: string; cpu: string }) | null {
+export function parseVersionLine(output: string):
+  | (FlotiFound & {
+      protocolNumbers: ProtocolVersionNumbers
+      os: string
+      cpu: string
+    })
+  | null {
   for (const line of output.split(/\r?\n/)) {
     const match = /^floti (\S+) protocol (\d+)\.(\d+) (\S+) (\S+)$/.exec(line.trim())
     if (match === null) continue
@@ -144,6 +148,162 @@ export function parseVersionLine(
     return { version, protocol: formatProtocol(protocolNumbers), protocolNumbers, os, cpu }
   }
   return null
+}
+
+/** A version as floti and Helm name them: `2.4.1`, or a prerelease such as `2.4.1-preview.7`. */
+const SEMVER = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
+
+/**
+ * How two versions order, by semantic versioning's precedence: negative when
+ * `a` comes first, positive when `b` does, 0 when they are the same release.
+ * A prerelease comes before its release (`2.4.1-preview.7` before `2.4.1`),
+ * and its dot-separated parts compare numbers as numbers. Build metadata is
+ * ignored. Null when either is not such a version, which says nothing about
+ * which is older.
+ */
+export function compareVersions(a: string, b: string): number | null {
+  const left = SEMVER.exec(a.trim())
+  const right = SEMVER.exec(b.trim())
+  if (left === null || right === null) return null
+  for (let index = 1; index <= 3; index++) {
+    const difference = Number(left[index]) - Number(right[index])
+    if (difference !== 0) return Math.sign(difference)
+  }
+  const leftPre = left[4]
+  const rightPre = right[4]
+  if (leftPre === undefined || rightPre === undefined) {
+    return leftPre === rightPre ? 0 : leftPre === undefined ? 1 : -1
+  }
+  const leftParts = leftPre.split('.')
+  const rightParts = rightPre.split('.')
+  for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index++) {
+    const order = comparePrereleasePart(leftParts[index] ?? '', rightParts[index] ?? '')
+    if (order !== 0) return order
+  }
+  return Math.sign(leftParts.length - rightParts.length)
+}
+
+function comparePrereleasePart(a: string, b: string): number {
+  const numeric = /^\d+$/
+  const aNumber = numeric.test(a)
+  const bNumber = numeric.test(b)
+  if (aNumber && bNumber) return Math.sign(Number(a) - Number(b))
+  // A number comes before a word.
+  if (aNumber !== bNumber) return aNumber ? -1 : 1
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/**
+ * Whether this PC's host runs a floti older than the one this Helm carries:
+ * only when both versions read, so a host naming something else is never
+ * called older.
+ */
+export function hostFlotiOlder(hostVersion: string, helmVersion: string): boolean {
+  const order = compareVersions(hostVersion, helmVersion)
+  return order !== null && order < 0
+}
+
+/**
+ * Which of this PC's host and this Helm is behind the other, as Settings >
+ * Hosts and the status bar say it: from the floti version the host's welcome
+ * named, or, when it refused this Helm's hello, from the protocol versions it
+ * named. `host` and `helm` name each side the same way: a floti version
+ * (`2.4.0`), or `protocol 1.3` when that is all the refusal said.
+ *
+ * - `older: 'host'`: the host runs an older floti, and is offered Restart
+ *   host to update. With `beforeRestart` it speaks protocol 1.x, from before
+ *   the restart could be asked for: Restart host to update ends its process
+ *   as a crash would, leaving its session keeper running, and the floti Helm
+ *   carries starts and takes every session and terminal over in its tab.
+ * - `older: 'helm'`: this Helm is too old for the host, and is updated.
+ */
+export type LocalHostVersions =
+  | { older: 'host'; host: string; helm: string; beforeRestart: boolean }
+  | { older: 'helm'; host: string; helm: string }
+
+/**
+ * What a refused hello says of the two sides (`update` is the side it said
+ * to update), or, when the host welcomed this Helm, what its floti version
+ * says: older only when both versions read and the host's comes first.
+ */
+export function localHostVersions(
+  seen:
+    | { refused: { host: ProtocolVersionNumbers; client: ProtocolVersionNumbers; update: 'host' | 'client' } }
+    | { hostVersion: string },
+  helmVersion: string
+): LocalHostVersions | null {
+  if ('refused' in seen) {
+    const { host, client, update } = seen.refused
+    const named = { host: `protocol ${formatProtocol(host)}`, helm: `protocol ${formatProtocol(client)}` }
+    return update === 'host' ? { older: 'host', ...named, beforeRestart: host.major < 2 } : { older: 'helm', ...named }
+  }
+  return hostFlotiOlder(seen.hostVersion, helmVersion)
+    ? { older: 'host', host: seen.hostVersion, helm: helmVersion, beforeRestart: false }
+    : null
+}
+
+/** `floti 2.4.0`, or `Floti protocol 2.0` for a side named by its protocol. */
+function sideName(side: string): string {
+  return side.startsWith('protocol ') ? `Floti ${side}` : `floti ${side}`
+}
+
+/** The sentence Settings > Hosts and the status bar's hover say about this PC's host's version, naming both sides. */
+export function localHostVersionsSentence(versions: LocalHostVersions): string {
+  const host = sideName(versions.host)
+  const helm = sideName(versions.helm)
+  if (versions.older === 'helm') {
+    return `This PC’s host runs ${host}, newer than the ${helm} this Helm speaks, so Helm cannot connect to it. Update Helm on this PC.`
+  }
+  if (versions.beforeRestart) {
+    return `This PC’s host runs ${host}, older than the ${helm} this Helm carries. Restart host to update keeps every session and terminal running in its tab.`
+  }
+  return `This PC’s host runs ${host}, older than the ${helm} this Helm carries. Restart host to update says first what it ends.`
+}
+
+/** What restarting this PC's host on the floti this Helm carries does, asked before anything happens. */
+export interface LocalHostRestartOffer {
+  /**
+   * The floti the host runs now (`2.4.0`), or `protocol 1.4` for a host from
+   * before the restart could be asked for, which names only its protocol.
+   */
+  hostVersion: string
+  /**
+   * The sessions running in it, whichever device started them; null for a
+   * host from before the restart, which cannot be asked.
+   */
+  sessions: number | null
+  /**
+   * How many of them the restart ends: none when the carried floti speaks the
+   * keeper's link and takes them over, every one when it does not. None for a
+   * host from before the restart, whose process is ended as a crash would end
+   * it, leaving its keeper for the carried floti to take back.
+   */
+  ends: number
+}
+
+/** The question before restarting this PC's host, naming what it ends. */
+export function restartHostQuestion(offer: LocalHostRestartOffer, helmVersion: string): string {
+  const to = `floti ${helmVersion}`
+  if (offer.ends === 0) return `Restart this PC’s host on ${to}? No session ends.`
+  return `Restart this PC’s host on ${to}, ending ${String(offer.ends)} session${offer.ends === 1 ? '' : 's'}?`
+}
+
+/** The restart question's confirm button: the danger one only when the restart ends a session. */
+export function restartHostConfirmTone(offer: LocalHostRestartOffer): 'danger' | 'primary' {
+  return offer.ends > 0 ? 'danger' : 'primary'
+}
+
+/** What the restart question says beneath it. */
+export function restartHostDetail(offer: LocalHostRestartOffer): string {
+  if (offer.sessions === null) {
+    return `The host runs Floti ${offer.hostVersion}, from before Restart host to update, so Helm ends its process as a crash would. Every session and terminal keeps running in its tab, and the new host takes them over; any it cannot take over come back in their own tabs to resume.`
+  }
+  if (offer.ends === 0) {
+    return offer.sessions === 0
+      ? 'No session is running in it. Helm starts the new host and connects to it.'
+      : 'Every session and terminal keeps running, with its screen, and the new host takes them over.'
+  }
+  return `The host runs floti ${offer.hostVersion}, whose sessions the new floti cannot take over, so they end. The new host offers them back once, to resume.`
 }
 
 /** The version `floti --version` names (`floti 0.1.0`), for a floti too old to have `floti version`. */

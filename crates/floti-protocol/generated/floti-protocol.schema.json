@@ -4380,6 +4380,11 @@
           "const": "update",
           "description": "It is being replaced by a newer version: the sessions end with their\nrows left running, so the next start records them as lost and offers\nthem back once.",
           "type": "string"
+        },
+        {
+          "const": "restart",
+          "description": "It is being restarted for an update: it lets go of its session\nkeeper and exits, leaving every session and plain terminal running\nthere for the next host to take back, as a crash would leave them. A\nhost without a keeper stops as for [`Self::Update`]. What a `restart`\nframe asks for.",
+          "type": "string"
         }
       ]
     },
@@ -5226,6 +5231,45 @@
           "properties": {
             "type": {
               "const": "streamClose",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RestartAsk",
+          "properties": {
+            "type": {
+              "const": "restartAsk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Restart",
+          "properties": {
+            "type": {
+              "const": "restart",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RestartState",
+          "properties": {
+            "type": {
+              "const": "restartState",
               "type": "string"
             }
           },
@@ -7744,6 +7788,64 @@
       "required": [
         "id",
         "payload"
+      ],
+      "type": "object"
+    },
+    "Restart": {
+      "description": "Sent in place of `hello`: the host lets go of its session keeper, leaving\nevery session and plain terminal running in it, answers with\n[`RestartState`], closes the connection and exits, as a crash would leave\nthings, so the next host takes the keeper back. A host without a keeper\nstops as a stop for an update does. Frozen across majors.",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/ClientInfo"
+        }
+      },
+      "required": [
+        "client"
+      ],
+      "type": "object"
+    },
+    "RestartAsk": {
+      "description": "Sent in place of `hello`: asks the host what restarting it for an update\nwould mean, answered with [`RestartState`], after which the host closes\nthe connection. It takes no protocol version, so a client on any version\nthe host would refuse can still ask. Frozen across majors.",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/ClientInfo"
+        }
+      },
+      "required": [
+        "client"
+      ],
+      "type": "object"
+    },
+    "RestartState": {
+      "description": "The host's answer to [`RestartAsk`] and [`Restart`]. Frozen across\nmajors.",
+      "properties": {
+        "hostVersion": {
+          "description": "The host program's own version, such as \"2.4.1\".",
+          "type": "string"
+        },
+        "keeperLink": {
+          "description": "The link version of the session keeper it holds them in, or none when\nit runs no keeper. A host built with this link version takes that\nkeeper back.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "protocol": {
+          "$ref": "#/$defs/ProtocolVersion",
+          "description": "The protocol version the host speaks."
+        },
+        "sessions": {
+          "description": "How many sessions it runs.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hostVersion",
+        "protocol",
+        "sessions"
       ],
       "type": "object"
     },
@@ -11948,5 +12050,5 @@
   ],
   "x-defaultInitialCredit": 262144,
   "x-maxFrameLen": 16777216,
-  "x-protocolVersion": "1.0"
+  "x-protocolVersion": "2.0"
 }

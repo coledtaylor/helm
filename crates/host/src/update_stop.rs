@@ -367,7 +367,7 @@ fn kind_of(message: &Message) -> &'static str {
 
 /// Waits until the host whose data folder is `data` has let go of its lock,
 /// which it holds for as long as it runs, then lets go of it too.
-async fn host_exited(data: &Path) -> Result<(), String> {
+pub async fn host_exited(data: &Path) -> Result<(), String> {
     let path = data.join(LOCK_FILE);
     let file = match File::options().read(true).open(&path) {
         Ok(file) => file,

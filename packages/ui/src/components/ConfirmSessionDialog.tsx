@@ -9,11 +9,17 @@ export interface ConfirmSessionDialogProps {
    * Ending one tab's session, ending sessions because Helm is quitting, or
    * stopping this PC's host, which ends every session in it.
    */
-  kind: 'close-session' | 'quit' | 'stop-host'
+  kind: 'close-session' | 'quit' | 'stop-host' | 'restart-host'
   message: string
   detail: string
   /** What the agreeing button says; main decides, because it counts them. */
   confirmLabel: string
+  /**
+   * How the agreeing button is drawn: `danger` (the default) when agreeing
+   * ends something, `primary` when it ends nothing, such as a restart that
+   * hands every session over.
+   */
+  confirmTone?: 'danger' | 'primary' | undefined
   /**
    * The quit question's third answer: quit and leave them running in the
    * host. No button without it.
@@ -48,6 +54,7 @@ export function ConfirmSessionDialog({
   message,
   detail,
   confirmLabel,
+  confirmTone = 'danger',
   keepLabel,
   sessionNames,
   onConfirm,
@@ -140,14 +147,17 @@ export function ConfirmSessionDialog({
         )}
         <button
           type="button"
-          data-confirm-accept
+          data-confirm-accept={confirmTone}
           onClick={onConfirm}
           className={cn(
+            'rounded-well border px-3.5 py-1.5 text-[12px] font-medium transition-colors',
             // Danger is carried by the text and the hover wash, not by a
             // solid fill: the accent never solid-fills anything and neither
-            // does this (DESIGN.md).
-            'rounded-well border border-danger/50 px-3.5 py-1.5 text-[12px] font-medium',
-            'text-danger transition-colors hover:bg-danger/10'
+            // does this (DESIGN.md). An answer that ends nothing is the
+            // primary button, outlined in the accent.
+            confirmTone === 'danger'
+              ? 'border-danger/50 text-danger hover:bg-danger/10'
+              : 'border-accent text-accent-text hover:bg-accent-soft'
           )}
         >
           {confirmLabel}

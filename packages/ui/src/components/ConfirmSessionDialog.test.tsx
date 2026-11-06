@@ -95,4 +95,43 @@ describe('ConfirmSessionDialog', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     expect(props.onCancel).toHaveBeenCalledTimes(1)
   })
+
+  it('S16: a restart that ends no session confirms with the ordinary button, outlined in the accent, Cancel in focus', () => {
+    renderDialog({
+      kind: 'restart-host',
+      message: 'Restart this PC’s host on floti 2.4.1? No session ends.',
+      detail: 'Every session and terminal keeps running, with its screen, and the new host takes them over.',
+      confirmLabel: 'Restart host',
+      confirmTone: 'primary',
+      sessionNames: []
+    })
+    const dialog = screen.getByRole('alertdialog', { name: 'Restart this PC’s host on floti 2.4.1? No session ends.' })
+    const accept = within(dialog).getByRole('button', { name: 'Restart host' })
+    expect(accept.className).toContain('border-accent')
+    expect(accept.className).toContain('text-accent-text')
+    expect(accept.className).not.toMatch(/danger/)
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
+  })
+
+  it('S16: a restart that ends sessions confirms with the danger button, Cancel in focus', () => {
+    renderDialog({
+      kind: 'restart-host',
+      message: 'Restart this PC’s host on floti 2.4.1, ending 2 sessions?',
+      detail: 'The host runs floti 2.4.0, whose sessions the new floti cannot take over, so they end.',
+      confirmLabel: 'Restart host',
+      confirmTone: 'danger',
+      sessionNames: []
+    })
+    const dialog = screen.getByRole('alertdialog', { name: 'Restart this PC’s host on floti 2.4.1, ending 2 sessions?' })
+    const accept = within(dialog).getByRole('button', { name: 'Restart host' })
+    expect(accept.className).toContain('border-danger/50')
+    expect(accept.className).toContain('text-danger')
+    expect(accept.className).not.toContain('border-accent')
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
+  })
+
+  it('draws the danger button when no tone is asked for', () => {
+    renderDialog()
+    expect(screen.getByRole('button', { name: 'End session' }).className).toContain('text-danger')
+  })
 })

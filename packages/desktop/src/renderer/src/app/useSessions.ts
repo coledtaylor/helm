@@ -60,9 +60,16 @@ export interface SessionsState {
   reportFocus: (ids: readonly number[]) => void
 }
 
-export function useSessions(onActivate: (id: number) => void): SessionsState {
+/**
+ * `reconnects` counts the times the window got its host back, or got one at
+ * all after a host refused it (`host/hostState.ts`): while nothing has been
+ * listed yet, each asks for the list again, so a window that opened while its
+ * host refused it shows the sessions of the host that replaced it.
+ */
+export function useSessions(onActivate: (id: number) => void, reconnects = 0): SessionsState {
   const [sessions, setSessions] = useState<SessionRecord[]>([])
   const [listed, setListed] = useState(false)
+  const listedRef = useRef(false)
   const [activity, setActivity] = useState<Map<number, SessionActivityState>>(new Map())
   const [launchError, setLaunchError] = useState<string | null>(null)
 
@@ -88,13 +95,22 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
         setActivity(new Map(states.map((state) => [state.id, state])))
       })
     ]
+    return () => {
+      for (const off of offs) off()
+    }
+  }, [])
 
+  useEffect(() => {
+    if (listedRef.current) return
+    let live = true
     // A renderer reload (dev HMR, or a crashed renderer) leaves main holding
     // processes this side has forgotten. Adopting them back is the difference
     // between a reload and an orphan.
     void helm.invoke('session:list').then(
-      (live) => {
-        setSessions((current) => (current.length > 0 ? current : live))
+      (rows) => {
+        if (!live) return
+        listedRef.current = true
+        setSessions((current) => (current.length > 0 ? current : rows))
         setListed(true)
       },
       // Not listed: a host that cannot be reached has not said there are none.
@@ -103,14 +119,16 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
     // Adopted with them, for the same reason: an idle session publishes nothing
     // until somebody types at it, so a strip waiting for the next push would sit
     // without dots for as long as nobody used it.
-    void helm.invoke('session:activity').then((states) => {
-      setActivity(new Map(states.map((state) => [state.id, state])))
-    })
-
+    void helm.invoke('session:activity').then(
+      (states) => {
+        if (live) setActivity(new Map(states.map((state) => [state.id, state])))
+      },
+      () => undefined
+    )
     return () => {
-      for (const off of offs) off()
+      live = false
     }
-  }, [])
+  }, [reconnects])
 
   const launch = useCallback(
     async (project: Project, paneSize: HTMLElement | null): Promise<number | null> => {

@@ -64,6 +64,28 @@ describe('useSessions', () => {
     expect([...result.current.activity.keys()]).toEqual([1])
   })
 
+  it('S15: lists the sessions of the host that replaced one that refused the window, once it is connected, and only until listed', async () => {
+    bridge.answer('session:list', () => {
+      throw new Error('This client speaks Floti protocol 2.0 and the host speaks 1.4.')
+    })
+    const { result, rerender } = renderHook(({ reconnects }) => useSessions(vi.fn(), reconnects), {
+      initialProps: { reconnects: 0 }
+    })
+    await waitFor(() => expect(bridge.invoked('session:list')).toHaveLength(1))
+    expect(result.current.listed).toBe(false)
+
+    // The carried floti's host took the keeper back: 7 and 9 still run.
+    hosting = [record(7), record(9)]
+    bridge.answer('session:list', () => hosting)
+    rerender({ reconnects: 1 })
+    await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([7, 9]))
+    expect(result.current.listed).toBe(true)
+
+    // Listed: a later reconnect keeps what the window holds and its pushes.
+    rerender({ reconnects: 2 })
+    expect(bridge.invoked('session:list')).toHaveLength(2)
+  })
+
   it('keeps an ended session’s tab where it was, with the row main sent', async () => {
     hosting = [record(1), record(2), record(3)]
     const { result } = await mounted()

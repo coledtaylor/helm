@@ -122,6 +122,14 @@ pub trait FamilySource: Send + Sync + 'static {
     fn families(&self) -> Vec<Arc<dyn ToolFamily>>;
 }
 
+/// Several sources read as one, in order: a family an earlier source has
+/// wins over one of the same name or route a later one has.
+impl FamilySource for Vec<Arc<dyn FamilySource>> {
+    fn families(&self) -> Vec<Arc<dyn ToolFamily>> {
+        self.iter().flat_map(|source| source.families()).collect()
+    }
+}
+
 /// One minted token, by an id that is not the token: what the host keeps to
 /// bind it to its session and revoke it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

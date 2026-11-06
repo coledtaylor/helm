@@ -245,6 +245,12 @@ impl Fixture {
             &mut shutdown,
         )
         .await
+        .map(|first| match first {
+            super::First::Hello(hello) => hello,
+            super::First::RestartAsk(_) | super::First::Restart(_) => {
+                panic!("a restart frame, not hello")
+            }
+        })
     }
 }
 

@@ -139,6 +139,22 @@ async fn clients_connect_and_bytes_flow_both_ways() {
 }
 
 #[tokio::test]
+async fn a_client_is_told_which_process_serves_the_endpoint_it_connected_to() {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let host = HostProcess::start(&endpoint);
+    let (mut client, server) = Native
+        .connect_naming_server(&endpoint)
+        .await
+        .expect("connect");
+    assert_eq!(server, floti_protocol::Knowable::Known(host.pid()));
+    // It is an ordinary connection all the same.
+    assert_eq!(round_trip(&mut client, b"hello").await, b"hello");
+    drop(client);
+    host.kill();
+}
+
+#[tokio::test]
 async fn s2_the_relay_endpoint_is_beside_the_local_one_no_longer_than_a_byte_more_and_listens_apart()
  {
     let dirs = TestDirs::new();

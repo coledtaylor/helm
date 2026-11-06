@@ -2,8 +2,8 @@
 //! `agentPlugin:answer` and `agentPlugin:cancel`.
 //!
 //! A client that runs plugins (Helm's window) offers the tool servers its
-//! plugins have on, each as a session should read it. The host serves each
-//! one to its sessions as one more agent tool family
+//! version 1 plugins have on, each as a session should read it. The host
+//! serves each one to its sessions as one more agent tool family
 //! ([`super::super::plugin_tools`]) and carries every call to the client that
 //! offered it, which answers it with its plugin's background page. The call
 //! names the session whose token made it, and the caller the plugin is told
@@ -23,6 +23,11 @@
 //! on, error-free and with its tools on ([`PluginRelay::installed`]). A
 //! plugin only some other host has, or one switched off here, is served by
 //! nobody's offer, and its route answers 404.
+//!
+//! **Not a version 2 plugin's.** A plugin whose background module runs in
+//! this host's engine has its tools served by the host itself
+//! ([`super::super::plugin_tools::HostPluginTools`]): an offer naming it is
+//! passed over, and its client is sent no call for it.
 //!
 //! **No timers.** A call ends with its answer, with the client leaving or no
 //! longer listening (it fails at once, saying so), or with the session no
@@ -44,6 +49,7 @@ use tokio::sync::oneshot;
 
 use super::{Caller, Feature};
 use crate::agent_tools::{JsonObject, Tool, ToolAnnotations};
+use crate::plugins::info::host_runs_background;
 use crate::server::events::Events;
 use crate::session::ClientId;
 
@@ -123,14 +129,80 @@ impl Relay {
     }
 }
 
-/// The ids of the plugins in `list` whose tools this host serves: each on,
-/// error-free and with its tools on.
+/// The ids of the plugins in `list` whose tools a client answers here: each
+/// on, error-free and with its tools on, and not one whose background the
+/// host runs itself.
 fn serving(list: &[PluginInfo]) -> BTreeSet<String> {
     list.iter()
-        .filter(|plugin| plugin.enabled && plugin.error.is_none())
-        .filter(|plugin| plugin.agent.as_ref().is_some_and(|agent| agent.enabled))
+        .filter(|plugin| tools_served(plugin) && !host_runs_background(plugin))
         .filter_map(|plugin| plugin.id.clone())
         .collect()
+}
+
+/// Whether `plugin`'s tools are served at all: it is on, error-free and has
+/// its tools on.
+pub(crate) fn tools_served(plugin: &PluginInfo) -> bool {
+    plugin.enabled
+        && plugin.error.is_none()
+        && plugin.agent.as_ref().is_some_and(|agent| agent.enabled)
+}
+
+/// The words a session reads first about a plugin's server: where its tools
+/// come from, then the plugin's own instructions. As Helm words an offer.
+fn plugin_instructions(name: &str, instructions: Option<&str>) -> String {
+    let provenance = format!(
+        "These tools come from \"{name}\", a plugin the user added to Helm, the app hosting \
+         this session. The plugin answers every call; Helm passes it on."
+    );
+    match instructions {
+        Some(own) => format!("{provenance}\n\n{own}"),
+        None => provenance,
+    }
+}
+
+/// One tool as a session lists it, marked with `readOnlyHint` when it
+/// changes nothing.
+fn listing(name: String, description: String, schema: JsonObject, read_only: bool) -> Tool {
+    let listing = Tool::new(name, description, schema);
+    if read_only {
+        listing.with_annotations(ToolAnnotations::new().read_only(true))
+    } else {
+        listing
+    }
+}
+
+impl PluginServer {
+    /// The server the host serves for `plugin` itself, worded from its
+    /// manifest as Helm words an offer: for a plugin whose background the
+    /// host runs, on, error-free and with its tools on; `None` otherwise.
+    pub fn hosted(plugin: &PluginInfo) -> Option<Self> {
+        if !tools_served(plugin) || !host_runs_background(plugin) {
+            return None;
+        }
+        let id = plugin.id.clone()?;
+        let agent = plugin.agent.as_ref()?;
+        let tools = agent
+            .tools
+            .iter()
+            .map(|tool| {
+                // The manifest reader has held every schema to an object.
+                let schema: JsonObject = from_payload(&tool.input_schema).unwrap_or_default();
+                listing(
+                    tool.name.clone(),
+                    tool.description.clone(),
+                    schema,
+                    tool.read_only,
+                )
+            })
+            .collect();
+        Some(Self {
+            name: agent.server.clone(),
+            route: format!("{ROUTE_PREFIX}{id}"),
+            instructions: plugin_instructions(&plugin.name, agent.instructions.as_deref()),
+            plugin: id,
+            tools,
+        })
+    }
 }
 
 impl PluginRelay {
@@ -167,7 +239,8 @@ impl PluginRelay {
     }
 
     /// This host's plugins now, from its list: only those on, error-free and
-    /// with their tools on are served from here on. A plugin leaving the set
+    /// with their tools on, and whose background is not the host's own to
+    /// run, are served from a client's offer from here on. A plugin leaving the set
     /// is gone at once for every session given it, as a server left out of
     /// an offer is.
     pub fn installed(&self, list: &[PluginInfo]) {
@@ -447,11 +520,7 @@ fn checked(offer: AgentPluginServers) -> Result<Vec<Arc<PluginServer>>, String> 
                     tool.name
                 )
             })?;
-            let mut listing = Tool::new(tool.name, tool.description, schema);
-            if tool.read_only {
-                listing = listing.with_annotations(ToolAnnotations::new().read_only(true));
-            }
-            listed.push(listing);
+            listed.push(listing(tool.name, tool.description, schema, tool.read_only));
         }
         servers.push(Arc::new(PluginServer {
             route: format!("{ROUTE_PREFIX}{plugin}"),

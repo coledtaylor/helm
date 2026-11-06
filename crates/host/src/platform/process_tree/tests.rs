@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 
 use floti_protocol::Knowable;
 
-use super::{Ending, Native, ProcessTree, descendants, tree_under};
+use super::{Ending, Native, OneProcess, ProcessTree, descendants, tree_under};
 use crate::session::tests::fake_agent_exe;
 
 #[test]
@@ -119,6 +119,50 @@ fn a_root_holds_no_descriptor_of_the_host_but_its_standard_three() {
         Native.end_tree(pid, Ending::Forced).unwrap();
     }
     assert_eq!(read, 0, "the program holds the pipe's write end: {held}");
+}
+
+/// Ending one process alone ends that process at once, and nothing it
+/// started: its child runs on.
+#[test]
+fn ending_one_process_ends_it_alone_and_leaves_what_it_started_running() {
+    let mut command = Command::new(fake_agent_exe());
+    command
+        .arg("--fake-child=60000")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // A root of its own, as a host is: its group is its tree.
+    Native.prepare_root(&mut command);
+    let mut agent = command.spawn().unwrap();
+    let mut line = String::new();
+    BufReader::new(agent.stdout.take().expect("the agent's output"))
+        .read_line(&mut line)
+        .expect("read the agent's child");
+    let grandchild: u32 = line
+        .trim()
+        .strip_prefix("child: ")
+        .and_then(|pid| pid.parse().ok())
+        .unwrap_or_else(|| panic!("no child reported: {line:?}"));
+
+    let one = OneProcess::hold(agent.id()).expect("hold the agent");
+    assert_eq!(one.pid(), agent.id());
+    one.end_now().expect("end the agent");
+    agent.wait().expect("the agent ended");
+    let child_alive = Native.is_alive(grandchild);
+    Native.end_tree(grandchild, Ending::Forced).unwrap();
+    assert_eq!(
+        child_alive,
+        Knowable::Known(true),
+        "its child was ended too"
+    );
+    // Ending one that has already exited is no error.
+    one.end_now().expect("end it again");
+}
+
+#[test]
+fn this_process_and_no_process_are_not_ones_to_end() {
+    assert!(OneProcess::hold(0).is_err());
+    assert!(OneProcess::hold(std::process::id()).is_err());
 }
 
 /// A program this process started, and the child that one started, are

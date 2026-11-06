@@ -364,9 +364,21 @@ no listener for them, mints no token and writes no `--mcp-config`.
   without tools and the log says so, naming the port only. The device that
   started a session or opened a plain terminal goes in its keeper label by
   fingerprint, so its `host:quit` ends it after a crash as before one.
-- The host has no plugins of its own for agent tools: a client offers its
-  plugins' servers (`agentPlugin:offer`, replacing its last offer) and
-  answers their calls (`agentPlugin:call`, `agentPlugin:answer`). Each is
+- The host serves a version 2 plugin's tools itself
+  (`server/plugin_tools.rs` `HostPluginTools`): for each plugin whose
+  background module runs in its engine, on, error-free and with its tools
+  on, `helm-plugin-<id>` at `/mcp/plugin/<id>`, worded from the manifest as
+  Helm words an offer, is given to every launch with its read-only tools in
+  `--allowedTools`, with no client attached. Each call goes to the module's
+  handler (`Registry::call_tool`), naming the session as the relay does, and
+  is cancelled there when the session drops it. The plugin turned off,
+  removed or with its tools switched off loses its route at once (404) and is
+  given to no later launch, until it is back on. A client's offer naming such
+  a plugin is passed over (`PluginRelay::installed`), and that client is sent
+  no call for it.
+- For a version 1 plugin a client offers its servers (`agentPlugin:offer`,
+  replacing its last offer) and answers their calls (`agentPlugin:call`,
+  `agentPlugin:answer`). Each is
   served as `helm-plugin-<id>` at `/mcp/plugin/<id>`, given to launches only
   while that client listens, its read-only tools passed as `--allowedTools`.
   A server left out of an offer answers 404 at once; a call is withdrawn
@@ -457,10 +469,12 @@ folder: run through npx, that folder is a cache.
   panels. A version 2 background module has no frame and no storage of its
   own; the host relays its `BroadcastChannel` posts to and from the plugin's
   pages on every client.
-- A plugin's tools (`agent` in its manifest) are answered by its background
-  (`floti.tools.handle` in a version 2 module; a version 1 page's
-  `helm.tools.handle`, through `main/plugins/tools.ts`), and served by the host as one more
-  family on its agent tools listener. A plugin sends no notifications and
+- A plugin's tools (`agent` in its manifest) are served by the host as one
+  more family on its agent tools listener. A version 2 plugin's are answered
+  by its background module (`floti.tools.handle`) in the host's isolate, with
+  no client attached; a version 1 plugin's by its background page
+  (`helm.tools.handle`) in the hidden window, through `main/plugins/tools.ts`.
+  A plugin sends no notifications and
   never sends a running session anything: a session calls it, not the other
   way round.
 - A tool its manifest marks `readOnly` is listed with `readOnlyHint` and

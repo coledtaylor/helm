@@ -7,7 +7,7 @@ import {
 import type { Capability } from '../../../../shared/host/protocol'
 import { RECONNECT_FIRST_MS, nextReconnectWait } from '../../../../shared/host/reconnect'
 import { unreachable } from '../../../../shared/host/sentences'
-import type { HelmBridge, HostLinkOpened } from '../../../../shared/ipc'
+import type { HelmBridge, HostLinkOpened, RefusedVersions } from '../../../../shared/ipc'
 
 /**
  * This page's own protocol connection to a host.
@@ -29,7 +29,17 @@ import type { HelmBridge, HostLinkOpened } from '../../../../shared/ipc'
  * was killed - the link connects again by itself, waiting as main's link
  * does (`shared/host/reconnect.ts`), until it connects; its `onConnected`
  * listeners then run again. A connection the page closed itself is no end
- * of the host.
+ * of the host. After a Restart host to update the link connects again at
+ * once: main holds the connect until the new host is up.
+ *
+ * A host that refuses this Helm's `hello` names both protocol versions and
+ * the side to update; the link rejects with that sentence, as a
+ * `HostRefusedError` carrying the versions, and tells its `onRefused`
+ * listeners, so the window can say which side is older and offer what fits.
+ * A link that connects again by itself tries a refusing host again with the
+ * same waits, so the page connects once main reaches a host that welcomes it
+ * (the carried floti's, after Restart host to update); Reconnect now drops
+ * the wait.
  */
 
 /** What the app window says it can do: draw terminals, show files and draw plugins' pages. */
@@ -41,6 +51,8 @@ export interface HostEnd {
   planned: boolean
   /** Helm starts a new host in place of this one, rather than waiting for it to answer again. */
   restarts: boolean
+  /** The user's Restart host to update ended it; the page connects to the new host at once. */
+  restarting?: boolean
 }
 
 export interface PageLink {
@@ -53,6 +65,8 @@ export interface PageLink {
   onConnected(listener: (connection: HostConnection) => void): void
   /** Called each time the host's side ends the connection, saying how. */
   onEnded(listener: (end: HostEnd) => void): void
+  /** Called each time the host refused this Helm's `hello`, with the versions it named. */
+  onRefused?(listener: (refused: RefusedVersions) => void): void
   /**
    * The user's Reconnect now: a link waiting to connect again drops the wait
    * and connects at once, and the next wait starts from the first again. A
@@ -108,7 +122,11 @@ export function relayTransport(
         bridge.on('hostLink:ended', (payload) => {
           if (payload.connection !== connection || ended) return
           stop()
-          hostEnded?.({ planned: payload.planned, restarts: payload.restarts })
+          hostEnded?.({
+            planned: payload.planned,
+            restarts: payload.restarts,
+            ...(payload.restarting === true ? { restarting: true } : {})
+          })
           receiver.end(payload.why)
         })
       ]
@@ -127,6 +145,7 @@ export function relayTransport(
 export function createPageLink(deps: PageLinkDeps): PageLink {
   const listeners: Array<(connection: HostConnection) => void> = []
   const endListeners: Array<(end: HostEnd) => void> = []
+  const refusedListeners: Array<(refused: RefusedVersions) => void> = []
   const setTimer = deps.setTimeout ?? ((run: () => void, ms: number): unknown => setTimeout(run, ms))
   const clearTimer = deps.clearTimeout ?? ((timer: unknown): void => clearTimeout(timer as ReturnType<typeof setTimeout>))
   let attempt: Promise<HostConnection> | null = null
@@ -155,7 +174,23 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
         deps.log?.(`host: hearing the connection end failed (${(error as Error).message})`)
       }
     }
-    if (!end.planned && deps.retries !== false) scheduleRetry()
+    if (end.restarting === true) {
+      // Main's link answers once the new host is up, or says why it is not.
+      link.connection().then(
+        () => undefined,
+        () => scheduleRetry()
+      )
+    } else if (!end.planned && deps.retries !== false) scheduleRetry()
+  }
+
+  const refusedWith = (refused: RefusedVersions): void => {
+    for (const listener of refusedListeners) {
+      try {
+        listener(refused)
+      } catch (error) {
+        deps.log?.(`host: hearing a refusal failed (${(error as Error).message})`)
+      }
+    }
   }
 
   const open = (): Promise<HostLinkOpened> =>
@@ -164,7 +199,11 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
   /** Connects once; `ended` hears how the host's side ended this connection, if it does. */
   const connect = async (ended: (end: HostEnd) => void): Promise<HostConnection> => {
     const opened = await open()
-    if ('unreachable' in opened) throw new Error(opened.unreachable)
+    if ('unreachable' in opened) {
+      if (opened.refused === undefined) throw new Error(opened.unreachable)
+      refusedWith(opened.refused)
+      throw new HostRefusedError(opened.unreachable, opened.refused)
+    }
     let connection: HostConnection
     try {
       connection = await connectHost({
@@ -176,10 +215,12 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
       })
     } catch (error) {
       // The bridge's exit said why, as main's link would; a refused hello
-      // names both versions.
-      throw new Error(error instanceof HostRefusedError ? unreachable(error.message) : (error as Error).message, {
-        cause: error
-      })
+      // names both versions, and the side to update.
+      if (error instanceof HostRefusedError) {
+        if (error.refused !== null) refusedWith(error.refused)
+        throw new HostRefusedError(unreachable(error.message), error.refused)
+      }
+      throw new Error((error as Error).message, { cause: error })
     }
     for (const listener of listeners) {
       try {
@@ -210,6 +251,9 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
         },
         (error: unknown) => {
           if (attempt === made) attempt = null
+          // A refusing host is tried again, as main's link tries it, so the
+          // page connects once main has a host that speaks its protocol.
+          if (error instanceof HostRefusedError && deps.retries !== false) scheduleRetry()
           throw error
         }
       )
@@ -223,6 +267,10 @@ export function createPageLink(deps: PageLinkDeps): PageLink {
 
     onEnded(listener) {
       endListeners.push(listener)
+    },
+
+    onRefused(listener) {
+      refusedListeners.push(listener)
     },
 
     reconnectNow() {

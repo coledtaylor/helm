@@ -65,6 +65,12 @@ pub enum HostStopReason {
     /// rows left running, so the next start records them as lost and offers
     /// them back once.
     Update,
+    /// It is being restarted for an update: it lets go of its session
+    /// keeper and exits, leaving every session and plain terminal running
+    /// there for the next host to take back, as a crash would leave them. A
+    /// host without a keeper stops as for [`Self::Update`]. What a `restart`
+    /// frame asks for.
+    Restart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

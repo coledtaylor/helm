@@ -1,10 +1,14 @@
 //! What the host and its keeper say to each other: one frame at a time, each
 //! a four-byte little-endian length and then that many bytes of CBOR.
 //!
-//! The first frame a keeper sends is always [`FromKeeper::Hello`], with its
-//! version, and a host reads nothing else from a keeper of another version.
-//! Serde names each variant, so a later version that adds variants still
-//! reads and writes that greeting the same way.
+//! The first frame a keeper sends is always [`FromKeeper::Hello`], with the
+//! floti version that built it and its link version
+//! ([`floti_protocol::KEEPER_LINK_VERSION`]), and a host reads nothing else
+//! from a keeper of a link version it does not speak. Serde names each
+//! variant, so a later version that adds variants still reads and writes
+//! that greeting the same way. A keeper from before the greeting named a
+//! link version (2.4.1-preview.7's) leaves it out, and reads as link version
+//! 1 ([`UNNAMED_LINK_VERSION`]), which is the link it speaks.
 //!
 //! Nothing here carries a key, a code or a credential. A program is started
 //! with its arguments, its folder and only the variables its backend adds for
@@ -27,6 +31,12 @@ use crate::session::{SessionExit, TermSize};
 /// The largest frame either side reads: far more than a screen's redraw or
 /// a pty's read, and far less than would hurt to hold.
 const MOST_FRAME: usize = 64 << 20;
+
+/// The link version a keeper speaks when its greeting names none: one built
+/// before the greeting carried a link version, as 2.4.1-preview.7's was,
+/// whose link to its host is link version 1. Apart from the greeting gaining
+/// its `link`, that link has not changed since.
+pub(crate) const UNNAMED_LINK_VERSION: u32 = 1;
 
 /// Which of the host's two kinds of terminal a program the keeper holds is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,8 +142,16 @@ pub(crate) enum ToKeeper {
 /// From the keeper to its host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum FromKeeper {
-    /// The first frame on every connection.
-    Hello { version: String, pid: u32 },
+    /// The first frame on every connection: the floti version that built the
+    /// keeper, its process and its link version, which a keeper from before
+    /// the greeting named one leaves out: that keeper speaks
+    /// [`UNNAMED_LINK_VERSION`].
+    Hello {
+        version: String,
+        pid: u32,
+        #[serde(default)]
+        link: Option<u32>,
+    },
     /// One program the keeper holds, sent to a host as it connects: running,
     /// with its screen drawn again and its output from here on, or ended
     /// while no host was there, with how.
@@ -235,6 +253,7 @@ mod tests {
             FromKeeper::Hello {
                 version: "1.2.3".to_owned(),
                 pid: 42,
+                link: Some(1),
             },
             FromKeeper::held(
                 7,

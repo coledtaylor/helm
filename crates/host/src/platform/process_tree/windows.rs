@@ -37,7 +37,7 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, CreateProcessW, GetCurrentProcess,
     GetExitCodeProcess, OpenProcess, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE, STARTUPINFOW, WaitForSingleObject,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
 
 use super::{Ending, ProcessTree, Started};
@@ -223,6 +223,59 @@ impl Drop for Alone {
     fn drop(&mut self) {
         // SAFETY: the process handle CreateProcessW made, closed once.
         unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// One process, held by a handle opened when it is named, so ending it later
+/// ends that process even once Windows could have handed its id to another.
+#[derive(Debug)]
+pub struct OneProcess {
+    handle: HANDLE,
+    pid: u32,
+}
+
+// SAFETY: a process handle may be used and closed from any thread.
+unsafe impl Send for OneProcess {}
+
+impl OneProcess {
+    /// Opens process `pid` to end it later.
+    pub fn hold(pid: u32) -> io::Result<Self> {
+        if pid == 0 || pid == std::process::id() {
+            return Err(io::Error::other(format!("process {pid} is not one to end")));
+        }
+        open_process(
+            pid,
+            PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+        )
+        .map(|handle| Self { handle, pid })
+        .ok_or_else(io::Error::last_os_error)
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Ends this process alone, at once, as a crash would
+    /// (`TerminateProcess`): nothing it started, and nothing it could handle.
+    /// A process that has already exited is not an error.
+    pub fn end_now(&self) -> io::Result<()> {
+        // SAFETY: `self.handle` is a process handle with PROCESS_TERMINATE.
+        if unsafe { TerminateProcess(self.handle, 1) } != 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        // SAFETY: as above, with SYNCHRONIZE, waited on without blocking.
+        if unsafe { WaitForSingleObject(self.handle, 0) } == WAIT_OBJECT_0 {
+            return Ok(());
+        }
+        Err(err)
+    }
+}
+
+impl Drop for OneProcess {
+    fn drop(&mut self) {
+        // SAFETY: the handle `hold` opened, closed once.
+        unsafe { CloseHandle(self.handle) };
     }
 }
 

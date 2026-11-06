@@ -15,7 +15,9 @@ import {
   type RemoteHost,
   type RemoteHostConnection,
   lineToTryByHand,
-  transportFix
+  localHostVersionsSentence,
+  transportFix,
+  type LocalHostVersions
 } from '@helm/core/types'
 import { Chip, type ChipTone } from './Chip'
 import { PlusIcon } from './icons'
@@ -43,6 +45,13 @@ import { Action, Divider, Group, Select } from './SettingsKit'
  * what that would do and where is said first, and it is done only after the
  * user's yes. A link that cannot connect says why the way the dialog does
  * (`classifyHostFailure`), with the last line written there, unedited.
+ *
+ * Above them, while this PC's host and this Helm are on different floti
+ * versions, a notice says which is behind, naming both. An older host, one on
+ * protocol 1.x included, is offered Restart host to update, which says what
+ * it ends before anything happens; for a 1.x host it says every session and
+ * terminal keeps running in its tab. A Helm behind its host is told to update
+ * Helm. Nothing is restarted without the user's click.
  */
 
 /** What Settings > Hosts asks the desktop to check, install and cancel on a host's computer. */
@@ -76,6 +85,8 @@ export interface HostsSettingsProps {
   updateRequest?: { id: string; nonce: number } | null | undefined
   /** Reconnect now on a host that is not connected: its link tries at once rather than after the wait. */
   onReconnect?: ((id: string) => void) | undefined
+  /** This PC's host, while it and this Helm are on different versions; null or absent otherwise. */
+  localHost?: { versions: LocalHostVersions; onRestart: () => void } | null | undefined
 }
 
 const CONNECTION_CHIP: Record<RemoteHostConnection['state'], { tone: ChipTone; label: string }> = {
@@ -97,7 +108,8 @@ export function HostsSettings({
   install,
   onInstalled,
   updateRequest = null,
-  onReconnect
+  onReconnect,
+  localHost = null
 }: HostsSettingsProps): JSX.Element {
   return (
     <Group
@@ -105,6 +117,12 @@ export function HostsSettings({
       title="Hosts"
       hint="Hosts on your other computers, reached with your own ssh or a command you choose. Each runs its own sessions."
     >
+      {localHost !== null && (
+        <>
+          <LocalHostNotice versions={localHost.versions} onRestart={localHost.onRestart} />
+          <Divider />
+        </>
+      )}
       {hosts.length === 0 && (
         <div data-settings-hosts-empty className="flex flex-col items-start gap-2 py-1.5">
           <p className="text-[12px] text-fg-muted">
@@ -235,6 +253,35 @@ function HostRow({
           Remove
         </Action>
       </div>
+    </div>
+  )
+}
+
+/** This PC's host and this Helm on different versions: which is behind, and what to do. */
+function LocalHostNotice({
+  versions,
+  onRestart
+}: {
+  versions: LocalHostVersions
+  onRestart: () => void
+}): JSX.Element {
+  const restarts = versions.older === 'host'
+  return (
+    <div data-settings-local-host={versions.older} aria-label="This PC" role="group" className="py-2">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="min-w-0 truncate text-[12.5px] text-fg">This PC</span>
+        <Chip tone="warn">{versions.older === 'host' ? 'Older host' : 'Update Helm'}</Chip>
+      </div>
+      <p data-settings-local-host-versions className="mt-2 text-[11.5px] leading-[1.5] text-fg-muted">
+        {localHostVersionsSentence(versions)}
+      </p>
+      {restarts && (
+        <div className="mt-2 flex items-center">
+          <Action primary data-settings-local-host-restart onClick={onRestart}>
+            Restart host to update
+          </Action>
+        </div>
+      )}
     </div>
   )
 }

@@ -155,6 +155,55 @@ fn test_deadline(data: &Path) -> Option<Duration> {
     None
 }
 
+/// The file in a data folder whose text, `<major>.<minor>`, is the protocol
+/// version a test build's host greets with in place of [`PROTOCOL_VERSION`],
+/// so a test can meet a host one version apart. A production build never
+/// reads it.
+#[cfg(any(test, feature = "testkit"))]
+pub const TEST_HOST_PROTOCOL: &str = "floti-test-host-protocol";
+
+/// The protocol version the host over the data folder `data` greets with:
+/// [`PROTOCOL_VERSION`], or in a test build what [`TEST_HOST_PROTOCOL`] there
+/// says.
+fn host_protocol(data: &Path) -> floti_protocol::ProtocolVersion {
+    #[cfg(any(test, feature = "testkit"))]
+    if let Some((major, minor)) = std::fs::read_to_string(data.join(TEST_HOST_PROTOCOL))
+        .ok()
+        .and_then(|text| {
+            let (major, minor) = text.trim().split_once('.')?;
+            Some((major.parse().ok()?, minor.parse().ok()?))
+        })
+    {
+        return floti_protocol::ProtocolVersion::new(major, minor);
+    }
+    let _ = data;
+    PROTOCOL_VERSION
+}
+
+/// The file in a data folder whose text is the floti version a test build's
+/// host names, in its welcome and its restart state, in place of
+/// [`FLOTI_VERSION`](crate::version::FLOTI_VERSION), so a test, or a dev
+/// window driven to look at it, can meet a host older than the Helm it is.
+/// A production build never reads it.
+#[cfg(any(test, feature = "testkit"))]
+pub const TEST_HOST_VERSION: &str = "floti-test-host-version";
+
+/// The floti version the host over the data folder `data` names:
+/// [`FLOTI_VERSION`](crate::version::FLOTI_VERSION), or in a test build what
+/// [`TEST_HOST_VERSION`] there says.
+fn host_version(data: &Path) -> String {
+    #[cfg(any(test, feature = "testkit"))]
+    if let Some(version) = std::fs::read_to_string(data.join(TEST_HOST_VERSION))
+        .ok()
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+    {
+        return version;
+    }
+    let _ = data;
+    crate::version::FLOTI_VERSION.to_owned()
+}
+
 /// How long a stop waits, once the sessions have ended, for the plugin
 /// registry to be let go, and then for the store, before it goes on anyway.
 const RELEASE_WAIT: Duration = Duration::from_secs(10);
@@ -387,8 +436,8 @@ impl Host {
             .clone()
             .map(|program| Arc::new(Keeper::new(program, &folders, inherited_env.clone())));
         let identity = Arc::new(HostIdentity {
-            protocol: PROTOCOL_VERSION,
-            host_version: crate::version::FLOTI_VERSION.to_owned(),
+            protocol: host_protocol(&folders.data),
+            host_version: host_version(&folders.data),
             backends: backends
                 .iter()
                 .map(|backend| backend.capabilities())
@@ -556,11 +605,19 @@ fn start_agent_tools(hosted: &Arc<Hosted>, features: &Features) -> Result<Arc<Ho
     let tools = Arc::new(HostAgentTools::new(
         Arc::clone(features.browser()),
         Arc::clone(features.plugin_tools()),
+        Arc::clone(features.host_plugin_tools()),
     ));
-    // An offer taken away can leave nothing to serve: the port goes then.
+    // An offer taken away, or a plugin of the host's own switched off, can
+    // leave nothing to serve: the port goes then.
     let offers = Arc::downgrade(&tools);
     features.plugin_tools().on_change(move || {
         if let Some(tools) = offers.upgrade() {
+            tools.settle();
+        }
+    });
+    let own_plugins = Arc::downgrade(&tools);
+    features.host_plugin_tools().on_change(move || {
+        if let Some(tools) = own_plugins.upgrade() {
             tools.settle();
         }
     });
