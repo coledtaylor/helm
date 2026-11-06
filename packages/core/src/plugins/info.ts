@@ -11,7 +11,7 @@ import type { PanelActionSpec, SettingSpec, SettingValue, StatusItem } from '@co
 /** A sidebar panel: Helm's header, the plugin's page. */
 export interface PluginPanelInfo {
   title: string
-  /** `helm-plugin://<id>/<path>`: the plugin's own origin. */
+  /** `helm-plugin://<id>/<path>` at version 1, `floti-plugin://<id>/<path>` at version 2: the plugin's own origin. */
   url: string
   actions: PanelActionSpec[]
 }

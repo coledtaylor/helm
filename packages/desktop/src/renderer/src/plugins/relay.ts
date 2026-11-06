@@ -10,7 +10,7 @@ import {
   type PluginToolCall,
   type PluginToolOutcome
 } from '../../../shared/ipc'
-import { hostLabel, parsePluginOrigin } from '../../../shared/plugins/origin'
+import { hostLabel, parsePluginOrigin, pluginSchemeOf } from '../../../shared/plugins/origin'
 import {
   CONNECT,
   HELLO,
@@ -256,8 +256,10 @@ export function createPluginRelay(options: PluginRelayOptions): PluginRelay {
   const onWindowMessage = (event: MessageEvent): void => {
     const data = event.data as { type?: unknown } | null
     if (data === null || typeof data !== 'object' || data.type !== HELLO) return
-    // The origin names the plugin and its host: a page is known as the
-    // frame made for that very plugin on that very host, and no other.
+    // The origin names the plugin, its host and its scheme: a page is known
+    // as the frame made for that very plugin on that very host, on the
+    // scheme its URL has (helm-plugin at version 1, floti-plugin at 2), and
+    // no other.
     const origin = parsePluginOrigin(event.origin)
     if (origin === null) return
     let frame: Frame | undefined
@@ -265,6 +267,7 @@ export function createPluginRelay(options: PluginRelayOptions): PluginRelay {
       if (
         candidate.spec.plugin === origin.plugin &&
         labelOf(candidate.spec) === origin.label &&
+        pluginSchemeOf(candidate.spec.url) === origin.scheme &&
         candidate.element.contentWindow === event.source
       ) {
         frame = candidate

@@ -35,6 +35,8 @@ describe('pluginOriginOf', () => {
     ['helm-plugin://sample/dist/panel.html', 'helm-plugin://sample'],
     ['helm-plugin://sample/', 'helm-plugin://sample'],
     ['helm-plugin://sample.build-box/dist/panel.html', 'helm-plugin://sample.build-box'],
+    ['floti-plugin://sample/dist/panel.html', 'floti-plugin://sample'],
+    ['floti-plugin://sample.build-box/dist/panel.html', 'floti-plugin://sample.build-box'],
     ['https://example.com/', null],
     ['http://localhost:5173/', null],
     ['helm-content://abc/x.html', null],
@@ -121,6 +123,46 @@ describe('the same plugin on two hosts', () => {
       request(null, 'clipboard-sanitized-write', (granted) => answers.push(granted), { requestingUrl: `${origin}/x.html` })
       request(null, 'notifications', (granted) => answers.push(granted), { requestingUrl: `${origin}/x.html` })
       expect(answers).toEqual([true, false])
+    }
+  })
+})
+
+describe('a version 1 and a version 2 plugin side by side', () => {
+  const v1 = 'helm-plugin://sample'
+  const v2 = 'floti-plugin://sample'
+  const from = (origin: string, target: string, initiatorIsHelm = false): boolean =>
+    pluginNavigationAllowed({ target, frameOrigin: origin, initiatorOrigin: origin, initiatorIsHelm, framesPlugins: true })
+
+  it('s1: keeps a version 2 frame on its own floti-plugin origin, scheme included, as a version 1 frame is kept on helm-plugin', () => {
+    expect(from(v2, `${v2}/dist/other.html`)).toBe(true)
+    expect(from(v2, `${v1}/dist/panel.html`)).toBe(false)
+    expect(from(v1, `${v2}/dist/panel.html`)).toBe(false)
+    expect(from(v2, 'floti-plugin://other/x.html')).toBe(false)
+    expect(from(v2, 'https://example.com/')).toBe(false)
+    // Helm itself puts a frame on either.
+    expect(from('http://localhost:5173', `${v2}/dist/panel.html`, true)).toBe(true)
+    expect(
+      pluginNavigationAllowed({
+        target: `${v2}/dist/panel.html`,
+        frameOrigin: 'https://example.com',
+        initiatorOrigin: 'https://example.com',
+        initiatorIsHelm: true,
+        framesPlugins: false
+      })
+    ).toBe(false)
+  })
+
+  it('s1: gives a version 2 page the clipboard write and nothing else, as a version 1 page', () => {
+    installPluginPermissions()
+    const request = handlers.request!
+    const check = handlers.check!
+    for (const origin of [v1, v2, 'floti-plugin://sample.build-box']) {
+      const answers: boolean[] = []
+      request(null, 'clipboard-sanitized-write', (granted) => answers.push(granted), { requestingUrl: `${origin}/x.html` })
+      request(null, 'notifications', (granted) => answers.push(granted), { requestingUrl: `${origin}/x.html` })
+      expect(answers).toEqual([true, false])
+      expect(check(null, 'media', origin, {})).toBe(false)
+      expect(check(null, 'clipboard-sanitized-write', origin, {})).toBe(true)
     }
   })
 })

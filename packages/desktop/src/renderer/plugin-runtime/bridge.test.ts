@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { HelmBridge, HelmContext, HelmError, HelmTheme } from '@coledtaylor/helm-plugin-sdk'
+import type { FlotiBridge, HelmBridge, HelmContext, HelmError, HelmTheme } from '@coledtaylor/helm-plugin-sdk'
 import { BUILTIN_THEMES, PALETTE_HUES, pluginThemeOf, resolveTheme, type ThemeKind } from '@helm/core/types'
 import type { PluginFetchRequest, PluginFetchResponse } from '../../shared/ipc'
 import { installBridge } from './bridge'
@@ -63,16 +63,28 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-/** A frame with the bridge installed, as Helm serves a page: named with its context, booted with a theme. */
+/** A frame with the bridge installed, as Helm serves a version 1 page: named with its context, booted with a theme. */
 function page(context: HelmContext | null = PANEL, boot: string | null = JSON.stringify({ theme: THEME })): Page {
   const frame = document.createElement('iframe')
   document.body.appendChild(frame)
   const win = frame.contentWindow as Window & { helm: HelmBridge }
   if (context !== null) win.name = contextName(context)
   const parentPost = vi.spyOn(win.parent, 'postMessage').mockImplementation(() => undefined)
-  const helm = installBridge(win, boot)
+  // A boot that names no apiVersion is a version 1 page's: the bridge is window.helm.
+  const helm = installBridge(win, boot) as HelmBridge
   const hellos = parentPost.mock.calls.map((call) => call[0])
   return { win, helm, hellos }
+}
+
+/** A frame booted as Helm serves a version 2 page on floti-plugin: the boot says apiVersion 2. */
+function flotiPage(context: HelmContext = PANEL): { win: Window & { floti: FlotiBridge }; floti: FlotiBridge; hellos: unknown[] } {
+  const frame = document.createElement('iframe')
+  document.body.appendChild(frame)
+  const win = frame.contentWindow as Window & { floti: FlotiBridge }
+  win.name = contextName(context)
+  const parentPost = vi.spyOn(win.parent, 'postMessage').mockImplementation(() => undefined)
+  const floti = installBridge(win, JSON.stringify({ theme: THEME, channels: 'host', onHostComputer: true, apiVersion: 2 })) as FlotiBridge
+  return { win, floti, hellos: parentPost.mock.calls.map((call) => call[0]) }
 }
 
 /** A `message` event made in the page's own realm, with the fields a browser sets. */
@@ -182,6 +194,52 @@ describe('installing', () => {
     expect(() => {
       ;(win as unknown as Record<string, unknown>)['helm'] = {}
     }).toThrow(TypeError)
+  })
+})
+
+describe('a version 2 page beside a version 1 page', () => {
+  /** Every method and property path of a bridge, as dotted names. */
+  const shape = (bridge: object, prefix = ''): string[] =>
+    Object.entries(Object.getOwnPropertyDescriptors(bridge)).flatMap(([key, descriptor]) =>
+      descriptor.value !== null && typeof descriptor.value === 'object'
+        ? shape(descriptor.value as object, `${prefix}${key}.`)
+        : [`${prefix}${key}`]
+    )
+
+  it('s1: gives a floti-plugin page window.floti at apiVersion 2 and no window.helm, and a helm-plugin page window.helm at apiVersion 1 and no window.floti', () => {
+    const v2 = flotiPage()
+    expect(v2.floti.apiVersion).toBe(2)
+    expect(v2.win.floti).toBe(v2.floti)
+    expect('helm' in v2.win).toBe(false)
+    expect(Object.isFrozen(v2.win.floti)).toBe(true)
+    expect(Object.getOwnPropertyDescriptor(v2.win, 'floti')).toMatchObject({ writable: false, configurable: false })
+    expect(v2.hellos).toEqual([{ type: HELLO }])
+
+    const v1 = page()
+    expect(v1.helm.apiVersion).toBe(1)
+    expect(v1.win.helm).toBe(v1.helm)
+    expect('floti' in v1.win).toBe(false)
+  })
+
+  it('s1: has the same calls, theme and context on either bridge', async () => {
+    const v1 = page()
+    const v2 = flotiPage()
+    expect(shape(v2.floti).sort()).toEqual(shape(v1.helm).sort())
+    expect(v2.floti.theme).toEqual(v1.helm.theme)
+    expect(v2.floti.context).toEqual(v1.helm.context)
+    expect(v2.win.document.documentElement.style.getPropertyValue('--helm-bg')).toBe('#101010')
+
+    const port = connect(v2.win)
+    const done = v2.floti.settings.get()
+    expect(sent(port).at(-1)).toMatchObject({ t: 'call', method: 'settings.get', args: [] })
+    answer(port, { ok: true, value: { a: 1 } })
+    await expect(done).resolves.toEqual({ a: 1 })
+  })
+
+  it('s1: names floti in the errors a version 2 page is told', async () => {
+    const { floti } = flotiPage()
+    await expect(floti.open('https://example.com')).rejects.toMatchObject({ code: 'not-allowed', message: expect.stringMatching(/^floti.open needs/) as string })
+    expect(() => floti.tools.handle('x', () => 'y')).toThrow(/^floti.tools.handle works in the background page only$/)
   })
 })
 

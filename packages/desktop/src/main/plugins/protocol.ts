@@ -1,13 +1,17 @@
 import { extname } from 'node:path'
 import { protocol } from 'electron'
 import { RESERVED_PREFIX } from '@coledtaylor/helm-plugin-sdk/manifest'
-import { PLUGIN_SCHEME } from '../../shared/ipc'
-import { parsePluginOrigin } from '../../shared/plugins/origin'
+import { PLUGIN_SCHEMES } from '../../shared/ipc'
+import { apiVersionOfScheme, parsePluginOrigin } from '../../shared/plugins/origin'
 import { MIME } from '../content'
 
 /**
- * `helm-plugin://<id>/<path>`: a plugin's page files, served from the host
- * that keeps the plugin, and Helm's runtime beside them.
+ * `helm-plugin://<id>/<path>` and `floti-plugin://<id>/<path>`: a version 1
+ * and a version 2 plugin's page files, served from the host that keeps the
+ * plugin, and Helm's runtime beside them. The two schemes are served alike,
+ * under the same policy, stylesheet and bridge script; the scheme a page is
+ * asked for on tells the bridge which it is (`window.helm` at apiVersion 1,
+ * `window.floti` at apiVersion 2).
  *
  * The host names the plugin, so every plugin is its own **origin**: the
  * browser keeps it out of Helm's page and out of every other plugin's, gives
@@ -18,7 +22,7 @@ import { MIME } from '../content'
  * the primitives stylesheet - so a plugin never ships a copy of either and
  * never runs a stale one. Every HTML page the plugin serves gets the two
  * injected at the top of its `<head>`, before its own styles and scripts:
- * `window.helm` exists before the plugin's first line runs, and the plugin's
+ * the bridge exists before the plugin's first line runs, and the plugin's
  * CSS wins over the primitives wherever it says something different.
  */
 
@@ -86,13 +90,17 @@ export interface PluginPageSource {
 export type PluginPageSources = (label: string | null) => PluginPageSource | null
 
 /**
- * A request on the scheme, taken apart: the plugin, the label of the host it
- * is on (null for This PC), and the runtime file or the page path it names.
+ * A request on either scheme, taken apart: the plugin API version its scheme
+ * serves, the plugin, the label of the host it is on (null for This PC), and
+ * the runtime file or the page path it names.
  */
-type Parsed =
-  | { id: string; label: string | null; runtime: string }
-  | { id: string; label: string | null; parts: string[] }
-  | Response
+interface ParsedOrigin {
+  apiVersion: 1 | 2
+  id: string
+  label: string | null
+}
+
+type Parsed = (ParsedOrigin & { runtime: string }) | (ParsedOrigin & { parts: string[] }) | Response
 
 function parse(requestUrl: string): Parsed {
   let url: URL
@@ -103,12 +111,11 @@ function parse(requestUrl: string): Parsed {
   }
   const origin = parsePluginOrigin(requestUrl)
   if (origin === null) return new Response('Bad request', { status: 400 })
-  const { plugin: id, label } = origin
-  if (url.pathname.startsWith(RUNTIME_PATH)) return { id, label, runtime: url.pathname.slice(RUNTIME_PATH.length) }
+  const at: ParsedOrigin = { apiVersion: apiVersionOfScheme(origin.scheme), id: origin.plugin, label: origin.label }
+  if (url.pathname.startsWith(RUNTIME_PATH)) return { ...at, runtime: url.pathname.slice(RUNTIME_PATH.length) }
   try {
     return {
-      id,
-      label,
+      ...at,
       parts: url.pathname
         .split('/')
         .filter((part) => part !== '')
@@ -136,13 +143,13 @@ function page(path: string, bytes: Uint8Array, boot: () => string, fallbackType:
 }
 
 /**
- * Answers one request on the scheme from a host's files, every response under
- * the plugin CSP and every page with the runtime injected. Separate from the
- * registration so a test can call it. Each origin is
+ * Answers one request on either scheme from a host's files, every response
+ * under the plugin CSP and every page with the runtime injected. Separate from
+ * the registration so a test can call it. Each origin is
  * served from the host it names and from no other: This PC's
- * (`helm-plugin://<id>/`) from the local host, a remote host's
- * (`helm-plugin://<id>.<label>/`) from that host, and one naming a host this
- * device has not added not at all (404). The host resolves the path inside
+ * (`helm-plugin://<id>/`, `floti-plugin://<id>/`) from the local host, a
+ * remote host's (`<scheme>://<id>.<label>/`) from that host, and one naming a
+ * host this device has not added not at all (404). The host resolves the path inside
  * the plugin's folder and refuses one outside it (403) or not there (404); a
  * host that cannot be reached is a 503 saying why.
  *
@@ -155,7 +162,7 @@ export async function servePluginRequestFrom(
 ): Promise<Response> {
   const parsed = parse(requestUrl)
   if (parsed instanceof Response) return parsed
-  const { id, label } = parsed
+  const { apiVersion, id, label } = parsed
   const source = typeof sources === 'function' ? sources(label) : label === null ? sources : null
   if (source === null) return new Response('Not found', { status: 404 })
   try {
@@ -168,7 +175,7 @@ export async function servePluginRequestFrom(
     if (file.status !== 200) {
       return new Response(new Uint8Array(file.body), { status: file.status, headers: { 'content-type': file.contentType } })
     }
-    return page(path, file.body, () => hostBoot(runtime.boot(id), source.onHostComputer), file.contentType)
+    return page(path, file.body, () => hostBoot(runtime.boot(id), source.onHostComputer, apiVersion), file.contentType)
   } catch (error) {
     return new Response(error instanceof Error ? error.message : String(error), {
       status: 503,
@@ -180,11 +187,12 @@ export async function servePluginRequestFrom(
 /**
  * The boot facts of a page drawn from a host's files: the runtime's, that the
  * page's `BroadcastChannel`s are relayed through the host, so a message
- * reaches the plugin's pages on every client and its background page, and
- * whether that host runs on this computer.
+ * reaches the plugin's pages on every client and its background page,
+ * whether that host runs on this computer, and the plugin API version the
+ * page's scheme serves, which is the bridge it gets.
  */
-export function hostBoot(boot: string, onHostComputer: boolean): string {
-  return JSON.stringify({ ...(JSON.parse(boot) as Record<string, unknown>), channels: 'host', onHostComputer })
+export function hostBoot(boot: string, onHostComputer: boolean, apiVersion: 1 | 2): string {
+  return JSON.stringify({ ...(JSON.parse(boot) as Record<string, unknown>), channels: 'host', onHostComputer, apiVersion })
 }
 
 function asset(body: string, type: string): Response {
@@ -216,7 +224,9 @@ function insertAt(text: string, at: number, insert: string): string {
   return text.slice(0, at) + insert + text.slice(at)
 }
 
-/** The scheme, answered from each host's files. */
+/** Both schemes, answered from each host's files by the one handler. */
 export function registerHostPluginProtocol(sources: PluginPageSources, runtime: PluginRuntime): void {
-  protocol.handle(PLUGIN_SCHEME, (request) => servePluginRequestFrom(request.url, sources, runtime))
+  for (const scheme of PLUGIN_SCHEMES) {
+    protocol.handle(scheme, (request) => servePluginRequestFrom(request.url, sources, runtime))
+  }
 }

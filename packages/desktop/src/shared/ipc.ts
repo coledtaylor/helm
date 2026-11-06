@@ -1655,11 +1655,25 @@ export interface IpcRequests {
 }
 
 /**
- * The scheme plugin pages are served on: `helm-plugin://<id>/<path>` for This
- * PC's, `helm-plugin://<id>.<host label>/<path>` for a remote host's, an
- * origin per host and plugin (`shared/plugins/origin.ts`).
+ * The scheme a version 1 plugin's pages are served on:
+ * `helm-plugin://<id>/<path>` for This PC's,
+ * `helm-plugin://<id>.<host label>/<path>` for a remote host's, an origin per
+ * host and plugin (`shared/plugins/origin.ts`). Such a page gets `window.helm`.
  */
 export const PLUGIN_SCHEME = 'helm-plugin'
+
+/**
+ * The scheme a version 2 plugin's pages are served on, laid out as
+ * `helm-plugin`'s. The host writes it into a version 2 plugin's page URLs, so
+ * the scheme is how a client tells the versions apart; such a page gets
+ * `window.floti`.
+ */
+export const FLOTI_PLUGIN_SCHEME = 'floti-plugin'
+
+/** Both plugin page schemes, version 1's first. */
+export const PLUGIN_SCHEMES = [PLUGIN_SCHEME, FLOTI_PLUGIN_SCHEME] as const
+
+export type PluginScheme = (typeof PLUGIN_SCHEMES)[number]
 
 // What the window draws of a plugin, and of the secrets: in core so the ui
 // package's Settings pages can be typed by them (`core/plugins/info.ts`).

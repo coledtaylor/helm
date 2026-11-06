@@ -2,7 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { LOCAL_HOST_KEY } from '@helm/core/types'
 import type * as P from '../host/protocol'
 import { pluginFromHost } from '../host/records'
-import { hostFrameKey, hostLabel, hostOfLabel, onHostOrigin, parsePluginOrigin, pluginOrigin } from './origin'
+import {
+  apiVersionOfScheme,
+  formatPluginOrigin,
+  hostFrameKey,
+  hostLabel,
+  hostOfLabel,
+  onHostOrigin,
+  parsePluginOrigin,
+  pluginOrigin,
+  pluginSchemeOf
+} from './origin'
 
 const BUILD_BOX = '6f1d2c3a-1b2c-4d5e-8f90-a1b2c3d4e5f6'
 
@@ -25,9 +35,9 @@ describe('a plugin’s origin on each host', () => {
   })
 
   it('reads an origin or a URL back to its plugin and host', () => {
-    expect(parsePluginOrigin('helm-plugin://trackr')).toEqual({ plugin: 'trackr', label: null })
-    expect(parsePluginOrigin('helm-plugin://trackr/dist/a.html?x=1')).toEqual({ plugin: 'trackr', label: null })
-    expect(parsePluginOrigin(`helm-plugin://trackr.${BUILD_BOX}/dist/a.html`)).toEqual({ plugin: 'trackr', label: BUILD_BOX })
+    expect(parsePluginOrigin('helm-plugin://trackr')).toEqual({ scheme: 'helm-plugin', plugin: 'trackr', label: null })
+    expect(parsePluginOrigin('helm-plugin://trackr/dist/a.html?x=1')).toEqual({ scheme: 'helm-plugin', plugin: 'trackr', label: null })
+    expect(parsePluginOrigin(`helm-plugin://trackr.${BUILD_BOX}/dist/a.html`)).toEqual({ scheme: 'helm-plugin', plugin: 'trackr', label: BUILD_BOX })
     expect(parsePluginOrigin('https://trackr')).toBeNull()
     expect(parsePluginOrigin('helm-plugin://')).toBeNull()
     expect(parsePluginOrigin('helm-plugin://user@trackr')).toBeNull()
@@ -48,6 +58,32 @@ describe('a plugin’s origin on each host', () => {
       `helm-plugin://trackr.${BUILD_BOX}/dist/main%20page.html?tab=1#top`
     )
     expect(onHostOrigin('helm-plugin://trackr', { host: BUILD_BOX, plugin: 'trackr' })).toBe(`helm-plugin://trackr.${BUILD_BOX}/`)
+  })
+
+  it('s1: puts a version 2 plugin on floti-plugin://<id>, beside version 1 on helm-plugin://<id>, and reads either back with its scheme', () => {
+    expect(pluginOrigin({ host: LOCAL_HOST_KEY, plugin: 'sample', scheme: 'floti-plugin' })).toBe('floti-plugin://sample')
+    expect(pluginOrigin({ host: BUILD_BOX, plugin: 'sample', scheme: 'floti-plugin' })).toBe(`floti-plugin://sample.${BUILD_BOX}`)
+    expect(parsePluginOrigin('floti-plugin://sample/dist/panel.html')).toEqual({ scheme: 'floti-plugin', plugin: 'sample', label: null })
+    expect(parsePluginOrigin(`FLOTI-PLUGIN://sample.${BUILD_BOX}`)).toEqual({ scheme: 'floti-plugin', plugin: 'sample', label: BUILD_BOX })
+    expect(parsePluginOrigin('floti-plugin://')).toBeNull()
+    expect(parsePluginOrigin('floti-pluginx://sample')).toBeNull()
+    expect(pluginSchemeOf('helm-plugin://sample/')).toBe('helm-plugin')
+    expect(pluginSchemeOf('floti-plugin://sample/')).toBe('floti-plugin')
+    expect(pluginSchemeOf('https://sample/')).toBeNull()
+    expect(apiVersionOfScheme('helm-plugin')).toBe(1)
+    expect(apiVersionOfScheme('floti-plugin')).toBe(2)
+    expect(formatPluginOrigin({ scheme: 'floti-plugin', plugin: 'sample', label: 'build-box' })).toBe('floti-plugin://sample.build-box')
+    // The scheme is part of the origin: the two versions never share one.
+    expect(pluginOrigin({ host: LOCAL_HOST_KEY, plugin: 'sample', scheme: 'floti-plugin' })).not.toBe(
+      pluginOrigin({ host: LOCAL_HOST_KEY, plugin: 'sample' })
+    )
+  })
+
+  it('s1: moves a remote host’s version 2 page onto that host’s origin on floti-plugin, keeping its path', () => {
+    const url = 'floti-plugin://sample/dist/panel.html?x=1'
+    expect(onHostOrigin(url, { host: LOCAL_HOST_KEY, plugin: 'sample' })).toBe(url)
+    expect(onHostOrigin(url, { host: BUILD_BOX, plugin: 'sample' })).toBe(`floti-plugin://sample.${BUILD_BOX}/dist/panel.html?x=1`)
+    expect(onHostOrigin('floti-plugin://sample', { host: BUILD_BOX, plugin: 'sample' })).toBe(`floti-plugin://sample.${BUILD_BOX}/`)
   })
 
   it('keys a remote host’s frame under its host, and This PC’s as today', () => {
@@ -98,5 +134,20 @@ describe('a plugin as a host lists it', () => {
     expect(theirs.panels['main']?.url).toBe(`helm-plugin://trackr.${BUILD_BOX}/dist/panel.html`)
     expect(theirs.tabs['item']?.url).toBe(`helm-plugin://trackr.${BUILD_BOX}/dist/item.html`)
     expect(theirs.background?.url).toBe(`helm-plugin://trackr.${BUILD_BOX}/dist/background.html`)
+  })
+
+  it('s1: keeps a version 2 plugin’s pages on floti-plugin, here and on build-box', () => {
+    const v2: P.PluginInfo = {
+      ...listed,
+      id: 'sample',
+      panels: { main: { title: 'Sample', url: 'floti-plugin://sample/dist/panel.html', actions: [] } },
+      tabs: { item: { title: 'Item', url: 'floti-plugin://sample/dist/item.html' } },
+      background: { url: 'floti-plugin://sample/dist/background.js', state: 'running', error: null }
+    }
+    expect(pluginFromHost(v2).panels['main']?.url).toBe('floti-plugin://sample/dist/panel.html')
+    const theirs = pluginFromHost(v2, BUILD_BOX)
+    expect(theirs.panels['main']?.url).toBe(`floti-plugin://sample.${BUILD_BOX}/dist/panel.html`)
+    expect(theirs.tabs['item']?.url).toBe(`floti-plugin://sample.${BUILD_BOX}/dist/item.html`)
+    expect(theirs.background?.url).toBe(`floti-plugin://sample.${BUILD_BOX}/dist/background.js`)
   })
 })

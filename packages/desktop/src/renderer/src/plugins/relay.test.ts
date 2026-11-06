@@ -178,6 +178,26 @@ describe('the frame', () => {
     expect(relay.state('panel:sample/main')).toEqual({ kind: 'loading' })
   })
 
+  it('s1: connects a version 2 frame from its floti-plugin origin, and a version 1 frame from helm-plugin, each only from its own scheme', () => {
+    const v2 = open({ key: 'panel:next/main', plugin: 'next', url: 'floti-plugin://next/dist/panel.html' })
+    const v1 = open()
+    const v2Post = vi.spyOn(v2.contentWindow!, 'postMessage').mockImplementation(() => undefined)
+    const v1Post = vi.spyOn(v1.contentWindow!, 'postMessage').mockImplementation(() => undefined)
+    // The other scheme's origin for the same plugin is not this frame's page.
+    window.dispatchEvent(windowMessage({ data: { type: HELLO }, origin: 'helm-plugin://next', source: v2.contentWindow }))
+    window.dispatchEvent(windowMessage({ data: { type: HELLO }, origin: 'floti-plugin://sample', source: v1.contentWindow }))
+    expect(v2Post).not.toHaveBeenCalled()
+    expect(v1Post).not.toHaveBeenCalled()
+    v2Post.mockRestore()
+    v1Post.mockRestore()
+
+    const next = connect(v2, 'floti-plugin://next')
+    expect(next.connect).toMatchObject({ type: CONNECT, context: { plugin: 'next', surface: 'panel', name: 'main' } })
+    expect(relay.state('panel:next/main')).toEqual({ kind: 'ready' })
+    connect(v1, 'helm-plugin://sample')
+    expect(relay.state('panel:sample/main')).toEqual({ kind: 'ready' })
+  })
+
   it('is one frame per key: opening the same surface again hands back the same element', () => {
     const first = open()
     expect(relay.open(spec())).toBe(first)

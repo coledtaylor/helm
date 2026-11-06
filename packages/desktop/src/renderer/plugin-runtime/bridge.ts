@@ -1,12 +1,14 @@
 import type {
   ExecOptions,
   ExecResult,
+  FlotiBridge,
   HelmBridge,
   HelmContext,
   HelmError,
   HelmErrorCode,
   HelmEvents,
   HelmTheme,
+  PluginBridge,
   PluginParams,
   PluginSession,
   SecretState,
@@ -28,7 +30,10 @@ import {
 } from './wire'
 
 /**
- * `window.helm`, as every plugin page gets it.
+ * `window.helm`, as every version 1 plugin page gets it, and `window.floti`,
+ * as every version 2 page does: the same object with the same calls, under the
+ * name and `apiVersion` the page's boot gives (`main/plugins/protocol.ts`, from
+ * the scheme the page was asked for on). A page gets one of the two, never both.
  *
  * Served by Helm under `/__helm/bridge.js` and injected at the top of the
  * page's `<head>`, so it runs before any of the plugin's own code and the
@@ -54,9 +59,11 @@ const NULL_BODY = new Set([101, 103, 204, 205, 304])
  */
 export const TOOL_HANDLER_WAIT_MS = 5000
 
-export function installBridge(win: Window, bootText: string | null): HelmBridge {
+export function installBridge(win: Window, bootText: string | null): HelmBridge | FlotiBridge {
   const doc = win.document
   const boot = readBoot(bootText)
+  // The global the page knows the bridge by, as its own errors name it.
+  const bridgeName = boot.apiVersion === 2 ? 'floti' : 'helm'
   let theme = boot.theme ?? fallbackTheme()
   let context = readContext(win)
   let visible = false
@@ -149,7 +156,7 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       if (controller.signal.aborted) return
       if (handler === null) {
         throw new Error(
-          `The plugin's background page has no handler for ${message.name}. It registers one with helm.tools.handle('${message.name}', ...) as it starts.`
+          `The plugin's background page has no handler for ${message.name}. It registers one with ${bridgeName}.tools.handle('${message.name}', ...) as it starts.`
         )
       }
       const value: unknown = await handler(message.args, { session: message.session, signal: controller.signal })
@@ -271,8 +278,8 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     })
   }
 
-  const bridge: HelmBridge = {
-    apiVersion: 1,
+  const bridge: PluginBridge = {
+    apiVersion: boot.apiVersion,
     get context() {
       return context
     },
@@ -309,7 +316,7 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       // Said here, where the mistake is made: Helm refuses it too.
       if (navigator.userActivation?.isActive !== true) {
         return Promise.reject(
-          helmError('not-allowed', 'helm.open needs a click or key press the user just made in the page: call it from the handler')
+          helmError('not-allowed', `${bridgeName}.open needs a click or key press the user just made in the page: call it from the handler`)
         )
       }
       return call<void>('open', [url])
@@ -353,7 +360,7 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
         // user's own click or key press in this page is refused by Helm too.
         if (navigator.userActivation?.isActive !== true) {
           return Promise.reject(
-            helmError('not-allowed', 'helm.sessions.start needs a click or key press the user just made in the page: call it from the handler')
+            helmError('not-allowed', `${bridgeName}.sessions.start needs a click or key press the user just made in the page: call it from the handler`)
           )
         }
         return call<SessionStartResult>('sessions.start', [request])
@@ -367,10 +374,10 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
         // arrives: only the background page is running whenever a session
         // might call, so only it is ever handed one.
         if (context.surface !== 'background') {
-          throw helmError('invalid', 'helm.tools.handle works in the background page only')
+          throw helmError('invalid', `${bridgeName}.tools.handle works in the background page only`)
         }
-        if (typeof name !== 'string' || name === '') throw helmError('invalid', 'helm.tools.handle needs the name of a tool')
-        if (typeof handler !== 'function') throw helmError('invalid', 'helm.tools.handle needs a function to answer the tool')
+        if (typeof name !== 'string' || name === '') throw helmError('invalid', `${bridgeName}.tools.handle needs the name of a tool`)
+        if (typeof handler !== 'function') throw helmError('invalid', `${bridgeName}.tools.handle needs a function to answer the tool`)
         handlers.set(name, handler)
         for (const wake of [...(awaitingHandler.get(name) ?? [])]) wake()
         return () => {
@@ -389,9 +396,9 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     }
   }
 
-  Object.defineProperty(win, 'helm', { value: Object.freeze(bridge), enumerable: true, configurable: false, writable: false })
+  Object.defineProperty(win, bridgeName, { value: Object.freeze(bridge), enumerable: true, configurable: false, writable: false })
   if (win.parent !== win) win.parent.postMessage({ type: HELLO }, '*')
-  return bridge
+  return bridge as HelmBridge | FlotiBridge
 }
 
 /** A `Response` the page can use like any other, `url` and `redirected` included. */
@@ -458,30 +465,34 @@ function abortError(message = 'The operation was aborted.'): DOMException {
 /**
  * What the page's script tag carries: its first theme, whether its channels
  * are relayed through the local host, and whether this page is drawn on the
- * computer the plugin runs on. A boot that does not say is a page Helm serves
- * on its own computer.
+ * computer the plugin runs on, and the plugin API version its scheme serves:
+ * 2 on `floti-plugin`, which makes the bridge `window.floti`. A boot that does
+ * not say is a version 1 page Helm serves on its own computer.
  */
 interface Boot {
   theme: HelmTheme | null
   channels: 'host' | null
   onHostComputer: boolean
+  apiVersion: 1 | 2
 }
 
 function readBoot(text: string | null): Boot {
-  if (text === null) return { theme: null, channels: null, onHostComputer: true }
+  const unsaid: Boot = { theme: null, channels: null, onHostComputer: true, apiVersion: 1 }
+  if (text === null) return unsaid
   try {
-    const boot = JSON.parse(text) as { theme?: HelmTheme; channels?: unknown; onHostComputer?: unknown }
+    const boot = JSON.parse(text) as { theme?: HelmTheme; channels?: unknown; onHostComputer?: unknown; apiVersion?: unknown }
     return {
       theme: boot.theme ?? null,
       channels: boot.channels === 'host' ? 'host' : null,
-      onHostComputer: boot.onHostComputer !== false
+      onHostComputer: boot.onHostComputer !== false,
+      apiVersion: boot.apiVersion === 2 ? 2 : 1
     }
   } catch {
-    return { theme: null, channels: null, onHostComputer: true }
+    return unsaid
   }
 }
 
-/** The bridge's own method a channel post goes through; not part of `window.helm`. */
+/** The bridge's own method a channel post goes through; not part of `window.helm` or `window.floti`. */
 export const CHANNEL_POST = 'channel.post'
 
 /**

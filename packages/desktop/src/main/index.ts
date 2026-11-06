@@ -29,7 +29,7 @@ import { activePty, killPty, spawnPty, windowsBuildNumber } from './pty'
 import { adoptExistingProfile, createServices, updateSettings, type Services } from './services'
 import { createFilesService, filesRoots } from './files'
 import { attachArtifactConsole, CONTENT_SCHEME, registerContentProtocol, serveArtifactsFrom } from './content'
-import { PLUGIN_SCHEME } from '../shared/ipc'
+import { PLUGIN_SCHEMES } from '../shared/ipc'
 import { createPluginHost } from './plugins/host'
 import { registerHostPluginProtocol } from './plugins/protocol'
 import { createBackgroundHost } from './plugins/background'
@@ -155,13 +155,14 @@ protocol.registerSchemesAsPrivileged([
     scheme: CONTENT_SCHEME,
     privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false }
   },
-  // A plugin's pages: an origin per plugin (`helm-plugin://<id>`), secure so
-  // its storage and module scripts work, and no fetch - its network goes
-  // through Helm. See `main/plugins/protocol.ts`.
-  {
-    scheme: PLUGIN_SCHEME,
+  // A plugin's pages: an origin per plugin (`helm-plugin://<id>` at version 1,
+  // `floti-plugin://<id>` at version 2), secure so its storage and module
+  // scripts work, and no fetch - its network goes through Helm. See
+  // `main/plugins/protocol.ts`.
+  ...PLUGIN_SCHEMES.map((scheme) => ({
+    scheme,
     privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false }
-  }
+  }))
 ])
 
 /**
@@ -402,7 +403,7 @@ function startApp(options: AppOptions = {}): void {
   })
   // Asked only once a page loads, which is after the desktop host below exists.
   // Each origin from its own host's files: This PC's from the local host, a
-  // remote host's (`helm-plugin://<id>.<label>/`) from that host only.
+  // remote host's (`<scheme>://<id>.<label>/`) from that host only.
   registerHostPluginProtocol((label) => {
     const hosted = label === null ? desktopHost.plugins : desktopHost.remotePlugins.byLabel(label)
     if (hosted === null) return null
