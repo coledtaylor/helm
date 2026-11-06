@@ -1,5 +1,6 @@
 import { LOCAL_HOST_KEY } from '../hosts'
 import type { WorkspaceTab } from '../types'
+import { isChild } from './family'
 import { pluginPagesId, pluginTabId } from '../plugins/tabs'
 
 /**
@@ -918,9 +919,17 @@ export function reconcile(
  * a session gets a tab here only where this device placed one (its saved
  * layout, a launch, Open in the sessions pane), so none is given one unasked.
  * Helm's own process runs this PC's sessions only.
+ *
+ * **A child is given none either way.** One an agent started is drawn under its
+ * parent in the sessions tree and shown in its parent's tab; it never adds a
+ * tab or a pane to the window by starting, and only the user's press on its row
+ * opens one (`resolveFamilyPress`).
  */
-export function unplacedSessionTabs(sessions: readonly { id: number }[], perDevice: boolean): PaneRef[] {
-  return perDevice ? [] : sessions.map((session) => sessionRef(session.id))
+export function unplacedSessionTabs(
+  sessions: readonly { id: number; parentId?: number | null }[],
+  perDevice: boolean
+): PaneRef[] {
+  return perDevice ? [] : sessions.filter((session) => !isChild(session)).map((session) => sessionRef(session.id))
 }
 
 /** The ids of the sessions on `host` (this PC's by default) the layout has a tab for. */

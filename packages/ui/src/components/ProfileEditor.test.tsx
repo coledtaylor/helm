@@ -153,12 +153,40 @@ describe('ProfileEditor', () => {
     })
   })
 
-  it('keeps the choice of a profile that turns the session agents off when it is saved again', () => {
-    const props = renderEditor({
-      initial: { ...BLANK, name: 'No agents', root: HUB, sessionAgents: false }
+  describe('Sessions can start agents', () => {
+    it('is on for a new profile, and a profile saved with it on has no choice stored', () => {
+      const props = renderEditor({ initial: { ...BLANK, name: 'Hub', root: HUB } })
+      expect(checked('Sessions can start agents')).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
+      expect(props.onSave).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(props.onSave).mock.calls[0]?.[0]).not.toHaveProperty('sessionAgents')
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
-    expect(props.onSave).toHaveBeenCalledWith(expect.objectContaining({ sessionAgents: false }))
+
+    it('S3: saves the choice to turn it off, and no other field changes with it', () => {
+      const props = renderEditor({ initial: { ...BLANK, name: 'Hub', root: HUB } })
+      tick('Sessions can start agents')
+      expect(checked('Sessions can start agents')).toBe(false)
+      fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
+      expect(props.onSave).toHaveBeenCalledWith({ ...BLANK, name: 'Hub', root: HUB, sessionAgents: false })
+    })
+
+    it('shows a profile that turned it off as off, keeps the choice when saved again, and drops it when turned on', () => {
+      const props = renderEditor({ initial: { ...BLANK, name: 'No agents', root: HUB, sessionAgents: false } })
+      expect(checked('Sessions can start agents')).toBe(false)
+      fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
+      expect(props.onSave).toHaveBeenLastCalledWith(expect.objectContaining({ sessionAgents: false }))
+
+      tick('Sessions can start agents')
+      expect(checked('Sessions can start agents')).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
+      expect(vi.mocked(props.onSave).mock.calls.at(-1)?.[0]).not.toHaveProperty('sessionAgents')
+    })
+
+    it('says what it covers, and that Settings can turn the tools off for every session', () => {
+      renderEditor()
+      expect(screen.getByText(/get the tools to start, list and stop agents of their own/)).toBeTruthy()
+      expect(screen.getByText(/follows Settings > Agents/)).toBeTruthy()
+    })
   })
 
   it('ticks Access when Compose is ticked, and Access can be unticked after', () => {

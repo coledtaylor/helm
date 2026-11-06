@@ -804,6 +804,19 @@ describe('the browser tools', () => {
       expect(browsers.calls.slice(before).filter((call) => call.method !== 'revoke')).toEqual([])
     })
 
+    it('answers a call for an agents tool, which only the host serves, as a tool it does not have, and drives nothing', async () => {
+      const alpha = caller('alpha')
+      const before = browsers.calls.length
+      for (const tool of ['agents_start', 'agents_list', 'agents_stop']) {
+        const answer = await alpha.call(tool, { task: 'review it' })
+        expect(answer.isError).toBe(true)
+        expect(answer.text).toContain(`has no tool called "${tool}"`)
+        // And the tools it says it has are the browser's, none of them an agents tool.
+        expect(answer.text.split('It has: ')[1]).not.toContain('agents_')
+      }
+      expect(browsers.calls.length).toBe(before)
+    })
+
     it('refuses every call while the browser tools are switched off, and answers again once they are on', async () => {
       const alpha = caller('alpha')
       settings = { ...settings, browserMcp: false }

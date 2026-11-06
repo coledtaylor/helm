@@ -75,7 +75,10 @@ export { CLAUDE_CODE_BACKEND }
  * run - the one chosen in Settings, or the one Helm finds - the shell a
  * terminal opens, the ceiling its transcript archive is held to, whether its
  * sessions get the browser tools and whether those are held to this machine,
- * and whether they get the session tools.
+ * whether they get the session tools, and whether they can start agents of
+ * their own, with the four limits on a family of them. The host serves that
+ * last family and judges every start against the numbers it was last told;
+ * Helm's own process serves none of it.
  */
 export function hostSettingsFor(settings: AppSettings, discovered: string | null): P.HostSettingsPatch {
   const claude = settings.claudePath ?? discovered
@@ -85,7 +88,12 @@ export function hostSettingsFor(settings: AppSettings, discovered: string | null
     transcriptArchiveMaxBytes: settings.transcriptArchiveMaxBytes,
     browserMcp: settings.browserMcp,
     browserMcpLocalOnly: settings.browserMcpLocalOnly,
-    sessionMcp: settings.sessionMcp
+    sessionMcp: settings.sessionMcp,
+    sessionAgents: settings.sessionAgents,
+    agentChildrenPerParent: settings.agentChildrenPerParent,
+    agentSessionsPerHost: settings.agentSessionsPerHost,
+    agentDepth: settings.agentDepth,
+    agentStartsPerParent: settings.agentStartsPerParent
   }
 }
 

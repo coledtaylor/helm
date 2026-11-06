@@ -117,6 +117,27 @@ describe('the window’s profiles over its own connection', () => {
     await expect(ask(adapter, 'profile:pin', { ids: [1] })).resolves.toMatchObject([{ id: 1, pinnedOrder: 0 }])
   })
 
+  it('S3: sends a profile that turns the session agents off to the host with the choice, lists it with the choice kept, and leaves another profile following the setting', async () => {
+    const { adapter, connection } = world({ hosted: [profile(1, 'review')] })
+    const draft = (name: string, sessionAgents?: false) =>
+      ({ ...profile(0, name), root: `/work dir/${name}`, ...(sessionAgents === undefined ? {} : { sessionAgents }) }) as RequestPayload<'profile:save'>['draft']
+
+    const quiet = await ask(adapter, 'profile:save', { draft: draft('quiet', false) })
+    await ask(adapter, 'profile:save', { draft: draft('busy') })
+
+    expect(connection.payloads('profile:save')).toMatchObject([
+      { id: null, draft: { name: 'quiet', sessionAgents: false } },
+      { id: null, draft: { name: 'busy' } }
+    ])
+    expect((connection.payloads('profile:save')[1] as { draft: object }).draft).not.toHaveProperty('sessionAgents')
+    expect(quiet.profile).toMatchObject({ name: 'quiet', sessionAgents: false })
+
+    const listed = await ask(adapter, 'profile:list')
+    expect(listed.find((each) => each.name === 'quiet')?.sessionAgents).toBe(false)
+    expect(listed.find((each) => each.name === 'busy')).not.toHaveProperty('sessionAgents')
+    expect(listed.find((each) => each.name === 'review')).not.toHaveProperty('sessionAgents')
+  })
+
   it('deletes only after the user agrees in Helm’s dialog, and asks nothing about a profile that is gone', async () => {
     const refused = world({ hosted: [profile(1, 'review')], agree: false })
     await expect(ask(refused.adapter, 'profile:delete', { id: 1 })).resolves.toEqual({ deleted: false })

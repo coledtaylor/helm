@@ -110,6 +110,21 @@ describe('the plugins’ tools through the local host', () => {
     expect(pluginInstructions(NOTES)).toMatch(/\n\nSearch the notes before writing one\.$/)
   })
 
+  it('offers the host only plugins’ servers, each under its plugin’s own name, and never an agents server of Helm’s', async () => {
+    const w = world()
+    w.servers.value = [NOTES, { ...NOTES, plugin: 'trackr', name: 'Trackr', server: 'helm-plugin-trackr' }]
+    await w.link.connect()
+
+    const offered = w.connection.payloads('agentPlugin:offer')
+    expect(offered).toHaveLength(1)
+    const names = (offered[0] as P.AgentPluginServers).servers.map((server) => server.name)
+    expect(names).toEqual(['helm-plugin-notes', 'helm-plugin-trackr'])
+    expect(names).not.toContain('floti-agents')
+    // And that is everything this side tells the host about tool servers: the
+    // host serves the agents family from its own table.
+    expect(w.connection.sent.map((request) => request.channel)).toEqual(['agentPlugin:offer'])
+  })
+
   it('offers again when a plugin’s tools come or go, and offers nothing with no host connected', async () => {
     const w = world()
     w.relay.offer()

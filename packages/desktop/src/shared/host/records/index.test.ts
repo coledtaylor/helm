@@ -1,6 +1,47 @@
 import { describe, expect, it } from 'vitest'
 import type * as P from '../protocol'
-import { profileFromHost, splitSettingsPatch } from './index'
+import { profileFromHost, sessionFromHost, splitSettingsPatch } from './index'
+
+const hostSession = (patch: Partial<P.SessionRecord> = {}): P.SessionRecord => ({
+  id: 9,
+  name: 'reviewer',
+  label: null,
+  cwd: '/work/docs',
+  branch: null,
+  projectPath: null,
+  profileId: null,
+  argv: [],
+  conversationId: null,
+  backend: 'claude-code',
+  status: 'running',
+  startedAt: '2026-11-05T09:00:00.000Z',
+  endedAt: null,
+  durationMs: null,
+  exitCode: null,
+  ...patch
+})
+
+describe('a host session, as the window reads it', () => {
+  it('carries a child’s parent, the parent’s name and its role', () => {
+    const record = sessionFromHost(hostSession({ parentId: 4, parentName: 'lead', role: 'reviewer' }))
+    expect(record).toMatchObject({ id: 9, parentId: 4, parentName: 'lead', role: 'reviewer' })
+  })
+
+  it('carries a session nobody started with neither a parent nor a role', () => {
+    for (const bare of [hostSession(), hostSession({ parentId: null, parentName: null, role: null })]) {
+      const record = sessionFromHost(bare)
+      expect(record).not.toHaveProperty('parentId')
+      expect(record).not.toHaveProperty('parentName')
+      expect(record).not.toHaveProperty('role')
+    }
+  })
+
+  it('keeps a role the parent’s row outlived, with no parent', () => {
+    const record = sessionFromHost(hostSession({ parentId: null, parentName: null, role: 'reviewer' }))
+    expect(record).toMatchObject({ role: 'reviewer' })
+    expect(record).not.toHaveProperty('parentId')
+  })
+})
 
 const hostProfile = (patch: Partial<P.Profile> = {}): P.Profile => ({
   id: 3,

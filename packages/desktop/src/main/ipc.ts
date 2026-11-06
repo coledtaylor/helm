@@ -253,7 +253,8 @@ export function registerIpc(ctx: IpcContext): void {
     if (patch.hosts !== undefined) ctx.remoteHosts?.sync(next.hosts)
     // Sessions run the `claude` and open the shell the host was told, and get
     // the browser and session tools and the browser's reach as it was told,
-    // and the host holds its archive to the ceiling it was told, so it is told
+    // and can start agents of their own within the limits it was told, and
+    // the host holds its archive to the ceiling it was told, so it is told
     // again at once when any of those changes.
     if (
       patch.claudePath !== undefined ||
@@ -261,7 +262,12 @@ export function registerIpc(ctx: IpcContext): void {
       patch.transcriptArchiveMaxBytes !== undefined ||
       patch.browserMcp !== undefined ||
       patch.browserMcpLocalOnly !== undefined ||
-      patch.sessionMcp !== undefined
+      patch.sessionMcp !== undefined ||
+      patch.sessionAgents !== undefined ||
+      patch.agentChildrenPerParent !== undefined ||
+      patch.agentSessionsPerHost !== undefined ||
+      patch.agentDepth !== undefined ||
+      patch.agentStartsPerParent !== undefined
     ) {
       ctx.hostSettingsChanged()
     }

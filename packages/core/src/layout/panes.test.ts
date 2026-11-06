@@ -462,6 +462,15 @@ describe('reconcile', () => {
     expect(shape(reconciled)).toEqual(['>*history session:1 session:2'])
   })
 
+  it('gives a child no tab by itself, in Helm’s own process or in a host, though its parent has one', () => {
+    const hosted = [{ id: 1 }, { id: 2, parentId: 1 }, { id: 3, parentId: null }]
+    expect(unplacedSessionTabs(hosted, false)).toEqual([session(1), session(3)])
+    expect(unplacedSessionTabs(hosted, true)).toEqual([])
+
+    const reconciled = reconcile(layoutOf(g(HISTORY), 0), () => true, unplacedSessionTabs(hosted, false))
+    expect(shape(reconciled)).toEqual(['>*history session:1 session:3'])
+  })
+
   it('with the layout kept per device, keeps this device’s tabs, panes and split sizes and opens no tab for a session it did not place', () => {
     const saved = layoutOf(row([g(session(1), HISTORY), g(session(2))], [0.3, 0.7]), 1)
     const hosted = [{ id: 1 }, { id: 2 }, { id: 3 }]

@@ -755,7 +755,7 @@ describe('sessions through the local host', () => {
   })
 
   describe('the settings the host is given', () => {
-    it('writes the claude, the shell, the archive’s ceiling, whether the browser tools are on and held to this machine, and whether the session tools are on', () => {
+    it('writes the claude, the shell, the archive’s ceiling, whether the browser tools are on and held to this machine, whether the session tools are on, and whether sessions can start agents within which limits', () => {
       expect(
         hostSettingsFor(
           {
@@ -765,7 +765,12 @@ describe('sessions through the local host', () => {
             transcriptArchiveMaxBytes: 256 * 1024 * 1024,
             browserMcp: false,
             browserMcpLocalOnly: true,
-            sessionMcp: false
+            sessionMcp: false,
+            sessionAgents: false,
+            agentChildrenPerParent: 6,
+            agentSessionsPerHost: 12,
+            agentDepth: 3,
+            agentStartsPerParent: 20
           },
           '/bin/claude'
         )
@@ -775,11 +780,26 @@ describe('sessions through the local host', () => {
         transcriptArchiveMaxBytes: 256 * 1024 * 1024,
         browserMcp: false,
         browserMcpLocalOnly: true,
-        sessionMcp: false
+        sessionMcp: false,
+        sessionAgents: false,
+        agentChildrenPerParent: 6,
+        agentSessionsPerHost: 12,
+        agentDepth: 3,
+        agentStartsPerParent: 20
       })
       expect(
         hostSettingsFor({ ...DEFAULT_SETTINGS, browserMcp: true, browserMcpLocalOnly: false, sessionMcp: true }, null)
       ).toMatchObject({ browserMcp: true, browserMcpLocalOnly: false, sessionMcp: true })
+    })
+
+    it('tells the host the defaults - agents on, 4 children, 8 on the host, 2 deep, 16 starts - when the user has changed none', () => {
+      expect(hostSettingsFor(DEFAULT_SETTINGS, null)).toMatchObject({
+        sessionAgents: true,
+        agentChildrenPerParent: 4,
+        agentSessionsPerHost: 8,
+        agentDepth: 2,
+        agentStartsPerParent: 16
+      })
     })
   })
 })

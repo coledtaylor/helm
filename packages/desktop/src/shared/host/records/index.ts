@@ -68,7 +68,11 @@ export function sessionFromHost(record: P.SessionRecord): SessionRecord {
     startedAt: record.startedAt,
     endedAt: record.endedAt,
     durationMs: record.durationMs,
-    exitCode: record.exitCode
+    exitCode: record.exitCode,
+    // A session a person started names no parent and no role, and the window's
+    // record then has neither: a protocol before 2.1 says nothing of them.
+    ...(record.parentId == null ? {} : { parentId: record.parentId, parentName: record.parentName ?? null }),
+    ...(record.role == null ? {} : { role: record.role })
   }
 }
 

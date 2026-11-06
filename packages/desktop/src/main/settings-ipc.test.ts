@@ -193,6 +193,43 @@ describe('settings over IPC', () => {
       expect(hostSettingsChanged).toHaveBeenCalledTimes(2)
       expect(stored()).toMatchObject({ sessionMcp: true })
     })
+
+    it('tells the host at once when sessions are allowed to start agents or not, and when any limit on them changes', async () => {
+      hostSettingsChanged.mockClear()
+      await invoke('ownSettings:write', { sessionAgents: false })
+      expect(hostSettingsChanged).toHaveBeenCalledTimes(1)
+      await invoke('ownSettings:write', { sessionAgents: true })
+      expect(hostSettingsChanged).toHaveBeenCalledTimes(2)
+
+      for (const [key, value] of [
+        ['agentChildrenPerParent', 6],
+        ['agentSessionsPerHost', 12],
+        ['agentDepth', 3],
+        ['agentStartsPerParent', 20]
+      ] as const) {
+        const before = hostSettingsChanged.mock.calls.length
+        await invoke('ownSettings:write', { [key]: value })
+        expect(hostSettingsChanged).toHaveBeenCalledTimes(before + 1)
+      }
+      expect(stored()).toMatchObject({
+        sessionAgents: true,
+        agentChildrenPerParent: 6,
+        agentSessionsPerHost: 12,
+        agentDepth: 3,
+        agentStartsPerParent: 20
+      })
+    })
+
+    it('keeps the limits it was given and tells the host nothing when one is refused', async () => {
+      hostSettingsChanged.mockClear()
+      await expect(invoke('ownSettings:write', { agentDepth: 0 })).rejects.toThrow(/agentDepth/)
+      await expect(invoke('ownSettings:write', { agentChildrenPerParent: 2.5 })).rejects.toThrow(
+        /agentChildrenPerParent/
+      )
+      await expect(invoke('ownSettings:write', { sessionAgents: 'false' as never })).rejects.toThrow(/sessionAgents/)
+      expect(hostSettingsChanged).not.toHaveBeenCalled()
+      expect(stored()).toMatchObject({ agentDepth: 3, agentChildrenPerParent: 6, sessionAgents: true })
+    })
   })
 
   describe('validation', () => {

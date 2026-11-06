@@ -182,6 +182,11 @@ describe('settings', () => {
       browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false,
+      sessionAgents: false,
+      agentChildrenPerParent: 6,
+      agentSessionsPerHost: 12,
+      agentDepth: 3,
+      agentStartsPerParent: 20,
       quitSessions: { local: 'keep' },
       hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
       profilesCopiedToHostAt: '2026-10-29T08:00:00.000Z',
@@ -836,6 +841,35 @@ describe('settings validation', () => {
       bad: ['false', 'true', 0, 1, null, [], {}]
     },
     {
+      // `'false'` would switch the family on while the pane read it as off.
+      key: 'sessionAgents',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
+      // Whole numbers inside the range the host accepts: the host refuses a
+      // limit outside it, and its refusal would take the write's other settings
+      // with it.
+      key: 'agentChildrenPerParent',
+      good: [1, 4, 32],
+      bad: [0, -1, 33, 2.5, '4', null, NaN, Infinity, true, {}]
+    },
+    {
+      key: 'agentSessionsPerHost',
+      good: [1, 8, 128],
+      bad: [0, -1, 129, 2.5, '8', null, NaN, Infinity, true, {}]
+    },
+    {
+      key: 'agentDepth',
+      good: [1, 2, 8],
+      bad: [0, -1, 9, 1.5, '2', null, NaN, Infinity, true, {}]
+    },
+    {
+      key: 'agentStartsPerParent',
+      good: [1, 16, 1000],
+      bad: [0, -1, 1001, 16.5, '16', null, NaN, Infinity, true, {}]
+    },
+    {
       // A string that reads as off would reopen sessions unasked.
       key: 'restoreWithoutAsking',
       good: [true, false],
@@ -1062,6 +1096,11 @@ describe('settings validation', () => {
       browserRecentUrls: ['http://localhost:3000/'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false,
+      sessionAgents: false,
+      agentChildrenPerParent: 6,
+      agentSessionsPerHost: 12,
+      agentDepth: 3,
+      agentStartsPerParent: 20,
       quitSessions: { local: 'keep' },
       hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
       profilesCopiedToHostAt: null,
@@ -1112,6 +1151,11 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   browserRecentUrls: ['http://localhost:3000/'],
   browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
   sessionMcp: false,
+  sessionAgents: false,
+  agentChildrenPerParent: 6,
+  agentSessionsPerHost: 12,
+  agentDepth: 3,
+  agentStartsPerParent: 20,
   quitSessions: { local: 'keep' },
   hosts: [{ id: 'h1', name: 'build-box', transport: { kind: 'ssh', target: 'you@build-box' } }],
   profilesCopiedToHostAt: null,

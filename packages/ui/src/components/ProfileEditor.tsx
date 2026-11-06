@@ -127,6 +127,8 @@ export function ProfileEditor({
   const [agent, setAgent] = useState(initial.agent ?? '')
   const [mcp, setMcp] = useState<string[]>(initial.mcp)
   const [openingPrompt, setOpeningPrompt] = useState(initial.openingPrompt ?? '')
+  // On unless the profile turns it off; only the off choice is ever stored.
+  const [sessionAgents, setSessionAgents] = useState(initial.sessionAgents !== false)
   const [filter, setFilter] = useState('')
 
   const nameRef = useRef<HTMLInputElement>(null)
@@ -273,8 +275,9 @@ export function ProfileEditor({
       mcp,
       openingPrompt: openingPrompt.trim() || null,
       pinnedOrder: 'pinnedOrder' in initial ? initial.pinnedOrder : null,
-      // Not edited here: a profile that turns the session agents off keeps it.
-      ...(initial.sessionAgents === false ? { sessionAgents: false } : {})
+      // Only the off choice is a value: a profile that leaves it on follows the
+      // setting, so it is saved as having no choice at all.
+      ...(sessionAgents ? {} : { sessionAgents: false })
     })
   }
 
@@ -502,6 +505,25 @@ export function ProfileEditor({
             />
           </Field>
         </div>
+
+        {/* A label, so the whole row is the hit target, like an MCP server's. */}
+        <label className="mt-4 flex items-start gap-[9px]">
+          <span className="mt-px">
+            <Checkbox
+              checked={sessionAgents}
+              onChange={() => setSessionAgents((on) => !on)}
+              label="Sessions can start agents"
+            />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-[12px] text-fg">Sessions can start agents</span>
+            <span className="mt-[3px] block text-[10px] text-fg-subtle">
+              Sessions from this profile get the tools to start, list and stop agents of their
+              own. Off, they get none. On follows Settings &gt; Agents, which can turn them off
+              for every session.
+            </span>
+          </span>
+        </label>
 
         {/* ----------------------------------------------------------------
             MCP servers.

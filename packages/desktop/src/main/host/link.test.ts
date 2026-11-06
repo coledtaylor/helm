@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_SETTINGS } from '@helm/core'
 import { FakeConnection, fakeLocalHost } from '../../../test/host-connection'
 import type { HostConnection } from '../../shared/host/client'
 import type * as P from '../../shared/host/protocol'
@@ -474,6 +475,48 @@ describe('the link to the local host', () => {
       expect(w.link.endedOnPurpose()).toBe(true)
       expect(w.timers.pending()).toEqual([])
       expect(w.starts).toEqual([true])
+    })
+
+    it('tells the new host whether sessions can start agents and the limits as they are now, not as they were when the old one connected', async () => {
+      let settings = { ...DEFAULT_SETTINGS }
+      const timers = steppedTimers()
+      const first = new FakeConnection()
+      const second = new FakeConnection()
+      const outcomes = [first, second]
+      const link = createHostLink({
+        start: () => Promise.resolve(fakeLocalHost(outcomes.shift() as FakeConnection, true)),
+        settings: () => hostSettingsFor(settings, null),
+        log: () => undefined,
+        ...timers
+      })
+      await link.connection()
+      expect(first.payloads('settings:write')).toEqual([
+        expect.objectContaining({
+          sessionAgents: true,
+          agentChildrenPerParent: 4,
+          agentSessionsPerHost: 8,
+          agentDepth: 2,
+          agentStartsPerParent: 16
+        })
+      ])
+
+      // Changed while the host was away, then the host came back.
+      settings = { ...settings, sessionAgents: false, agentChildrenPerParent: 2, agentDepth: 1 }
+      first.close()
+      await settle()
+      timers.fireAll()
+      await settle()
+
+      expect(link.current()).toBe(second.asConnection())
+      expect(second.payloads('settings:write')).toEqual([
+        expect.objectContaining({
+          sessionAgents: false,
+          agentChildrenPerParent: 2,
+          agentSessionsPerHost: 8,
+          agentDepth: 1,
+          agentStartsPerParent: 16
+        })
+      ])
     })
 
     it('stops trying once Helm quits while it waits to try again', async () => {

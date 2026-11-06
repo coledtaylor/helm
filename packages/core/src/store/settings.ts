@@ -9,6 +9,10 @@ import {
   pluginTabNameProblem
 } from '../plugins/tabs'
 import {
+  AGENT_CHILDREN_PER_PARENT,
+  AGENT_DEPTH,
+  AGENT_SESSIONS_PER_HOST,
+  AGENT_STARTS_PER_PARENT,
   BROWSER_PROJECT_URLS_MAX,
   BROWSER_REACH_MODES,
   BROWSER_SEARCH_ENGINES,
@@ -575,6 +579,18 @@ export const SETTING_VALIDATORS: SettingValidators = {
    * same reason: this one also decides whether a port is bound.
    */
   sessionMcp: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+
+  /**
+   * Whether sessions can start agents of their own, checked as strictly: it
+   * decides whether the host serves the family at all, and `'false'` is truthy.
+   * Each limit is a whole number the host accepts - the host refuses a number
+   * outside its range, and a write it refuses takes the other settings with it.
+   */
+  sessionAgents: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+  agentChildrenPerParent: boundedInteger(AGENT_CHILDREN_PER_PARENT),
+  agentSessionsPerHost: boundedInteger(AGENT_SESSIONS_PER_HOST),
+  agentDepth: boundedInteger(AGENT_DEPTH),
+  agentStartsPerParent: boundedInteger(AGENT_STARTS_PER_PARENT),
 
   /**
    * What quitting does, by host: a plain object of host keys to `end` or

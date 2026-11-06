@@ -61,6 +61,7 @@ export * from './theme/themes'
  */
 export * from './layout/panes'
 export * from './layout/pluginPages'
+export * from './layout/family'
 
 /**
  * A plugin's tab and rail id, re-exported for the same reason: the renderer
@@ -356,6 +357,16 @@ export interface SessionRecord {
   durationMs: number | null
   /** Null while running, and for a session whose exit code was never observed. */
   exitCode: number | null
+  /**
+   * The session that started this one with the host's agent tools, by its row
+   * id. Absent for a session a person started. It names the parent after the
+   * parent has ended, which is what marks a child that outlived it.
+   */
+  parentId?: number | null
+  /** What the parent is called on screen, or null. */
+  parentName?: string | null
+  /** The role the session was started in, or null for one started with none. */
+  role?: string | null
 }
 
 /**
@@ -1122,6 +1133,19 @@ export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } a
 export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as const
 
 /**
+ * The limits on a family of agents, each a whole number inside the range the
+ * host accepts: the host refuses a limit outside it, and a write it refused
+ * would drop every other setting sent with it, so Helm keeps to the same range.
+ * The defaults are the design's: four children running at once per parent,
+ * eight agent-started sessions per host, two levels deep, sixteen starts in a
+ * parent's life.
+ */
+export const AGENT_CHILDREN_PER_PARENT = { min: 1, max: 32, default: 4 } as const
+export const AGENT_SESSIONS_PER_HOST = { min: 1, max: 128, default: 8 } as const
+export const AGENT_DEPTH = { min: 1, max: 8, default: 2 } as const
+export const AGENT_STARTS_PER_PARENT = { min: 1, max: 1000, default: 16 } as const
+
+/**
  * The rail's destinations that can be hidden, in the order the rail draws them.
  *
  * Settings is not one, and leaving it out of this list is the whole mechanism:
@@ -1638,6 +1662,28 @@ export interface AppSettings {
   sessionMcp: boolean
 
   /**
+   * Whether the sessions a host starts can start, list and stop children of
+   * their own: the host's agent tools and `floti agent`. A profile can turn it
+   * off for its own sessions (`Profile.sessionAgents`); this is the setting
+   * every other session follows.
+   *
+   * Told to the host on every connect and every change, and the host serves the
+   * tools - Helm's own process serves none. On by default, because the design
+   * keeps the tools' reach to the caller's own children, bounds them with the
+   * four limits below, and a capability that has to be found first is one most
+   * sessions never get.
+   */
+  sessionAgents: boolean
+  /** Children one session may have running at once. A start past it is refused. */
+  agentChildrenPerParent: number
+  /** Sessions agents started that may run on one host at once; people's own count toward none. */
+  agentSessionsPerHost: number
+  /** How deep a family goes: 2 is a parent, its children, and their children. */
+  agentDepth: number
+  /** Children one session may start in its life, running or not. */
+  agentStartsPerParent: number
+
+  /**
    * What quitting Helm does to the sessions it started on a host, by host:
    * `end` them or `keep` them running there. This PC's host is keyed
    * `LOCAL_HOST_KEY` and ends them when it has no entry; a remote host is keyed
@@ -1772,6 +1818,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // and because what it serves is a strictly smaller grant than the tick above
   // it. See the field for what is not in it, which is what makes that true.
   sessionMcp: true,
+  // On, with the limits that bound it: a family is a parent, up to four children
+  // at once, at most eight agent-started sessions on the host, two levels deep,
+  // and sixteen starts in a parent's life. Sessions a person starts count
+  // toward none of them.
+  sessionAgents: true,
+  agentChildrenPerParent: AGENT_CHILDREN_PER_PARENT.default,
+  agentSessionsPerHost: AGENT_SESSIONS_PER_HOST.default,
+  agentDepth: AGENT_DEPTH.default,
+  agentStartsPerParent: AGENT_STARTS_PER_PARENT.default,
   // Empty: this PC's host then ends the sessions Helm started when it quits,
   // which is what a session on your own computer usually wants, and a host on
   // another computer keeps them running (`quitChoice`).
