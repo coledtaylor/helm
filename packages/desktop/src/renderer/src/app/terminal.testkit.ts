@@ -216,8 +216,21 @@ export class Terminal {
     this.written.push(data)
   }
 
-  focus(): void {}
-  blur(): void {}
+  /** The one terminal holding the keyboard, as a page has one focused element. */
+  static focused: Terminal | null = null
+
+  /** Whether this terminal holds the keyboard, which is when its cursor is solid and any other's is hollow. */
+  get hasFocus(): boolean {
+    return Terminal.focused === this
+  }
+
+  focus(): void {
+    Terminal.focused = this
+  }
+
+  blur(): void {
+    if (Terminal.focused === this) Terminal.focused = null
+  }
   hasSelection(): boolean {
     return this.selection !== ''
   }
@@ -233,6 +246,7 @@ export class Terminal {
 
   dispose(): void {
     this.disposed = true
+    this.blur()
   }
 }
 

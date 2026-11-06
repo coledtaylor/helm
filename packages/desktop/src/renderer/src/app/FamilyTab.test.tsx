@@ -314,34 +314,31 @@ describe('a parent’s tab with children', () => {
     expect(header.nextElementSibling!.contains(getTerminal(2)!.element)).toBe(true)
   })
 
-  it('S7: a parent starting a child keeps the keyboard, and the new card’s terminal is made without it, drawing the outline of a terminal without the caret', () => {
-    const focused: Terminal[] = []
-    vi.spyOn(Terminal.prototype, 'focus').mockImplementation(function (this: Terminal) {
-      focused.push(this)
-    })
+  it('S7: a parent starting a child keeps the keyboard and its caret, and the new card’s terminal is made without it and draws the hollow cursor of a terminal without focus', () => {
     const view = mount(WIDE, [LEAD])
     const parentTerminal = getTerminal(1)!.term as unknown as Terminal
-    expect(focused).toContain(parentTerminal)
-    focused.length = 0
+    expect(parentTerminal.hasFocus).toBe(true)
 
     view.list([LEAD, child(2, 'reviewer')])
     expect(cardNames(view.container)).toEqual(['reviewer'])
-    const cardTerminal = getTerminal(2)!.term
-    expect(cardTerminal.options.cursorInactiveStyle).toBe('outline')
-    expect(focused).toEqual([])
+    const cardTerminal = getTerminal(2)!.term as unknown as Terminal
+    expect(parentTerminal.hasFocus).toBe(true)
+    expect(cardTerminal.hasFocus).toBe(false)
+    // A terminal without the keyboard draws its cursor as an outline, not solid.
+    expect(cardTerminal.options['cursorInactiveStyle']).toBe('outline')
+    expect(parentTerminal.options['cursorInactiveStyle']).toBe('outline')
   })
 
-  it('S8: pressing a card’s terminal gives it the keyboard, and what is typed goes to that child, not the parent', async () => {
-    const focused: Terminal[] = []
-    vi.spyOn(Terminal.prototype, 'focus').mockImplementation(function (this: Terminal) {
-      focused.push(this)
-    })
+  it('S8: pressing a card’s terminal gives it the keyboard and a solid cursor, turns the parent’s hollow, and what is typed goes to that child', async () => {
     const { container } = mount(WIDE, [LEAD, child(2, 'reviewer')])
-    focused.length = 0
+    const parentTerminal = getTerminal(1)!.term as unknown as Terminal
     const cardTerminal = getTerminal(2)!.term as unknown as Terminal
+    expect(parentTerminal.hasFocus).toBe(true)
 
     await userEvent.click(card(container, 'reviewer').querySelector('[data-terminal-card]')!)
-    expect(focused).toEqual([cardTerminal])
+    expect(cardTerminal.hasFocus).toBe(true)
+    expect(parentTerminal.hasFocus).toBe(false)
+    expect(parentTerminal.options['cursorInactiveStyle']).toBe('outline')
 
     cardTerminal.type('hello')
     expect(bridge.sent('session:input')).toEqual([{ id: 2, data: 'hello' }])
