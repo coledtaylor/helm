@@ -11,8 +11,17 @@
 //! path it leads to), the profile, the permission mode (never above the
 //! parent's), the backend's ability to enforce every rule, then the limits
 //! read afresh from the settings. Only a start that passes all of it spawns a
-//! process. Starts are taken one at a time, so two calls cannot both pass a
-//! limit that only one fits under.
+//! process, and only then is a worktree made, so a refused start writes
+//! nothing. Starts are taken one at a time, so two calls cannot both pass a
+//! limit that only one fits under, or choose the same worktree name.
+//!
+//! **A resume is a start of an ended child.** It names one of the caller's
+//! children, resolved among the caller's own rows (ended ones included), and
+//! reopens it in its recorded folder through its backend's resume with the
+//! task as its next turn. It is refused while the child runs, when anything
+//! but the task is asked for, and when its folder, backend or conversation
+//! cannot be reopened; then it is judged against the same limits and counts as
+//! one more start and one more running child.
 //!
 //! **A child's row carries its links** (parent row, parent conversation,
 //! name, role, outlive, can_start), written when the session is. Counts and
@@ -30,7 +39,7 @@ mod folders;
 mod rows;
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Duration;
 
@@ -47,7 +56,9 @@ use crate::roles::{
 use crate::server::floti_agents::FAMILY;
 use crate::server::records::{self, ExitNotice};
 use crate::session::{ParentLink, SessionId, SessionOrigin, TermSize};
+use crate::workspace::files::paths::resolves_inside;
 use crate::workspace::settings;
+use crate::workspace::worktrees::{self, Repository};
 
 /// How long ending a child waits for it to be reported ended.
 const STOP_WAIT: Duration = Duration::from_secs(5);
@@ -122,8 +133,14 @@ pub(crate) struct StartChild {
     pub folder: Option<String>,
     pub profile: Option<String>,
     pub name: Option<String>,
+    /// The one-word name of the worktree to make for it. A role that asks for
+    /// a worktree makes one named after the child when this is `None`.
+    pub worktree: Option<String>,
     pub outlive: bool,
     pub can_start: Option<bool>,
+    /// The name of one of the caller's ended children to reopen. `task` is
+    /// then its next turn, and nothing else about it can be asked for.
+    pub resume: Option<String>,
 }
 
 /// What `agents_start` answers.
@@ -133,6 +150,8 @@ pub(crate) struct ChildStarted {
     pub backend: String,
     pub folder: String,
     pub branch: Option<String>,
+    /// The name of the worktree made for it, when one was.
+    pub worktree: Option<String>,
 }
 
 /// One running child, as `agents_list` shows it.
@@ -149,7 +168,7 @@ pub(crate) struct ChildEntry {
     pub can_start: bool,
     /// The resource class of the role it was started in.
     pub class: RoleClass,
-    /// Whether the role it was started in asks for a worktree of its own.
+    /// Whether it works in a worktree Floti made for it.
     pub worktree: bool,
 }
 
@@ -182,9 +201,19 @@ pub(crate) struct LimitsLeft {
     pub starts_left: u32,
     pub sessions_per_host: u32,
     pub host_left: u32,
+    pub heavy_per_host: u32,
+    /// How many more heavy agents the host takes.
+    pub heavy_left: u32,
     pub depth: u32,
     /// Why the session cannot start children at all, when it cannot.
     pub cannot_start: Option<String>,
+}
+
+/// What runs on the host now that the limits count: every agent-started
+/// session, and the heavy ones among them.
+struct HostLoad {
+    running: Vec<SessionId>,
+    heavy: Vec<rows::HeavyHolder>,
 }
 
 /// What `agents_list` answers.
@@ -267,6 +296,9 @@ impl Hosted {
         }
         let facts =
             rows::parent_facts(&self.ledger.store(), parent).map_err(|err| err.to_string())?;
+        if request.resume.is_some() {
+            return self.resume_child(parent, &facts, request);
+        }
 
         let role = self.role_for(request.role.as_deref())?;
         let role_mode = capped(role.permission, facts.permission_mode);
@@ -277,6 +309,18 @@ impl Hosted {
             &base,
             request.folder.as_deref(),
         )?;
+        // A worktree is asked for by name or by the role. Anywhere in a
+        // repository a start must also leave alone a worktree another session
+        // works in.
+        let wants_worktree = request.worktree.is_some() || role.worktree;
+        let repository = if wants_worktree {
+            Some(Repository::of(&folder)?)
+        } else {
+            Repository::of(&folder).ok()
+        };
+        if let Some(repository) = &repository {
+            self.refuse_shared_worktree(repository, &folder, parent)?;
+        }
         let profile = {
             let store = self.ledger.store();
             let profiles = rows::profiles(&store).map_err(|err| err.to_string())?;
@@ -311,7 +355,7 @@ impl Hosted {
             let settings = settings::read(store.connection()).map_err(|err| err.to_string())?;
             let existing = rows::children_of(&store, parent, facts.conversation_id.as_deref())
                 .map_err(|err| err.to_string())?;
-            let host_running = self.agent_sessions_running(&store)?;
+            let load = self.host_load(&store)?;
             let running: Vec<&rows::ChildRow> = existing
                 .iter()
                 .filter(|child| child.running && self.sessions.get(child.id).is_some())
@@ -322,7 +366,8 @@ impl Hosted {
                 &running,
                 existing.len(),
                 &existing,
-                &host_running,
+                &load,
+                role.class == RoleClass::Heavy,
             )
             .err();
             let wanted = request.name.as_deref().unwrap_or(&role.name);
@@ -335,19 +380,29 @@ impl Hosted {
             return Err(refusal);
         }
 
-        let folder_text = folder.display().to_string();
+        // Everything is judged: only now is anything written.
+        let made = match (&repository, wants_worktree) {
+            (Some(repository), true) => {
+                Some(repository.make(&folder, request.worktree.as_deref().unwrap_or(&name))?)
+            }
+            _ => None,
+        };
+        let project_path = self.known_project(&folder.display().to_string());
+        let run_folder = made
+            .as_ref()
+            .map_or_else(|| folder.clone(), |made| made.folder.clone());
         let outlive = request.outlive;
         let backend_id = backend.id().clone();
         let launched = self.run(
             Plan {
                 backend,
-                folder,
+                folder: run_folder,
                 name: name.clone(),
                 prompt: Some(request.task),
                 composition,
                 resume: None,
                 origin: SessionOrigin {
-                    project_path: self.known_project(&folder_text),
+                    project_path,
                     profile_id: profile.as_ref().and_then(|p| i64::try_from(p.id).ok()),
                     permission_mode: mode.map(records::permission_mode_name),
                     branch: None,
@@ -359,34 +414,251 @@ impl Hosted {
                         outlive,
                         can_start,
                         heavy: role.class == RoleClass::Heavy,
-                        worktree: role.worktree,
+                        worktree: made.is_some(),
+                    }),
+                },
+            },
+            TermSize::new(CHILD_SIZE.0, CHILD_SIZE.1),
+            None,
+        );
+        let launched = match launched {
+            Ok(launched) => launched,
+            Err(refusal) => {
+                // A worktree made for a child that never started holds no work.
+                if let Some(Err(err)) = made.as_ref().map(worktrees::Made::discard) {
+                    log_line!("floti host: {err}");
+                }
+                return Err(refusal);
+            }
+        };
+
+        self.end_with_gone_parent(parent, outlive, launched.session.id)?;
+        Ok(ChildStarted {
+            name,
+            backend: backend_id_text(&backend_id),
+            folder: launched.session.cwd,
+            branch: launched.session.branch,
+            worktree: made.map(|made| made.name),
+        })
+    }
+
+    /// The parent may have ended while a child started, after the exit notice
+    /// that would have ended the child had already been handled: the child
+    /// that was not to outlive it ends now.
+    fn end_with_gone_parent(
+        &self,
+        parent: SessionId,
+        outlive: bool,
+        child: u64,
+    ) -> Result<(), String> {
+        if outlive || self.parent_runs(parent) {
+            return Ok(());
+        }
+        if let Some(session) = super::session_id(child).and_then(|id| self.sessions.get(id))
+            && let Err(err) = session.end_now()
+        {
+            log_line!("floti host: {err}");
+        }
+        Err(
+            "Your session ended while the agent was starting, so the agent ended with it."
+                .to_owned(),
+        )
+    }
+
+    /// Reopens `parent`'s ended child named by `request.resume` in the folder
+    /// it worked in, through its backend's own resume of its conversation,
+    /// with the task as its next turn and its role's instructions composed
+    /// again. It is judged as a start is, against the same limits, and is one
+    /// more start and one more running child. It keeps its name, parent link,
+    /// outlive and can_start; nothing else about it can be asked for.
+    ///
+    /// # Errors
+    ///
+    /// A sentence naming what was refused. Nothing has started then.
+    fn resume_child(
+        &self,
+        parent: SessionId,
+        facts: &rows::ParentFacts,
+        request: StartChild,
+    ) -> Result<ChildStarted, String> {
+        let wanted = request.resume.as_deref().unwrap_or_default().trim();
+        let also: Vec<&str> = [
+            ("role", &request.role),
+            ("backend", &request.backend),
+            ("folder", &request.folder),
+            ("profile", &request.profile),
+            ("worktree", &request.worktree),
+            ("name", &request.name),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.is_some().then_some(key))
+        .collect();
+        if !also.is_empty() {
+            return Err(format!(
+                "A resumed agent keeps its own role, backend, folder, profile, worktree and name, so resume takes only the task, and you also gave {}. No agent was started.",
+                also.join(", ")
+            ));
+        }
+
+        let (settings, existing, load) = {
+            let store = self.ledger.store();
+            (
+                settings::read(store.connection()).map_err(|err| err.to_string())?,
+                rows::children_of(&store, parent, facts.conversation_id.as_deref())
+                    .map_err(|err| err.to_string())?,
+                self.host_load(&store)?,
+            )
+        };
+        let running: Vec<&rows::ChildRow> = existing
+            .iter()
+            .filter(|child| child.running && self.sessions.get(child.id).is_some())
+            .collect();
+        // The newest row of that name is the child: a resume adds a row under
+        // the same name.
+        let Some(child) = existing
+            .iter()
+            .rev()
+            .find(|child| child.name.eq_ignore_ascii_case(wanted))
+        else {
+            return Err(not_found(wanted, &running));
+        };
+        let name = &child.name;
+        if running.iter().any(|runs| runs.id == child.id) {
+            return Err(format!(
+                "{name} is still running, so it cannot be resumed. Wait for news from it, or stop it first. No agent was started."
+            ));
+        }
+        let Some(conversation_id) = child.conversation_id.clone() else {
+            return Err(format!(
+                "Floti never learned which conversation {name} had, so it cannot be resumed. No agent was started."
+            ));
+        };
+        let backend_id = BackendId::new(&child.backend);
+        let Some(backend) = self.find_backend(&backend_id).map(Arc::clone) else {
+            return Err(format!(
+                "{name} ran on `{}`, which this Floti host does not have, so it cannot be resumed. No agent was started.",
+                child.backend
+            ));
+        };
+        if backend.resumer().is_none() {
+            return Err(format!(
+                "{} cannot reopen a conversation, so {name} cannot be resumed. No agent was started.",
+                backend.name()
+            ));
+        }
+        let recorded = PathBuf::from(&child.cwd);
+        if !recorded.is_dir() {
+            return Err(format!(
+                "{} is no longer on disk, so {name} cannot be resumed. No agent was started.",
+                recorded.display()
+            ));
+        }
+        let folder = folders::child_folder(&self.ledger.shared_store(), &recorded, None)
+            .map_err(|problem| format!("{problem} {name} was not resumed."))?;
+        if let Ok(repository) = Repository::of(&folder) {
+            self.refuse_shared_worktree(&repository, &folder, parent)
+                .map_err(|problem| format!("{name} was not resumed: {problem}"))?;
+        }
+
+        let profile = child
+            .profile_id
+            .and_then(|id| u64::try_from(id).ok())
+            .and_then(|id| {
+                records::read_profile(&self.ledger.store(), id)
+                    .ok()
+                    .flatten()
+            });
+        let mode = capped(child.permission_mode, facts.permission_mode);
+        let mut composition = super::composition_of(profile.as_ref());
+        composition.permission_mode = mode;
+        if let Some(role) = child.role.as_deref() {
+            let (reopened, warning) =
+                self.reopen_in_role(role, backend.as_ref(), profile.as_ref(), mode)?;
+            if let Some(reopened) = reopened {
+                composition = reopened;
+            }
+            if let Some(warning) = warning {
+                log_line!("floti host: {name}: {warning}");
+            }
+        }
+        judge(
+            &settings,
+            facts,
+            &running,
+            existing.len(),
+            &existing,
+            &load,
+            child.class == RoleClass::Heavy,
+        )?;
+
+        // Everything is judged: only now does anything run.
+        let launched = self.run(
+            Plan {
+                backend,
+                folder: folder.clone(),
+                name: name.clone(),
+                prompt: Some(request.task),
+                composition,
+                resume: Some(conversation_id),
+                origin: SessionOrigin {
+                    project_path: self.known_project(&folder.display().to_string()),
+                    profile_id: profile.as_ref().and_then(|p| i64::try_from(p.id).ok()),
+                    permission_mode: mode.map(records::permission_mode_name),
+                    branch: None,
+                    parent: Some(ParentLink {
+                        session: parent,
+                        conversation_id: facts.conversation_id.clone(),
+                        name: name.clone(),
+                        role: child.role.clone(),
+                        outlive: child.outlive,
+                        can_start: child.can_start,
+                        heavy: child.class == RoleClass::Heavy,
+                        worktree: child.worktree,
                     }),
                 },
             },
             TermSize::new(CHILD_SIZE.0, CHILD_SIZE.1),
             None,
         )?;
-
-        // The parent may have ended while this started, after the exit
-        // notice that would have ended the child had already been handled.
-        let child = launched.session.id;
-        if !outlive && !self.parent_runs(parent) {
-            if let Some(session) = super::session_id(child).and_then(|id| self.sessions.get(id))
-                && let Err(err) = session.end_now()
-            {
-                log_line!("floti host: {err}");
-            }
-            return Err(
-                "Your session ended while the agent was starting, so the agent ended with it."
-                    .to_owned(),
-            );
-        }
+        self.end_with_gone_parent(parent, child.outlive, launched.session.id)?;
         Ok(ChildStarted {
-            name,
+            name: name.clone(),
             backend: backend_id_text(&backend_id),
             folder: launched.session.cwd,
             branch: launched.session.branch,
+            worktree: child
+                .worktree
+                .then(|| folder.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .flatten(),
         })
+    }
+
+    /// Refuses a start in a folder inside an agent worktree that a running
+    /// session other than `caller` works in: one checkout, one agent.
+    fn refuse_shared_worktree(
+        &self,
+        repository: &Repository,
+        folder: &Path,
+        caller: SessionId,
+    ) -> Result<(), String> {
+        let Some(root) = repository.worktree_holding(folder) else {
+            return Ok(());
+        };
+        let running =
+            rows::running_sessions(&self.ledger.store()).map_err(|err| err.to_string())?;
+        let holder = running
+            .into_iter()
+            .filter(|session| session.id != caller && self.sessions.get(session.id).is_some())
+            .find(|session| resolves_inside(&root, Path::new(&session.cwd)));
+        match holder {
+            Some(holder) => Err(format!(
+                "{} is inside the worktree {}, where the agent {} works, so no agent starts there. Start yours in a worktree of its own: name one with worktree.",
+                folder.display(),
+                root.display(),
+                holder.label
+            )),
+            None => Ok(()),
+        }
     }
 
     /// `parent`'s running children and what is left of its limits.
@@ -400,7 +672,7 @@ impl Hosted {
         let settings = settings::read(store.connection()).map_err(|err| err.to_string())?;
         let existing = rows::children_of(&store, parent, facts.conversation_id.as_deref())
             .map_err(|err| err.to_string())?;
-        let host_running = self.agent_sessions_running(&store)?;
+        let load = self.host_load(&store)?;
         let mut children = Vec::new();
         for child in &existing {
             let Some(session) = self.sessions.get(child.id).filter(|_| child.running) else {
@@ -425,7 +697,8 @@ impl Hosted {
         }
         let running = u32::try_from(children.len()).unwrap_or(u32::MAX);
         let made = u32::try_from(existing.len()).unwrap_or(u32::MAX);
-        let on_host = u32::try_from(host_running.len()).unwrap_or(u32::MAX);
+        let on_host = u32::try_from(load.running.len()).unwrap_or(u32::MAX);
+        let heavy_on_host = u32::try_from(load.heavy.len()).unwrap_or(u32::MAX);
         Ok(ChildrenListed {
             children,
             limits: LimitsLeft {
@@ -435,6 +708,8 @@ impl Hosted {
                 starts_left: settings.agent_starts_per_parent.saturating_sub(made),
                 sessions_per_host: settings.agent_sessions_per_host,
                 host_left: settings.agent_sessions_per_host.saturating_sub(on_host),
+                heavy_per_host: settings.agent_heavy_per_host,
+                heavy_left: settings.agent_heavy_per_host.saturating_sub(heavy_on_host),
                 depth: settings.agent_depth,
                 cannot_start: depth_refusal(&settings, &facts),
             },
@@ -587,16 +862,20 @@ impl Hosted {
             .ok()
     }
 
-    /// The agent-started sessions running on this host now.
-    fn agent_sessions_running(
-        &self,
-        store: &crate::store::Store,
-    ) -> Result<Vec<SessionId>, String> {
-        Ok(rows::agent_sessions_running(store)
+    /// The agent-started sessions running on this host now, and the heavy
+    /// ones among them.
+    fn host_load(&self, store: &crate::store::Store) -> Result<HostLoad, String> {
+        let running = rows::agent_sessions_running(store)
             .map_err(|err| err.to_string())?
             .into_iter()
             .filter(|id| self.sessions.get(*id).is_some())
-            .collect())
+            .collect();
+        let heavy = rows::heavy_running(store)
+            .map_err(|err| err.to_string())?
+            .into_iter()
+            .filter(|holder| self.sessions.get(holder.id).is_some())
+            .collect();
+        Ok(HostLoad { running, heavy })
     }
 
     /// The role a start asks for, read now: the default role when it names
@@ -910,8 +1189,10 @@ fn judge(
     running: &[&rows::ChildRow],
     starts_made: usize,
     made: &[rows::ChildRow],
-    host_running: &[SessionId],
+    load: &HostLoad,
+    heavy: bool,
 ) -> Result<(), String> {
+    let host_running = &load.running;
     if let Some(refusal) = depth_refusal(settings, facts) {
         return Err(refusal);
     }
@@ -935,6 +1216,24 @@ fn judge(
         return Err(format!(
             "The limit of {per_host} agent sessions running on this host holds: {} are running, {yours}. Wait for news and start again.",
             host_running.len()
+        ));
+    }
+    let heavy_limit = settings.agent_heavy_per_host as usize;
+    if heavy && load.heavy.len() >= heavy_limit {
+        let holders: Vec<String> = load
+            .heavy
+            .iter()
+            .map(|holder| format!("{} (started by {})", holder.name, holder.started_by))
+            .collect();
+        return Err(format!(
+            "The heavy limit of {heavy_limit} holds: {} heavy agent{} running on this host, {}. Wait for news and start again.",
+            load.heavy.len(),
+            if load.heavy.len() == 1 {
+                " is"
+            } else {
+                "s are"
+            },
+            holders.join(", ")
         ));
     }
     let per_life = settings.agent_starts_per_parent as usize;

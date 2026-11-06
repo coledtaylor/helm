@@ -255,7 +255,7 @@ fn a_new_store_reads_as_the_defaults() {
 }
 
 #[test]
-fn the_agents_settings_default_to_on_with_4_children_8_on_the_host_depth_2_and_16_starts() {
+fn the_agents_settings_default_to_on_with_4_children_8_on_the_host_depth_2_16_starts_and_1_heavy() {
     let world = World::new();
     let settings = world.stored();
     assert!(settings.session_agents);
@@ -263,6 +263,7 @@ fn the_agents_settings_default_to_on_with_4_children_8_on_the_host_depth_2_and_1
     assert_eq!(settings.agent_sessions_per_host, 8);
     assert_eq!(settings.agent_depth, 2);
     assert_eq!(settings.agent_starts_per_parent, 16);
+    assert_eq!(settings.agent_heavy_per_host, 1);
 }
 
 #[test]
@@ -276,6 +277,7 @@ fn a_new_limit_is_kept_reported_to_every_listener_and_read_by_the_next_judge() {
             agent_sessions_per_host: Some(5),
             agent_depth: Some(3),
             agent_starts_per_parent: Some(40),
+            agent_heavy_per_host: Some(3),
             ..Default::default()
         })
         .unwrap();
@@ -285,9 +287,10 @@ fn a_new_limit_is_kept_reported_to_every_listener_and_read_by_the_next_judge() {
             written.agent_children_per_parent,
             written.agent_sessions_per_host,
             written.agent_depth,
-            written.agent_starts_per_parent
+            written.agent_starts_per_parent,
+            written.agent_heavy_per_host
         ),
-        (2, 5, 3, 40)
+        (2, 5, 3, 40, 3)
     );
     assert_eq!(world.told(), vec![written.clone()]);
     assert_eq!(world.stored(), written, "a later read finds what was kept");
@@ -337,6 +340,20 @@ fn a_limit_outside_its_range_is_refused_in_its_own_sentence_and_writes_nothing()
             },
             "agentStartsPerParent: expected 1 to 1000, got 0",
         ),
+        (
+            HostSettingsPatch {
+                agent_heavy_per_host: Some(0),
+                ..Default::default()
+            },
+            "agentHeavyPerHost: expected 1 to 8, got 0",
+        ),
+        (
+            HostSettingsPatch {
+                agent_heavy_per_host: Some(9),
+                ..Default::default()
+            },
+            "agentHeavyPerHost: expected 1 to 8, got 9",
+        ),
     ] {
         assert_eq!(
             world.refusal(patch),
@@ -354,7 +371,9 @@ fn an_unreadable_or_out_of_range_agents_row_keeps_its_default() {
     world.raw("agentSessionsPerHost", "{ not json");
     world.raw("agentDepth", "99");
     world.raw("agentStartsPerParent", "30");
+    world.raw("agentHeavyPerHost", "9");
     let settings = world.stored();
+    assert_eq!(settings.agent_heavy_per_host, 1, "9 is above the range");
     assert!(settings.session_agents, "a string is not a boolean");
     assert_eq!(
         settings.agent_children_per_parent, 4,

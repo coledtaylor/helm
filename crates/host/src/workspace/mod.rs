@@ -14,6 +14,7 @@
 //! - [`content`]: notes and documents in a known scope, and the note write.
 //! - [`render`]: markdown and code rendered to sanitised HTML.
 //! - [`files`]: the Files view's listing, reading, git status and watching.
+//! - [`worktrees`]: the git worktrees Floti makes for agents.
 
 pub mod app;
 pub mod content;
@@ -25,3 +26,4 @@ pub mod roots;
 pub mod settings;
 pub mod setup;
 pub mod templates;
+pub(crate) mod worktrees;

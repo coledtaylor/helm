@@ -273,6 +273,8 @@ import { useNewSession } from "./useNewSession";
 import { useRestore } from "./useRestore";
 import { useRestartHost, type RestartHostDeps } from "./useRestartHost";
 import { useSessions } from "./useSessions";
+import { LocalProjectPane } from "./LocalProjectPane";
+import { sessionActivityIn } from "./useAgentWorktrees";
 import { useSetup } from "./useSetup";
 import { useHostWorkspaces } from "./useHostWorkspaces";
 import { HostProfiles } from "./HostProfiles";
@@ -3945,9 +3947,10 @@ export function App(): JSX.Element {
         heightPct={savedShellHeight}
         onHeightChange={setShellHeight}
       >
-        <ProjectPane
+        <LocalProjectPane
           key={project.path}
           project={project}
+          activity={sessionActivityIn(sessionState.sessions, project.path)}
           harness={harness}
           onReveal={launcher.reveal}
           onLaunch={(p) => void launch(p)}
@@ -4240,6 +4243,8 @@ export function App(): JSX.Element {
         agentSessionsPerHost:
           settings?.agentSessionsPerHost ??
           DEFAULT_SETTINGS.agentSessionsPerHost,
+        agentHeavyPerHost:
+          settings?.agentHeavyPerHost ?? DEFAULT_SETTINGS.agentHeavyPerHost,
         agentDepth: settings?.agentDepth ?? DEFAULT_SETTINGS.agentDepth,
         agentStartsPerParent:
           settings?.agentStartsPerParent ??

@@ -1,17 +1,17 @@
 {
   "name": "floti-agents",
   "path": "/mcp/agents",
-  "instructions": "These tools start agents of your own, list them and stop them. agents_roles lists the roles an agent can be started in; agents_start runs a new agent in one of them on a task you give it and answers with its name; agents_list shows the agents you started and how many more you may start; agents_stop ends one of them and any it started. They reach only the agents you started: a name that is not one of yours is not found, no tool takes a session id, and none returns any part of a conversation.",
+  "instructions": "These tools start agents of your own, list them and stop them. agents_roles lists the roles an agent can be started in; agents_start runs a new agent in one of them on a task you give it and answers with its name, or with resume reopens one of yours that has ended on a new task; agents_list shows the agents you started and how many more you may start; agents_stop ends one of them and any it started. They reach only the agents you started: a name that is not one of yours is not found, no tool takes a session id, and none returns any part of a conversation.",
   "tools": [
     {
       "name": "agents_start",
-      "description": "Start an agent of your own on a task. It is a full session that runs in the background with the task as its opening prompt, in your folder unless you name another that Floti tracks, and never with more permission than you have. Answers with its name, backend, folder and branch. A start can be refused because of a limit (children at once, agents on the host, depth, starts in your life), a folder Floti does not track, a role or backend that does not fit, or a rule its backend cannot enforce; the answer says which, and for a limit says to wait for news and start again.",
+      "description": "Start an agent of your own on a task. It is a full session that runs in the background with the task as its opening prompt, in your folder unless you name another that Floti tracks, and never with more permission than you have. Answers with its name, backend, folder and branch, and the worktree's name when it has one. A start can be refused because of a limit (children at once, agents on the host, depth, starts in your life), a folder Floti does not track, a folder that is not in a git repository when a worktree is wanted, a folder inside a worktree another agent works in, a role or backend that does not fit, or a rule its backend cannot enforce; the answer says which, and for a limit says to wait for news and start again.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "task": {
             "type": "string",
-            "description": "What the agent is to do. It is the agent's opening prompt, so write it as a complete brief."
+            "description": "What the agent is to do. It is the agent's opening prompt, so write it as a complete brief. With resume it is the agent's next turn."
           },
           "role": {
             "type": "string",
@@ -33,6 +33,10 @@
             "type": "string",
             "description": "What you call it. Omit it to use its role's name. A name you already used gets a number after it."
           },
+          "worktree": {
+            "type": "string",
+            "description": "A one-word name for a git worktree Floti makes for it: it works in <repository>/.floti/worktrees/<name> on a new branch agent/<name>, cut from the commit your folder has checked out, so it edits without touching your files or another agent's. Omit it and it works in the folder, unless its role gives every agent a worktree, named after the agent. A name already taken gets a number after it; the answer names the one made. The worktree stays, with its branch, when the agent ends."
+          },
           "outlive": {
             "type": "boolean",
             "description": "Whether it keeps running if you end. Omit it, or pass false, and it ends when you do."
@@ -40,6 +44,10 @@
           "can_start": {
             "type": "boolean",
             "description": "Whether it may start agents of its own. Omit it to use its role's choice."
+          },
+          "resume": {
+            "type": "string",
+            "description": "The name of one of your agents that has ended, to reopen instead of starting a new one. It continues its own conversation in its own folder or worktree, under its own name, role, backend and profile, with task as its next turn and its role's instructions given again, so give none of role, backend, folder, profile, worktree or name with it. It keeps whether it outlives you and may start agents. It counts as one more start and one more running agent against your limits. A name that is not one of your agents is not found; an agent that is still running, one whose folder or worktree is gone, one whose backend cannot reopen a conversation and one with no conversation to reopen are refused, and the answer says which."
           }
         },
         "required": ["task"],

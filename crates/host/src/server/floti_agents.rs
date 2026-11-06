@@ -167,7 +167,8 @@ impl ToolFamily for FlotiAgents {
     }
 }
 
-/// `agents_start`: a child of `me`, started on the task given.
+/// `agents_start`: a child of `me`, started on the task given, or one of its
+/// ended children reopened with the task as its next turn.
 async fn start(
     hosted: std::sync::Arc<Hosted>,
     me: SessionId,
@@ -177,15 +178,20 @@ async fn start(
         Ok(request) => request,
         Err(refusal) => return problem(&refusal),
     };
+    let resumed = request.resume.is_some();
     match blocking(move || hosted.start_child(me, request)).await {
         Ok(started) => {
             let branch = started.branch.as_deref().unwrap_or("none");
-            let text = format!(
-                "Started {name}.\nname: {name}\nbackend: {backend}\nfolder: {folder}\nbranch: {branch}",
+            let verb = if resumed { "Resumed" } else { "Started" };
+            let mut text = format!(
+                "{verb} {name}.\nname: {name}\nbackend: {backend}\nfolder: {folder}\nbranch: {branch}",
                 name = started.name,
                 backend = started.backend,
                 folder = started.folder,
             );
+            if let Some(worktree) = &started.worktree {
+                text.push_str(&format!("\nworktree: {worktree}"));
+            }
             answer(
                 text,
                 json!({
@@ -193,6 +199,7 @@ async fn start(
                     "backend": started.backend,
                     "folder": started.folder,
                     "branch": started.branch,
+                    "worktree": started.worktree,
                 }),
             )
         }
@@ -273,7 +280,9 @@ fn start_request(arguments: &JsonObject) -> Result<StartChild, String> {
             Some(_) => Err(format!("{key} is true or false.")),
         }
     };
-    for key in ["role", "backend", "folder", "profile", "name"] {
+    for key in [
+        "role", "backend", "folder", "profile", "name", "worktree", "resume",
+    ] {
         if !matches!(
             arguments.get(key),
             None | Some(Value::Null | Value::String(_))
@@ -288,8 +297,10 @@ fn start_request(arguments: &JsonObject) -> Result<StartChild, String> {
         folder: text_argument(arguments, "folder"),
         profile: text_argument(arguments, "profile"),
         name: text_argument(arguments, "name"),
+        worktree: text_argument(arguments, "worktree"),
         outlive: flag("outlive")?.unwrap_or(false),
         can_start: flag("can_start")?,
+        resume: text_argument(arguments, "resume"),
     })
 }
 
@@ -315,13 +326,15 @@ fn listing_text(listed: &ChildrenListed) -> String {
     }
     let limits = &listed.limits;
     out.push_str(&format!(
-        "Limits left: {} of {} running at once, {} of {} starts, {} of {} on this host.",
+        "Limits left: {} of {} running at once, {} of {} starts, {} of {} on this host, {} of {} heavy on this host.",
         limits.children_left,
         limits.children_per_parent,
         limits.starts_left,
         limits.starts_per_parent,
         limits.host_left,
         limits.sessions_per_host,
+        limits.heavy_left,
+        limits.heavy_per_host,
     ));
     if let Some(reason) = &limits.cannot_start {
         out.push_str(&format!(" {reason}"));
@@ -376,6 +389,8 @@ fn listing_json(listed: &ChildrenListed) -> Value {
             "startsLeft": limits.starts_left,
             "sessionsPerHost": limits.sessions_per_host,
             "hostLeft": limits.host_left,
+            "heavyPerHost": limits.heavy_per_host,
+            "heavyLeft": limits.heavy_left,
             "depth": limits.depth,
             "cannotStart": limits.cannot_start,
         },

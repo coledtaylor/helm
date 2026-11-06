@@ -22,7 +22,9 @@
 //   `--allow-shell <command>` (a command, with any arguments after it). It has
 //   no flag that disallows a tool, so none is accepted.
 // - `--conversation <id>` names a new conversation; `--continue <id>` reopens
-//   one, and succeeds only in the folder it was recorded in.
+//   one, and succeeds only in the folder it was recorded in. A prompt given
+//   with `--continue` is the next turn: it is answered and logged as
+//   `openingPrompt`, with `resumed` true.
 // - An interactive run draws a prompt, echoes what is typed and writes the
 //   conversation record `<home>/conversations/<id>.json`. It reports no
 //   status: a host sees only its output.

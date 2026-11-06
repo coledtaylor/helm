@@ -130,12 +130,20 @@ pub(super) struct ChildRow {
     pub running: bool,
     /// The resource class of the role it was started in.
     pub class: RoleClass,
-    /// Whether the role it was started in asks for a worktree of its own.
+    /// Whether it works in a worktree Floti made for it.
     pub worktree: bool,
+    /// The conversation it is in now, when its row knows: what a resume
+    /// reopens.
+    pub conversation_id: Option<String>,
+    /// The mode it ran in.
+    pub permission_mode: Option<PermissionMode>,
+    /// The profile it ran under.
+    pub profile_id: Option<i64>,
 }
 
 const CHILD_COLUMNS: &str = "id, child_name, role, backend, cwd, branch, started_at, outlive, \
-     can_start, status, child_class, child_worktree";
+     can_start, status, child_class, child_worktree, \
+     coalesce(last_claude_session_id, claude_session_id), permission_mode, profile_id";
 
 fn child_row(row: &Row<'_>) -> rusqlite::Result<ChildRow> {
     let status: String = row.get(9)?;
@@ -157,6 +165,14 @@ fn child_row(row: &Row<'_>) -> rusqlite::Result<ChildRow> {
             .get::<_, Option<String>>(10)?
             .map_or(RoleClass::Light, |class| RoleClass::from_word(&class)),
         worktree: row.get(11)?,
+        conversation_id: row
+            .get::<_, Option<String>>(12)?
+            .filter(|id| !id.trim().is_empty()),
+        permission_mode: row
+            .get::<_, Option<String>>(13)?
+            .as_deref()
+            .and_then(records::permission_mode_from_name),
+        profile_id: row.get(14)?,
     })
 }
 
@@ -193,6 +209,68 @@ pub(super) fn agent_sessions_running(store: &Store) -> Result<Vec<SessionId>> {
         .query_map([], |row| row.get(0).map(SessionId))
         .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
         .map_err(sql("read the agent sessions running"))
+}
+
+/// A running agent-started session whose role is heavy, and who started it.
+pub(super) struct HeavyHolder {
+    pub id: SessionId,
+    pub name: String,
+    /// The session that started it, by its agent name when it is one, else
+    /// its session name.
+    pub started_by: String,
+}
+
+/// Every agent-started session the rows say is running whose role is heavy,
+/// oldest first. Sessions a person starts have no class, so hold no slot.
+pub(super) fn heavy_running(store: &Store) -> Result<Vec<HeavyHolder>> {
+    let mut select = store
+        .connection()
+        .prepare(
+            "SELECT s.id, s.child_name, COALESCE(p.child_name, p.name, 'a session') \
+             FROM sessions s LEFT JOIN sessions p ON p.id = s.parent_session_id \
+             WHERE s.child_name IS NOT NULL AND s.child_class = 'heavy' \
+             AND s.status = 'running' ORDER BY s.id",
+        )
+        .map_err(sql("read the heavy agents running"))?;
+    select
+        .query_map([], |row| {
+            Ok(HeavyHolder {
+                id: SessionId(row.get(0)?),
+                name: row.get(1)?,
+                started_by: row.get(2)?,
+            })
+        })
+        .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+        .map_err(sql("read the heavy agents running"))
+}
+
+/// A session the rows say is running, and where.
+pub(super) struct RunningSession {
+    pub id: SessionId,
+    pub cwd: String,
+    /// What to call it: its agent name when an agent started it, else its
+    /// session name.
+    pub label: String,
+}
+
+/// Every session the rows say is running, agent-started or not.
+pub(super) fn running_sessions(store: &Store) -> Result<Vec<RunningSession>> {
+    let mut select = store
+        .connection()
+        .prepare(
+            "SELECT id, cwd, COALESCE(child_name, name) FROM sessions WHERE status = 'running'",
+        )
+        .map_err(sql("read the sessions running"))?;
+    select
+        .query_map([], |row| {
+            Ok(RunningSession {
+                id: SessionId(row.get(0)?),
+                cwd: row.get(1)?,
+                label: row.get(2)?,
+            })
+        })
+        .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+        .map_err(sql("read the sessions running"))
 }
 
 /// The agent-started rows below `root`, nearest first, however deep.

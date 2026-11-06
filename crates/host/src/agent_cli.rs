@@ -28,7 +28,7 @@ pub const URL_VAR: &str = "FLOTI_AGENT_URL";
 pub const TOKEN_VAR: &str = "FLOTI_AGENT_TOKEN";
 
 /// What `floti agent` accepts.
-pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--outlive] [--can-start] [--json]\n       floti agent stop <name> [--json]";
+pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--json]\n       floti agent start --resume <name> --task <text> [--json]\n       floti agent stop <name> [--json]";
 
 /// How long a connection waits to be made.
 const CONNECT_WAIT: Duration = Duration::from_secs(10);
@@ -53,6 +53,11 @@ pub struct Start {
     pub folder: Option<String>,
     pub profile: Option<String>,
     pub name: Option<String>,
+    /// The one-word name of the git worktree to make for it.
+    pub worktree: Option<String>,
+    /// The name of one of the caller's ended agents to reopen; `task` is then
+    /// its next turn.
+    pub resume: Option<String>,
     pub outlive: bool,
     /// Whether `--can-start` was given; without it the role chooses.
     pub can_start: bool,
@@ -134,6 +139,8 @@ fn parse_start(args: &[String]) -> Result<Start, String> {
             "--folder" => start.folder = Some(value(flag)?),
             "--profile" => start.profile = Some(value(flag)?),
             "--name" => start.name = Some(value(flag)?),
+            "--worktree" => start.worktree = Some(value(flag)?),
+            "--resume" => start.resume = Some(value(flag)?),
             "--outlive" if inline.is_none() => start.outlive = true,
             "--can-start" if inline.is_none() => start.can_start = true,
             "--json" if inline.is_none() => start.json = true,
@@ -209,6 +216,8 @@ fn start_arguments(start: &Start) -> Value {
         ("folder", &start.folder),
         ("profile", &start.profile),
         ("name", &start.name),
+        ("worktree", &start.worktree),
+        ("resume", &start.resume),
     ] {
         if let Some(value) = value {
             map.insert(key.to_owned(), json!(value));
@@ -476,6 +485,9 @@ mod tests {
             "Acme",
             "--name",
             "rev",
+            "--worktree=ledger-store",
+            "--resume",
+            "rev",
             "--outlive",
             "--can-start",
             "--json",
@@ -490,6 +502,8 @@ mod tests {
                 folder: Some("src".to_owned()),
                 profile: Some("Acme".to_owned()),
                 name: Some("rev".to_owned()),
+                worktree: Some("ledger-store".to_owned()),
+                resume: Some("rev".to_owned()),
                 outlive: true,
                 can_start: true,
                 json: true,

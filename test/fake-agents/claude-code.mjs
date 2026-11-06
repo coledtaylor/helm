@@ -23,7 +23,8 @@
 //   beside it as the real CLI keeps one, `history.jsonl`, and a transcript
 //   under `projects/`.
 // - `--resume <id>` succeeds only in the directory the conversation was
-//   recorded in, as the real CLI does.
+//   recorded in, as the real CLI does. A prompt given with it is the next turn,
+//   and is logged as `openingPrompt` with `resumed` true.
 // - `mcp add-json`, `mcp remove` and `mcp list` read and write the files the
 //   real CLI does: the working folder's `.mcp.json`, and the global config,
 //   `.claude.json` in `CLAUDE_CONFIG_DIR` when that is set and in the home

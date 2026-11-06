@@ -26,7 +26,7 @@ use floti_host::platform::process_tree::Native as NativeTree;
 use floti_host::platform::socket::Endpoint;
 use floti_host::server::HostConfig;
 use floti_host::testkit::{
-    OtherAgent, OtherAgentRecord, PATIENCE, RunningHost, TestClient, TestDirs,
+    GitRepo, OtherAgent, OtherAgentRecord, PATIENCE, RunningHost, TestClient, TestDirs,
 };
 use floti_protocol::BackendId;
 use floti_protocol::channels::common::{PermissionMode, SessionRecord};
@@ -157,6 +157,15 @@ impl World {
     /// A folder in the workspace, which Floti tracks.
     fn project(&self, name: &str) -> PathBuf {
         resolved(&self.dirs.folder(&format!("workspace/{name}")))
+    }
+
+    /// A git repository in the workspace with one commit, for the roles that
+    /// work in a worktree.
+    fn repository(&self, name: &str) -> PathBuf {
+        let repo = GitRepo::init(self.project(name));
+        repo.write("README.md", "hello\n");
+        repo.commit_all("first");
+        resolved(repo.path())
     }
 
     /// The host's database, as a test reads it and writes fixtures into it.
@@ -1345,7 +1354,7 @@ async fn s9_class_and_worktree_are_kept_on_the_childs_row_and_shown_by_agents_li
     world.role("nimble", "---\nbackend: claude-code\n---\n");
     let host = world.host().await;
     let parent = world
-        .session(CLAUDE, &world.project("classes"), "parent")
+        .session(CLAUDE, &world.repository("classes"), "parent")
         .await;
 
     parent
@@ -1377,9 +1386,12 @@ async fn s9_class_and_worktree_are_kept_on_the_childs_row_and_shown_by_agents_li
     assert_eq!(find("nimble-kid")["worktree"], false);
     assert!(listed.text().contains("class heavy"), "{}", listed.text());
     assert!(listed.text().contains("class light"), "{}", listed.text());
-    // Making the worktree and holding the heavy slot are not this role file's
-    // doing: the child runs in the folder it was given.
-    assert_eq!(bulk.record.cwd, parent.record.cwd);
+    // The role's worktree is named after the child; a light role without one
+    // runs in the folder it was given.
+    let expected = Path::new(&parent.record.cwd).join(".floti/worktrees/bulk-kid");
+    assert_eq!(Path::new(&bulk.record.cwd), expected.as_path());
+    assert_eq!(bulk.record.branch.as_deref(), Some("agent/bulk-kid"));
+    assert_eq!(nimble.record.cwd, parent.record.cwd);
     host.stop(HostStopReason::Stop).await;
 }
 
@@ -1596,7 +1608,7 @@ async fn s13_the_shipped_lead_starts_agents_cannot_edit_and_carries_its_voice_an
     let world = World::new();
     let host = world.host().await;
     let parent = world
-        .session(CLAUDE, &world.project("lead"), "parent")
+        .session(CLAUDE, &world.repository("lead"), "parent")
         .await;
 
     parent
@@ -1639,7 +1651,7 @@ async fn s14_the_shipped_worker_edits_in_a_worktree_cannot_start_agents_or_creat
     let parent = world
         .session_in(
             CLAUDE,
-            &world.project("worker"),
+            &world.repository("worker"),
             "parent",
             PermissionMode::AcceptEdits,
         )
@@ -1651,6 +1663,13 @@ async fn s14_the_shipped_worker_edits_in_a_worktree_cannot_start_agents_or_creat
         .done();
     let worker = world.child_of(&parent, "worker").await;
     assert!(world.column::<bool>(worker.id(), "child_worktree"));
+    assert_eq!(
+        Path::new(&worker.record.cwd),
+        Path::new(&parent.record.cwd)
+            .join(".floti/worktrees/worker")
+            .as_path()
+    );
+    assert_eq!(worker.record.branch.as_deref(), Some("agent/worker"));
     assert_eq!(world.column::<String>(worker.id(), "child_class"), "light");
     assert!(!world.column::<bool>(worker.id(), "can_start"));
     assert_eq!(
