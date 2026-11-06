@@ -215,6 +215,25 @@ export interface TerminalHooks {
   onKeyDown?: (at: number) => void
 }
 
+/**
+ * xterm draws no cursor, the outline of a terminal without the keyboard
+ * included, until its terminal has had the keyboard once: `isCursorInitialized`
+ * is set by the first focus or key and by switching to the alternate screen,
+ * and a card made beside a parent that keeps the caret has had none of them.
+ * Claude Code draws on the normal screen, so its card would show no cursor at
+ * all until pressed. Setting the flag and drawing again gives the card the
+ * hollow cursor without taking the keyboard or sending the program a focus
+ * report. The flag is xterm's own state with no public setter; an xterm that
+ * keeps it elsewhere is left as it is.
+ */
+function drawCursorWithoutFocus(term: Terminal): void {
+  const service = (term as unknown as { _core?: { coreService?: { isCursorInitialized?: unknown } } })._core
+    ?.coreService
+  if (service === undefined || typeof service.isCursorInitialized !== 'boolean') return
+  service.isCursorInitialized = true
+  term.refresh(0, term.rows - 1)
+}
+
 export function createTerminal(
   container: HTMLElement,
   opts: TermCreateOptions & {
@@ -354,6 +373,7 @@ export function createTerminal(
   // A card in a family view is made beside a parent that has the keyboard, and
   // leaves it there: the cursor it draws is the outline of a terminal without it.
   if (opts.focus !== false) term.focus()
+  else drawCursorWithoutFocus(term)
   return {
     term,
     serialize,

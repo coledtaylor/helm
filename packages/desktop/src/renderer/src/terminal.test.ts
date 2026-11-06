@@ -113,6 +113,18 @@ describe('createTerminal preferences', () => {
     expect(focus).toHaveBeenCalledTimes(1)
   })
 
+  it('draws the outline cursor on a card that was never given the keyboard, without giving it the keyboard', () => {
+    const focus = vi.spyOn(Terminal.prototype, 'focus')
+    createTerminal(container(), { cols: 80, rows: 24, fit: false, focus: false }, hooks())
+
+    const card = latest()
+    expect(focus).not.toHaveBeenCalled()
+    expect(card.hasFocus).toBe(false)
+    // xterm draws no cursor until its terminal has had the keyboard once.
+    expect(card._core.coreService.isCursorInitialized).toBe(true)
+    expect(card.refreshed.at(-1)).toEqual([0, 23])
+  })
+
   it('uses the built-in defaults when it is handed none, whatever the settings say', () => {
     // The spike page's call: three arguments. A settings change reaching it
     // would make the fidelity drivers measure a configuration nobody proved.

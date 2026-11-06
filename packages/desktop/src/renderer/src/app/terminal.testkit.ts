@@ -224,8 +224,21 @@ export class Terminal {
     return Terminal.focused === this
   }
 
+  /**
+   * Where xterm keeps whether the cursor is drawn at all: not until the
+   * terminal has had the keyboard once, outline included.
+   */
+  readonly _core = { coreService: { isCursorInitialized: false } }
+  /** The row ranges the screen was asked to draw again. */
+  readonly refreshed: [number, number][] = []
+
+  refresh(start: number, end: number): void {
+    this.refreshed.push([start, end])
+  }
+
   focus(): void {
     Terminal.focused = this
+    this._core.coreService.isCursorInitialized = true
   }
 
   blur(): void {
