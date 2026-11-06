@@ -68,9 +68,13 @@ export function applyTerminalSettings(settings: AppSettings): void {
 }
 
 /**
- * Subscribe a registry. Never unsubscribed: the registries are module
- * singletons that live as long as the window does.
+ * Subscribe. A registry never unsubscribes: the registries are module
+ * singletons that live as long as the window does. A component that reads the
+ * preferences (`useTerminalPrefs`) does, with what this returns.
  */
-export function onTerminalPrefs(listener: Listener): void {
+export function onTerminalPrefs(listener: Listener): () => void {
   listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
 }

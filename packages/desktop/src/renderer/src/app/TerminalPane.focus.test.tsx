@@ -145,6 +145,29 @@ describe('TerminalPane', () => {
     expect(terminal.term.focus).toHaveBeenCalledTimes(1)
   })
 
+  it('as a card in its parent’s tab, never takes the keyboard by showing, and takes it when its terminal is pressed', async () => {
+    const child: SessionRecord = { ...SESSION, id: 7, name: 'reviewer', parentId: 3 }
+    const { container, rerender } = render(<TerminalPane card session={child} active windowsBuild={null} onClose={vi.fn()} />)
+    rerender(<TerminalPane card session={child} active windowsBuild={null} onClose={vi.fn()} />)
+    // The parent keeps the caret: the card was refit for its size and nothing more.
+    expect(terminal.refit).toHaveBeenCalled()
+    expect(terminal.term.focus).not.toHaveBeenCalled()
+
+    await userEvent.click(container.querySelector('[data-terminal-card]')!)
+    expect(terminal.term.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('as a card, says nothing in a bar of its own and takes no press on an ended session’s last screen', async () => {
+    const ended: SessionRecord = { ...SESSION, id: 7, status: 'exited', exitCode: 0, durationMs: 4_000, parentId: 3 }
+    const { container } = render(<TerminalPane card session={ended} active windowsBuild={null} onClose={vi.fn()} />)
+
+    // Its header says how it ended, so the pane draws no bar, and the screen takes no keys.
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(terminal.term.options).toMatchObject({ cursorBlink: false, disableStdin: true })
+    await userEvent.click(container.querySelector('[data-terminal-card]')!)
+    expect(terminal.term.focus).not.toHaveBeenCalled()
+  })
+
   it('S5: a remote session whose host cannot be reached shows the last line ssh wrote and the line to try by hand on its tab', () => {
     render(
       <TerminalPane

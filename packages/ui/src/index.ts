@@ -164,6 +164,17 @@ export {
   type PaneCrumbProps,
   type PaneGroupProps
 } from './components/PaneGroup'
+export {
+  ChildHeader,
+  FAMILY_HEADER_PX,
+  FamilyCard,
+  FamilyFrame,
+  FamilyKids,
+  type ChildHeaderProps,
+  type ChildHeaderShape,
+  type FamilyFrameProps,
+  type FamilyKidsProps
+} from './components/FamilyView'
 export { PaneDrop, type PaneDropProps } from './components/PaneDrop'
 export { PaneGrid, type PaneGridProps } from './components/PaneGrid'
 export {

@@ -217,7 +217,10 @@ export interface TerminalHooks {
 
 export function createTerminal(
   container: HTMLElement,
-  opts: TermCreateOptions,
+  opts: TermCreateOptions & {
+    /** Whether the terminal takes the keyboard as it is made. True unless it says false. */
+    focus?: boolean
+  },
   hooks: TerminalHooks,
   prefs: TerminalPrefs = TERMINAL_DEFAULTS
 ): TerminalHost {
@@ -240,6 +243,11 @@ export function createTerminal(
     rescaleOverlappingGlyphs: true,
     cursorBlink: prefs.cursorBlink,
     cursorStyle: prefs.cursorStyle,
+    // A terminal without the keyboard draws its cursor as an outline, whatever
+    // style the user chose for the one that has it. xterm's own default, set
+    // here so the family view's cards, which start without focus beside a parent
+    // that keeps it, are known to show a hollow cursor rather than assumed to.
+    cursorInactiveStyle: 'outline',
     theme: THEME,
     // Spread rather than `windowsPty: cond ? {...} : undefined`. Same value
     // reaches xterm either way - it tests the property for truthiness - but
@@ -343,7 +351,9 @@ export function createTerminal(
     { capture: true, passive: true }
   )
 
-  term.focus()
+  // A card in a family view is made beside a parent that has the keyboard, and
+  // leaves it there: the cursor it draws is the outline of a terminal without it.
+  if (opts.focus !== false) term.focus()
   return {
     term,
     serialize,

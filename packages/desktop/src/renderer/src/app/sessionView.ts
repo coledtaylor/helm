@@ -102,6 +102,24 @@ export function crumbStatus(
 }
 
 /**
+ * A child's state in its card's header: what the crumb says of a session, kept
+ * to a few words. A session handing control back says how long it has been
+ * idle (the header has the room for it and a card's reader wants it), and an
+ * error is the one word because its program's message does not fit a header
+ * (the crumb, the tab and the tooltip of its dot have it).
+ */
+export function childStatus(
+  session: SessionRecord,
+  state: TabIndicator,
+  since: number | null,
+  now: number
+): string {
+  if (state === 'idle' || state === 'shell') return since === null ? 'Idle' : `Idle · ${shortAge(now - since)}`
+  if (state === 'error') return 'Error'
+  return crumbStatus(session, state, since, now).text
+}
+
+/**
  * What a running session's hint adds to its folder: what a waiting one waits
  * on, and a reported error's message. The CLI's sentence and the program's
  * message are shown verbatim and never matched against. Null when it says

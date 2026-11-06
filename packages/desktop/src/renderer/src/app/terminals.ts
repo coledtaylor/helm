@@ -63,6 +63,12 @@ onTerminalPrefs((prefs) => {
 export interface MountOptions {
   /** From `app:info`; picks xterm's ConPTY quirk handling. */
   windowsBuild: number | null
+  /**
+   * Whether a terminal made by this call takes the keyboard. A child's card in
+   * its parent's tab says false, because its parent keeps the caret. Only the
+   * call that makes the terminal reads it.
+   */
+  focus?: boolean
 }
 
 /** The terminal for session `id` on `on`, created on first call, re-parented on later ones. */
@@ -96,7 +102,8 @@ export function mountTerminal(
       cols: 100,
       rows: 30,
       fit: true,
-      ...(opts.windowsBuild !== null ? { windowsBuild: opts.windowsBuild } : {})
+      ...(opts.windowsBuild !== null ? { windowsBuild: opts.windowsBuild } : {}),
+      ...(opts.focus === false ? { focus: false } : {})
     },
     {
       onInput: (data) => session.send('session:input', { id, data }),
@@ -170,8 +177,8 @@ export function estimateGrid(container: HTMLElement | null): { cols: number; row
  * null when it cannot be measured. The family view's room rule reads it, so a
  * larger font in Settings needs more pixels for the same floors in columns.
  */
-export function terminalCell(): CellSize | null {
-  return measureCell(terminalPrefs())
+export function terminalCell(prefs: { fontFamily: string; fontSize: number } = terminalPrefs()): CellSize | null {
+  return measureCell(prefs)
 }
 
 /** The lines of scrollback this device's terminals keep, which decide the ruler's strip (`gridOf`). */

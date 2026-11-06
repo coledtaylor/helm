@@ -884,6 +884,37 @@ overrides the gate; keep it.
   can be seen), and, while there is more than one pane, **close**, which hands
   its tabs to the pane that takes its room rather than closing them - a layout
   button that ended sessions would be a destructive control in disguise.
+
+  **A session's tab holds its children** (Settings > Agents, "Show children in
+  their parent's tab", on by default and kept per device). When the pane has
+  room - the parent keeps 80 columns at its fixed 55%, and a child 60 columns
+  by 8 rows, at the terminal's font, measured as the terminal measures - the
+  parent's terminal takes 55% of the pane's long side and its children stand on
+  the other 45% on the `surface` ground, in a column on the right of a pane at
+  least as wide as it is tall and in a row below the parent in a taller one,
+  a 1px `border-strong` hairline between the two and between the cards. A pane
+  without room shows the parent alone, filling the tab. The parent's terminal
+  is never rebuilt by any of it, and it keeps 55% while any child is in the
+  family, so it does not reflow as cards shrink and swap.
+
+  **A card is the child's terminal under a one-line header.** The terminal is
+  on its own fixed ground (`terminal`, §6), padded 8px by 10px, and it is made
+  without the keyboard: the parent keeps the caret, and the card's cursor is
+  the outline of a terminal without it until its terminal is pressed. The
+  header is 26px on `surface` with a 1px `border` below it, in 11.5px: the
+  state dot (6px, the session dot's colours), the name in weight 500, the role
+  as a 10px tag in `accent-text` on `accent-soft`, the state and for how long
+  at the right in 10.5px `fg-muted` ("Working - 4m"), then **Open as tab** and
+  **Stop** as 10.5px buttons in `border-strong`, Stop in `danger` with a
+  `danger` edge at 45%. Pressing the words shrinks the card; Stop ends the child
+  with no question. The children that do not fit at 8 rows are **one-line
+  headers** at the end of the column, or under the row: the same 26px with a 1px
+  `border` above, only the dot, name and state, and pressing one shows that
+  child and shrinks the last card in its place. A child that ended is a header
+  saying how and when ("Stopped - 14:52", "Done - 14:52") with **Close**; the
+  words open its last screen, input off, and Close takes it out of the family
+  view and leaves its row in the tree. A family with no card says "Press a
+  header to show that child here." in `fg-subtle`, 11.5px.
 - **Project shell**: a project page carries a plain shell (PowerShell, cwd at
   the project) as a terminal island below it. It is furniture, not a session:
   no row, no history, no notification. Each page owns its shell and its

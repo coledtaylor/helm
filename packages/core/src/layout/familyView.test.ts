@@ -5,12 +5,14 @@ import {
   arrangeFamily,
   closeFamilyChild,
   familyOf,
+  openFamilyChildAsTab,
   pressSessionRow,
   shrinkFamilyChild,
   showFamilyChild
 } from './familyView'
 import { familyEntries, PLAIN_FAMILY } from './familyState'
 import {
+  activateTab,
   activeRef,
   closeTab,
   familiesHere,
@@ -360,5 +362,50 @@ describe('pressing a child’s row in the Sessions tree', () => {
     const pressed = pressSessionRow(away, FAMILY, 4, 'build', scope(2))
     expect(pressed.press).toEqual({ to: 'parent-tab', id: 1 })
     expect(Object.keys(pressed.layout.families)).toEqual([paneId(session(1, 'build'))])
+  })
+})
+
+describe('Open as tab on a card', () => {
+  const parent = paneId(session(1))
+  const base = layoutOf(row([g(session(1), HISTORY), g(SETTINGS)]), 1)
+
+  it('gives the child a tab in its parent’s strip, in front, in the pane that takes the focus, and takes it out of the family view', () => {
+    const opened = openFamilyChildAsTab(base, parent, { id: 3 })
+    expect(opened.groups[0]!.tabs).toEqual([session(1), session(3), HISTORY])
+    expect(activeRef(opened.groups[0]!)).toEqual(session(3))
+    expect(opened.focused).toBe(opened.groups[0]!.id)
+    // Only the parent's strip changed: no pane was added and the other strip is as it was.
+    expect(opened.groups.map((group) => group.id)).toEqual(base.groups.map((group) => group.id))
+    expect(opened.groups[1]!.tabs).toEqual(base.groups[1]!.tabs)
+    expect(familiesHere(opened, FAMILY).get(1)?.map((child) => child.id)).toEqual([2, 4])
+    expect(sessionTabIds(opened)).toEqual(new Set([1, 3]))
+  })
+
+  it('puts the next child behind the ones already opened, so a parent’s children stay together after it', () => {
+    const first = openFamilyChildAsTab(base, parent, { id: 3 }, new Set([2, 3, 4]))
+    const second = openFamilyChildAsTab(first, parent, { id: 4 }, new Set([2, 3, 4]))
+    expect(second.groups[0]!.tabs).toEqual([session(1), session(3), session(4), HISTORY])
+    expect(activeRef(second.groups[0]!)).toEqual(session(4))
+  })
+
+  it('only brings forward a child that already has a tab, and does nothing for a parent that is not here', () => {
+    const own = openFamilyChildAsTab(base, parent, { id: 3 })
+    const again = openFamilyChildAsTab(activateTab(own, parent), parent, { id: 3 })
+    expect(again.groups[0]!.tabs).toEqual(own.groups[0]!.tabs)
+    expect(activeRef(again.groups[0]!)).toEqual(session(3))
+    expect(openFamilyChildAsTab(base, paneId(session(77)), { id: 3 })).toBe(base)
+  })
+
+  it('goes through another host’s tabs the same way', () => {
+    const away = layoutOf(g(session(1, 'build'), HISTORY), 0)
+    const opened = openFamilyChildAsTab(away, paneId(session(1, 'build')), { id: 4, host: 'build' })
+    expect(opened.groups[0]!.tabs).toEqual([session(1, 'build'), session(4, 'build'), HISTORY])
+  })
+
+  it('brings the child back into the family view when its tab closes', () => {
+    const opened = openFamilyChildAsTab(base, parent, { id: 3 })
+    const closed = closeTab(opened, paneId(session(3)))
+    expect(familiesHere(closed, FAMILY).get(1)?.map((child) => child.id)).toEqual([2, 3, 4])
+    expect(returnsToFamily(opened, FAMILY, 3, LOCAL_HOST_KEY, ROOM)).toBe(true)
   })
 })

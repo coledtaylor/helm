@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionActivity, SessionActivityState, SessionRecord } from '@helm/core/types'
-import { crumbStatus, indicatorOf, sessionNote, statusCounts, statusHint } from './sessionView'
+import { childStatus, crumbStatus, indicatorOf, sessionNote, statusCounts, statusHint } from './sessionView'
 
 function session(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -111,6 +111,20 @@ describe('what the tree row and the crumb say', () => {
     expect(crumbStatus(ended, 'ended', null, now)).toEqual({ text: 'Ended after 3h', tone: 'subtle' })
     const failed = session({ status: 'exited', exitCode: 3, durationMs: 5_000 })
     expect(crumbStatus(failed, 'failed', null, now)).toEqual({ text: 'Exited 3', tone: 'danger' })
+  })
+
+  it('says a child’s state in its card header, with how long for every state that has been going a while', () => {
+    expect(childStatus(session(), 'busy', now - 4 * MINUTE, now)).toBe('Working · 4m')
+    expect(childStatus(session(), 'waiting', now - MINUTE, now)).toBe('Needs you · 1m')
+    expect(childStatus(session(), 'idle', now - 20 * MINUTE, now)).toBe('Idle · 20m')
+    expect(childStatus(session(), 'shell', now - MINUTE, now)).toBe('Idle · 1m')
+    expect(childStatus(session(), 'idle', null, now)).toBe('Idle')
+    expect(childStatus(session(), 'busy', null, now)).toBe('Working')
+    expect(childStatus(session(), 'running', null, now)).toBe('Running')
+  })
+
+  it('keeps a child’s reported error to one word in its header, the program’s message being the crumb’s', () => {
+    expect(childStatus(session(), 'error', now - 4 * MINUTE, now)).toBe('Error')
   })
 })
 

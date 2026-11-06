@@ -170,6 +170,17 @@ describe('a session terminal', () => {
     expect(host?.element.isConnected).toBe(false)
   })
 
+  it('takes the keyboard when its tab opens, and a card made beside a parent leaves it with the parent', () => {
+    const focus = vi.spyOn(Terminal.prototype, 'focus')
+    render(<TerminalPane session={session(1)} active windowsBuild={null} onClose={vi.fn()} />)
+    expect(focus).toHaveBeenCalled()
+    focus.mockClear()
+
+    render(<TerminalPane card session={session(2, { parentId: 1 })} active windowsBuild={null} onClose={vi.fn()} />)
+    expect(Terminal.instances.filter((t) => !t.disposed)).toHaveLength(2)
+    expect(focus).not.toHaveBeenCalled()
+  })
+
   it('keeps its grid while hidden at 0x0, and re-measures when it is shown', () => {
     const box = pane(700, 350)
     const view = render(<TerminalPane session={session(2)} active windowsBuild={null} onClose={vi.fn()} />, {

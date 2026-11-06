@@ -1,3 +1,4 @@
+import { LOCAL_HOST_KEY } from '../hosts'
 import { tabHolder, type FamilyMember, type FamilyPress } from './family'
 import {
   PLAIN_FAMILY,
@@ -11,6 +12,10 @@ import {
   activateTab,
   familiesHere,
   findTab,
+  groupById,
+  isSessionOn,
+  moveTab,
+  openTab,
   paneId,
   sessionRef,
   sessionTabIds,
@@ -70,6 +75,42 @@ export function showFamilyChild<T extends FamilyMember>(
   id: number
 ): PaneLayout {
   return arrangeFamily(layout, tab, (state) => showChild(state, children, capacity, id))
+}
+
+/**
+ * Open as tab on a card: the child gets a tab in the pane strip its parent's
+ * tab is in, in front, and that pane takes the focus. It leaves the family view
+ * on this device by having a tab (`familiesHere` holds no child that has one),
+ * and Close tab, keep running puts it back.
+ *
+ * The tab goes after the parent's and after any tab of the parent's other
+ * children that already follows it (`siblings`), so the children of a parent
+ * stay together behind it in the order they were opened. The layout is
+ * returned unchanged when the parent's tab is not here, and the child's own
+ * tab, if it already has one, is only brought forward.
+ */
+export function openFamilyChildAsTab(
+  layout: PaneLayout,
+  tab: string,
+  child: { id: number; host?: string },
+  siblings: ReadonlySet<number> = new Set()
+): PaneLayout {
+  const host = child.host ?? LOCAL_HOST_KEY
+  const ref = sessionRef(child.id, host)
+  const childTab = paneId(ref)
+  if (findTab(layout, childTab) !== null) return activateTab(layout, childTab)
+  const at = findTab(layout, tab)
+  if (at === null) return layout
+
+  const group = groupById(layout, at.group)!
+  let index = at.index + 1
+  while (index < group.tabs.length) {
+    const next = group.tabs[index]!
+    if (!isSessionOn(next, host) || !siblings.has(next.id)) break
+    index += 1
+  }
+  const opened = openTab(layout, ref, group.id)
+  return activateTab(moveTab(opened, childTab, group.id, index), childTab)
 }
 
 /** What a press on a session's row needs to know of this device's family view. */

@@ -411,6 +411,9 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         if (now === undefined) return { closed: true }
         // Asked already, so the host is told not to ask again.
         if (isRunning(now)) await (await host()).request('session:close', { id: req.id, force: true })
+        // Ended, and still on screen where it was ended: its row follows on
+        // `session:exit`, and the window forgets it when it is closed there.
+        if (req.keep === true) return { closed: true }
         records.delete(req.id)
         shown.delete(req.id)
         streams.close('session:data', req.id)

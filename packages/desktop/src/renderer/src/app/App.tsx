@@ -18,6 +18,8 @@ import {
   closeTab,
   cycleTab,
   DEFAULT_SETTINGS,
+  familiesHere,
+  familyOf,
   findTab,
   focusGroup,
   fromSaved,
@@ -287,6 +289,8 @@ import {
   type FamilyScope,
 } from "./hostTabs";
 import { familyCapacity, useFamilyRoomOf } from "./familyRooms";
+import { stopChild } from "./familyActions";
+import { FamilyTab, type FamilyKid } from "./FamilyTab";
 import { useUpdate } from "./useUpdate";
 import { useOwnDataCopy } from "./useOwnDataCopy";
 import { useUsage } from "./useUsage";
@@ -1178,6 +1182,17 @@ export function App(): JSX.Element {
           }
         : null,
     [showChildren, sessions, listedHostIds, hostWork.byHost, roomOf],
+  );
+
+  /** The children each session tab here holds in its family view, by host and then the parent's row id. */
+  const heldFamilies = useMemo(
+    () =>
+      new Map(
+        [...(family?.sessions ?? new Map<string, readonly SessionRecord[]>())].map(
+          ([host, there]) => [host, familiesHere(open, there, host)] as const,
+        ),
+      ),
+    [open, family],
   );
 
   /** The running sessions this device has no tab for and no family view shows. */
@@ -4755,6 +4770,29 @@ export function App(): JSX.Element {
   // The frame
   // ---------------------------------------------------------------------------
 
+  /**
+   * The children a session tab holds in its family view, each with what it is
+   * doing and for how long. Only this PC's sessions have a registry record to
+   * say how long.
+   */
+  const kidsOf = (ref: { id: number; host?: string }): FamilyKid[] => {
+    const host = ref.host ?? LOCAL_HOST_KEY;
+    return (heldFamilies.get(host)?.get(ref.id) ?? []).flatMap((member) => {
+      const there = sessionAt({ id: member.id, host });
+      if (there === null) return [];
+      return [
+        {
+          session: there.record,
+          state: there.indicator,
+          since:
+            host === LOCAL_HOST_KEY
+              ? (liveByHelmId.get(member.id)?.statusSinceMs ?? null)
+              : null,
+        },
+      ];
+    });
+  };
+
   /** One pane, by its group's id: its strip, its crumb, its sessions' terminals, its front page and its drop zones. */
   const renderGroup = (id: number): JSX.Element | null => {
     const index = open.groups.findIndex((candidate) => candidate.id === id);
@@ -4899,57 +4937,73 @@ export function App(): JSX.Element {
             // off under a banner; the session is still running there, and the
             // terminal reattaches once it is back.
             return (
-              <div
+              <FamilyTab
                 key={paneId(ref)}
-                className={cn(
-                  "absolute inset-0",
-                  remoteFront ? "block" : "hidden",
-                )}
-                aria-hidden={!remoteFront}
-              >
-                <TerminalPane
-                  session={there}
-                  host={hostOf(ref)}
-                  active={remoteFront}
-                  windowsBuild={info?.windowsBuild ?? null}
-                  onClose={(id) => closeRemoteSession(hostOf(ref), id)}
-                  hostLost={hostAway(hostOf(ref)) ?? undefined}
-                />
-              </div>
+                tab={paneId(ref)}
+                host={hostOf(ref)}
+                front={remoteFront}
+                kids={kidsOf(ref)}
+                family={familyOf(open, paneId(ref))}
+                now={now}
+                windowsBuild={info?.windowsBuild ?? null}
+                hostLost={hostAway(hostOf(ref)) ?? undefined}
+                arrange={commit}
+                onStop={(id) => stopChild(hostOf(ref), id)}
+                parent={
+                  <TerminalPane
+                    session={there}
+                    host={hostOf(ref)}
+                    active={remoteFront}
+                    windowsBuild={info?.windowsBuild ?? null}
+                    onClose={(id) => closeRemoteSession(hostOf(ref), id)}
+                    hostLost={hostAway(hostOf(ref)) ?? undefined}
+                  />
+                }
+              />
             );
           }
           const session = sessionsById.get(ref.id);
           if (!session) return null;
           const isFront = groupFrontId === paneId(ref);
           return (
-            <div
+            <FamilyTab
               key={paneId(ref)}
-              className={cn("absolute inset-0", isFront ? "block" : "hidden")}
-              aria-hidden={!isFront}
-            >
-              <TerminalPane
-                session={session}
-                active={isFront}
-                windowsBuild={info?.windowsBuild ?? null}
-                onClose={closeSession}
-                hostGone={hostLink.lost !== null}
-                {...(session.status === "lost"
-                  ? {
-                      lost: {
-                        hostName: LOCAL_HOST_NAME,
-                        restoreReady:
-                          hostLink.lost === null &&
-                          (restoreOffer?.sessions.some(
-                            (each) =>
-                              each.id === session.id && each.blocked === null,
-                          ) ??
-                            false),
-                        onRestore: () => restoreSession(session.id),
-                      },
-                    }
-                  : {})}
-              />
-            </div>
+              tab={paneId(ref)}
+              host={LOCAL_HOST_KEY}
+              front={isFront}
+              kids={kidsOf(ref)}
+              family={familyOf(open, paneId(ref))}
+              now={now}
+              windowsBuild={info?.windowsBuild ?? null}
+              hostGone={hostLink.lost !== null}
+              arrange={commit}
+              onStop={(id) => stopChild(LOCAL_HOST_KEY, id)}
+              parent={
+                <TerminalPane
+                  session={session}
+                  active={isFront}
+                  windowsBuild={info?.windowsBuild ?? null}
+                  onClose={closeSession}
+                  hostGone={hostLink.lost !== null}
+                  {...(session.status === "lost"
+                    ? {
+                        lost: {
+                          hostName: LOCAL_HOST_NAME,
+                          restoreReady:
+                            hostLink.lost === null &&
+                            (restoreOffer?.sessions.some(
+                              (each) =>
+                                each.id === session.id &&
+                                each.blocked === null,
+                            ) ??
+                              false),
+                          onRestore: () => restoreSession(session.id),
+                        },
+                      }
+                    : {})}
+                />
+              }
+            />
           );
         })}
         {groupFront?.kind === "file" && (

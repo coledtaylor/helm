@@ -2,7 +2,7 @@ import type { JSX } from 'react'
 import { useEffect, useRef } from 'react'
 import type { SessionRecord } from '@helm/core'
 import { LOCAL_HOST_KEY } from '@helm/core/types'
-import { HostLostBanner, SessionEndedBar, type SessionLost } from '@helm/ui'
+import { cn, HostLostBanner, SessionEndedBar, type SessionLost } from '@helm/ui'
 import { getTerminal, mountTerminal } from './terminals'
 import { terminalPrefs } from './termprefs'
 
@@ -29,6 +29,13 @@ export interface TerminalPaneProps {
    * Reconnect now, until the link is back.
    */
   hostLost?: HostLost | undefined
+  /**
+   * The terminal is a child's card in its parent's tab, not a tab of its own.
+   * It never takes the keyboard when it shows (the parent keeps it), takes it
+   * when its terminal is pressed, and says nothing in a bar of its own: its
+   * header says how it ended, and the parent's tab says where the host went.
+   */
+  card?: boolean
 }
 
 /** What a remote session's tab says while its host's link is down. */
@@ -58,13 +65,15 @@ export function TerminalPane({
   lost,
   hostGone = false,
   host: on = LOCAL_HOST_KEY,
-  hostLost
+  hostLost,
+  card = false
 }: TerminalPaneProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (boxRef.current) mountTerminal(session.id, boxRef.current, { windowsBuild }, on)
-  }, [session.id, windowsBuild, on])
+    // A card made while its parent has the keyboard leaves it there.
+    if (boxRef.current) mountTerminal(session.id, boxRef.current, { windowsBuild, ...(card ? { focus: false } : {}) }, on)
+  }, [session.id, windowsBuild, on, card])
 
   const ended = session.status !== 'running'
   const away = !ended && hostLost !== undefined
@@ -97,8 +106,8 @@ export function TerminalPane({
     const host = getTerminal(session.id, on)
     if (!host) return
     host.refit()
-    if (!ended && !waiting) host.term.focus()
-  }, [active, ended, waiting, session.id, on])
+    if (!ended && !waiting && !card) host.term.focus()
+  }, [active, ended, waiting, session.id, on, card])
 
   // A terminal with no process behind it should not look like one that has.
   // The buffer stays readable and selectable; the blinking cursor and the
@@ -117,7 +126,7 @@ export function TerminalPane({
     // (DESIGN.md "foreign-ground islands"). The pane is the island - its edge,
     // corners and tab strip - so this draws no chrome of its own.
     <div className="flex h-full w-full flex-col overflow-hidden bg-terminal">
-      {away && hostLost !== undefined && (
+      {!card && away && hostLost !== undefined && (
         <HostLostBanner
           hostName={hostLost.hostName}
           sessionName={session.label ?? session.name}
@@ -126,7 +135,7 @@ export function TerminalPane({
           onReconnect={hostLost.onReconnect}
         />
       )}
-      {ended && (
+      {!card && ended && (
         <SessionEndedBar
           exitCode={session.exitCode}
           durationMs={session.durationMs}
@@ -142,7 +151,14 @@ export function TerminalPane({
       <div
         data-terminal-lost={lost !== undefined && session.status === 'lost' ? true : undefined}
         data-terminal-waiting={waiting ? true : undefined}
-        className={dimmed ? 'min-h-0 flex-1 p-2.5 opacity-60' : 'min-h-0 flex-1 p-2.5'}
+        data-terminal-card={card ? true : undefined}
+        className={cn('min-h-0 flex-1', card ? 'px-2.5 py-2' : 'p-2.5', dimmed && 'opacity-60')}
+        // Pressing a card's terminal gives it the keyboard. xterm would on its
+        // own, but it is the one promise a card makes about keys, so it is said
+        // here and not left to the renderer.
+        onPointerDown={
+          card && !ended && !waiting ? () => getTerminal(session.id, on)?.term.focus() : undefined
+        }
       >
         <div ref={boxRef} className="h-full w-full" />
       </div>

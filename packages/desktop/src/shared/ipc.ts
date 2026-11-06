@@ -407,6 +407,14 @@ export interface CloseSessionRequest {
    * about all of them at once.
    */
   force?: boolean
+  /**
+   * Ends the session and keeps its record in the window, so the surface that
+   * ended it still shows it: a child's card in its parent's tab, whose Stop
+   * leaves a header reading "Stopped" (`session:exit` brings the ended row).
+   * Without it a close also lets the window forget the session. Read by the
+   * window's connection to a host only.
+   */
+  keep?: boolean
 }
 
 export interface CloseSessionResult {

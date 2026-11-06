@@ -5,7 +5,14 @@ import { DEFAULT_SETTINGS } from '@helm/core/types'
 import { COPY_REFUSED, PASTE_REFUSED } from '@helm/ui'
 import type { ClipboardRead, ClipboardWriteOutcome } from '../../shared/ipc'
 import { CLIPBOARD_NOTICE_MS } from './clipboardNotice'
-import { applyPrefs, createTerminal, terminalFontStack, type TerminalHooks, type TerminalPrefs } from './terminal'
+import {
+  applyPrefs,
+  createTerminal,
+  terminalFontStack,
+  TERMINAL_DEFAULTS,
+  type TerminalHooks,
+  type TerminalPrefs
+} from './terminal'
 import { applyTerminalSettings } from './app/termprefs'
 import { FakeResizeObserver, FitAddon, layout, Terminal } from './app/terminal.testkit'
 
@@ -83,6 +90,27 @@ describe('createTerminal preferences', () => {
       cursorBlink: false,
       scrollback: 2500
     })
+  })
+
+  it('draws the cursor of a terminal without the keyboard as an outline, whatever style the user chose', () => {
+    for (const cursorStyle of ['block', 'underline', 'bar'] as const) {
+      createTerminal(
+        container(),
+        { cols: 80, rows: 24, fit: false },
+        hooks(),
+        { ...TERMINAL_DEFAULTS, cursorStyle }
+      )
+      expect(latest().options).toMatchObject({ cursorStyle, cursorInactiveStyle: 'outline' })
+    }
+  })
+
+  it('takes the keyboard as it is made, unless it is a card beside a parent that keeps it', () => {
+    const focus = vi.spyOn(Terminal.prototype, 'focus')
+    createTerminal(container(), { cols: 80, rows: 24, fit: false }, hooks())
+    expect(focus).toHaveBeenCalledTimes(1)
+
+    createTerminal(container(), { cols: 80, rows: 24, fit: false, focus: false }, hooks())
+    expect(focus).toHaveBeenCalledTimes(1)
   })
 
   it('uses the built-in defaults when it is handed none, whatever the settings say', () => {

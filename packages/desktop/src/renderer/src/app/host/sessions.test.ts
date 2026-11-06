@@ -174,6 +174,25 @@ describe('sessions over the window’s own connection', () => {
     expect(connection.streamsFor('session:data', 7)[0]?.closed).toBe(true)
   })
 
+  it('ends a session on a force close that keeps its record, asks nothing, and tells the window how it ended on the host’s exit', async () => {
+    const { adapters, connection } = world({ listed: [row({ id: 8, name: 'reviewer', parentId: 7 })] })
+    const questions = hear(adapters, 'session:confirm')
+    const exits = hear(adapters, 'session:exit')
+    await ask(adapters, 'session:list')
+    adapters.show([8])
+    await expect(ask(adapters, 'session:close', { id: 8, force: true, keep: true })).resolves.toEqual({ closed: true })
+    expect(questions).toEqual([])
+    expect(connection.payloads('session:close')).toEqual([{ id: 8, force: true }])
+
+    // The record stays, and the host's finished row (which says it was stopped) replaces it.
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([expect.objectContaining({ id: 8, status: 'running' })])
+    connection.push('session:exit', row({ id: 8, status: 'exited', exitCode: null, stopped: true, endedAt: '2026-10-29T10:05:00.000Z' }))
+    expect(exits).toEqual([expect.objectContaining({ id: 8, status: 'exited', stopped: true })])
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([
+      expect.objectContaining({ id: 8, status: 'exited', stopped: true })
+    ])
+  })
+
   it('keeps a session running when the user declines in the window, and tells the host nothing', async () => {
     const { adapters, connection } = world({ listed: [row()] })
     const questions = hear(adapters, 'session:confirm')
