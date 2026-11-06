@@ -3730,6 +3730,7 @@ export function App(): JSX.Element {
         kind={confirmRequest.kind}
         message={confirmRequest.message}
         detail={confirmRequest.detail}
+        folder={confirmRequest.folder}
         confirmLabel={confirmRequest.confirmLabel}
         keepLabel={confirmRequest.keepLabel}
         sessionNames={confirmRequest.sessionNames}

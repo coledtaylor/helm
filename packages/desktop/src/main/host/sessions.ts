@@ -505,6 +505,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
           kind: 'close-session',
           message: `“${sessionLabel(entry)}” is still running.`,
           detail: `Closing the tab ends the Claude Code session in ${entry.cwd}.`,
+          folder: entry.cwd,
           confirmLabel: 'End session',
           sessions: [entry]
         })

@@ -164,6 +164,8 @@ describe('sessions over the window’s own connection', () => {
       expect.objectContaining({
         kind: 'close-session',
         message: '“app” is still running on this PC’s host.',
+        detail: 'Ending it stops the Claude Code session in /work dir/app.',
+        folder: '/work dir/app',
         sessionNames: ['app']
       })
     ])
@@ -206,7 +208,8 @@ describe('sessions over the window’s own connection', () => {
       expect.objectContaining({
         kind: 'close-session',
         message: '“reviewer” is still running on this PC’s host.',
-        detail: expect.stringMatching(/^Ending it stops the Claude Code session in .+ lead, which started it, is told\.$/)
+        detail: 'Ending it stops the Claude Code session in /work dir/app. lead, which started it, is told.',
+        folder: '/work dir/app'
       })
     ])
     expect(connection.payloads('session:close')).toEqual([])

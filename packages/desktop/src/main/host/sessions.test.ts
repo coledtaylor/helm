@@ -360,7 +360,14 @@ describe('sessions through the local host', () => {
     await w.host.sessions.start({ cwd: '/work/app', cols: 80, rows: 24 })
 
     await expect(w.host.sessions.close({ id: 7 })).resolves.toEqual({ closed: true })
-    expect(w.asked).toEqual([expect.objectContaining({ kind: 'close-session', confirmLabel: 'End session' })])
+    expect(w.asked).toEqual([
+      expect.objectContaining({
+        kind: 'close-session',
+        detail: 'Closing the tab ends the Claude Code session in /work/app.',
+        folder: '/work/app',
+        confirmLabel: 'End session'
+      })
+    ])
     expect(w.connection.payloads('session:close')).toEqual([{ id: 7, force: true }])
     expect(w.host.sessions.list()).toEqual([])
     expect(w.connection.streamsFor('session:data', 7)[0]?.closed).toBe(true)

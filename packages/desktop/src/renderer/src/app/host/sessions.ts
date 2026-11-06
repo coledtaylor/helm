@@ -420,6 +420,7 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
             detail:
               `Ending it stops the Claude Code session in ${entry.cwd}.` +
               (parent === undefined ? '' : ` ${sessionLabel(parent)}, which started it, is told.`),
+            folder: entry.cwd,
             confirmLabel: 'End session',
             sessionNames: [sessionLabel(entry)]
           })
