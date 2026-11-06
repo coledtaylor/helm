@@ -10,6 +10,7 @@ import {
   sessionLabel,
   shrinkFamilyChild,
   showFamilyChild,
+  wantsCard,
   type FamilyEntry,
   type FamilyState,
   type PaneLayout,
@@ -136,7 +137,8 @@ export function FamilyTab({
           cell,
           headerHeight: FAMILY_HEADER_PX,
           scrollback: prefs.scrollback,
-          children: Math.max(1, held.length)
+          children: Math.max(1, held.length),
+          wanting: held.filter((child) => wantsCard(child, family)).length
         })
   const fits = room === null ? null : room.fits
   const capacity = room !== null && room.fits ? room.cards : 0

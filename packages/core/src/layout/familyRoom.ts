@@ -102,6 +102,12 @@ export interface FamilyRoomInput {
   scrollback: number
   /** The children in the family, as cards or headers. */
   children: number
+  /**
+   * How many of them want a card (`wantsCard`); the others are headers however
+   * much room there is, and the header rows are counted for them. Every child
+   * when left out.
+   */
+  wanting?: number
 }
 
 /** Why a pane shows the parent alone. */
@@ -166,6 +172,7 @@ export function familyRoom(input: FamilyRoomInput): FamilyRoom {
   if (parent.cols < FAMILY_PARENT_MIN_COLS) return { fits: false, axis, why: 'parent' }
 
   const children = Math.max(0, Math.floor(input.children))
+  const wanting = Math.min(children, Math.max(0, Math.floor(input.wanting ?? children)))
   // What a card's terminal needs below its header: 8 rows and its gutter.
   const cardRows = FAMILY_CARD_MIN_ROWS * cell.height + 2 * CARD_GUTTER_Y_PX
   const cardMinHeight = headerHeight + cardRows
@@ -187,12 +194,15 @@ export function familyRoom(input: FamilyRoomInput): FamilyRoom {
     // each card after the first with a hairline above it.
     const byRoom = Math.floor((body.height - children * headerHeight + hairline) / (cardRows + hairline))
     const cards = Math.min(children, Math.max(1, byRoom))
-    const between = (cards - 1) * hairline
+    // The cards actually drawn: a child that wants no card is a header, and the
+    // headers take the height the cards it leaves unused would have had.
+    const drawn = Math.min(cards, wanting)
+    const between = Math.max(0, drawn - 1) * hairline
     const headers = Math.min(
-      children - cards,
-      Math.floor((body.height - cards * cardMinHeight - between) / headerHeight)
+      children - drawn,
+      Math.floor((body.height - drawn * cardMinHeight - between) / headerHeight)
     )
-    const each = (body.height - headers * headerHeight - between) / cards
+    const each = (body.height - headers * headerHeight - between) / Math.max(1, drawn)
     return {
       fits: true,
       axis,
@@ -209,8 +219,12 @@ export function familyRoom(input: FamilyRoomInput): FamilyRoom {
   if (wide < 1 || cardMinHeight > rest) return { fits: false, axis, why: 'cards' }
   if (children === 0) return { fits: false, axis, why: 'children' }
   const cards = Math.min(children, wide)
+  const drawn = Math.min(cards, wanting)
   // The headers under the row take height from the cards, down to 8 rows.
-  const headers = Math.min(children - cards, Math.floor((rest - cardMinHeight) / headerHeight))
+  const headers = Math.min(
+    children - drawn,
+    Math.floor((rest - (drawn > 0 ? cardMinHeight : 0)) / headerHeight)
+  )
   return {
     fits: true,
     axis,

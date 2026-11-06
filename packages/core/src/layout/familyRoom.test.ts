@@ -153,6 +153,35 @@ describe('familyRoom', () => {
     expect(used).toBeLessThanOrEqual(860)
   })
 
+  it('gives every child that is a header its row, though the pane had room for more cards than children that want one', () => {
+    const body = { width: 1440, height: 860 }
+    // Four children and room for four cards, but two have ended: two cards and two headers.
+    const alone = familyRoom({ body, cell: DEFAULT_CELL, headerHeight: HEADER, scrollback: 10_000, children: 4 })
+    const ended = familyRoom({
+      body,
+      cell: DEFAULT_CELL,
+      headerHeight: HEADER,
+      scrollback: 10_000,
+      children: 4,
+      wanting: 2
+    })
+    expect(alone).toMatchObject({ fits: true, cards: 4, headers: 0 })
+    expect(ended).toMatchObject({ fits: true, cards: 4, headers: 2 })
+    // The parent's terminal is the same either way.
+    if (alone.fits && ended.fits) expect(ended.parent).toEqual(alone.parent)
+
+    // The same in a tall pane, where the headers go under the row.
+    const tall = familyRoom({
+      body: { width: 1100, height: 1400 },
+      cell: DEFAULT_CELL,
+      headerHeight: HEADER,
+      scrollback: 10_000,
+      children: 4,
+      wanting: 1
+    })
+    expect(tall).toMatchObject({ fits: true, axis: 'row', headers: 3 })
+  })
+
   it('keeps the parent’s terminal at the same columns and rows however many children there are, as cards or headers', () => {
     const body = { width: 1440, height: 860 }
     const parents = [1, 2, 3, 5, 8, 12, 30].map((children) => {

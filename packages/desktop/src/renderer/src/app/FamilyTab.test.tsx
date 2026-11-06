@@ -18,7 +18,7 @@ import {
   type SavedPane,
   type SessionRecord
 } from '@helm/core/types'
-import type { TabIndicator } from '@helm/ui'
+import { FAMILY_HEADER_PX, type TabIndicator } from '@helm/ui'
 import { bridge } from './bridge.testkit'
 import { familyCapacity, familyRoomFits } from './familyRooms'
 import { FamilyTab } from './FamilyTab'
@@ -388,6 +388,16 @@ describe('a parent’s tab with children', () => {
     expect(within(header as HTMLElement).queryByRole('button', { name: /Stop reviewer/ })).toBeNull()
     // Its terminal is kept for the last screen, but no card holds it.
     expect(view.container.querySelector('[data-family-cards]')!.contains(getTerminal(2)!.element)).toBe(false)
+  })
+
+  it('S17: leaves every ended child’s header its row, though the pane had room for a card for each child', () => {
+    const view = mount(WIDE, [LEAD, child(2, 'reviewer'), child(3, 'worker'), child(4, 'tester'), child(5, 'docs')])
+    view.list([LEAD, stopped(2, 'reviewer'), stopped(3, 'worker'), child(4, 'tester'), child(5, 'docs')])
+
+    expect(cardNames(view.container)).toEqual(['tester', 'docs'])
+    expect(headerNames(view.container)).toEqual(['reviewer', 'worker'])
+    const headers = view.container.querySelector<HTMLElement>('[data-family-headers]')!
+    expect(parseFloat(headers.style.maxHeight)).toBeGreaterThanOrEqual(2 * FAMILY_HEADER_PX)
   })
 
   it('S13: shows as cards the children that fit at 8 rows and the rest as one-line headers at the end of the column', () => {
