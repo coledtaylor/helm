@@ -847,9 +847,12 @@ overrides the gate; keep it.
   that is what stops it. A pane is named by its place in reading order, left to
   right and top to bottom: "First pane", "Second pane". A new tab opens in the **focused**
   pane, the one last pressed anywhere inside (taken in capture, so a terminal,
-  a list or the strip all count). A session's terminal fills the body edge to
-  edge on its own ground, and a page is drawn on the pane's own surface (§3,
-  "A page draws no island at all").
+  a list or the strip all count). A session tab can hold several terminals.
+  Its terminal fills the body edge to edge on its own ground, or, for a parent
+  whose pane has room, takes 55% of it beside its children's cards, each on the
+  same ground under a themed header (below, "A session's tab holds its
+  children"). A page is drawn on the pane's own surface (§3, "A page draws no
+  island at all").
 
   A strip with more tabs than fit scrolls sideways under the wheel, and its
   only sign of that is a 4px thumb along its foot with no arrow buttons -
@@ -888,7 +891,8 @@ overrides the gate; keep it.
   **A session's tab holds its children** (Settings > Agents, "Show children in
   their parent's tab", on by default and kept per device). When the pane has
   room - the parent keeps 80 columns at its fixed 55%, and a child 60 columns
-  by 8 rows, at the terminal's font, measured as the terminal measures - the
+  by 8 rows, at the terminal's font, measured as the terminal measures, inside
+  the gutters and hairlines the terminals sit in - the
   parent's terminal takes 55% of the pane's long side and its children stand on
   the other 45% on the `surface` ground, in a column on the right of a pane at
   least as wide as it is tall and in a row below the parent in a taller one,
@@ -904,17 +908,21 @@ overrides the gate; keep it.
   header is 26px on `surface` with a 1px `border` below it, in 11.5px: the
   state dot (6px, the session dot's colours), the name in weight 500, the role
   as a 10px tag in `accent-text` on `accent-soft`, the state and for how long
-  at the right in 10.5px `fg-muted` ("Working - 4m"), then **Open as tab** and
+  at the right in 10.5px `fg-muted` ("Working · 4m"), then **Open as tab** and
   **Stop** as 10.5px buttons in `border-strong`, Stop in `danger` with a
   `danger` edge at 45%. Pressing the words shrinks the card; Stop ends the child
   with no question. The children that do not fit at 8 rows are **one-line
   headers** at the end of the column, or under the row: the same 26px with a 1px
   `border` above, only the dot, name and state, and pressing one shows that
-  child and shrinks the last card in its place. A child that ended is a header
-  saying how and when ("Stopped - 14:52", "Done - 14:52") with **Close**; the
-  words open its last screen, input off, and Close takes it out of the family
-  view and leaves its row in the tree. A family with no card says "Press a
-  header to show that child here." in `fg-subtle`, 11.5px.
+  child and shrinks the last card in its place. Stop turns the card into the
+  header of a child that ended, with the same words as one that ended by
+  itself. A child that ended is a header saying how and when ("Stopped · 14:52"
+  when its parent or the user stopped it, "Done · 14:52" when it exited by
+  itself) with **Close**, its dot the ended tone; the words open its last
+  screen under the same header, input off and no Open as tab or Stop, and Close
+  takes it out of the family view and leaves its row in the tree. A family with
+  no card says "Press a header to show that child here." in `fg-subtle`,
+  11.5px.
 - **Project shell**: a project page carries a plain shell (PowerShell, cwd at
   the project) as a terminal island below it. It is furniture, not a session:
   no row, no history, no notification. Each page owns its shell and its
