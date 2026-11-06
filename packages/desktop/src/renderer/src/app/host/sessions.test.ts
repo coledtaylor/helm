@@ -222,6 +222,25 @@ describe('sessions over the window’s own connection', () => {
     ])
   })
 
+  it('keeps a child running when the user declines the Stop question, leaves its row as it was, and tells the host nothing', async () => {
+    const { adapters, connection } = world({
+      listed: [row({ id: 7, name: 'lead' }), row({ id: 8, name: 'reviewer', parentId: 7 })]
+    })
+    const questions = hear(adapters, 'session:confirm')
+    await ask(adapters, 'session:list')
+    adapters.show([7, 8])
+    const stopping = ask(adapters, 'session:close', { id: 8, keep: true })
+    await settle()
+    send(adapters, 'session:confirmed', { id: (questions[0] as SessionConfirmRequest).id, agreed: false })
+    await expect(stopping).resolves.toEqual({ closed: false })
+    expect(connection.payloads('session:close')).toEqual([])
+    expect(connection.streamsFor('session:data', 8)[0]?.closed).toBeFalsy()
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([
+      expect.objectContaining({ id: 7, status: 'running' }),
+      expect.objectContaining({ id: 8, status: 'running' })
+    ])
+  })
+
   it('keeps a session running when the user declines in the window, and tells the host nothing', async () => {
     const { adapters, connection } = world({ listed: [row()] })
     const questions = hear(adapters, 'session:confirm')
