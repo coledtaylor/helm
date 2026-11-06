@@ -198,6 +198,23 @@ export function TerminalIcon(props: IconProps): JSX.Element {
   )
 }
 
+/**
+ * A command a session ran as a child, in the Sessions tree: a screen with a
+ * prompt, where an agent has its state dot. Its own drawing on a 12-unit grid
+ * and shown at 12px, so a unit is a pixel and the screen is 10 x 8.5 of them
+ * with a 1.25 stroke - not `TerminalIcon` scaled down, whose strokes would thin
+ * to 1.125px and whose screen would shrink to about 9.4 x 7.9.
+ */
+export function CommandChildIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon viewBox="0 0 12 12" width="12" height="12" strokeWidth="1.25" {...props}>
+      <rect x="1" y="1.75" width="10" height="8.5" rx="1.5" />
+      <path d="M3.5 4.6l1.7 1.4-1.7 1.4" />
+      <path d="M6.4 7.6h2.1" />
+    </Icon>
+  )
+}
+
 export function MonitorIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>

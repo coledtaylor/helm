@@ -4,7 +4,7 @@ import { cn } from '../lib/cn'
 import { PROJECT_KIND_ICON } from '../lib/projectIcons'
 import { ROW_SELECTED, ROW_SELECTED_GROUP } from '../lib/rows'
 import { SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
-import { CaretIcon, FolderIcon, PinIcon, TerminalIcon } from './icons'
+import { CaretIcon, CommandChildIcon, FolderIcon, PinIcon, TerminalIcon } from './icons'
 
 /** The caret's column: 16px, so a row with nothing to expand keeps its icon in line. */
 const CARET_PX = 16
@@ -318,9 +318,6 @@ const CARET_LEFT_PX = 17
  * session with nothing to fold keeps its own.
  */
 const CARET_DOT_SHIFT_PX = 3
-/** A command's glyph, in the 12px box a dot's column is given beside it. */
-const COMMAND_GLYPH_PX = 12
-
 /** A command's glyph takes the tone a dot would: it runs, it has ended, or it failed. */
 function commandTone(state: SessionState | null): string {
   if (state === 'failed') return 'text-danger'
@@ -454,12 +451,12 @@ export function SessionRow({
             data-session-command={state ?? 'unknown'}
             style={lead}
             className={cn(
-              'grid shrink-0 place-items-center',
+              'grid size-3 shrink-0 place-items-center',
               commandTone(state),
               outside && 'opacity-70'
             )}
           >
-            <TerminalIcon width={COMMAND_GLYPH_PX} height={COMMAND_GLYPH_PX} />
+            <CommandChildIcon />
           </span>
         ) : (
           <span

@@ -441,6 +441,32 @@ describe('SessionTree: a parent’s row and a child’s as the design draws them
     expect(guides(3)).toEqual(['more', 'elbow'])
   })
 
+  it('draws the command glyph as its own 12-unit drawing in the 12px box a dot’s column gives it', () => {
+    renderTree(
+      new Map([
+        [HELM.toLowerCase(), [row(1, 'api-refactor', 'idle', { nested: [row(2, 'tests', 'running', { command: true })] })]]
+      ])
+    )
+    const box = rowOf(2).querySelector<HTMLElement>('[data-session-command]')
+    expect(box?.className).toContain('size-3')
+    const svg = box?.querySelector('svg')
+    // Drawn on a 12-unit grid and shown at 12px, so a unit is a pixel: the 10 x 8.5
+    // screen is 10 x 8.5 pixels and the 1.25 stroke is 1.25 pixels.
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 12 12')
+    expect(svg?.getAttribute('width')).toBe('12')
+    expect(svg?.getAttribute('height')).toBe('12')
+    expect(svg?.getAttribute('stroke-width')).toBe('1.25')
+    const screen = svg?.querySelector('rect')
+    expect(
+      ['x', 'y', 'width', 'height', 'rx'].map((name) => screen?.getAttribute(name))
+    ).toEqual(['1', '1.75', '10', '8.5', '1.5'])
+    // The prompt chevron and the underscore.
+    expect(Array.from(svg?.querySelectorAll('path') ?? []).map((path) => path.getAttribute('d'))).toEqual([
+      'M3.5 4.6l1.7 1.4-1.7 1.4',
+      'M6.4 7.6h2.1'
+    ])
+  })
+
   it('draws a hollow ring for a session whose agent is back at the shell, and on a folded parent for a child that is', async () => {
     renderTree(
       new Map([

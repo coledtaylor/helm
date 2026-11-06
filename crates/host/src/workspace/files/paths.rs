@@ -96,13 +96,65 @@ pub fn is_inside_root(root: &Path, path: &Path) -> bool {
 /// Whether `path` is inside `root` once both are resolved as the disk
 /// resolves them: junctions and symlinks followed, `..` taken after the links
 /// before it rather than folded away, and the case of a name ignored where
-/// the OS does (Windows). `path` is judged where it leads, not where it is
-/// spelled, so a link out of `root` is outside and a link into it is inside.
-/// A path that does not exist resolves through its deepest ancestor that does.
+/// the disk ignores it ([`folds_case`]). `path` is judged where it leads, not
+/// where it is spelled, so a link out of `root` is outside and a link into it
+/// is inside. A path that does not exist resolves through its deepest
+/// ancestor that does.
 pub fn resolves_inside(root: &Path, path: &Path) -> bool {
     let walked = walk_dots_after_links(path);
     let reached = std::fs::canonicalize(&walked).unwrap_or_else(|_| real_path(&walked));
-    starts_with(&real_path(root), &reached, cfg!(windows))
+    let root = real_path(root);
+    starts_with(&root, &reached, folds_case(&root))
+}
+
+/// Whether the disk holding `folder` reads two names that differ only in case
+/// as one, which it answers by asking the disk: the deepest cased name on the
+/// way to `folder`, spelled with its case swapped, opens although the folder
+/// above it does not list it under that spelling. A Windows volume folds, a
+/// macOS volume usually does and a Linux one usually does not; no list of
+/// operating systems decides it, so a volume that differs from its OS's habit
+/// is judged as it behaves. A folder that is not there is judged by the
+/// deepest ancestor that is, and a path with no name that has a case is not
+/// judged to fold.
+fn folds_case(folder: &Path) -> bool {
+    let named = folder
+        .ancestors()
+        .filter(|ancestor| ancestor.exists())
+        .find_map(|ancestor| {
+            let name = ancestor.file_name()?.to_string_lossy().into_owned();
+            let swapped = swap_case(&name);
+            (swapped != name).then(|| (ancestor.parent().map(Path::to_path_buf), swapped))
+        });
+    let Some((Some(parent), swapped)) = named else {
+        return false;
+    };
+    if !parent.join(&swapped).exists() {
+        return false;
+    }
+    // Opening is not enough: a disk that tells the two names apart can hold
+    // both as folders of their own, and then the swapped one is another folder.
+    let Ok(listing) = std::fs::read_dir(&parent) else {
+        return false;
+    };
+    !listing
+        .flatten()
+        .any(|entry| entry.file_name() == std::ffi::OsStr::new(&swapped))
+}
+
+/// `text` with each lower-case letter upper-cased and each upper-case letter
+/// lower-cased.
+fn swap_case(text: &str) -> String {
+    text.chars()
+        .flat_map(|c| {
+            if c.is_lowercase() {
+                c.to_uppercase().collect::<Vec<_>>()
+            } else if c.is_uppercase() {
+                c.to_lowercase().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
 }
 
 /// `path` with each `..` taken from where the walk has got to, links before
@@ -208,5 +260,55 @@ mod tests {
             &dirs.folder("elsewhere"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_name_spelled_in_another_case_is_the_same_folder_exactly_where_the_disk_says_so() {
+        let dirs = TestDirs::new();
+        let root = dirs.folder("Holder/Project");
+        let held = dirs.folder("Holder/Project/Src");
+        let real_root = real_path(&root);
+        let parent = real_root.parent().expect("a project has a parent");
+
+        // The disk's own answer: does the other spelling open the folder?
+        let other_spelling = parent.join(swap_case("Project"));
+        let folds = other_spelling.exists();
+        assert_eq!(folds_case(&real_root), folds);
+        assert_eq!(
+            resolves_inside(&root, &other_spelling.join("Src")),
+            folds,
+            "{} is the project's folder exactly where the disk folds case",
+            other_spelling.join("Src").display()
+        );
+        assert!(resolves_inside(&root, &held));
+
+        // A name that differs by more than case is another folder on any disk.
+        assert!(!resolves_inside(&root, &parent.join("Projects")));
+    }
+
+    #[test]
+    fn a_root_that_is_gone_is_judged_by_the_disk_that_held_it() {
+        let dirs = TestDirs::new();
+        let holder = dirs.folder("Holder");
+        let gone = holder.join("Gone").join("Project");
+        let other_holder = holder.parent().unwrap().join(swap_case("Holder"));
+        let folds = other_holder.exists();
+
+        assert_eq!(folds_case(&gone), folds);
+        // Neither the root nor the path is there, so each resolves through
+        // `Holder`, and the names below it compare as the disk compares them.
+        assert_eq!(
+            resolves_inside(&gone, &holder.join("gONE").join("pROJECT").join("x")),
+            folds
+        );
+        assert!(resolves_inside(&gone, &gone.join("x")));
+        assert!(!resolves_inside(&gone, &holder.join("Gone").join("Other")));
+    }
+
+    #[test]
+    fn swapping_case_changes_only_letters_that_have_one() {
+        assert_eq!(swap_case("Project 2.x"), "pROJECT 2.X");
+        assert_eq!(swap_case("12 .-"), "12 .-");
+        assert_eq!(swap_case("Ünï"), "üNÏ");
     }
 }

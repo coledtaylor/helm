@@ -1053,7 +1053,10 @@ overrides the gate; keep it.
   ordinary session row, with its own dot and word, except that a command a
   session ran as a child wears a 12px terminal glyph where the dot would be, in
   `success` while it runs, `fg-subtle` once it has ended and `danger` if it
-  failed. A session row's dot and name are 7px apart.
+  failed. The glyph is `CommandChildIcon`, its own drawing on a 12-unit grid shown
+  at 12px (a screen of 10 x 8.5 units, a 1.25 stroke, a prompt chevron and an
+  underscore), not `TerminalIcon` scaled down. A session row's dot and name are
+  7px apart.
 
   **A parent folds its children the way a project folds its sessions.** The
   caret is a `fg-subtle` triangle in 9px type, pointing down while the children
