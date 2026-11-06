@@ -109,7 +109,7 @@ interface HarnessProps {
   front?: boolean
   /** This device shows children in their parent's tab. */
   enabled?: boolean
-  onStop?: (id: number) => void
+  onStop?: (id: number) => Promise<boolean> | void
 }
 
 function Harness({ sessions, doing = {}, front = true, enabled = true, onStop = vi.fn() }: HarnessProps): JSX.Element {
@@ -344,13 +344,35 @@ describe('a parent’s tab with children', () => {
     expect(bridge.sent('session:input')).toEqual([{ id: 2, data: 'hello' }])
   })
 
-  it('S9: Stop asks the window to end that child and nothing else, with no question', async () => {
+  it('S9: Stop asks the window to end that child and nothing else; the question is the window’s, not the card’s', async () => {
     const onStop = vi.fn()
     const { container } = mount(WIDE, [LEAD, child(2, 'reviewer'), child(3, 'tester')], { onStop })
 
     await userEvent.click(within(card(container, 'reviewer')).getByRole('button', { name: 'Stop reviewer' }))
     expect(onStop).toHaveBeenCalledExactlyOnceWith(2)
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('S9: a child the user stopped, once they agreed, shrinks to a header reading Stopped by you and the time', async () => {
+    const onStop = vi.fn(() => Promise.resolve(true))
+    const view = mount(WIDE, [LEAD, child(2, 'reviewer'), child(3, 'tester')], { onStop })
+
+    await userEvent.click(within(card(view.container, 'reviewer')).getByRole('button', { name: 'Stop reviewer' }))
+    view.list([LEAD, stopped(2, 'reviewer'), child(3, 'tester')], { onStop })
+
+    const header = view.container.querySelector('[data-family-header="ended"]')!
+    expect(header.querySelector('[data-family-status]')!.textContent).toBe('Stopped by you · 14:52')
+  })
+
+  it('S9: a child whose Stop the user declined, and that was stopped by another, reads Stopped and the time', async () => {
+    const onStop = vi.fn(() => Promise.resolve(false))
+    const view = mount(WIDE, [LEAD, child(2, 'reviewer'), child(3, 'tester')], { onStop })
+
+    await userEvent.click(within(card(view.container, 'reviewer')).getByRole('button', { name: 'Stop reviewer' }))
+    view.list([LEAD, stopped(2, 'reviewer'), child(3, 'tester')], { onStop })
+
+    const header = view.container.querySelector('[data-family-header="ended"]')!
+    expect(header.querySelector('[data-family-status]')!.textContent).toBe('Stopped · 14:52')
   })
 
   it('S9: a child that was stopped shrinks to a header reading Stopped and the time, with Close and no terminal', () => {

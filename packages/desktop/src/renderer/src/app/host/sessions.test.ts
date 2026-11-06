@@ -193,6 +193,32 @@ describe('sessions over the window’s own connection', () => {
     ])
   })
 
+  it('asks before Stop on a child’s card ends it, says its parent is told, and keeps the session where it ended once agreed', async () => {
+    const { adapters, connection } = world({
+      listed: [row({ id: 7, name: 'lead' }), row({ id: 8, name: 'reviewer', parentId: 7 })]
+    })
+    const questions = hear(adapters, 'session:confirm')
+    await ask(adapters, 'session:list')
+    adapters.show([7, 8])
+    const stopping = ask(adapters, 'session:close', { id: 8, keep: true })
+    await settle()
+    expect(questions).toEqual([
+      expect.objectContaining({
+        kind: 'close-session',
+        message: '“reviewer” is still running on this PC’s host.',
+        detail: expect.stringMatching(/^Ending it stops the Claude Code session in .+ lead, which started it, is told\.$/)
+      })
+    ])
+    expect(connection.payloads('session:close')).toEqual([])
+    send(adapters, 'session:confirmed', { id: (questions[0] as SessionConfirmRequest).id, agreed: true })
+    await expect(stopping).resolves.toEqual({ closed: true })
+    expect(connection.payloads('session:close')).toEqual([{ id: 8, force: true }])
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([
+      expect.objectContaining({ id: 7 }),
+      expect.objectContaining({ id: 8, status: 'running' })
+    ])
+  })
+
   it('keeps a session running when the user declines in the window, and tells the host nothing', async () => {
     const { adapters, connection } = world({ listed: [row()] })
     const questions = hear(adapters, 'session:confirm')

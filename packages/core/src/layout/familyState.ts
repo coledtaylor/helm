@@ -241,16 +241,21 @@ export function pruneFamilyState(
 /**
  * An ended child's header: how it ended and when, "Stopped · 14:52" when its
  * parent, the user or the host ended it and "Done · 14:52" when its agent
- * exited by itself, in the time of day where this window is. A session whose
- * host lost it says "Lost". With no time (it never saw one end) the time is
- * left off rather than guessed.
+ * exited by itself, in the time of day where this window is. A child this
+ * window's user stopped with Stop (`byYou`) says "Stopped by you". A session
+ * whose host lost it says "Lost". With no time (it never saw one end) the time
+ * is left off rather than guessed.
  */
-export function endedHeaderText(child: {
-  status: string
-  stopped?: boolean
-  endedAt?: string | null
-}): string {
-  const how = child.status === 'lost' ? 'Lost' : child.stopped === true ? 'Stopped' : 'Done'
+export function endedHeaderText(
+  child: {
+    status: string
+    stopped?: boolean
+    endedAt?: string | null
+  },
+  byYou = false
+): string {
+  const stopped = byYou && child.stopped === true ? 'Stopped by you' : 'Stopped'
+  const how = child.status === 'lost' ? 'Lost' : child.stopped === true ? stopped : 'Done'
   if (child.endedAt === undefined || child.endedAt === null) return how
   const at = new Date(child.endedAt)
   if (Number.isNaN(at.getTime())) return how

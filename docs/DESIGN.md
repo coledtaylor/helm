@@ -910,15 +910,17 @@ overrides the gate; keep it.
   as a 10px tag in `accent-text` on `accent-soft`, the state and for how long
   at the right in 10.5px `fg-muted` ("Working · 4m"), then **Open as tab** and
   **Stop** as 10.5px buttons in `border-strong`, Stop in `danger` with a
-  `danger` edge at 45%. Pressing the words shrinks the card; Stop ends the child
-  with no question. The children that do not fit at 8 rows are **one-line
+  `danger` edge at 45%. Pressing the words shrinks the card; Stop asks first, in the
+  window's one question for ending a running session ("*name* is still running
+  on *host*. Ending it stops the Claude Code session in *folder*. *Parent*,
+  which started it, is told.", End session / Cancel, Cancel focused). The children that do not fit at 8 rows are **one-line
   headers** at the end of the column, or under the row: the same 26px with a 1px
   `border` above, only the dot, name and state, and pressing one shows that
   child and shrinks the last card in its place. Stop turns the card into the
-  header of a child that ended, with the same words as one that ended by
-  itself. A child that ended is a header saying how and when ("Stopped · 14:52"
-  when its parent or the user stopped it, "Done · 14:52" when it exited by
-  itself) with **Close**, its dot the ended tone; the words open its last
+  header of a child that ended, reading "Stopped by you" and the time. A child
+  that ended is a header saying how and when ("Stopped by you · 14:52" when
+  the user stopped it from this window, "Stopped · 14:52" when its parent or
+  another client did, "Done · 14:52" when it exited by itself) with **Close**, its dot the ended tone; the words open its last
   screen under the same header, input off and no Open as tab or Stop, and Close
   takes it out of the family view and leaves its row in the tree. A family with
   no card says "Press a header to show that child here." in `fg-subtle`,

@@ -11,39 +11,34 @@ beforeEach(() => {
 })
 
 describe('Stop on a child’s card', () => {
-  it('S9: asks the host that runs the child to end it by force, keeping the session where it was ended, with no question', () => {
+  it('S9: asks the host that runs the child to end it unforced, so the window asks first, keeping the session where it was ended', async () => {
     const closed = vi.fn(() => ({ closed: true }) as never)
     bridge.answer('session:close', closed)
 
-    stopChild(LOCAL_HOST_KEY, 7)
+    await expect(stopChild(LOCAL_HOST_KEY, 7)).resolves.toBe(true)
 
-    expect(bridge.invoked('session:close')).toEqual([{ id: 7, force: true, keep: true }])
+    expect(bridge.invoked('session:close')).toEqual([{ id: 7, keep: true }])
     expect(closed).toHaveBeenCalledOnce()
   })
 
-  it('goes to the host the child runs on, and to no other', () => {
+  it('settles false when the user declines the question, and ends nothing', async () => {
+    bridge.answer('session:close', () => ({ closed: false }) as never)
+
+    await expect(stopChild(LOCAL_HOST_KEY, 7)).resolves.toBe(false)
+  })
+
+  it('goes to the host the child runs on, and to no other', async () => {
     remoteBridge('h1').answer('session:close', () => ({ closed: true }) as never)
 
-    stopChild('h1', 3)
+    await stopChild('h1', 3)
 
-    expect(remoteBridge('h1').invoked('session:close')).toEqual([{ id: 3, force: true, keep: true }])
+    expect(remoteBridge('h1').invoked('session:close')).toEqual([{ id: 3, keep: true }])
     expect(bridge.invoked('session:close')).toEqual([])
   })
 
   it('leaves the card running, without an unhandled rejection, when the host cannot be reached', async () => {
-    let refuse: (reason: Error) => void = () => undefined
-    bridge.answer(
-      'session:close',
-      () =>
-        new Promise<never>((_resolve, reject) => {
-          refuse = reject
-        })
-    )
+    bridge.answer('session:close', () => Promise.reject(new Error('the connection to the host is gone')) as never)
 
-    stopChild(LOCAL_HOST_KEY, 7)
-    refuse(new Error('the connection to the host is gone'))
-
-    // The rejection is taken by Stop's own handler: a later one would fail the run as unhandled.
-    await expect(Promise.resolve().then(() => bridge.invoked('session:close'))).resolves.toHaveLength(1)
+    await expect(stopChild(LOCAL_HOST_KEY, 7)).resolves.toBe(false)
   })
 })

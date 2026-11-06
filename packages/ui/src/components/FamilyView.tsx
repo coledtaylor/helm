@@ -152,7 +152,7 @@ export interface ChildHeaderProps {
   onPress: () => void
   /** A running card's Open as tab. */
   onOpenAsTab?: (() => void) | undefined
-  /** A running card's Stop, which ends the child without a question. */
+  /** A running card's Stop, which the window asks about before it ends the child. */
   onStop?: (() => void) | undefined
   /** An ended child's Close, which takes it out of the family view. */
   onClose?: (() => void) | undefined

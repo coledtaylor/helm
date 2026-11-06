@@ -412,10 +412,14 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         if (entry === undefined) return { closed: true }
         if (isRunning(entry) && req.force !== true) {
           // The host is named by the window: a client names its hosts.
+          // A child's parent is told, and the question says so.
+          const parent = entry.parentId == null ? undefined : records.get(entry.parentId)
           const agreed = await asking({
             kind: 'close-session',
             message: `“${sessionLabel(entry)}” is still running on ${hostName()}.`,
-            detail: `Ending it stops the Claude Code session in ${entry.cwd}.`,
+            detail:
+              `Ending it stops the Claude Code session in ${entry.cwd}.` +
+              (parent === undefined ? '' : ` ${sessionLabel(parent)}, which started it, is told.`),
             confirmLabel: 'End session',
             sessionNames: [sessionLabel(entry)]
           })
