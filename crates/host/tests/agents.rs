@@ -897,7 +897,7 @@ fn cli_stop(child: &str) -> StopCommand {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s1_a_session_on_either_backend_gets_a_floti_agents_entry_and_lists_its_three_tools() {
+async fn s1_a_session_on_either_backend_gets_a_floti_agents_entry_and_lists_its_four_tools() {
     let world = World::new();
     let host = world.host().await;
     let folder = world.project("alpha");
@@ -911,7 +911,7 @@ async fn s1_a_session_on_either_backend_gets_a_floti_agents_entry_and_lists_its_
         );
         assert_eq!(
             agent.tool_names().await,
-            ["agents_list", "agents_start", "agents_stop"],
+            ["agents_list", "agents_roles", "agents_start", "agents_stop"],
             "{backend}"
         );
         let (url, token) = agent.route();
@@ -1832,7 +1832,7 @@ async fn s24_a_rule_the_chosen_backend_cannot_enforce_refuses_the_start_naming_t
 // Allowed up front
 // ---------------------------------------------------------------------------
 
-/// The five rules a session is given for the agents family, as each backend
+/// The six rules a session is given for the agents family, as each backend
 /// spells them.
 fn family_rules(backend: &str) -> Vec<String> {
     if backend == CLAUDE {
@@ -1840,6 +1840,7 @@ fn family_rules(backend: &str) -> Vec<String> {
             "mcp__floti-agents__agents_start",
             "mcp__floti-agents__agents_list",
             "mcp__floti-agents__agents_stop",
+            "mcp__floti-agents__agents_roles",
             "Bash(floti agent start:*)",
             "Bash(floti agent stop:*)",
         ]
@@ -1848,6 +1849,7 @@ fn family_rules(backend: &str) -> Vec<String> {
             "floti-agents.agents_start",
             "floti-agents.agents_list",
             "floti-agents.agents_stop",
+            "floti-agents.agents_roles",
             "floti agent start",
             "floti agent stop",
         ]
@@ -1874,7 +1876,7 @@ fn assert_family_allowed(who: &str, backend: &str, agent: &Agent) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s26_the_three_tools_and_the_two_commands_are_allowed_up_front_never_by_wildcard_and_a_deny_stands()
+async fn s26_the_four_tools_and_the_two_commands_are_allowed_up_front_never_by_wildcard_and_a_deny_stands()
  {
     let world = World::new();
     let host = world.host().await;

@@ -23,7 +23,9 @@ use floti_protocol::{BackendFeature, HarnessPart, Knowable};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::agent::{BackendAnswers, Composition, ToolRules, ToolSupport, sweep_launch_folders};
+use crate::agent::{
+    BackendAnswers, Composition, RoleInstructions, ToolRules, ToolSupport, sweep_launch_folders,
+};
 use crate::platform::links::is_link;
 use crate::platform::process_tree::{self, Ending, ProcessTree};
 use crate::testkit::{PATIENCE, TestDirs};
@@ -1478,6 +1480,79 @@ fn an_overlaid_projects_agents_md_is_composed_like_its_claude_md() {
     succeeded(&output);
     let composed = log["composedInstructions"].as_str().unwrap();
     assert!(composed.contains("(AGENTS.md)") && composed.contains("# agents rules"));
+}
+
+fn role_body(role: &str, body: &str) -> Option<RoleInstructions> {
+    Some(RoleInstructions {
+        role: role.to_owned(),
+        body: body.to_owned(),
+    })
+}
+
+#[test]
+fn a_roles_body_is_composed_into_the_instructions_with_no_overlays_and_never_typed() {
+    let world = World::new();
+    let (launch, _folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "reviewer".into(),
+        composition: Composition {
+            instructions: role_body("reviewer", "Read the code before you give findings.\n"),
+            ..Composition::default()
+        },
+        prompt: Some("review the change".into()),
+    });
+    assert!(launch.composed_instructions);
+
+    let (output, log) = world.run(&launch, "/exit\n");
+    succeeded(&output);
+    let composed = log["composedInstructions"].as_str().unwrap();
+    assert!(
+        composed.contains("# Role: reviewer")
+            && composed.contains("Read the code before you give findings."),
+        "{composed}"
+    );
+    // It is in the instructions the launch loads, not in what is typed.
+    assert_eq!(log["received"], json!(["/exit"]), "only /exit was typed");
+    assert_eq!(log["openingPrompt"], "review the change");
+}
+
+#[test]
+fn a_roles_section_follows_the_project_instructions() {
+    let world = World::new();
+    let other = world.folder("project with rules");
+    write(&other.join("CLAUDE.md"), "# project rules\n");
+    let (launch, _folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "worker".into(),
+        composition: Composition {
+            overlays: vec![other],
+            instructions: role_body("worker", "Do one item."),
+            ..Composition::default()
+        },
+        ..LaunchRequest::default()
+    });
+    let (output, log) = world.run(&launch, "/exit\n");
+    succeeded(&output);
+    let composed = log["composedInstructions"].as_str().unwrap();
+    let project = composed.find("# project rules").expect("project rules");
+    let role = composed.find("# Role: worker").expect("role section");
+    assert!(project < role, "{composed}");
+    assert!(composed.ends_with("Do one item.\n"), "{composed:?}");
+}
+
+#[test]
+fn a_role_without_a_body_adds_no_instructions() {
+    let world = World::new();
+    let (launch, _folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "bare".into(),
+        composition: Composition {
+            instructions: role_body("bare", "  \n"),
+            ..Composition::default()
+        },
+        ..LaunchRequest::default()
+    });
+    assert!(!launch.composed_instructions);
 }
 
 #[test]

@@ -134,6 +134,13 @@
       "when": 1793948656042,
       "tag": "0018_closed_ares",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1793957237031,
+      "tag": "0019_cool_slayback",
+      "breakpoints": true
     }
   ]
 }

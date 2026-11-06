@@ -158,6 +158,20 @@ pub trait AgentBackend: Send + Sync {
         Ok(())
     }
 
+    /// Whether the agent has an effort setting a launch can pass. A role
+    /// that gives an effort for a backend without one is refused, naming the
+    /// effort and the backend, rather than started with it dropped.
+    fn takes_effort(&self) -> bool {
+        false
+    }
+
+    /// Whether the adapter composes [`Composition::instructions`] into the
+    /// session's own instructions. A role with a body is refused on a backend
+    /// that does not, naming it, rather than started without the body.
+    fn takes_instructions(&self) -> bool {
+        false
+    }
+
     /// The backend's id, name and declared features, derived from the parts
     /// it has.
     fn capabilities(&self) -> BackendDescriptor {
@@ -468,6 +482,20 @@ pub struct Composition {
     /// A role's disallowed tools, as [`ToolRules`] spells them, refused the
     /// same way.
     pub disallowed_tools: Vec<String>,
+    /// A role's body, composed into the session's own instructions by an
+    /// adapter that takes instructions, and never typed or sent to the
+    /// session. An adapter that takes none fails the launch rather than
+    /// dropping it.
+    pub instructions: Option<RoleInstructions>,
+}
+
+/// A role's body, and the name of the role it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleInstructions {
+    /// The role's name, which heads its section.
+    pub role: String,
+    /// The body.
+    pub body: String,
 }
 
 impl Composition {

@@ -88,6 +88,8 @@ use crate::platform::process_tree::{self, ProcessTree};
 use crate::platform::socket::{self, Endpoint, LocalListener, LocalSocket};
 use crate::platform::wsl::{self, WslProgram, WslSide};
 use crate::roles::RoleSource;
+use crate::roles::folder::{FolderRoles, roles_folder};
+use crate::roles::seed::seed_roles;
 use crate::session::ClientId;
 use crate::store::Store;
 use crate::{Error, Result};
@@ -459,6 +461,15 @@ impl Host {
         if let Some(floti) = &run.keeper {
             hosted.use_floti(floti);
         }
+        // The roles an agent starts children in are files in the config
+        // folder, read afresh at every start. A folder that could not be
+        // seeded is not a host that cannot start: the default role still
+        // works, and the problem is in the log.
+        let roles_dir = roles_folder(&folders);
+        if let Some(problem) = seed_roles(&roles_dir).problem {
+            log_line!("floti host: {problem}");
+        }
+        hosted.use_roles(Arc::new(FolderRoles::new(roles_dir)));
         let features = Arc::new(Features::new(Arc::clone(&hosted), folders, run)?);
         let agent_tools = start_agent_tools(&hosted, &features)?;
 

@@ -1,7 +1,7 @@
 {
   "name": "floti-agents",
   "path": "/mcp/agents",
-  "instructions": "These tools start agents of your own, list them and stop them. agents_start runs a new agent on a task you give it and answers with its name; agents_list shows the agents you started and how many more you may start; agents_stop ends one of them and any it started. They reach only the agents you started: a name that is not one of yours is not found, no tool takes a session id, and none returns any part of a conversation.",
+  "instructions": "These tools start agents of your own, list them and stop them. agents_roles lists the roles an agent can be started in; agents_start runs a new agent in one of them on a task you give it and answers with its name; agents_list shows the agents you started and how many more you may start; agents_stop ends one of them and any it started. They reach only the agents you started: a name that is not one of yours is not found, no tool takes a session id, and none returns any part of a conversation.",
   "tools": [
     {
       "name": "agents_start",
@@ -48,7 +48,7 @@
     },
     {
       "name": "agents_list",
-      "description": "The agents you started that are running: each one's name, role, backend, state, folder and branch, then what is left of your limits. Only your own agents are listed.",
+      "description": "The agents you started that are running: each one's name, role, class, backend, state, folder and branch, then what is left of your limits. Only your own agents are listed.",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
     },
     {
@@ -65,6 +65,11 @@
         "required": ["child"],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "agents_roles",
+      "description": "The roles you can start an agent in, read fresh on every call: each one's name, what it is for, its class (light or heavy), whether it works in a worktree of its own, whether its agents may start agents, and the installed backends it can run on for you. Then any role file that cannot be used and what is wrong with it.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
     }
   ]
 }

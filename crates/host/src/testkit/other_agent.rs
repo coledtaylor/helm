@@ -60,6 +60,9 @@ pub struct OtherAgentRecord {
     pub resumed: bool,
     pub title: Option<String>,
     pub model: Option<String>,
+    /// What its `--instructions-file` held, when it was given one.
+    #[serde(default)]
+    pub instructions: Option<String>,
     /// Its `--mode`, as the CLI names it.
     pub mode: Option<String>,
     /// Each `--allow-tool`, in order.
@@ -212,6 +215,16 @@ impl OtherAgentBackend {
             .filter(|model| !model.trim().is_empty())
         {
             args.extend(["--model".into(), model.into()]);
+        }
+        // A role's body goes in a file of the launch's own, passed with the
+        // flag it has for that; it is never typed to the session. It has no
+        // effort setting, so a composition's effort is not passed.
+        if let Some(role) = &composition.instructions {
+            let file = folder.write(
+                "instructions.md",
+                format!("# Role: {}\n\n{}\n", role.role, role.body.trim()),
+            )?;
+            args.extend(["--instructions-file".into(), file.into_os_string()]);
         }
         if let Some(mode) = composition.permission_mode {
             args.extend(self.arguments(mode));
@@ -414,6 +427,12 @@ impl AgentBackend for OtherAgentBackend {
     fn permissions(&self) -> Option<&dyn Permissions> {
         Some(self)
     }
+
+    /// `--instructions-file`. It has no effort setting: [`Self::takes_effort`]
+    /// stays false.
+    fn takes_instructions(&self) -> bool {
+        true
+    }
 }
 
 impl Resumer for OtherAgentBackend {
@@ -442,7 +461,7 @@ mod tests {
     use floti_protocol::BackendFeature;
 
     use super::*;
-    use crate::agent::ToolSupport;
+    use crate::agent::{RoleInstructions, ToolSupport};
     use crate::testkit::PATIENCE;
 
     struct World {
@@ -817,6 +836,57 @@ mod tests {
         );
         assert_eq!(record.exit_code, Some(0));
         assert_eq!(world.agent.records().len(), 1);
+    }
+
+    #[test]
+    fn a_roles_body_goes_in_an_instructions_file_it_loads_and_is_never_typed() {
+        let world = World::new();
+        let (launch, folder) = world.launch(&LaunchRequest {
+            composition: Composition {
+                model: Some("small".into()),
+                instructions: Some(RoleInstructions {
+                    role: "reviewer".into(),
+                    body: "Read the code before you give findings.\n".into(),
+                }),
+                ..Composition::default()
+            },
+            prompt: Some("review the change".into()),
+            ..request(world.dirs.folder("work"))
+        });
+        let args = world.args(&launch);
+        let file = folder.path().join("instructions.md");
+        let at = args
+            .iter()
+            .position(|arg| arg == "--instructions-file")
+            .expect("the flag is passed");
+        assert_eq!(args[at + 1], file.display().to_string());
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "# Role: reviewer\n\nRead the code before you give findings.\n"
+        );
+        // The prompt stays the last argument, and is only the task.
+        assert_eq!(args.last().unwrap(), "review the change");
+
+        let (output, pid) = world.run(&launch.spec, "/exit\n");
+        assert!(output.status.success());
+        let record = world.agent.record(pid).expect("the run is recorded");
+        assert_eq!(
+            record.instructions.as_deref(),
+            Some("# Role: reviewer\n\nRead the code before you give findings.\n")
+        );
+        assert_eq!(record.model.as_deref(), Some("small"));
+        assert_eq!(record.received, ["/exit"]);
+        assert_eq!(record.opening_prompt.as_deref(), Some("review the change"));
+
+        // No role, no file and no flag.
+        let (bare, folder) = world.launch(&request(world.dirs.folder("work")));
+        assert!(
+            !world
+                .args(&bare)
+                .iter()
+                .any(|arg| arg == "--instructions-file")
+        );
+        assert!(!folder.path().join("instructions.md").exists());
     }
 
     #[test]

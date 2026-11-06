@@ -139,7 +139,9 @@ pub fn seed_templates(dir: &Path) -> Seeded {
     }
 }
 
-fn write_new(path: &Path, content: &str) -> io::Result<()> {
+/// Writes `content` to `path`, making its folders, and fails when `path`
+/// exists. Shared with the roles folder's seeding.
+pub(crate) fn write_new(path: &Path, content: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

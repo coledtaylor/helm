@@ -79,6 +79,10 @@ pub struct ParentLink {
     pub outlive: bool,
     /// Whether it may start children of its own.
     pub can_start: bool,
+    /// Whether its role is heavy, which a host runs one of at a time.
+    pub heavy: bool,
+    /// Whether its role asks for a worktree of its own.
+    pub worktree: bool,
 }
 
 /// The record of sessions: a row on spawn, its end when the program ends.
@@ -119,9 +123,10 @@ impl SessionLedger for Mutex<Store> {
             .query_row(
                 "INSERT INTO sessions (name, cwd, argv, claude_session_id, backend, \
                  project_path, profile_id, permission_mode, branch, parent_session_id, \
-                 parent_conversation_id, child_name, role, outlive, can_start, status) \
+                 parent_conversation_id, child_name, role, outlive, can_start, child_class, \
+                 child_worktree, status) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                 'running') RETURNING id",
+                 ?16, ?17, 'running') RETURNING id",
                 params![
                     row.name,
                     row.cwd.to_string_lossy(),
@@ -138,6 +143,8 @@ impl SessionLedger for Mutex<Store> {
                     parent.and_then(|link| link.role.as_deref()),
                     parent.is_some_and(|link| link.outlive),
                     parent.is_some_and(|link| link.can_start),
+                    parent.map(|link| if link.heavy { "heavy" } else { "light" }),
+                    parent.is_some_and(|link| link.worktree),
                 ],
                 |found| found.get(0),
             )

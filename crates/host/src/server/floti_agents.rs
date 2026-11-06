@@ -1,4 +1,5 @@
-//! floti-agents: start, list and stop an agent's own children, served to the
+//! floti-agents: start, list and stop an agent's own children, and list the
+//! roles they can be started in, served to the
 //! host's sessions on the agent tools listener at `/mcp/agents` (`floti_agents.json`).
 //!
 //! **Only the host serves it, and only to a session's own children.** Which
@@ -23,7 +24,9 @@ use std::sync::{LazyLock, OnceLock, Weak};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::hosted::{ChildEntry, ChildStopped, ChildrenListed, Hosted, StartChild};
+use super::hosted::{
+    ChildEntry, ChildStopped, ChildrenListed, Hosted, RoleEntry, RolesListed, StartChild,
+};
 use crate::agent_tools::{
     CallToolResult, Caller, ContentBlock, JsonObject, Tool, ToolFamily, ToolFuture,
 };
@@ -58,6 +61,7 @@ pub(crate) const FAMILY: &str = "floti-agents";
 const AGENTS_START: &str = "agents_start";
 const AGENTS_LIST: &str = "agents_list";
 const AGENTS_STOP: &str = "agents_stop";
+const AGENTS_ROLES: &str = "agents_roles";
 
 /// The shell commands a launch runs without asking beside the tools, each
 /// named on its own: never `floti agent` as a prefix, which would allow its
@@ -156,6 +160,7 @@ impl ToolFamily for FlotiAgents {
                 AGENTS_START => start(hosted, me, &arguments).await,
                 AGENTS_LIST => list(hosted, me).await,
                 AGENTS_STOP => stop(hosted, me, &arguments).await,
+                AGENTS_ROLES => roles(hosted, me).await,
                 other => problem(&format!("{} has no tool named {other}.", TABLE.name)),
             }
         })
@@ -201,6 +206,17 @@ async fn list(hosted: std::sync::Arc<Hosted>, me: SessionId) -> CallToolResult {
         Ok(listed) => {
             let text = listing_text(&listed);
             answer(text, listing_json(&listed))
+        }
+        Err(refusal) => problem(&refusal),
+    }
+}
+
+/// `agents_roles`: the roles there are now, and the files that are not roles.
+async fn roles(hosted: std::sync::Arc<Hosted>, me: SessionId) -> CallToolResult {
+    match blocking(move || hosted.list_roles(me)).await {
+        Ok(listed) => {
+            let text = roles_text(&listed);
+            answer(text, roles_json(&listed))
         }
         Err(refusal) => problem(&refusal),
     }
@@ -317,13 +333,17 @@ fn child_text(child: &ChildEntry) -> String {
     let branch = child.branch.as_deref().unwrap_or("none");
     let role = child.role.as_deref().unwrap_or("none");
     let mut line = format!(
-        "{name}  role {role}  {backend}  {state} since {since}  {folder}  branch {branch}",
+        "{name}  role {role}  class {class}  {backend}  {state} since {since}  {folder}  branch {branch}",
         name = child.name,
+        class = child.class.as_str(),
         backend = child.backend,
         state = child.state,
         since = child.since,
         folder = child.folder,
     );
+    if child.worktree {
+        line.push_str("  works in a worktree");
+    }
     if child.outlive {
         line.push_str("  outlives you");
     }
@@ -339,6 +359,8 @@ fn listing_json(listed: &ChildrenListed) -> Value {
         "children": listed.children.iter().map(|child| json!({
             "name": child.name,
             "role": child.role,
+            "class": child.class.as_str(),
+            "worktree": child.worktree,
             "backend": child.backend,
             "state": child.state,
             "since": child.since,
@@ -360,6 +382,58 @@ fn listing_json(listed: &ChildrenListed) -> Value {
     })
 }
 
+fn roles_text(listed: &RolesListed) -> String {
+    let mut out = String::new();
+    for role in &listed.roles {
+        out.push_str(&role_text(role));
+        out.push('\n');
+    }
+    if !listed.bad.is_empty() {
+        out.push_str("Role files that cannot be used:\n");
+        for bad in &listed.bad {
+            out.push_str(&format!("{}: {}\n", bad.file, bad.problem));
+        }
+    }
+    out.trim_end().to_owned()
+}
+
+fn role_text(role: &RoleEntry) -> String {
+    let yes_no = |flag: bool| if flag { "yes" } else { "no" };
+    let backends = if role.backends.is_empty() {
+        "none installed here can run it".to_owned()
+    } else {
+        role.backends.join(", ")
+    };
+    let mut text = format!(
+        "{name}  class {class}  worktree {worktree}  may start agents {can_start}  runs on {backends}",
+        name = role.name,
+        class = role.class.as_str(),
+        worktree = yes_no(role.worktree),
+        can_start = yes_no(role.can_start),
+    );
+    if !role.description.is_empty() {
+        text.push_str(&format!("\n  {}", role.description));
+    }
+    text
+}
+
+fn roles_json(listed: &RolesListed) -> Value {
+    json!({
+        "roles": listed.roles.iter().map(|role| json!({
+            "name": role.name,
+            "description": role.description,
+            "class": role.class.as_str(),
+            "worktree": role.worktree,
+            "canStart": role.can_start,
+            "backends": role.backends,
+        })).collect::<Vec<_>>(),
+        "bad": listed.bad.iter().map(|bad| json!({
+            "file": bad.file,
+            "problem": bad.problem,
+        })).collect::<Vec<_>>(),
+    })
+}
+
 /// A success: the text, then the same answer as JSON.
 fn answer(text: String, json: Value) -> CallToolResult {
     CallToolResult::success(vec![
@@ -376,13 +450,14 @@ fn problem(message: &str) -> CallToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::roles::{BadRole, RoleClass};
 
     fn arguments(value: Value) -> JsonObject {
         value.as_object().expect("an object").clone()
     }
 
     #[test]
-    fn the_table_names_the_three_tools_and_the_route() {
+    fn the_table_names_the_four_tools_and_the_route() {
         let family = FlotiAgents::new();
         assert_eq!(family.name(), "floti-agents");
         assert_eq!(family.route(), "/mcp/agents");
@@ -391,7 +466,10 @@ mod tests {
             .into_iter()
             .map(|tool| tool.name.to_string())
             .collect();
-        assert_eq!(names, ["agents_start", "agents_list", "agents_stop"]);
+        assert_eq!(
+            names,
+            ["agents_start", "agents_list", "agents_stop", "agents_roles"]
+        );
         assert_eq!(family.allowed_tools(), names);
         assert_eq!(
             family.allowed_commands(),
@@ -410,6 +488,7 @@ mod tests {
             "agents_start",
             "agents_list",
             "agents_stop",
+            "agents_roles",
             "only the agents you started",
         ] {
             assert!(instructions.contains(word), "{word} in {instructions}");
@@ -440,6 +519,79 @@ mod tests {
         assert_eq!(request.name.as_deref(), Some("r"));
         assert!(request.outlive);
         assert_eq!(request.can_start, Some(false));
+    }
+
+    fn listed_roles() -> RolesListed {
+        RolesListed {
+            roles: vec![
+                RoleEntry {
+                    name: "agent".into(),
+                    description: String::new(),
+                    class: RoleClass::Light,
+                    worktree: false,
+                    can_start: false,
+                    backends: vec!["claude-code".into(), "other-agent".into()],
+                },
+                RoleEntry {
+                    name: "scout".into(),
+                    description: "Looks around.".into(),
+                    class: RoleClass::Heavy,
+                    worktree: true,
+                    can_start: true,
+                    backends: vec![],
+                },
+            ],
+            bad: vec![BadRole {
+                file: "typo.md".into(),
+                problem: "the key disalowed_tools is not a role field".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn the_roles_answer_names_each_role_what_it_is_and_the_backends_that_can_run_it() {
+        let text = roles_text(&listed_roles());
+        assert_eq!(
+            text,
+            "agent  class light  worktree no  may start agents no  runs on claude-code, other-agent\n\
+             scout  class heavy  worktree yes  may start agents yes  runs on none installed here can run it\n  Looks around.\n\
+             Role files that cannot be used:\n\
+             typo.md: the key disalowed_tools is not a role field"
+        );
+        assert_eq!(
+            roles_json(&listed_roles()),
+            json!({
+                "roles": [
+                    {
+                        "name": "agent",
+                        "description": "",
+                        "class": "light",
+                        "worktree": false,
+                        "canStart": false,
+                        "backends": ["claude-code", "other-agent"],
+                    },
+                    {
+                        "name": "scout",
+                        "description": "Looks around.",
+                        "class": "heavy",
+                        "worktree": true,
+                        "canStart": true,
+                        "backends": [],
+                    },
+                ],
+                "bad": [
+                    { "file": "typo.md", "problem": "the key disalowed_tools is not a role field" },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn a_listing_with_no_bad_file_says_nothing_of_them() {
+        let mut listed = listed_roles();
+        listed.bad.clear();
+        assert!(!roles_text(&listed).contains("cannot be used"));
+        assert_eq!(roles_json(&listed)["bad"], json!([]));
     }
 
     #[test]

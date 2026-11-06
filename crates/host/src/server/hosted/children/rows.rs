@@ -10,6 +10,7 @@ use floti_protocol::channels::common::PermissionMode;
 use floti_protocol::channels::sessions::Profile;
 use rusqlite::{OptionalExtension, Row, params};
 
+use crate::roles::RoleClass;
 use crate::server::records::{self, PROFILE_COLUMNS, profile_row};
 use crate::session::SessionId;
 use crate::store::Store;
@@ -127,10 +128,14 @@ pub(super) struct ChildRow {
     pub can_start: bool,
     /// Whether the row says it is running.
     pub running: bool,
+    /// The resource class of the role it was started in.
+    pub class: RoleClass,
+    /// Whether the role it was started in asks for a worktree of its own.
+    pub worktree: bool,
 }
 
 const CHILD_COLUMNS: &str = "id, child_name, role, backend, cwd, branch, started_at, outlive, \
-     can_start, status";
+     can_start, status, child_class, child_worktree";
 
 fn child_row(row: &Row<'_>) -> rusqlite::Result<ChildRow> {
     let status: String = row.get(9)?;
@@ -148,6 +153,10 @@ fn child_row(row: &Row<'_>) -> rusqlite::Result<ChildRow> {
         outlive: row.get(7)?,
         can_start: row.get(8)?,
         running: status == "running",
+        class: row
+            .get::<_, Option<String>>(10)?
+            .map_or(RoleClass::Light, |class| RoleClass::from_word(&class)),
+        worktree: row.get(11)?,
     })
 }
 

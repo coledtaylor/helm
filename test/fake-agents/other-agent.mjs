@@ -13,6 +13,9 @@
 //   document `{ "servers": [{ "name", "url", "bearer" }] }`, a list rather than
 //   Claude Code's map, with the token as `bearer` and not in a header. A file
 //   that is not there or is not JSON fails the run at once.
+// - `--model <name>` and `--instructions-file <file>`, whose text it reads and
+//   logs as `instructions`. It has no effort setting: `--effort` is an unknown
+//   option, as it is for any agent without one.
 // - Permission: `--mode plan|ask|edit|yolo`. Tools it may use without asking
 //   are given one at a time: `--allow-tool <name>` (`read`, `write`, `edit`,
 //   `find`, `search`, `shell`, or `<server>.<tool>` for an agent tool) and
@@ -65,6 +68,7 @@ const OPTION_SPEC = (() => {
   add(['--continue'], 'continue', 'value')
   add(['--title'], 'title', 'value')
   add(['--model'], 'model', 'value')
+  add(['--instructions-file'], 'instructionsFile', 'value')
   add(['--mode'], 'mode', 'value')
   add(['--tools-config'], 'toolsConfig', 'value')
   add(['--allow-tool'], 'allowTool', 'repeat')
@@ -100,6 +104,7 @@ if (opts.help) {
       '  --continue <id>             Reopen a conversation',
       '  --title <text>              Title the conversation',
       '  --model <model>             Model to use',
+      '  --instructions-file <file>  Add the file to its instructions',
       '  --mode <mode>               plan, ask, edit or yolo',
       '  --tools-config <file>       Load agent tool servers from a JSON file',
       '  --allow-tool <name>         Use this tool without asking (repeat for more)',
@@ -139,6 +144,7 @@ const runLog = new RunLog(home, {
   resumed: reopened !== undefined,
   title: opts.title ?? null,
   model: opts.model ?? null,
+  instructions: null,
   mode: opts.mode ?? null,
   allowedTools: opts.allowTool ?? [],
   allowedShell: opts.allowShell ?? []
@@ -186,7 +192,16 @@ function openConversation() {
   writeFileSync(conversationFile, JSON.stringify({ id: conversation, cwd, title: opts.title ?? null }))
 }
 
+/** Reads the instructions file it was given, which a bad path fails the run on. */
+function loadInstructions() {
+  if (opts.instructionsFile === undefined) return
+  const file = resolve(cwd, opts.instructionsFile)
+  if (!existsSync(file)) fail(`instructions file not found: ${file}`)
+  log.instructions = readFileSync(file, 'utf8')
+}
+
 loadToolServers()
+loadInstructions()
 openConversation()
 log.openingPrompt = parsed.positionals[0] ?? null
 

@@ -157,5 +157,12 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "ALTER TABLE `sessions` ADD `can_start` integer DEFAULT false NOT NULL;",
       "CREATE INDEX `sessions_parent_idx` ON `sessions` (`parent_session_id`);"
     ]
+  },
+  {
+    "tag": "0019_cool_slayback",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `child_class` text;",
+      "ALTER TABLE `sessions` ADD `child_worktree` integer DEFAULT false NOT NULL;"
+    ]
   }
 ]

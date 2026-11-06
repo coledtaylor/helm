@@ -182,11 +182,15 @@ pub(crate) struct LostRow {
     pub permission_mode: Option<PermissionMode>,
     /// The backend it ran on, which reopens it ([`recorded_backend`]).
     pub backend: BackendId,
+    /// The role an agent started it in, when one did: the role file as it is
+    /// when the session reopens is what composes it again.
+    pub role: Option<String>,
 }
 
 /// What an update to `lost` returns, in [`lost_row`]'s order.
 const LOST_COLUMNS: &str = "id, name, label, cwd, branch, profile_id, \
-     coalesce(last_claude_session_id, claude_session_id), backend, project_path, permission_mode";
+     coalesce(last_claude_session_id, claude_session_id), backend, project_path, permission_mode, \
+     role";
 
 fn lost_row(row: &Row<'_>) -> rusqlite::Result<LostRow> {
     let name: String = row.get(1)?;
@@ -203,6 +207,9 @@ fn lost_row(row: &Row<'_>) -> rusqlite::Result<LostRow> {
         backend: recorded_backend(row.get(7)?),
         project_path: row.get(8)?,
         permission_mode: named(row.get(9)?),
+        role: row
+            .get::<_, Option<String>>(10)?
+            .filter(|role| !role.trim().is_empty()),
     })
 }
 

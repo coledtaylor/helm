@@ -54,6 +54,10 @@ impl AgentBackend for PlainCommandBackend {
         if request.prompt.is_some() {
             return Err(Error::backend(&self.id, "take an opening prompt"));
         }
+        // Nor can it be given a role's body, which it would run without.
+        if request.composition.instructions.is_some() {
+            return Err(Error::backend(&self.id, "take instructions"));
+        }
         // It has no way to enforce a tool rule, so a launch that carries one
         // is refused rather than started without it.
         self.check_rules(&request.composition.tool_lists())?;
@@ -255,5 +259,29 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.to_string(), "my-cli cannot take an opening prompt");
         assert!(backend().resumer().is_none());
+    }
+
+    #[test]
+    fn refuses_a_roles_body_naming_the_backend_and_takes_neither_instructions_nor_an_effort() {
+        let dirs = TestDirs::new();
+        let err = backend()
+            .launch(
+                &LaunchRequest {
+                    folder: "C:/work".into(),
+                    composition: Composition {
+                        instructions: Some(crate::agent::RoleInstructions {
+                            role: "reviewer".into(),
+                            body: "Read first.".into(),
+                        }),
+                        ..Composition::default()
+                    },
+                    ..LaunchRequest::default()
+                },
+                &LaunchFolder::create(&dirs.data).unwrap(),
+            )
+            .unwrap_err();
+        assert_eq!(err.to_string(), "my-cli cannot take instructions");
+        assert!(!backend().takes_instructions());
+        assert!(!backend().takes_effort());
     }
 }

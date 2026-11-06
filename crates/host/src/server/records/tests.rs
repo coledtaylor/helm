@@ -60,6 +60,8 @@ fn link(parent: SessionId, name: &str) -> ParentLink {
         role: Some("reviewer".to_owned()),
         outlive: false,
         can_start: false,
+        heavy: false,
+        worktree: false,
     }
 }
 

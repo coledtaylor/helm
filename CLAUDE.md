@@ -558,6 +558,17 @@ folder: run through npx, that folder is a cache.
   `paths.ts`). The shipped README and example are written only when the
   directory is absent, and nothing there is ever overwritten. There is no
   in-app template editor.
+- Roles live in `roles` in the host's config folder (`~/.config/floti`), one
+  `<name>.md` each (front matter, then the body). The host reads the folder
+  afresh on every `agents_start`, `agents_roles` and reopen of a child, never
+  from a cache, and seeds the shipped `reviewer.md`, `worker.md` and `lead.md`
+  only when the folder is absent: nothing there is ever rewritten, an edit or a
+  deletion stays, and an empty folder stays empty. A file that is not a role
+  (front matter that does not parse, an unknown key, a value outside its
+  choices) is named with its problem by `agents_roles`, and a start naming it
+  is refused naming the file; nothing guesses at it. A role's body is composed
+  into the child's instructions by its adapter, as its own section after the
+  project's, and is never typed to the session.
 
 ## Where the data lives
 

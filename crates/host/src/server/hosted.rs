@@ -58,7 +58,8 @@ mod children;
 
 use children::Children;
 pub(crate) use children::{
-    ChildEntry, ChildStopped, ChildrenListed, StartChild, end_children_at_exit,
+    ChildEntry, ChildStopped, ChildrenListed, RoleEntry, RolesListed, StartChild,
+    end_children_at_exit,
 };
 
 /// How long a stop waits for each session to be reported ended after its
@@ -1122,6 +1123,20 @@ impl Hosted {
             });
         let mut composition = composition_of(profile.as_ref());
         composition.permission_mode = row.permission_mode;
+        // An agent's child comes back in its role as the role file reads now.
+        let mut role_warning = None;
+        if let Some(role) = row.role.as_deref() {
+            let (reopened, warning) = self.reopen_in_role(
+                role,
+                backend.as_ref(),
+                profile.as_ref(),
+                row.permission_mode,
+            )?;
+            if let Some(reopened) = reopened {
+                composition = reopened;
+            }
+            role_warning = warning;
+        }
         let mut launched = self.run(
             Plan {
                 backend,
@@ -1148,6 +1163,9 @@ impl Hosted {
                     row.name
                 ),
             );
+        }
+        if let Some(warning) = role_warning {
+            launched.warnings.insert(0, warning);
         }
         Ok(launched)
     }
@@ -1312,6 +1330,7 @@ fn composition_of(profile: Option<&Profile>) -> Composition {
         // Only a role names these.
         allowed_tools: Vec::new(),
         disallowed_tools: Vec::new(),
+        instructions: None,
     }
 }
 

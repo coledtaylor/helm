@@ -238,7 +238,12 @@ impl ClaudeCodeBackend {
         });
         let built = overlay::build_overlays(&overlays, folder, &mut warnings)?;
 
-        let instructions = overlay::compose_instructions(&built, cwd);
+        // The project's instructions, then the role's own section after them:
+        // written even with no overlays, and never typed to the session.
+        let instructions = overlay::with_role_section(
+            overlay::compose_instructions(&built, cwd),
+            composition.instructions.as_ref(),
+        );
         let instructions_file = match &instructions {
             Some(text) => Some(folder.write("instructions.md", text)?),
             None => {
@@ -411,6 +416,17 @@ impl AgentBackend for ClaudeCodeBackend {
 
     fn tested_range(&self) -> Option<TestedVersions> {
         Some(TESTED_VERSIONS)
+    }
+
+    /// `--effort` is a flag of its own.
+    fn takes_effort(&self) -> bool {
+        true
+    }
+
+    /// A role's body is a headed section of the launch's instructions file,
+    /// which `--append-system-prompt-file` passes.
+    fn takes_instructions(&self) -> bool {
+        true
     }
 
     /// Claude Code moves a long tool call to the background, has MCP tools,

@@ -590,6 +590,10 @@ run-log shape, with `conversation`, `resumed`, `title`, `model`, `mode`,
   "name", "url", "bearer" }] }`: a list, with the token as `bearer`. A tool is
   allowed as `<server>.<tool>` or by one of its own names (`read`, `write`,
   `edit`, `find`, `search`, `shell`); a command with `--allow-shell`.
+- `--model <name>` and `--instructions-file <file>` are how it takes a role's
+  model and body: it reads the file and logs its text as `instructions`
+  (`OtherAgentRecord::instructions`). It has no effort setting, so its adapter
+  refuses a role's effort for it, and the body is never typed to it.
 - `--mode plan|ask|edit|yolo` is its only permission flag. It has no flag that
   disallows a tool, so its adapter refuses a role's `disallowed_tools`, a mode
   it has no name for, and an allowed tool it has no equivalent for.

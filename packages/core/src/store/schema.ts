@@ -263,6 +263,14 @@ export const sessions = sqliteTable(
     outlive: integer('outlive', { mode: 'boolean' }).notNull().default(false),
     /** Whether it may start children of its own (the second generation). */
     canStart: integer('can_start', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * The resource class of the role it was started in, `light` or `heavy`,
+     * kept so the one heavy child a host runs at a time is counted from rows.
+     * Null for a session with no parent.
+     */
+    childClass: text('child_class', { enum: ['light', 'heavy'] }),
+    /** Whether the role it was started in asks for a worktree of its own. */
+    childWorktree: integer('child_worktree', { mode: 'boolean' }).notNull().default(false),
     status: text('status', { enum: ['running', 'exited', 'lost'] })
       .notNull()
       .default('running'),

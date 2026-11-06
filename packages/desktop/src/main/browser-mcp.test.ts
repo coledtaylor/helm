@@ -807,7 +807,7 @@ describe('the browser tools', () => {
     it('answers a call for an agents tool, which only the host serves, as a tool it does not have, and drives nothing', async () => {
       const alpha = caller('alpha')
       const before = browsers.calls.length
-      for (const tool of ['agents_start', 'agents_list', 'agents_stop']) {
+      for (const tool of ['agents_start', 'agents_list', 'agents_stop', 'agents_roles']) {
         const answer = await alpha.call(tool, { task: 'review it' })
         expect(answer.isError).toBe(true)
         expect(answer.text).toContain(`has no tool called "${tool}"`)
