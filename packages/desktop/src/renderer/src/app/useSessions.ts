@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Project, SessionActivityState, SessionRecord } from '@helm/core'
+import { isChild, withReports } from '@helm/core/types'
 import { helm } from './bridge'
 import { disposeTerminal, estimateGrid } from './terminals'
 
@@ -80,10 +81,13 @@ export function useSessions(onActivate: (id: number) => void, reconnects = 0): S
     activateRef.current = onActivate
   }, [onActivate])
 
-  // The sessions the window holds, for the push below to tell which one is new.
+  // The sessions the window holds, for the push below to tell which one is new, and
+  // whether it holds a child, whose report the host lists with its row.
   const heldRef = useRef(new Set<number>())
+  const childrenRef = useRef(false)
   useEffect(() => {
     heldRef.current = new Set(sessions.map((session) => session.id))
+    childrenRef.current = sessions.some((session) => session.status === 'running' && isChild(session))
   }, [sessions])
 
   useEffect(() => {
@@ -103,13 +107,20 @@ export function useSessions(onActivate: (id: number) => void, reconnects = 0): S
         // hold - a child an agent started, one started from another device - is
         // listed. Only a running one is taken: a session ended and closed here
         // is not brought back by the host still remembering it.
-        if (states.some((state) => !heldRef.current.has(state.id))) {
+        //
+        // A child's report, which its parent's tab shows in its card, comes with
+        // its row and changes with what the child does, so a window holding a
+        // running child lists again whenever the activity moves. The host moves
+        // it when a report is made or cleared, and a listing that says nothing
+        // new leaves the rows as they are.
+        if (childrenRef.current || states.some((state) => !heldRef.current.has(state.id))) {
           void helm.invoke('session:list').then(
             (rows) =>
               setSessions((current) => {
                 const held = new Set(current.map((session) => session.id))
                 const started = rows.filter((row) => row.status === 'running' && !held.has(row.id))
-                return started.length === 0 ? current : [...current, ...started]
+                const reported = withReports(current, rows) ?? current
+                return started.length === 0 ? reported : [...reported, ...started]
               }),
             () => undefined
           )

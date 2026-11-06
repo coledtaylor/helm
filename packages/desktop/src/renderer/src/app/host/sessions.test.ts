@@ -296,6 +296,27 @@ describe('sessions over the window’s own connection', () => {
     expect(heard).toHaveLength(1)
   })
 
+  it('takes a child’s report from the host’s listing as it comes and goes, and leaves the rest of its row as the window has it', async () => {
+    const connection = new FakeConnection()
+    const child = { id: 12, name: 'mapper', parentId: 7, parentName: 'app' }
+    const { adapters } = world({ connection, listed: [row(child)] })
+    const listed = async () => (await ask(adapters, 'session:list')).find((each) => each.id === 12)
+    const relisted = async (rows: P.SessionRecord[]) => {
+      connection.answer('session:list', () => rows)
+      connection.push('session:activity', [])
+      await settle()
+    }
+    expect(await listed()).not.toHaveProperty('lastReport')
+
+    const lastReport = { state: 'done', text: 'Two bugs in ledger.rs.', at: '2026-11-06T10:00:00.000Z' }
+    await relisted([row({ ...child, lastReport })])
+    expect(await listed()).toMatchObject({ id: 12, name: 'mapper', parentId: 7, lastReport })
+
+    // The child's next turn started: the host lists it without the report.
+    await relisted([row(child)])
+    expect(await listed()).not.toHaveProperty('lastReport')
+  })
+
   it('opens a session it had no tab for on a new stream that starts with its screen, and lets it go again when its tab closes and it keeps running', async () => {
     const { adapters, connection } = world({ listed: [row(), row({ id: 9, name: 'api' })] })
     const data = hear(adapters, 'session:data')

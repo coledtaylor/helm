@@ -1,4 +1,10 @@
-import { sessionLabel, type SessionActivityState, type SessionRecord, type SessionsOverview } from '@helm/core/types'
+import {
+  sessionLabel,
+  withReportOf,
+  type SessionActivityState,
+  type SessionRecord,
+  type SessionsOverview
+} from '@helm/core/types'
 import { CLAUDE_CODE_BACKEND } from '../../../../shared/host/backend'
 import type { HostConnection, HostSubscription } from '../../../../shared/host/client'
 import type * as P from '../../../../shared/host/protocol'
@@ -176,8 +182,14 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         ended(record)
         continue
       }
-      // A rename answered here at once keeps its label until the host's row follows.
-      if (known === undefined || known.status !== record.status) records.set(record.id, record)
+      if (known === undefined || known.status !== record.status) {
+        // A rename answered here at once keeps its label until the host's row follows.
+        records.set(record.id, record)
+      } else {
+        // What a child last told its parent comes and goes with the child's turns, so it is
+        // taken from every listing; the rest of a known row stays as the window has it.
+        records.set(record.id, withReportOf(known, record))
+      }
       carry(records.get(record.id)!)
     }
     if (!whole) return

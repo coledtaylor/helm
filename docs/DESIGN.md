@@ -917,6 +917,17 @@ overrides the gate; keep it.
   words open its last screen, input off, and Close takes it out of the family
   view and leaves its row in the tree. A family with no card says "Press a
   header to show that child here." in `fg-subtle`, 11.5px.
+
+  **A child's report is a note under its card's header**, from the child's
+  `agents_report` until its next turn starts: "Reported done", "Reported
+  stuck" or "Note" in weight 500 and the start of the report on one line, in
+  11.5px `accent-text` on `accent-soft` (`accent-soft-hover` under the pointer)
+  with the 2px accent edge a selected row wears and a 1px `border` below, at
+  least 30px high. Pressing it shows all of the report (a stuck report keeps
+  its lines), up to 9rem before it scrolls, and pressing it again folds it
+  back; the card's terminal gives up the room. A running agent child's card
+  has one while it reports; a command child's, a header and an ended child's
+  last screen never do.
 - **Project shell**: a project page carries a plain shell (PowerShell, cwd at
   the project) as a terminal island below it. It is furniture, not a session:
   no row, no history, no notification. Each page owns its shell and its

@@ -76,15 +76,36 @@ describe('useSessions', () => {
       message: null,
       claudeSessionId: null
     })
+    // Everything it names is held, and none of it is a child: a push lists nothing.
+    const listed = bridge.invoked('session:list').length
+    act(() => bridge.emit('session:activity', [state(1)]))
+    expect(bridge.invoked('session:list')).toHaveLength(listed)
+
     hosting = [record(1), record(2, { parentId: 1, parentName: 'session 1' }), record(3, { status: 'exited', exitCode: 0 })]
     act(() => bridge.emit('session:activity', [state(1), state(2), state(3)]))
     await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1, 2]))
     expect(result.current.sessions[1]).toMatchObject({ parentId: 1 })
+  })
 
-    // Everything it names is held now: another push lists nothing.
-    const listed = bridge.invoked('session:list').length
+  it('takes the report a child holds from the host’s listing when its activity moves, and drops it when its next turn clears it', async () => {
+    const child = { parentId: 1, parentName: 'session 1' }
+    hosting = [record(1), record(2, child)]
+    const { result } = await mounted()
+    await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1, 2]))
+    expect(result.current.sessions[1]).not.toHaveProperty('lastReport')
+    const parent = result.current.sessions[0]
+
+    const state = (id: number): SessionActivityState => ({ id, activity: 'idle', waitingFor: null, message: null, claudeSessionId: null })
+    const lastReport = { state: 'stuck', text: 'Which table, A or B?', at: '2026-11-06T10:00:00.000Z' }
+    hosting = [record(1), record(2, { ...child, lastReport })]
     act(() => bridge.emit('session:activity', [state(1), state(2)]))
-    expect(bridge.invoked('session:list')).toHaveLength(listed)
+    await waitFor(() => expect(result.current.sessions[1]).toMatchObject({ id: 2, lastReport }))
+    // The sessions the report did not touch are the very same rows, so nothing drawn from them redraws.
+    expect(result.current.sessions[0]).toBe(parent)
+
+    hosting = [record(1), record(2, child)]
+    act(() => bridge.emit('session:activity', [state(1), state(2)]))
+    await waitFor(() => expect(result.current.sessions[1]).not.toHaveProperty('lastReport'))
   })
 
   it('S15: lists the sessions of the host that replaced one that refused the window, once it is connected, and only until listed', async () => {

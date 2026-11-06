@@ -68,6 +68,25 @@ describe('useHostWorkspaces', () => {
     expect(bridge.invocations).toEqual([])
   })
 
+  it('takes a child’s report from build-box’s listing when its activity moves, and drops it when the host clears it', async () => {
+    const box = remoteBridge(BOX)
+    const child = { ...deploy, id: 4, name: 'scout', parentId: 3, parentName: 'deploy' } as SessionRecord
+    box.answer('session:list', () => [deploy, child])
+    const { result } = renderHook(() => useHostWorkspaces([BOX], [BOX]))
+    await waitFor(() => expect(result.current.byHost.get(BOX)?.sessions).toEqual([deploy, child]))
+    const parent = result.current.byHost.get(BOX)?.sessions[0]
+
+    const lastReport = { state: 'done', text: 'Both bugs are fixed.', at: '2026-11-06T10:00:00.000Z' }
+    box.answer('session:list', () => [deploy, { ...child, lastReport }])
+    act(() => box.emit('session:activity', []))
+    await waitFor(() => expect(result.current.byHost.get(BOX)?.sessions[1]).toMatchObject({ id: 4, lastReport }))
+    expect(result.current.byHost.get(BOX)?.sessions[0]).toBe(parent)
+
+    box.answer('session:list', () => [deploy, child])
+    act(() => box.emit('session:activity', []))
+    await waitFor(() => expect(result.current.byHost.get(BOX)?.sessions[1]).not.toHaveProperty('lastReport'))
+  })
+
   it('writes a pin on build-box through its bridge only', async () => {
     const box = remoteBridge(BOX)
     const { result } = renderHook(() => useHostWorkspaces([BOX], [BOX]))

@@ -170,10 +170,12 @@ export {
   FamilyCard,
   FamilyFrame,
   FamilyKids,
+  ReportNote,
   type ChildHeaderProps,
   type ChildHeaderShape,
   type FamilyFrameProps,
-  type FamilyKidsProps
+  type FamilyKidsProps,
+  type ReportNoteProps
 } from './components/FamilyView'
 export { PaneDrop, type PaneDropProps } from './components/PaneDrop'
 export { PaneGrid, type PaneGridProps } from './components/PaneGrid'

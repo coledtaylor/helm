@@ -67,6 +67,7 @@ export * from './layout/pluginPages'
 export * from './layout/family'
 export * from './layout/familyRoom'
 export * from './layout/familyState'
+export * from './layout/familyReport'
 export * from './layout/familyView'
 
 /**

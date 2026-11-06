@@ -1,4 +1,4 @@
-import type { JSX, ReactNode } from 'react'
+import { useState, type JSX, type ReactNode } from 'react'
 import { FAMILY_PARENT_SHARE, type FamilyAxis } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
@@ -104,13 +104,19 @@ export function FamilyKids({ axis, cards, cardCount, headers, headersMax }: Fami
   )
 }
 
-/** A card: the child's terminal under its header, on the terminal's own ground. */
+/**
+ * A card: the child's terminal under its header, on the terminal's own ground,
+ * and between them the child's report when it has one (`ReportNote`).
+ */
 export function FamilyCard({
   header,
+  note,
   children,
   name
 }: {
   header: ReactNode
+  /** The report note under the header, or nothing. */
+  note?: ReactNode
   /** The child's terminal. */
   children: ReactNode
   name: string
@@ -121,9 +127,56 @@ export function FamilyCard({
       className="relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col bg-terminal"
     >
       {header}
+      {note}
       <div className="relative min-h-0 flex-1">
         <div className="absolute inset-0">{children}</div>
       </div>
+    </div>
+  )
+}
+
+export interface ReportNoteProps {
+  /** What the report is: "Reported done", "Reported stuck" or "Note". */
+  label: string
+  /** All of the report, in the child's own words. */
+  text: string
+}
+
+/**
+ * A child's report as a note under its card's header: what it is and the start
+ * of what it says on one line, in `accent-text` on `accent-soft` with the 2px
+ * accent edge a selected row wears. Pressing it shows all of the report, and
+ * pressing it again folds it back to the line.
+ *
+ * What the note says and whether there is one are decided where the window
+ * keeps its sessions (`reportNote`); a card with no report is drawn without
+ * this. A new report is a new note, so the card keys it by the report and it
+ * starts folded.
+ */
+export function ReportNote({ label, text }: ReportNoteProps): JSX.Element {
+  const [open, setOpen] = useState(false)
+  return (
+    <div
+      data-family-note
+      className="relative shrink-0 border-b border-border bg-accent-soft transition-colors hover:bg-accent-soft-hover"
+    >
+      <span aria-hidden className="absolute inset-y-0 left-0 w-[2px] bg-accent" />
+      <button
+        type="button"
+        onClick={() => setOpen((was) => !was)}
+        aria-expanded={open}
+        className="flex min-h-[30px] w-full cursor-pointer items-baseline gap-2 pt-[7px] pr-2.5 pb-1.5 pl-3 text-left text-[11.5px] leading-[1.45] text-accent-text focus-visible:outline-offset-[-2px]"
+      >
+        <span data-family-note-label className="shrink-0 font-medium">
+          {label}
+        </span>
+        <span
+          data-family-note-text
+          className={cn('min-w-0 flex-1', open ? 'max-h-36 overflow-y-auto break-words whitespace-pre-wrap' : 'truncate')}
+        >
+          {text}
+        </span>
+      </button>
     </div>
   )
 }

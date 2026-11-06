@@ -1225,6 +1225,38 @@ async fn s1_a_childs_report_is_heard_by_its_parents_next_wait_by_name_with_its_s
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_childs_report_is_published_to_the_clients_when_it_is_made_for_its_card() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("card-report");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    // The other fake reports no status, so nothing about the child moves but
+    // what it tells its parent: whatever the clients are sent after it is the
+    // report's doing.
+    parent
+        .start(json!({ "task": "look around", "name": "scout", "backend": OTHER }))
+        .await
+        .done();
+    let child = world.child_of(&parent, "scout").await;
+    // The host has read the child at rest before the clients look.
+    world.pass(&parent).await;
+    let mut watch = Watch::open(&world).await;
+
+    child.report("stuck", "Which table, A or B?").await.done();
+    watch
+        .client
+        .event_on::<Vec<SessionActivityState>>(8, "the activity published for the report", |_| true)
+        .await;
+    let listed = world.record(child.id()).await;
+    let report = listed.last_report.expect("the listing carries the report");
+    assert_eq!(
+        (report.state.as_str(), report.text.as_str()),
+        ("stuck", "Which table, A or B?")
+    );
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn s2_a_session_with_no_parent_has_no_agents_report_and_a_child_has_it_allowed_at_launch() {
     let world = World::new();
     let host = world.host().await;

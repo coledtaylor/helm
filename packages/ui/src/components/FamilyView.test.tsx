@@ -7,6 +7,7 @@ import {
   FamilyCard,
   FamilyFrame,
   FamilyKids,
+  ReportNote,
   type ChildHeaderProps
 } from './FamilyView'
 
@@ -129,6 +130,83 @@ describe('FamilyCard', () => {
     expect(card?.className).toContain('bg-terminal')
     expect(card?.firstElementChild?.textContent).toBe('the header')
     expect(card?.textContent).toBe('the headerthe terminal')
+  })
+})
+
+describe('ReportNote', () => {
+  const REPORT =
+    'Two bugs in ledger.rs: a record with no start time passes the reuse guard (line 212), and a cleared conversation drops its pin (line 340).'
+
+  it.each([['Reported done'], ['Reported stuck'], ['Note']])(
+    'says %s and the report on one line, in accent-text on accent-soft',
+    (label) => {
+      const { container } = render(<ReportNote label={label} text={REPORT} />)
+      const note = container.querySelector<HTMLElement>('[data-family-note]')!
+      expect(note.className).toContain('bg-accent-soft')
+      const press = within(note).getByRole('button')
+      expect(press.className).toContain('text-accent-text')
+      expect(container.querySelector('[data-family-note-label]')?.textContent).toBe(label)
+      const text = container.querySelector('[data-family-note-text]')!
+      expect(text.textContent).toBe(REPORT)
+      // On one line, cut short by the width of the card.
+      expect(text.className).toContain('truncate')
+      expect(press.getAttribute('aria-expanded')).toBe('false')
+    }
+  )
+
+  it('shows all of the report when pressed, and folds it back to a line when pressed again', async () => {
+    const { container } = render(<ReportNote label="Reported done" text={REPORT} />)
+    const press = screen.getByRole('button', { name: /Reported done/ })
+    const text = container.querySelector('[data-family-note-text]')!
+
+    await userEvent.click(press)
+    expect(press.getAttribute('aria-expanded')).toBe('true')
+    expect(text.className).not.toContain('truncate')
+    expect(text.className).toContain('whitespace-pre-wrap')
+    expect(text.textContent).toBe(REPORT)
+
+    await userEvent.click(press)
+    expect(press.getAttribute('aria-expanded')).toBe('false')
+    expect(text.className).toContain('truncate')
+  })
+
+  it('draws its edge and fill from the tokens, with no shadow, no raw colour and no weight past medium', () => {
+    const { container } = render(<ReportNote label="Reported stuck" text={'Which table?\nA or B.\nI suggest A.'} />)
+    const note = container.querySelector<HTMLElement>('[data-family-note]')!
+    expect(note.className).toContain('border-b border-border')
+    expect(note.className).toContain('hover:bg-accent-soft-hover')
+    expect(note.querySelector('span[aria-hidden]')?.className).toContain('bg-accent')
+    expect(note.querySelector('span[aria-hidden]')?.className).toContain('w-[2px]')
+    const classes = [...note.querySelectorAll('*')].map((element) => element.getAttribute('class') ?? '').join(' ')
+    expect(classes).not.toMatch(/font-(semibold|bold|extrabold|black)/)
+    expect(classes).not.toMatch(/#[0-9a-f]{3,8}|shadow/i)
+  })
+})
+
+describe('FamilyCard with a report note', () => {
+  it('puts the note between the header and the terminal', () => {
+    const { container } = render(
+      <FamilyCard
+        name="worker"
+        header={<header>the header</header>}
+        note={<ReportNote label="Reported done" text="Tests pass." />}
+      >
+        <p>the terminal</p>
+      </FamilyCard>
+    )
+    const card = container.querySelector<HTMLElement>('[data-family-card="worker"]')!
+    expect([...card.children].map((part) => part.tagName.toLowerCase())).toEqual(['header', 'div', 'div'])
+    expect(card.children[1]?.hasAttribute('data-family-note')).toBe(true)
+    expect(card.textContent).toBe('the headerReported doneTests pass.the terminal')
+  })
+
+  it('has no note when it is given none, as a command child’s card is not', () => {
+    const { container } = render(
+      <FamilyCard name="tests" header={<header>the header</header>}>
+        <p>the terminal</p>
+      </FamilyCard>
+    )
+    expect(container.querySelector('[data-family-note]')).toBeNull()
   })
 })
 

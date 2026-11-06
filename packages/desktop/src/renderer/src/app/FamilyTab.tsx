@@ -7,6 +7,7 @@ import {
   familyEntries,
   familyRoom,
   openFamilyChildAsTab,
+  reportNote,
   sessionLabel,
   shrinkFamilyChild,
   showFamilyChild,
@@ -22,6 +23,7 @@ import {
   FamilyCard,
   FamilyFrame,
   FamilyKids,
+  ReportNote,
   type TabIndicator
 } from '@helm/ui'
 import { forgetFamilyRoom, reportFamilyRoom } from './familyRooms'
@@ -38,6 +40,8 @@ export interface FamilyKid {
   state: TabIndicator
   /** When it entered `state`, in milliseconds, or null where nothing says. */
   since: number | null
+  /** It runs a command and not an agent, so its card has no report note. */
+  command?: boolean
 }
 
 export interface FamilyTabProps {
@@ -180,20 +184,29 @@ export function FamilyTab({
           <FamilyKids
             axis={drawn.axis}
             cardCount={cards.length}
-            cards={cards.map((entry) => (
-              <FamilyCard key={entry.child.id} name={sessionLabel(entry.child)} header={header(entry)}>
-                <TerminalPane
-                  card
-                  session={entry.child}
-                  host={host}
-                  active={front}
-                  windowsBuild={windowsBuild}
-                  onClose={(id) => arrange((layout) => closeFamilyChild(layout, tab, id))}
-                  hostGone={hostGone}
-                  hostLost={hostLost}
-                />
-              </FamilyCard>
-            ))}
+            cards={cards.map((entry) => {
+              const note = reportNote(entry.child, { command: kidOf.get(entry.child.id)?.command === true })
+              return (
+                <FamilyCard
+                  key={entry.child.id}
+                  name={sessionLabel(entry.child)}
+                  header={header(entry)}
+                  // A later report is another note, which starts folded.
+                  note={note === null ? null : <ReportNote key={note.at} label={note.label} text={note.text} />}
+                >
+                  <TerminalPane
+                    card
+                    session={entry.child}
+                    host={host}
+                    active={front}
+                    windowsBuild={windowsBuild}
+                    onClose={(id) => arrange((layout) => closeFamilyChild(layout, tab, id))}
+                    hostGone={hostGone}
+                    hostLost={hostLost}
+                  />
+                </FamilyCard>
+              )
+            })}
             headers={headers.map(header)}
             // The headers the pane has room for; more of them scroll, so the cards keep their rows.
             headersMax={Math.max(headers.length > 0 ? 1 : 0, drawn.headers) * FAMILY_HEADER_PX}

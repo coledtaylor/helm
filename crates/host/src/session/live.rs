@@ -211,6 +211,13 @@ impl SessionHost {
         lock(&self.shared.status_watchers).push(Box::new(watcher));
     }
 
+    /// Tells the status watchers that something a session's status read is
+    /// judged against has moved though no program reported anything, such as
+    /// a child's report to its parent, which its card shows.
+    pub fn status_moved(&self) {
+        self.shared.status_changed();
+    }
+
     /// Starts a session: its program in a new pty in its folder, its row
     /// written once it has spawned.
     pub fn start(&self, request: StartSession) -> Result<Arc<Session>> {

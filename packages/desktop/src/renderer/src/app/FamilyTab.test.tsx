@@ -104,10 +104,19 @@ interface HarnessProps {
   front?: boolean
   /** This device shows children in their parent's tab. */
   enabled?: boolean
+  /** The children that run a command and not an agent. */
+  commands?: number[]
   onStop?: (id: number) => void
 }
 
-function Harness({ sessions, doing = {}, front = true, enabled = true, onStop = vi.fn() }: HarnessProps): JSX.Element {
+function Harness({
+  sessions,
+  doing = {},
+  front = true,
+  enabled = true,
+  commands = [],
+  onStop = vi.fn()
+}: HarnessProps): JSX.Element {
   const [panes, setPanes] = useState(START)
   const parent = sessions.find((each) => each.id === 1)!
   const kids = enabled
@@ -116,7 +125,8 @@ function Harness({ sessions, doing = {}, front = true, enabled = true, onStop = 
         return {
           session: each,
           state: doing[each.id]?.state ?? indicatorOf(each, undefined),
-          since: doing[each.id]?.since ?? null
+          since: doing[each.id]?.since ?? null,
+          command: commands.includes(each.id)
         }
       })
     : []
@@ -469,5 +479,97 @@ describe('a parent’s tab with children', () => {
     expect(headerNames(view.container)).toEqual(['reviewer'])
     expect(getTerminal(1)!.element).toBe(parentElement)
     expect(Terminal.instances).toHaveLength(made)
+  })
+})
+
+describe('a child’s report note', () => {
+  const REPORT = 'Two bugs in ledger.rs: a record with no start time passes the reuse guard (line 212).'
+  const reported = (id: number, name: string, state: string, text = REPORT): SessionRecord =>
+    child(id, name, { lastReport: { state, text, at: '2026-11-06T10:00:00.000Z' } })
+  const noteOf = (root: HTMLElement, name: string): HTMLElement | null =>
+    card(root, name).querySelector<HTMLElement>('[data-family-note]')
+
+  it('shows "Reported done", "Reported stuck" or "Note" and the start of the report under the card’s header', () => {
+    const { container } = mount(WIDE, [
+      LEAD,
+      reported(2, 'reviewer', 'done'),
+      reported(3, 'tester', 'stuck', 'Which table, A or B?')
+    ])
+    const done = noteOf(container, 'reviewer')!
+    expect(done.querySelector('[data-family-note-label]')!.textContent).toBe('Reported done')
+    expect(done.querySelector('[data-family-note-text]')!.textContent).toBe(REPORT)
+    // Under the header and above the child's terminal.
+    const parts = [...card(container, 'reviewer').children]
+    expect(parts[0]!.hasAttribute('data-family-header')).toBe(true)
+    expect(parts[1]).toBe(done)
+    expect(parts[2]!.contains(getTerminal(2)!.element)).toBe(true)
+    expect(noteOf(container, 'tester')!.querySelector('[data-family-note-label]')!.textContent).toBe('Reported stuck')
+  })
+
+  it('says "Note" for a note the child made on the way', () => {
+    const { container } = mount(WIDE, [LEAD, reported(2, 'reviewer', 'note', 'Half way through.')])
+    expect(noteOf(container, 'reviewer')!.querySelector('[data-family-note-label]')!.textContent).toBe('Note')
+  })
+
+  it('shows all of the report when the note is pressed', async () => {
+    const { container } = mount(WIDE, [LEAD, reported(2, 'reviewer', 'done')])
+    const text = noteOf(container, 'reviewer')!.querySelector('[data-family-note-text]')!
+    expect(text.className).toContain('truncate')
+
+    await userEvent.click(within(card(container, 'reviewer')).getByRole('button', { name: /^Reported done/ }))
+    expect(text.className).not.toContain('truncate')
+    expect(text.textContent).toBe(REPORT)
+    // Pressing the note is not pressing the header: the card stays.
+    expect(cardNames(container)).toEqual(['reviewer'])
+  })
+
+  it('loses the note when the child’s next turn starts and the host lists its row without the report', () => {
+    const view = mount(WIDE, [LEAD, reported(2, 'reviewer', 'done')])
+    expect(noteOf(view.container, 'reviewer')).not.toBeNull()
+
+    view.list([LEAD, child(2, 'reviewer')])
+    expect(noteOf(view.container, 'reviewer')).toBeNull()
+    expect(cardNames(view.container)).toEqual(['reviewer'])
+  })
+
+  it('shows a later report as a new note, folded', async () => {
+    const view = mount(WIDE, [LEAD, reported(2, 'reviewer', 'done')])
+    await userEvent.click(within(card(view.container, 'reviewer')).getByRole('button', { name: /^Reported done/ }))
+    expect(noteOf(view.container, 'reviewer')!.querySelector('button')!.getAttribute('aria-expanded')).toBe('true')
+
+    view.list([
+      LEAD,
+      child(2, 'reviewer', { lastReport: { state: 'stuck', text: 'Which table?', at: '2026-11-06T10:30:00.000Z' } })
+    ])
+    const next = noteOf(view.container, 'reviewer')!
+    expect(next.querySelector('[data-family-note-label]')!.textContent).toBe('Reported stuck')
+    expect(next.querySelector('button')!.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('never shows one on a command child’s card, and none on a child that has reported nothing', () => {
+    const { container } = mount(
+      WIDE,
+      [LEAD, reported(2, 'tests', 'done'), child(3, 'tester')],
+      { commands: [2] }
+    )
+    expect(cardNames(container)).toEqual(['tests', 'tester'])
+    expect(noteOf(container, 'tests')).toBeNull()
+    expect(noteOf(container, 'tester')).toBeNull()
+  })
+
+  it('has no note on a header or on an ended child’s last screen', async () => {
+    const ended = child(3, 'tester', {
+      status: 'exited',
+      exitCode: null,
+      stopped: true,
+      endedAt: new Date(2026, 9, 29, 14, 52).toISOString(),
+      lastReport: { state: 'done', text: REPORT, at: '2026-11-06T10:00:00.000Z' }
+    })
+    const { container } = mount(SHORT, [LEAD, reported(2, 'reviewer', 'done'), reported(4, 'worker', 'done'), ended])
+    expect(container.querySelectorAll('[data-family-note]')).toHaveLength(cardNames(container).length)
+    expect(container.querySelector('[data-family-header="header"] [data-family-note]')).toBeNull()
+
+    await userEvent.click(within(container).getByRole('button', { name: /^Show tester, Stopped/ }))
+    expect(noteOf(container, 'tester')).toBeNull()
   })
 })

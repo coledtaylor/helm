@@ -207,6 +207,9 @@ struct Watched {
     /// Who ended a child that is ending, noted before it is ended.
     stopped_by: HashMap<SessionId, StoppedBy>,
     last_report: HashMap<SessionId, LastReport>,
+    /// Counts the changes to `last_report`, which the clients' listing shows
+    /// and the activity reader publishes again when it moves.
+    report_revision: u64,
 }
 
 /// The children the host watches, and the signal waits sleep on.
@@ -267,6 +270,11 @@ impl Desk {
         self.watched().last_report.get(&id).cloned()
     }
 
+    /// How many times a child's last report has been set or cleared.
+    pub fn report_revision(&self) -> u64 {
+        self.watched().report_revision
+    }
+
     fn forget(&self, id: SessionId) {
         let mut watched = self.watched();
         watched.trackers.remove(&id);
@@ -274,7 +282,9 @@ impl Desk {
         watched.plain.remove(&id);
         watched.adopted.remove(&id);
         watched.stopped_by.remove(&id);
-        watched.last_report.remove(&id);
+        if watched.last_report.remove(&id).is_some() {
+            watched.report_revision += 1;
+        }
     }
 }
 
@@ -338,6 +348,7 @@ impl Hosted {
                     moved = true;
                 }
                 if seen.turn_started && watched.last_report.remove(&id).is_some() {
+                    watched.report_revision += 1;
                     moved = true;
                 }
                 events.extend(
@@ -430,9 +441,19 @@ impl Hosted {
                     at,
                 },
             );
+            watched.report_revision += 1;
         }
         self.write_news_to(&link, Some(child), EventKind::Report, &facts);
+        // The child's card shows the report now, not at the next time
+        // something else about the child moves.
+        self.sessions.status_moved();
         Ok(())
+    }
+
+    /// How many times a child's last report has been set or cleared, for the
+    /// reader of the sessions' activity to tell a listing has changed.
+    pub(crate) fn report_revision(&self) -> u64 {
+        self.children.news.report_revision()
     }
 
     /// Child `child`'s session has ended: the parent is told how, from the

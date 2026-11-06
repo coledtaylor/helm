@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DiscoveryResult, SessionActivityState, SessionRecord } from '@helm/core'
-import { isProjectPinned, withProjectPinned } from '@helm/core/types'
+import { isChild, isProjectPinned, withProjectPinned, withReports } from '@helm/core/types'
 import type { HelmBridge } from '../../../shared/ipc'
 import { bridgeFor } from './bridge'
 import { readable } from './errors'
@@ -85,6 +85,29 @@ export function useHostWorkspaces(
     [patch]
   )
 
+  // A running child's report is listed with its row and changes with what the
+  // child does, which the host's activity moves for. Only the reports are taken,
+  // so a session this window adopted before the host listed it stays.
+  const refreshReports = useCallback(
+    (host: string) => {
+      void bridgesRef.current(host)
+        .invoke('session:list')
+        .then(
+          (rows) =>
+            patch(host, (current) => {
+              const reported = withReports(current.sessions, rows)
+              return reported === null ? current : { ...current, sessions: reported }
+            }),
+          () => undefined
+        )
+    },
+    [patch]
+  )
+  const heldRef = useRef(byHost)
+  useEffect(() => {
+    heldRef.current = byHost
+  }, [byHost])
+
   const rescan = useCallback(
     (host: string) => {
       patch(host, (current) => ({ ...current, scanning: true }))
@@ -133,13 +156,16 @@ export function useHostWorkspaces(
           })
           // A session started elsewhere, such as from another device: listed again.
           if (unknown) relist(host)
+          else if (heldRef.current.get(host)?.sessions.some((session) => session.status === 'running' && isChild(session))) {
+            refreshReports(host)
+          }
         })
       ]
     })
     return () => {
       for (const off of offs) off()
     }
-  }, [hostsKey, patch, relist])
+  }, [hostsKey, patch, relist, refreshReports])
 
   // Read afresh each time the window is connected to a host again.
   const connectedKey = connected.join('\n')

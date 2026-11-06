@@ -42,10 +42,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use floti_protocol::channel::Router;
 use floti_protocol::channels::host::{HostDeviceSessions, HostQuit};
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, CloseSessionResult, HistoryResume, LiveSession, ProfileLaunch,
-    PtermCheckShell, PtermClose, PtermExit, PtermExited, PtermOpen, PtermResize, PtermShells,
-    PtermStreamOpen, PtermTerminal, SessionActivate, SessionActivityChanged, SessionActivityState,
-    SessionClose, SessionConfirm, SessionConfirmAnswer, SessionConfirmKind, SessionConfirmRequest,
+    CloseSessionRequest, CloseSessionResult, HistoryResume, ProfileLaunch, PtermCheckShell,
+    PtermClose, PtermExit, PtermExited, PtermOpen, PtermResize, PtermShells, PtermStreamOpen,
+    PtermTerminal, SessionActivate, SessionActivityChanged, SessionActivityState, SessionClose,
+    SessionConfirm, SessionConfirmAnswer, SessionConfirmKind, SessionConfirmRequest,
     SessionConfirmed, SessionExit, SessionFocus, SessionLaunch, SessionList, SessionNotify,
     SessionRename, SessionResize, SessionRestorable, SessionRestore, SessionStart,
     SessionStreamOpen, SessionTerminal, SessionsOverview, SessionsOverviewChanged,
@@ -402,13 +402,19 @@ impl Feature for Sessions {
 struct Activity {
     states: Vec<SessionActivityState>,
     overview: SessionsOverview,
+    /// How many times a child's report has been set or cleared. The states
+    /// carry neither, but a client lists a child's report with its row when
+    /// the states are published, so a report moves the publication.
+    reports: u64,
 }
 
 impl Activity {
-    /// Whether `other` says anything different. When the records were read
+    /// Whether `next` says anything different. When the records were read
     /// is not part of it: it moves on every read by construction.
-    fn same_as(&self, states: &[SessionActivityState], sessions: &[LiveSession]) -> bool {
-        self.states == states && self.overview.sessions == sessions
+    fn same_as(&self, next: &Activity) -> bool {
+        self.states == next.states
+            && self.overview.sessions == next.overview.sessions
+            && self.reports == next.reports
     }
 }
 
@@ -426,6 +432,7 @@ fn read_activity(hosted: &Hosted, tracker: &mut ActivityTracker) -> Activity {
     Activity {
         states: pass.states,
         overview: pass.overview,
+        reports: hosted.report_revision(),
     }
 }
 
@@ -489,7 +496,7 @@ impl ActivityHandle {
 
 impl ActivityState {
     fn publish(&mut self, next: Activity, events: &Events) {
-        if self.last.same_as(&next.states, &next.overview.sessions) {
+        if self.last.same_as(&next) {
             return;
         }
         if self.last.overview.sessions != next.overview.sessions
@@ -497,7 +504,7 @@ impl ActivityState {
         {
             log_line!("floti host: {err}");
         }
-        if self.last.states != next.states
+        if (self.last.states != next.states || self.last.reports != next.reports)
             && let Err(err) = events.set_state::<SessionActivityChanged, _>(&next.states)
         {
             log_line!("floti host: {err}");
