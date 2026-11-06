@@ -364,9 +364,21 @@ no listener for them, mints no token and writes no `--mcp-config`.
   without tools and the log says so, naming the port only. The device that
   started a session or opened a plain terminal goes in its keeper label by
   fingerprint, so its `host:quit` ends it after a crash as before one.
-- The host has no plugins of its own for agent tools: a client offers its
-  plugins' servers (`agentPlugin:offer`, replacing its last offer) and
-  answers their calls (`agentPlugin:call`, `agentPlugin:answer`). Each is
+- The host serves a version 2 plugin's tools itself
+  (`server/plugin_tools.rs` `HostPluginTools`): for each plugin whose
+  background module runs in its engine, on, error-free and with its tools
+  on, `helm-plugin-<id>` at `/mcp/plugin/<id>`, worded from the manifest as
+  Helm words an offer, is given to every launch with its read-only tools in
+  `--allowedTools`, with no client attached. Each call goes to the module's
+  handler (`Registry::call_tool`), naming the session as the relay does, and
+  is cancelled there when the session drops it. The plugin turned off,
+  removed or with its tools switched off loses its route at once (404) and is
+  given to no later launch, until it is back on. A client's offer naming such
+  a plugin is passed over (`PluginRelay::installed`), and that client is sent
+  no call for it.
+- For a version 1 plugin a client offers its servers (`agentPlugin:offer`,
+  replacing its last offer) and answers their calls (`agentPlugin:call`,
+  `agentPlugin:answer`). Each is
   served as `helm-plugin-<id>` at `/mcp/plugin/<id>`, given to launches only
   while that client listens, its read-only tools passed as `--allowedTools`.
   A server left out of an offer answers 404 at once; a call is withdrawn
@@ -393,8 +405,11 @@ secrets, programs, services and `helm.fetch`. Main keeps the
 `helm-plugin://` scheme (`main/plugins/protocol.ts`), the hidden plugin host
 window and the tool relay (`main/host/plugins.ts`); the window draws their
 pages. `packages/plugin-sdk` holds the manifest validator
-Helm loads with, so a manifest change starts there. `apiVersion` 1 is the only
-one; anything else is an error in Settings, never a crash.
+Helm loads with, so a manifest change starts there. `apiVersion` 1 and 2
+load, side by side; anything else is an error in Settings, never a crash. A
+version 2 background is a module the host runs in its own isolate
+(`plugins/runtime`), whose tools the host serves; a version 1 background is a
+page that still runs in the hidden plugin host window.
 
 The SDK is published to npm as `@coledtaylor/helm-plugin-sdk`, and authors
 start with `npx @coledtaylor/helm-plugin-sdk create`. It ships what `files` in
@@ -436,9 +451,11 @@ folder: run through npx, that folder is a cache.
 - Background pages are iframes in the hidden `plugin-host.html` window, not
   top-level pages: Chromium partitions an iframe's storage by its top-level
   site, and a top-level page would share nothing with the plugin's panels.
-- A plugin's tools (`agent` in its manifest) are answered by its background
-  page, through `main/plugins/tools.ts`, and served by the host as one more
-  family on its agent tools listener. A plugin sends no notifications and
+- A plugin's tools (`agent` in its manifest) are served by the host as one
+  more family on its agent tools listener. A version 2 plugin's are answered
+  by its background module in the host's isolate, with no client attached; a
+  version 1 plugin's by its background page in the hidden window, through
+  `main/plugins/tools.ts`. A plugin sends no notifications and
   never sends a running session anything: a session calls it, not the other
   way round.
 - A tool its manifest marks `readOnly` is listed with `readOnlyHint` and

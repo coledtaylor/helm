@@ -17,9 +17,13 @@
 //! Today that is helm-browser ([`BrowserTools`]), on the `browserMcp`
 //! setting and given to a launch only while a client with a browser pane is
 //! attached; helm-sessions ([`SessionTools`]), on the `sessionMcp` setting;
-//! and `helm-plugin-<id>` for each plugin tool server a client offers
+//! and `helm-plugin-<id>` for each plugin with its tools on: for a version 2
+//! plugin, whose background module runs in the host's engine, served by the
+//! host itself from its manifest with no client attached
+//! ([`HostPluginFamilies`]), given to every launch while the plugin is on;
+//! for a version 1 plugin, each tool server a client offers
 //! ([`PluginFamilies`]), given to a launch only while that client is
-//! attached.
+//! attached. A client's offer naming a version 2 plugin is passed over.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,7 +35,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use super::browser_tools::BrowserTools;
 use super::features::{BrowserRelay, PluginRelay};
 use super::hosted::Hosted;
-use super::plugin_tools::PluginFamilies;
+use super::plugin_tools::{HostPluginFamilies, HostPluginTools, PluginFamilies};
 use super::records::ExitNotice;
 use super::session_tools::{SessionTools, SessionsWorld};
 use crate::Result;
@@ -61,19 +65,31 @@ struct Held {
 
 impl HostAgentTools {
     /// The listener with every family, each off until [`Self::follow`] reads
-    /// the settings, the browser tools carried through `relay` and the
-    /// plugins' through `plugins`. Call it inside the host's runtime.
-    pub fn new(relay: Arc<BrowserRelay>, plugins: Arc<PluginRelay>) -> Self {
+    /// the settings, the browser tools carried through `relay`, the version
+    /// 2 plugins' answered by the host through `hosted`, and the version 1
+    /// plugins' carried to clients through `plugins`. Call it inside the
+    /// host's runtime.
+    pub fn new(
+        relay: Arc<BrowserRelay>,
+        plugins: Arc<PluginRelay>,
+        hosted: Arc<HostPluginTools>,
+    ) -> Self {
         let browser = Arc::new(BrowserTools::new(relay));
         let sessions = Arc::new(SessionTools::new());
         let families: Vec<Arc<dyn ToolFamily>> = vec![
             Arc::clone(&browser) as Arc<dyn ToolFamily>,
             Arc::clone(&sessions) as Arc<dyn ToolFamily>,
         ];
+        // The host's own first: a client's server of the same name is
+        // passed over.
+        let sources: Vec<Arc<dyn FamilySource>> = vec![
+            Arc::new(HostPluginFamilies::new(hosted)),
+            Arc::new(PluginFamilies::new(plugins)),
+        ];
         Self {
             listener: AgentToolsListener::with_source(
                 families,
-                Some(Arc::new(PluginFamilies::new(plugins)) as Arc<dyn FamilySource>),
+                Some(Arc::new(sources) as Arc<dyn FamilySource>),
             ),
             browser,
             sessions,
@@ -95,7 +111,8 @@ impl HostAgentTools {
     }
 
     /// With no token held and nothing a launch could be given, the socket is
-    /// let go. Called when the settings or the plugins' offers change.
+    /// let go. Called when the settings, the plugins' offers or the host's
+    /// own plugins change.
     /// Nothing binds here: the first grant binds, so a host whose sessions
     /// take no agent tools holds no port.
     pub fn settle(&self) {
@@ -261,6 +278,7 @@ mod tests {
         HostAgentTools::new(
             Arc::new(BrowserRelay::new(&events)),
             Arc::new(PluginRelay::new(&events)),
+            Arc::new(HostPluginTools::new(|_| None)),
         )
     }
 

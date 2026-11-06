@@ -605,11 +605,19 @@ fn start_agent_tools(hosted: &Arc<Hosted>, features: &Features) -> Result<Arc<Ho
     let tools = Arc::new(HostAgentTools::new(
         Arc::clone(features.browser()),
         Arc::clone(features.plugin_tools()),
+        Arc::clone(features.host_plugin_tools()),
     ));
-    // An offer taken away can leave nothing to serve: the port goes then.
+    // An offer taken away, or a plugin of the host's own switched off, can
+    // leave nothing to serve: the port goes then.
     let offers = Arc::downgrade(&tools);
     features.plugin_tools().on_change(move || {
         if let Some(tools) = offers.upgrade() {
+            tools.settle();
+        }
+    });
+    let own_plugins = Arc::downgrade(&tools);
+    features.host_plugin_tools().on_change(move || {
+        if let Some(tools) = own_plugins.upgrade() {
             tools.settle();
         }
     });

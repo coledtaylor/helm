@@ -60,6 +60,7 @@ use super::HostRun;
 use super::attached::Attached;
 use super::events::Events;
 use super::hosted::Hosted;
+use super::plugin_tools::HostPluginTools;
 use crate::platform::folders::Folders;
 use crate::session::{ClientId, Session, SessionOutput};
 pub(crate) use agent_browser::BrowserRelay;
@@ -228,6 +229,7 @@ pub(crate) struct Features {
     settings: Arc<SettingsService>,
     browser: Arc<BrowserRelay>,
     plugin_tools: Arc<PluginRelay>,
+    host_plugin_tools: Arc<HostPluginTools>,
     /// The plugin registry the plugins feature keeps: the host waits on its
     /// shutdown before it lets go of the store.
     plugins: crate::plugins::Registry,
@@ -258,6 +260,9 @@ impl Features {
             PluginRelay::new(&context.events)
                 .naming_callers(plugins::tool_caller(Arc::downgrade(&plugin_sessions))),
         );
+        let host_plugin_tools = Arc::new(HostPluginTools::new(plugins::tool_caller(
+            Arc::downgrade(&plugin_sessions),
+        )));
         let attached = Arc::new(Attached::serve(Arc::clone(&context.events))?);
         let history = history::History::new(&context)?;
         let carry = carry::Carry::new(&context, history.handle());
@@ -281,6 +286,7 @@ impl Features {
             activity.clone(),
             plugin_sessions,
             Arc::clone(&plugin_tools),
+            Arc::clone(&host_plugin_tools),
         )?;
         let plugin_registry = plugins.registry().clone();
         features.push(Box::new(plugins));
@@ -296,6 +302,7 @@ impl Features {
             settings: Arc::clone(&context.workspace.settings),
             browser,
             plugin_tools,
+            host_plugin_tools,
             plugins: plugin_registry,
         })
     }
@@ -334,6 +341,12 @@ impl Features {
     /// offer.
     pub fn plugin_tools(&self) -> &Arc<PluginRelay> {
         &self.plugin_tools
+    }
+
+    /// The tool servers of the plugins whose background module the host
+    /// runs, for the families the host answers itself.
+    pub fn host_plugin_tools(&self) -> &Arc<HostPluginTools> {
+        &self.host_plugin_tools
     }
 
     /// The processes-and-ports pass, for what inside the host asks for it.

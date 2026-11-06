@@ -17,6 +17,8 @@ on:
       - "packages/core/drizzle/**"
       # The protocol's catalogue test reads the app's channel list.
       - "packages/desktop/src/shared/ipc.ts"
+      # The host compiles in the plugin manifest validator.
+      - "packages/plugin-sdk/src/manifest.js"
       # The agent backends' tests run these fake CLIs.
       - "test/fake-agents/**"
       # The remote and WSL tests run these fake transports.
@@ -33,6 +35,7 @@ on:
       - "rust-toolchain.toml"
       - "packages/core/drizzle/**"
       - "packages/desktop/src/shared/ipc.ts"
+      - "packages/plugin-sdk/src/manifest.js"
       - "test/fake-agents/**"
       - "test/fake-ssh/**"
       - "scripts/test-leftovers.mjs"
