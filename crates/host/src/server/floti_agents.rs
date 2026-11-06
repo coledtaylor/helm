@@ -167,7 +167,8 @@ impl ToolFamily for FlotiAgents {
     }
 }
 
-/// `agents_start`: a child of `me`, started on the task given.
+/// `agents_start`: a child of `me`, started on the task given, or one of its
+/// ended children reopened with the task as its next turn.
 async fn start(
     hosted: std::sync::Arc<Hosted>,
     me: SessionId,
@@ -177,11 +178,13 @@ async fn start(
         Ok(request) => request,
         Err(refusal) => return problem(&refusal),
     };
+    let resumed = request.resume.is_some();
     match blocking(move || hosted.start_child(me, request)).await {
         Ok(started) => {
             let branch = started.branch.as_deref().unwrap_or("none");
+            let verb = if resumed { "Resumed" } else { "Started" };
             let mut text = format!(
-                "Started {name}.\nname: {name}\nbackend: {backend}\nfolder: {folder}\nbranch: {branch}",
+                "{verb} {name}.\nname: {name}\nbackend: {backend}\nfolder: {folder}\nbranch: {branch}",
                 name = started.name,
                 backend = started.backend,
                 folder = started.folder,
@@ -277,7 +280,9 @@ fn start_request(arguments: &JsonObject) -> Result<StartChild, String> {
             Some(_) => Err(format!("{key} is true or false.")),
         }
     };
-    for key in ["role", "backend", "folder", "profile", "name", "worktree"] {
+    for key in [
+        "role", "backend", "folder", "profile", "name", "worktree", "resume",
+    ] {
         if !matches!(
             arguments.get(key),
             None | Some(Value::Null | Value::String(_))
@@ -295,6 +300,7 @@ fn start_request(arguments: &JsonObject) -> Result<StartChild, String> {
         worktree: text_argument(arguments, "worktree"),
         outlive: flag("outlive")?.unwrap_or(false),
         can_start: flag("can_start")?,
+        resume: text_argument(arguments, "resume"),
     })
 }
 

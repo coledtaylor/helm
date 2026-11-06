@@ -403,6 +403,20 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   works in (naming it). A launch that fails after the worktree was made
   removes it and its branch; otherwise nothing removes a worktree when its
   child ends, because its branch holds the work.
+- `agents_start` with `resume` (`floti agent start --resume <name>`) reopens
+  one of the caller's ended children, resolved among the caller's own
+  children like every other name (ended rows and those given back by a
+  resumed parent included; anything else is not found), in the folder or
+  worktree its row recorded, through its backend's `Resumer` with the task as
+  the conversation's next turn (`ResumeRequest.prompt`) and its role composed
+  again, its permission capped by the caller's. It keeps its name, parent
+  link, `outlive` and `can_start`, so a resume that also names a role,
+  backend, folder, profile, worktree or name is refused. Also refused, with
+  nothing started: a child still running, a folder or worktree gone or no
+  longer tracked, a backend whose adapter has no `Resumer`, and a child with
+  no conversation. It is then judged against every limit as a start is, and
+  is one more start and one more running child (a resume adds a row under the
+  same name; the newest row of a name is the child).
 - `floti agent start` and `floti agent stop` run the same tools from a
   session's own shell: the host puts its `floti` binary's folder first on the
   session's `PATH` and the session's token and the family's address in its

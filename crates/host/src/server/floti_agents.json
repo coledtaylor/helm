@@ -1,7 +1,7 @@
 {
   "name": "floti-agents",
   "path": "/mcp/agents",
-  "instructions": "These tools start agents of your own, list them and stop them. agents_roles lists the roles an agent can be started in; agents_start runs a new agent in one of them on a task you give it and answers with its name; agents_list shows the agents you started and how many more you may start; agents_stop ends one of them and any it started. They reach only the agents you started: a name that is not one of yours is not found, no tool takes a session id, and none returns any part of a conversation.",
+  "instructions": "These tools start agents of your own, list them and stop them. agents_roles lists the roles an agent can be started in; agents_start runs a new agent in one of them on a task you give it and answers with its name, or with resume reopens one of yours that has ended on a new task; agents_list shows the agents you started and how many more you may start; agents_stop ends one of them and any it started. They reach only the agents you started: a name that is not one of yours is not found, no tool takes a session id, and none returns any part of a conversation.",
   "tools": [
     {
       "name": "agents_start",
@@ -11,7 +11,7 @@
         "properties": {
           "task": {
             "type": "string",
-            "description": "What the agent is to do. It is the agent's opening prompt, so write it as a complete brief."
+            "description": "What the agent is to do. It is the agent's opening prompt, so write it as a complete brief. With resume it is the agent's next turn."
           },
           "role": {
             "type": "string",
@@ -44,6 +44,10 @@
           "can_start": {
             "type": "boolean",
             "description": "Whether it may start agents of its own. Omit it to use its role's choice."
+          },
+          "resume": {
+            "type": "string",
+            "description": "The name of one of your agents that has ended, to reopen instead of starting a new one. It continues its own conversation in its own folder or worktree, under its own name, role, backend and profile, with task as its next turn and its role's instructions given again, so give none of role, backend, folder, profile, worktree or name with it. It keeps whether it outlives you and may start agents. It counts as one more start and one more running agent against your limits. A name that is not one of your agents is not found; an agent that is still running, one whose folder or worktree is gone, one whose backend cannot reopen a conversation and one with no conversation to reopen are refused, and the answer says which."
           }
         },
         "required": ["task"],

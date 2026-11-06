@@ -132,10 +132,18 @@ pub(super) struct ChildRow {
     pub class: RoleClass,
     /// Whether it works in a worktree Floti made for it.
     pub worktree: bool,
+    /// The conversation it is in now, when its row knows: what a resume
+    /// reopens.
+    pub conversation_id: Option<String>,
+    /// The mode it ran in.
+    pub permission_mode: Option<PermissionMode>,
+    /// The profile it ran under.
+    pub profile_id: Option<i64>,
 }
 
 const CHILD_COLUMNS: &str = "id, child_name, role, backend, cwd, branch, started_at, outlive, \
-     can_start, status, child_class, child_worktree";
+     can_start, status, child_class, child_worktree, \
+     coalesce(last_claude_session_id, claude_session_id), permission_mode, profile_id";
 
 fn child_row(row: &Row<'_>) -> rusqlite::Result<ChildRow> {
     let status: String = row.get(9)?;
@@ -157,6 +165,14 @@ fn child_row(row: &Row<'_>) -> rusqlite::Result<ChildRow> {
             .get::<_, Option<String>>(10)?
             .map_or(RoleClass::Light, |class| RoleClass::from_word(&class)),
         worktree: row.get(11)?,
+        conversation_id: row
+            .get::<_, Option<String>>(12)?
+            .filter(|id| !id.trim().is_empty()),
+        permission_mode: row
+            .get::<_, Option<String>>(13)?
+            .as_deref()
+            .and_then(records::permission_mode_from_name),
+        profile_id: row.get(14)?,
     })
 }
 

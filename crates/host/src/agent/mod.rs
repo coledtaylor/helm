@@ -456,6 +456,9 @@ pub struct ResumeRequest {
     pub conversation_id: String,
     /// The folder history recorded for it.
     pub folder: PathBuf,
+    /// The next turn it is reopened with, when there is one: an agent's task
+    /// on a resume. A conversation reopened by a person has none.
+    pub prompt: Option<String>,
     /// The composition it is reopened with: a conversation reopened without
     /// its overlays is a session missing the skills it was having.
     pub composition: Composition,

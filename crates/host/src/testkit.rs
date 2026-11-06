@@ -951,7 +951,9 @@ impl Resumer for FakeAgentBackend {
         self.spec(
             &request.folder,
             &request.composition,
-            ["--resume".into(), request.conversation_id.clone().into()],
+            ["--resume".into(), request.conversation_id.clone().into()]
+                .into_iter()
+                .chain(request.prompt.iter().map(OsString::from)),
             request.conversation_id.clone(),
             folder,
         )
@@ -1109,6 +1111,7 @@ mod tests {
                 &ResumeRequest {
                     conversation_id: "conv 1".into(),
                     folder: folder.clone(),
+                    prompt: None,
                     composition: Default::default(),
                 },
                 &launch_folder,

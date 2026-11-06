@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use floti_host::agent::AgentBackend;
 use floti_host::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
+use floti_host::agent::{AgentBackend, PlainCommandBackend};
 use floti_host::agent_cli::{
     self, Command as Subcommand, Start as StartCommand, Stop as StopCommand,
 };
@@ -26,7 +26,7 @@ use floti_host::platform::socket::Endpoint;
 use floti_host::roles::{FixedRoles, Role, RoleSource};
 use floti_host::server::HostConfig;
 use floti_host::testkit::{
-    OtherAgent, OtherAgentRecord, PATIENCE, RunningHost, ShellRun, TestClient, TestDirs,
+    GitRepo, OtherAgent, OtherAgentRecord, PATIENCE, RunningHost, ShellRun, TestClient, TestDirs,
     link_folder,
 };
 use floti_protocol::channels::common::{PermissionMode, SessionRecord};
@@ -72,7 +72,12 @@ fn roles() -> Vec<Role> {
     // A rule the user denies, which stays denied beside what is allowed.
     let mut careful = Role::new("careful", [BackendId::new(CLAUDE)]);
     careful.disallowed_tools = vec!["Bash(floti agent stop:*)".to_owned()];
-    vec![builder, reviewer, locked, automatic, reader, careful]
+    // A body its backends are given as instructions on every launch.
+    let mut briefed = Role::new("briefed", [BackendId::new(CLAUDE), BackendId::new(OTHER)]);
+    briefed.instructions = "Answer in one line.".to_owned();
+    vec![
+        builder, reviewer, locked, automatic, reader, careful, briefed,
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +110,8 @@ impl World {
         }
     }
 
-    fn config(&self) -> HostConfig {
+    /// The host's configuration with `extra` backends after the two fakes.
+    fn config_with(&self, extra: Vec<Arc<dyn AgentBackend>>) -> HostConfig {
         let claude = ClaudeCodeSettings {
             search_first: Vec::new(),
             program: "node".into(),
@@ -114,10 +120,11 @@ impl World {
             pass_config_dir: true,
             api_key_set: false,
         };
-        let backends: Vec<Arc<dyn AgentBackend>> = vec![
+        let mut backends: Vec<Arc<dyn AgentBackend>> = vec![
             Arc::new(ClaudeCodeBackend::new(claude, Arc::new(NativeTree))),
             Arc::new(self.other.backend()),
         ];
+        backends.extend(extra);
         HostConfig {
             run: Default::default(),
             folders: self.dirs.folders(),
@@ -145,8 +152,14 @@ impl World {
     /// A host that serves once this returns, with the roles above, and the
     /// workspace tracked.
     async fn host(&self) -> RunningHost {
+        self.host_with(Vec::new()).await
+    }
+
+    /// As [`Self::host`], with `extra` backends after the two fakes.
+    async fn host_with(&self, extra: Vec<Arc<dyn AgentBackend>>) -> RunningHost {
         let source: Arc<dyn RoleSource> = Arc::new(FixedRoles(roles()));
-        let (host, ()) = RunningHost::start_with(self.config(), move |host| host.use_roles(source));
+        let (host, ()) =
+            RunningHost::start_with(self.config_with(extra), move |host| host.use_roles(source));
         // A client is welcomed once the host serves.
         drop(self.client().await);
         let known: i64 = self
@@ -257,6 +270,55 @@ impl World {
             )
             .ok()
             .and_then(|id| u64::try_from(id).ok())
+    }
+
+    /// The newest row `parent` started under `name`: a resume adds a row
+    /// under the same name.
+    fn newest_child_id(&self, parent: u64, name: &str) -> Option<u64> {
+        self.db()
+            .query_row(
+                "SELECT id FROM sessions WHERE parent_session_id = ?1 AND child_name = ?2 \
+                 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![i64::try_from(parent).unwrap(), name],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok()
+            .and_then(|id| u64::try_from(id).ok())
+    }
+
+    /// What column `column` of session `id`'s row holds, as text.
+    fn row_text(&self, id: u64, column: &str) -> Option<String> {
+        self.db()
+            .query_row(
+                &format!("SELECT CAST({column} AS TEXT) FROM sessions WHERE id = ?1"),
+                [i64::try_from(id).unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|err| panic!("read {column} of session {id}: {err}"))
+    }
+
+    /// A child of `parent` that has said something, so its conversation is on
+    /// record, and has then been stopped and is gone. `arguments` start it and
+    /// name it.
+    async fn ended_child(&self, parent: &Agent, arguments: Value) -> Agent {
+        let name = arguments["name"].as_str().expect("a name").to_owned();
+        parent.start(arguments).await.done();
+        let child = self.child_of(parent, &name).await;
+        self.type_line(&child, "remember this").await;
+        parent.stop(&name).await.done();
+        self.ended("the child to end", &[child.id()]).await;
+        self.gone("its process to end", &[&child]).await;
+        child
+    }
+
+    /// The run `parent` has under `name` now, which is not `before`'s.
+    async fn resumed(&self, parent: &Agent, name: &str, before: &Agent) -> Agent {
+        let id = self
+            .newest_child_id(parent.id(), name)
+            .unwrap_or_else(|| panic!("{} has no child named {name}", parent.name()));
+        assert_ne!(id, before.id(), "a resume is a row of its own");
+        let record = self.record(id).await;
+        self.agent_after(record, &[before.run.pid]).await
     }
 
     /// Every session the host has a row for.
@@ -491,6 +553,10 @@ struct Run {
     pid: u32,
     argv: Vec<String>,
     opening_prompt: Option<String>,
+    /// Whether it reopened a conversation.
+    resumed: bool,
+    /// The instructions it was given to add to its own, when it was given any.
+    instructions: Option<String>,
     /// The tool servers it loaded, by name: URL and bearer token.
     servers: BTreeMap<String, (String, String)>,
     received: Vec<String>,
@@ -519,6 +585,8 @@ impl Run {
             pid: u32::try_from(log["pid"].as_u64().expect("a pid")).unwrap(),
             argv: strings(&log["argv"]),
             opening_prompt: log["openingPrompt"].as_str().map(str::to_owned),
+            resumed: log["resumed"].as_bool().unwrap_or(false),
+            instructions: log["composedInstructions"].as_str().map(str::to_owned),
             servers,
             received: strings(&log["received"]),
             shell: serde_json::from_value(log["shell"].clone()).unwrap_or_default(),
@@ -530,6 +598,8 @@ impl Run {
             pid: record.pid,
             argv: record.argv.clone(),
             opening_prompt: record.opening_prompt.clone(),
+            resumed: record.resumed,
+            instructions: record.instructions.clone(),
             servers: record
                 .mcp_servers
                 .iter()
@@ -2291,4 +2361,594 @@ async fn s25_a_claude_code_parent_starts_lists_and_stops_children_on_both_backen
 #[tokio::test(flavor = "multi_thread")]
 async fn s25_an_other_agent_parent_starts_lists_and_stops_children_on_both_backends() {
     across_both_backends(OTHER, CLAUDE).await;
+}
+
+// ---------------------------------------------------------------------------
+// Resuming an ended child
+// ---------------------------------------------------------------------------
+
+/// The flag each fake reopens a conversation with.
+fn reopen_flag(backend: &str) -> &'static str {
+    if backend == CLAUDE {
+        "--resume"
+    } else {
+        "--continue"
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_parent_resumes_its_ended_child_under_its_name_with_the_task_as_its_next_turn_on_either_backend()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let project = world.project("resume");
+    let parent = world.session(CLAUDE, &project, "parent").await;
+    for backend in [CLAUDE, OTHER] {
+        let name = format!("worker-{backend}");
+        let ended = world
+            .ended_child(
+                &parent,
+                json!({
+                    "task": "first task", "name": name, "role": "briefed", "backend": backend,
+                    "outlive": true, "can_start": true,
+                }),
+            )
+            .await;
+        assert!(parent.children().await.is_empty());
+
+        let started = parent
+            .start(json!({ "task": "second task", "resume": name }))
+            .await
+            .done();
+        assert_eq!(started["name"], name.as_str());
+        assert_eq!(started["backend"], backend);
+        assert!(
+            same_folder(Path::new(started["folder"].as_str().unwrap()), &project),
+            "{started}"
+        );
+
+        let resumed = world.resumed(&parent, &name, &ended).await;
+        // The backend's own reopen of the conversation it had, with the task
+        // as the next turn.
+        assert!(resumed.run.resumed, "{:?}", resumed.run.argv);
+        assert_eq!(resumed.record.conversation_id, ended.record.conversation_id);
+        assert_eq!(
+            value_of(&resumed.run.argv, reopen_flag(backend)),
+            ended.record.conversation_id.as_deref(),
+            "{:?}",
+            resumed.run.argv
+        );
+        assert_eq!(resumed.run.opening_prompt.as_deref(), Some("second task"));
+        assert_eq!(
+            ended.run.opening_prompt.as_deref(),
+            Some("first task"),
+            "the earlier run began with its own task"
+        );
+        // Its role's instructions are composed again for the new run.
+        assert!(
+            resumed
+                .run
+                .instructions
+                .as_deref()
+                .is_some_and(|text| text.contains("Answer in one line.")),
+            "{:?}",
+            resumed.run.instructions
+        );
+        // The same child: its name, its parent, its role, outlive and
+        // can_start, and the mode it had.
+        assert_eq!(resumed.record.parent_id, Some(parent.id()));
+        let row = |id: u64, column: &str| world.row_text(id, column);
+        assert_eq!(
+            row(resumed.id(), "child_name").as_deref(),
+            Some(name.as_str())
+        );
+        for column in ["role", "outlive", "can_start", "backend", "permission_mode"] {
+            assert_eq!(
+                row(resumed.id(), column),
+                row(ended.id(), column),
+                "{column}"
+            );
+        }
+        assert_eq!(row(resumed.id(), "outlive").as_deref(), Some("1"));
+        assert_eq!(row(resumed.id(), "can_start").as_deref(), Some("1"));
+
+        // Every tool reaches it by that name.
+        assert_eq!(parent.children().await, std::slice::from_ref(&name));
+        parent.stop(&name).await.done();
+        world
+            .ended("the resumed child to stop", &[resumed.id()])
+            .await;
+        world.gone("its process to end", &[&resumed]).await;
+        assert!(parent.children().await.is_empty());
+    }
+    // A name resumed is still a name taken.
+    let next = parent
+        .start(json!({ "task": "another", "name": format!("worker-{CLAUDE}") }))
+        .await
+        .done();
+    assert_eq!(next["name"], format!("worker-{CLAUDE}-2"));
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resumed_child_returns_to_the_worktree_it_had_and_makes_no_new_one() {
+    let world = World::new();
+    let host = world.host().await;
+    let repo = GitRepo::init(world.project("resume repo"));
+    repo.write("README.md", "hello\n");
+    repo.commit_all("first");
+    let root = resolved(repo.path());
+    let parent = world.session(CLAUDE, &root, "parent").await;
+    for backend in [CLAUDE, OTHER] {
+        let name = format!("tree-{backend}");
+        let ended = world
+            .ended_child(
+                &parent,
+                json!({ "task": "first", "name": name, "worktree": name, "backend": backend }),
+            )
+            .await;
+        let tree = root.join(".floti").join("worktrees").join(&name);
+        assert!(tree.is_dir(), "{}", tree.display());
+        std::fs::write(tree.join("kept.txt"), "work\n").expect("leave some work");
+
+        let started = parent
+            .start(json!({ "task": "carry on", "resume": name }))
+            .await
+            .done();
+        assert!(
+            same_folder(Path::new(started["folder"].as_str().unwrap()), &tree),
+            "{started}"
+        );
+        assert_eq!(started["branch"], format!("agent/{name}"), "{started}");
+        assert_eq!(started["worktree"], name.as_str(), "{started}");
+        let resumed = world.resumed(&parent, &name, &ended).await;
+        assert!(resumed.run.resumed);
+        assert!(same_folder(Path::new(&resumed.record.cwd), &tree));
+        assert!(tree.join("kept.txt").is_file(), "its work is still there");
+        parent.stop(&name).await.done();
+        world
+            .ended("the resumed child to stop", &[resumed.id()])
+            .await;
+        world.gone("its process to end", &[&resumed]).await;
+    }
+    // One worktree for each child, however many runs it had.
+    let made = std::fs::read_dir(root.join(".floti").join("worktrees"))
+        .unwrap()
+        .count();
+    assert_eq!(made, 2);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resume_of_a_child_that_still_runs_is_refused_and_nothing_starts() {
+    let world = World::new();
+    let host = world.host().await;
+    let parent = world
+        .session(CLAUDE, &world.project("running"), "parent")
+        .await;
+    parent
+        .start(json!({ "task": "work", "name": "busy" }))
+        .await
+        .done();
+    let (rows, runs) = (world.children_made(), world.run_count());
+    let refused = parent
+        .start(json!({ "task": "again", "resume": "busy" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(sentence.contains("busy is still running"), "{sentence}");
+    assert_eq!(world.children_made(), rows);
+    assert_eq!(world.run_count(), runs);
+    assert_eq!(parent.children().await, ["busy"]);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resume_that_asks_for_more_than_the_task_is_refused_naming_what_else_it_gave() {
+    let world = World::new();
+    let host = world.host().await;
+    let parent = world
+        .session(CLAUDE, &world.project("keeps its own"), "parent")
+        .await;
+    world
+        .ended_child(&parent, json!({ "task": "first", "name": "kept" }))
+        .await;
+    let (rows, runs) = (world.children_made(), world.run_count());
+    for (key, value) in [
+        ("role", "briefed"),
+        ("backend", OTHER),
+        ("folder", "."),
+        ("profile", "workspace"),
+        ("worktree", "mine"),
+        ("name", "renamed"),
+    ] {
+        let refused = parent
+            .start(json!({ "task": "again", "resume": "kept", key: value }))
+            .await;
+        let sentence = refused.refused();
+        assert!(sentence.contains("keeps its own"), "{key}: {sentence}");
+        assert!(sentence.contains(key), "{key}: {sentence}");
+    }
+    assert_eq!(world.children_made(), rows);
+    assert_eq!(world.run_count(), runs);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resume_names_only_the_callers_own_children_and_any_other_name_is_not_found() {
+    let world = World::new();
+    let host = world.host().await;
+    let mine = world.session(CLAUDE, &world.project("mine"), "mine").await;
+    let theirs = world
+        .session(OTHER, &world.project("theirs"), "theirs")
+        .await;
+    world
+        .ended_child(&theirs, json!({ "task": "first", "name": "theirs-child" }))
+        .await;
+    world
+        .ended_child(&mine, json!({ "task": "first", "name": "mine-child" }))
+        .await;
+    let (rows, runs) = (world.children_made(), world.run_count());
+
+    for name in ["theirs-child", "nobody", "theirs", "mine"] {
+        let refused = mine.start(json!({ "task": "again", "resume": name })).await;
+        let sentence = refused.refused();
+        assert!(
+            sentence.contains(&format!("No agent of yours is named {name}")),
+            "{name}: {sentence}"
+        );
+    }
+    // Another session's child answers as every other tool answers it.
+    let stop = mine.stop("theirs-child").await;
+    let resume = mine
+        .start(json!({ "task": "again", "resume": "theirs-child" }))
+        .await;
+    assert_eq!(
+        stop.refused().split(". ").next(),
+        resume.refused().split(". ").next()
+    );
+    assert_eq!(world.children_made(), rows);
+    assert_eq!(world.run_count(), runs);
+    host.stop(HostStopReason::Stop).await;
+}
+
+/// An ended child's row, as a host left it, for the cases a run cannot make.
+fn insert_ended_child(
+    world: &World,
+    parent: &Agent,
+    name: &str,
+    backend: &str,
+    folder: &Path,
+    conversation: Option<&str>,
+) {
+    world
+        .db()
+        .execute(
+            "INSERT INTO sessions (name, cwd, argv, claude_session_id, backend, parent_session_id, \
+             child_name, role, status) VALUES (?1, ?2, '[]', ?3, ?4, ?5, ?1, 'agent', 'exited')",
+            rusqlite::params![
+                name,
+                text(folder),
+                conversation,
+                backend,
+                i64::try_from(parent.id()).unwrap(),
+            ],
+        )
+        .expect("insert an exited child");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resume_is_refused_saying_which_when_the_folder_is_gone_is_not_tracked_or_the_conversation_is_unknown()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let parent = world
+        .session(CLAUDE, &world.project("home"), "parent")
+        .await;
+
+    // Its folder is gone.
+    let scratch = world.project("scratch");
+    world
+        .ended_child(
+            &parent,
+            json!({ "task": "first", "name": "lost", "folder": text(&scratch) }),
+        )
+        .await;
+    std::fs::remove_dir_all(&scratch).expect("remove the folder");
+    let (rows, runs) = (world.children_made(), world.run_count());
+    let refused = parent
+        .start(json!({ "task": "again", "resume": "lost" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(sentence.contains("no longer on disk"), "{sentence}");
+    assert!(sentence.contains(&text(&scratch)), "{sentence}");
+
+    // It has no conversation to reopen.
+    insert_ended_child(&world, &parent, "blank", CLAUDE, &world.work, None);
+    let (rows, runs) = (rows + 1, runs);
+    let refused = parent
+        .start(json!({ "task": "again", "resume": "blank" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(
+        sentence.contains("which conversation blank had"),
+        "{sentence}"
+    );
+    assert_eq!(world.children_made(), rows);
+    assert_eq!(world.run_count(), runs);
+
+    // Its folder is there, but Floti no longer tracks it.
+    let elsewhere = world.project("elsewhere");
+    world
+        .ended_child(
+            &parent,
+            json!({ "task": "first", "name": "moved", "folder": text(&elsewhere) }),
+        )
+        .await;
+    let (rows, runs) = (world.children_made(), world.run_count());
+    world
+        .db()
+        .execute("DELETE FROM profiles", [])
+        .expect("untrack the workspace");
+    world
+        .db()
+        .execute("DELETE FROM projects", [])
+        .expect("forget the projects");
+    let refused = parent
+        .start(json!({ "task": "again", "resume": "moved" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(sentence.contains("not a folder Floti tracks"), "{sentence}");
+    assert_eq!(world.children_made(), rows);
+    assert_eq!(world.run_count(), runs);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resume_is_refused_when_the_childs_backend_cannot_reopen_a_conversation() {
+    let world = World::new();
+    let plain: Arc<dyn AgentBackend> = Arc::new(PlainCommandBackend::new(
+        BackendId::new("plain-cli"),
+        "Plain CLI",
+        "plain-cli",
+        Vec::<OsString>::new(),
+    ));
+    let host = world.host_with(vec![plain]).await;
+    let parent = world
+        .session(CLAUDE, &world.project("plain"), "parent")
+        .await;
+    insert_ended_child(
+        &world,
+        &parent,
+        "plain-child",
+        "plain-cli",
+        &world.work,
+        Some("some-conversation"),
+    );
+    // A backend the host lacks is told apart from one that cannot reopen.
+    insert_ended_child(
+        &world,
+        &parent,
+        "gone-child",
+        "missing-agent",
+        &world.work,
+        Some("some-conversation"),
+    );
+    let (rows, runs) = (world.children_made(), world.run_count());
+    let refused = parent
+        .start(json!({ "task": "again", "resume": "plain-child" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(
+        sentence.contains("Plain CLI cannot reopen a conversation"),
+        "{sentence}"
+    );
+    let refused = parent
+        .start(json!({ "task": "again", "resume": "gone-child" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(sentence.contains("does not have"), "{sentence}");
+    assert_eq!(world.children_made(), rows);
+    assert_eq!(world.run_count(), runs);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resume_is_judged_against_every_limit_and_counts_as_a_start_and_a_running_child() {
+    let world = World::new();
+    let host = world.host().await;
+    let parent = world
+        .session(CLAUDE, &world.project("limits"), "parent")
+        .await;
+    let neighbour = world
+        .session(OTHER, &world.project("neighbour"), "neighbour")
+        .await;
+    world
+        .ended_child(&parent, json!({ "task": "first", "name": "ended" }))
+        .await;
+
+    // Running children at once: one runs and the limit is one.
+    parent
+        .start(json!({ "task": "busy", "name": "busy" }))
+        .await
+        .done();
+    world
+        .settings(HostSettingsPatch {
+            agent_children_per_parent: Some(1),
+            ..HostSettingsPatch::default()
+        })
+        .await;
+    let refused = parent
+        .start(json!({ "task": "again", "resume": "ended" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(
+        sentence.contains("limit of 1 running agents per parent"),
+        "{sentence}"
+    );
+    assert!(sentence.contains("busy"), "{sentence}");
+    parent.stop("busy").await.done();
+    let busy = world.newest_child_id(parent.id(), "busy").unwrap();
+    world.ended("the busy child to stop", &[busy]).await;
+
+    // The starts in the parent's life: two so far, and the limit is two.
+    world
+        .settings(HostSettingsPatch {
+            agent_starts_per_parent: Some(2),
+            ..HostSettingsPatch::default()
+        })
+        .await;
+    let refused = parent
+        .start(json!({ "task": "again", "resume": "ended" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(
+        sentence.contains("limit of 2 starts per parent"),
+        "{sentence}"
+    );
+    assert_eq!(world.children_made(), 2);
+
+    // The host's agent sessions: another session's child holds the only slot.
+    neighbour
+        .start(json!({ "task": "holding", "name": "holder" }))
+        .await
+        .done();
+    world
+        .settings(HostSettingsPatch {
+            agent_starts_per_parent: Some(16),
+            agent_sessions_per_host: Some(1),
+            ..HostSettingsPatch::default()
+        })
+        .await;
+    let refused = parent
+        .start(json!({ "task": "again", "resume": "ended" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(
+        sentence.contains("limit of 1 agent sessions running on this host"),
+        "{sentence}"
+    );
+    assert_eq!(world.children_made(), 3, "nothing started");
+
+    // Within every limit it goes ahead, and is one more start and one more
+    // running child.
+    neighbour.stop("holder").await.done();
+    let holder = world.newest_child_id(neighbour.id(), "holder").unwrap();
+    world.ended("the holder to stop", &[holder]).await;
+    let started = parent
+        .start(json!({ "task": "again", "resume": "ended" }))
+        .await
+        .done();
+    assert_eq!(started["name"], "ended");
+    assert_eq!(world.children_made(), 4);
+    let limits = parent.list().await.done()["limits"].clone();
+    assert_eq!(limits["startsLeft"], 16 - 3, "{limits}");
+    assert_eq!(limits["childrenLeft"], 0, "{limits}");
+    assert_eq!(parent.children().await, ["ended"]);
+    // It holds the parent's only running slot, as any child would.
+    let refused = parent.start(json!({ "task": "one too many" })).await;
+    let sentence = refused.refused();
+    assert!(
+        sentence.contains("limit of 1 running agents per parent"),
+        "{sentence}"
+    );
+    assert!(sentence.contains("ended"), "{sentence}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resume_by_an_agent_at_the_depth_limit_is_refused_naming_the_depth() {
+    let world = World::new();
+    let host = world.host().await;
+    let top = world.session(CLAUDE, &world.project("depth"), "top").await;
+    top.start(json!({ "task": "lead", "name": "lead", "can_start": true }))
+        .await
+        .done();
+    let lead = world.child_of(&top, "lead").await;
+    world
+        .ended_child(&lead, json!({ "task": "first", "name": "leaf" }))
+        .await;
+    world
+        .settings(HostSettingsPatch {
+            agent_depth: Some(1),
+            ..HostSettingsPatch::default()
+        })
+        .await;
+    let rows = world.children_made();
+    let refused = lead
+        .start(json!({ "task": "again", "resume": "leaf" }))
+        .await;
+    let sentence = refused.refused();
+    assert!(sentence.contains("depth limit of 1"), "{sentence}");
+    assert_eq!(world.children_made(), rows);
+
+    world
+        .settings(HostSettingsPatch {
+            agent_depth: Some(2),
+            ..HostSettingsPatch::default()
+        })
+        .await;
+    lead.start(json!({ "task": "again", "resume": "leaf" }))
+        .await
+        .done();
+    assert_eq!(lead.children().await, ["leaf"]);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn floti_agent_start_resume_reopens_an_ended_child_from_the_parents_shell() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("shell resume");
+    for (backend, child_backend) in [(CLAUDE, OTHER), (OTHER, CLAUDE)] {
+        let parent = world
+            .session(backend, &folder, &format!("parent {backend}"))
+            .await;
+        let name = format!("cli-{child_backend}");
+        let ended = world
+            .ended_child(
+                &parent,
+                json!({ "task": "first", "name": name, "backend": child_backend }),
+            )
+            .await;
+
+        let resumed = world
+            .shell(
+                &parent,
+                &format!("floti agent start --resume {name} --task \"carry on\""),
+            )
+            .await;
+        assert_eq!(resumed.code, Some(0), "{resumed:?}");
+        assert_eq!(resumed.stdout.trim(), name, "{resumed:?}");
+        let run = world.resumed(&parent, &name, &ended).await;
+        assert!(run.run.resumed);
+        assert_eq!(run.run.opening_prompt.as_deref(), Some("carry on"));
+        assert_eq!(
+            run.record.parent_id,
+            Some(parent.id()),
+            "it acted as the session"
+        );
+
+        // Still running: refused, and the command exits non-zero.
+        let again = world
+            .shell(
+                &parent,
+                &format!("floti agent start --resume {name} --task again"),
+            )
+            .await;
+        assert_ne!(again.code, Some(0), "{again:?}");
+        assert!(again.stderr.contains("is still running"), "{again:?}");
+        assert!(again.stdout.trim().is_empty(), "{again:?}");
+
+        // Anything but the task is refused.
+        let renamed = world
+            .shell(
+                &parent,
+                &format!("floti agent start --resume {name} --task again --name other"),
+            )
+            .await;
+        assert_ne!(renamed.code, Some(0), "{renamed:?}");
+        assert!(renamed.stderr.contains("keeps its own"), "{renamed:?}");
+        parent.stop(&name).await.done();
+    }
+    host.stop(HostStopReason::Stop).await;
 }

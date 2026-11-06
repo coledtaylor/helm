@@ -73,7 +73,8 @@ struct Plan {
     folder: PathBuf,
     /// Basis for its name.
     name: String,
-    /// The opening prompt, for a new conversation.
+    /// The opening prompt of a new conversation, or the next turn of one
+    /// reopened.
     prompt: Option<String>,
     composition: Composition,
     /// The conversation to reopen, or `None` for a new one.
@@ -763,6 +764,7 @@ impl Hosted {
                 let request = ResumeRequest {
                     conversation_id,
                     folder,
+                    prompt,
                     composition,
                 };
                 self.launch_in_folder(&backend, name, size, client, origin, |launch_folder| {

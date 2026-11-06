@@ -850,6 +850,7 @@ fn a_conversation_resumes_in_the_folder_its_transcript_recorded() {
     let (launch, launch_folder) = world.resume(&ResumeRequest {
         conversation_id: id.into(),
         folder: folder.clone(),
+        prompt: None,
         composition: Composition {
             agent_tools: vec![server("helm-browser", "resume-token")],
             permission_mode: Some(PermissionMode::Plan),
@@ -896,6 +897,7 @@ fn a_resume_drops_what_belongs_to_a_new_conversation_and_keeps_its_overlays() {
     let (launch, _) = world.resume(&ResumeRequest {
         conversation_id: id.into(),
         folder: project,
+        prompt: None,
         composition: Composition {
             overlays: vec![overlay],
             ..Composition::default()
@@ -922,6 +924,48 @@ fn a_resume_drops_what_belongs_to_a_new_conversation_and_keeps_its_overlays() {
         )
         .unwrap_err();
     assert!(err.to_string().contains("resume a conversation with no id"));
+}
+
+#[test]
+fn a_resume_with_a_task_passes_it_last_behind_the_dashes_as_the_next_turn() {
+    let world = World::new();
+    let project = world.folder("work");
+    let id = "0f6c2a8e-91d4-4b7a-8e33-5d2f1c9a7b40";
+    let (launch, _) = world.resume(&ResumeRequest {
+        conversation_id: id.into(),
+        folder: project,
+        prompt: Some("  now fix the export  ".into()),
+        composition: Composition {
+            extra_folders: vec![world.folder("notes")],
+            permission_mode: Some(PermissionMode::Plan),
+            ..Composition::default()
+        },
+    });
+    let args = world.args(&launch);
+    // `--resume` still ends the folder list, and the prompt ends every list.
+    let resume = args.iter().position(|arg| arg == "--resume").unwrap();
+    let add_dir = args.iter().position(|arg| arg == "--add-dir").unwrap();
+    assert!(add_dir < resume, "{args:?}");
+    assert_eq!(args[resume + 1], id);
+    assert_eq!(&args[args.len() - 2..], ["--", "now fix the export"]);
+    for absent in ["-n", "--session-id"] {
+        assert!(!args.contains(&absent.to_owned()), "{absent} in {args:?}");
+    }
+
+    // A blank task is no prompt, and a reopen without one passes none.
+    for prompt in [Some("   ".to_owned()), None] {
+        let (launch, _) = world.resume(&ResumeRequest {
+            conversation_id: id.into(),
+            folder: world.folder("work"),
+            prompt,
+            composition: Composition::default(),
+        });
+        assert!(
+            !world.args(&launch).contains(&"--".to_owned()),
+            "{:?}",
+            world.args(&launch)
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1657,6 +1701,7 @@ fn a_resume_gets_the_settings_file_too() {
     let (launch, folder) = world.resume(&ResumeRequest {
         conversation_id: "0f6c2a8e-91d4-4b7a-8e33-5d2f1c9a7b40".into(),
         folder: world.folder("work"),
+        prompt: None,
         composition: Composition::default(),
     });
     let args = world.args(&launch);
