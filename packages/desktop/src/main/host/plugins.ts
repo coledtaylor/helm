@@ -142,10 +142,17 @@ export function createHostPlugins(deps: HostPluginsDeps): HostPlugins {
   /** The host's plugins offering tools, as the relay offers them: kept as the host sent them, schemas included. */
   let offered: P.PluginInfo[] = []
 
+  /**
+   * The tool servers Helm answers: only plugins whose background is a page the
+   * hidden window runs (plugin API version 1). A version 2 plugin's background
+   * is a module the host's engine runs, and the host serves its tools itself,
+   * so Helm never offers one.
+   */
   const toolServers = (): ToolServer[] =>
     offered.flatMap((plugin) => {
-      const { agent, id } = plugin
+      const { agent, id, background } = plugin
       if (id === null || !plugin.enabled || plugin.error !== null || agent === null || !agent.enabled) return []
+      if (background === null || !isBackgroundPage(background.url)) return []
       return [
         {
           plugin: id,

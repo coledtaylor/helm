@@ -229,6 +229,41 @@ describe('plugins in the local host', () => {
       expect(w.toolsChanged()).toBe(offers + 1)
     })
 
+    /** A version 2 plugin: its background is a module the host's engine runs, not a page. */
+    const moduleBackground = (id: string): Partial<P.PluginInfo> => ({
+      path: `C:\\plugins\\${id}`,
+      id,
+      name: id,
+      background: { url: `floti-plugin://${id}/dist/background.js`, state: 'running', error: null },
+      agent: { ...TOOLS, server: `helm-plugin-${id}` }
+    })
+
+    it('S9: given only version 2 plugins with backgrounds, opens no hidden plugin host window and offers the host no tool server', async () => {
+      const list = [hostPlugin(moduleBackground('trackr')), hostPlugin(moduleBackground('almanac'))]
+      const w = world({ hosted: list })
+      await w.link.connect()
+      w.connection.snapshot('plugins:changed', list)
+      expect(w.synced.length).toBeGreaterThan(0)
+      expect(w.synced.every((needed) => !needed)).toBe(true)
+      expect(w.plugins.toolServers()).toEqual([])
+      expect(w.toolsChanged()).toBe(0)
+      expect(await w.plugins.callTool({ plugin: 'trackr', tool: 'find', args: {}, session: { id: 'minted', name: 'alpha', cwd: 'C:\\work' } }, new AbortController().signal)).toEqual({
+        ok: false,
+        message: NOT_OFFERING
+      })
+      expect(w.toolRuns).toEqual([])
+    })
+
+    it('S9: a version 1 plugin with a background page and tools beside version 2 ones is still offered and still opens the hidden window', async () => {
+      const list = [hostPlugin(moduleBackground('trackr')), hostPlugin({ agent: TOOLS }), hostPlugin(moduleBackground('almanac'))]
+      const w = world({ hosted: list })
+      await w.link.connect()
+      w.connection.snapshot('plugins:changed', list)
+      expect(w.synced.at(-1)).toBe(true)
+      expect(w.plugins.toolServers().map((server) => server.plugin)).toEqual(['sample'])
+      expect(w.toolsChanged()).toBe(1)
+    })
+
     it('answers a tool call with the background page once it runs, and ends it when the plugin’s tools are switched off', async () => {
       const w = world({ hosted: [hostPlugin({ agent: TOOLS })] })
       await w.link.connect()
