@@ -1,8 +1,8 @@
 //! Settings, setup, discovery, roots, harnesses, templates, the config
-//! console, content and the Files view: `app:info`, `settings:*`, `setup:*`,
-//! `discovery:*`, `scan:status`, `git:updated`, `roots:*`, `harness:create`,
-//! `template:*`, `config:*`, `editor:highlight`, `content:*` and `files:*` in
-//! `shared/ipc.ts`.
+//! console, content, the Files view and agent worktrees: `app:info`,
+//! `settings:*`, `setup:*`, `discovery:*`, `scan:status`, `git:updated`,
+//! `roots:*`, `harness:create`, `template:*`, `config:*`, `editor:highlight`,
+//! `content:*`, `files:*` and `worktrees:*` in `shared/ipc.ts`.
 //!
 //! How the ipc.ts channels map onto the protocol:
 //!
@@ -39,6 +39,7 @@ mod content;
 mod discovery;
 mod files;
 mod templates;
+mod worktrees;
 
 #[cfg(test)]
 mod tests;
@@ -49,6 +50,7 @@ pub use content::*;
 pub use discovery::*;
 pub use files::*;
 pub use templates::*;
+pub use worktrees::*;
 
 use std::fmt;
 
@@ -131,7 +133,10 @@ pub fn declare(catalogue: &mut Catalogue) {
         .request::<ReadFile>()
         .request::<ListFiles>()
         .request::<WatchFiles>()
-        .event::<FilesChanged>();
+        .event::<FilesChanged>()
+        // The worktrees Floti makes for agents.
+        .request::<ListAgentWorktrees>()
+        .request::<RemoveAgentWorktree>();
 }
 
 /// Milliseconds, as a number that may have a fraction: a file's modification

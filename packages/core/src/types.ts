@@ -2575,6 +2575,37 @@ export interface FilesStatus {
   error: string | null
 }
 
+/** The session that worked in an agent worktree. */
+export interface AgentWorktreeChild {
+  /** The child's name; a session a person started has its own name. */
+  name: string
+  /** The name of the session that started it, or null when a person did, or its record is gone. */
+  parent: string | null
+  running: boolean
+}
+
+/**
+ * One checkout under a repository's `.floti/worktrees`, which Floti made for
+ * an agent and left when the agent ended, because its branch holds the work.
+ */
+export interface AgentWorktree {
+  /** The folder's name, which is also the branch's after `agent/`. */
+  name: string
+  folder: string
+  /** The branch checked out there, or null for a detached checkout. */
+  branch: string | null
+  /** The session that last worked there (a running one first), or null when none did. */
+  child: AgentWorktreeChild | null
+  /** Whether git sees a modified or untracked file there; null when git could not be asked, never "clean". */
+  uncommitted: boolean | null
+}
+
+/** What removing an agent worktree came to: gone, or the sentence saying why it stays. */
+export interface AgentWorktreeRemoval {
+  removed: boolean
+  refusal: string | null
+}
+
 /**
  * The lines of a file that differ from the last commit, numbered in the file
  * as it is now. Ranges are inclusive and 1-based.

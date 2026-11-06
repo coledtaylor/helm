@@ -656,6 +656,18 @@ app's folder, on any OS.
   session's working directory). Changed lines are the working tree against `HEAD`, said
   as that and never attributed to a session: git does not know who made a
   change. Only what is on screen is watched, and main is told the whole set.
+- A project's agent worktrees (`worktrees:list`, `worktrees:remove`, served by
+  `server/features/worktrees.rs` over `workspace/worktrees.rs`) are the folders
+  `git worktree list` gives under `<repo>/.floti/worktrees` and no other
+  worktree of the repository. The project must be one the host knows (a
+  scanned project, a harness or a profile's folder; a hosted session's working
+  directory does not make one). A removal is `git worktree remove` without
+  `--force`, never a recursive delete, and keeps the `agent/<name>` branch. It
+  is refused, in the answer and with the worktree left as it is, for a folder
+  that is none of the project's agent worktrees, for one a running session
+  works in (naming it) and for one with uncommitted changes (modified or
+  untracked). Whether a worktree has uncommitted changes is `null` when git
+  could not be asked, never "clean".
 - Every backend resumes in the directory history recorded; for Claude Code,
   `claude --resume` there. Claude Code's transcripts are found by scanning
   `projects/*` for `<uuid>.jsonl`, never by deriving a path.

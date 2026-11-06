@@ -33,6 +33,10 @@ use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, SessionClose, SessionList, SessionStart, StartSessionRequest,
 };
+use floti_protocol::channels::workspace::{
+    AgentWorktrees, ListAgentWorktrees, RemoveAgentWorktree, RemoveWorktreeRequest,
+    WorktreeRemoval, WorktreesProject,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -140,6 +144,41 @@ impl World {
 
     async fn client(&self) -> TestClient {
         TestClient::connect(&self.endpoint, TERMINAL).await
+    }
+
+    /// Makes `folder` a project Floti tracks, as a saved profile's root does.
+    fn track(&self, folder: &Path) {
+        self.db()
+            .execute(
+                "INSERT INTO profiles (name, root, overlays, access, model, effort, permission_mode, \
+                 agent, opening_prompt, session_agents) \
+                 VALUES (?1, ?2, '[]', '[]', NULL, NULL, NULL, NULL, NULL, NULL)",
+                [format!("tracks {}", folder.display()), text(folder)],
+            )
+            .expect("insert a profile");
+    }
+
+    /// What the host says the agent worktrees of `project` are.
+    async fn worktrees_of(&self, project: &Path) -> AgentWorktrees {
+        self.client()
+            .await
+            .request::<ListAgentWorktrees>(&WorktreesProject {
+                project: text(project),
+            })
+            .await
+            .expect("the worktrees are listed")
+    }
+
+    /// What the host answers to removing `folder` from `project`'s worktrees.
+    async fn remove_worktree(&self, project: &Path, folder: &Path) -> WorktreeRemoval {
+        self.client()
+            .await
+            .request::<RemoveAgentWorktree>(&RemoveWorktreeRequest {
+                project: text(project),
+                folder: text(folder),
+            })
+            .await
+            .expect("the removal is answered")
     }
 
     /// A plain folder in the workspace, which Floti tracks.
@@ -1146,5 +1185,315 @@ async fn s6_a_worktree_and_its_branch_stay_when_the_child_exits_is_stopped_or_en
         repo.agent_branches(),
         ["agent/exits", "agent/follows", "agent/stopped"]
     );
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// S16-S19: listing and removing a project's agent worktrees
+// ---------------------------------------------------------------------------
+
+/// A worktree a person made by hand under `.floti/worktrees`, with no child
+/// that ever worked in it.
+fn hand_made_worktree(repo: &Repo, name: &str) -> PathBuf {
+    let folder = repo.worktree(name);
+    repo.repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        &format!("agent/{name}"),
+        &text(&folder),
+        "HEAD",
+    ]);
+    folder
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s16_a_project_lists_its_agent_worktrees_with_their_child_and_state_and_no_other_worktree()
+{
+    let world = World::new();
+    let host = world.host().await;
+    let repo = world.repository("listed repo");
+    world.track(&repo.root);
+    let lead = world.session(CLAUDE, &repo.root, "lead").await;
+    for name in ["builder", "finished"] {
+        lead.start(json!({ "task": "work", "name": name, "worktree": name }))
+            .await
+            .done();
+    }
+    let finished = world.child_of(&lead, "finished").await;
+    lead.stop("finished").await.done();
+    world
+        .ended("the finished child to end", &[finished.id()])
+        .await;
+    // One checkout no child ever worked in, with an untracked file; the
+    // finished child's checkout has a modified file.
+    let spare = hand_made_worktree(&repo, "spare");
+    std::fs::write(spare.join("notes.txt"), "mine").unwrap();
+    std::fs::write(repo.worktree("finished").join("README.md"), "changed\n").unwrap();
+    // Worktrees of the repository that are not agent worktrees: one beside
+    // the repository, and one nested inside an agent worktree's folder.
+    let elsewhere = world.dirs.folder("workspace/elsewhere tree");
+    std::fs::remove_dir(&elsewhere).unwrap();
+    repo.repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "elsewhere",
+        &text(&elsewhere),
+        "HEAD",
+    ]);
+    let nested = spare.join("inner tree");
+    repo.repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "nested",
+        &text(&nested),
+        "HEAD",
+    ]);
+
+    let listed = world.worktrees_of(&repo.root).await.worktrees;
+
+    assert_eq!(
+        listed.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(),
+        ["builder", "finished", "spare"]
+    );
+    let by_name = |name: &str| listed.iter().find(|w| w.name == name).unwrap();
+    let builder = by_name("builder");
+    assert_eq!(Path::new(&builder.folder), repo.worktree("builder"));
+    assert_eq!(builder.branch.as_deref(), Some("agent/builder"));
+    let child = builder.child.as_ref().expect("the child that works there");
+    assert_eq!(child.name, "builder");
+    assert_eq!(child.parent.as_deref(), Some("lead"));
+    assert!(child.running);
+    assert_eq!(builder.uncommitted, Some(false));
+    let finished = by_name("finished");
+    let child = finished
+        .child
+        .as_ref()
+        .expect("the child that worked there");
+    assert_eq!((child.name.as_str(), child.running), ("finished", false));
+    assert_eq!(child.parent.as_deref(), Some("lead"));
+    assert_eq!(finished.uncommitted, Some(true));
+    let spare = by_name("spare");
+    assert_eq!(spare.branch.as_deref(), Some("agent/spare"));
+    assert_eq!(spare.child, None);
+    assert_eq!(spare.uncommitted, Some(true));
+
+    // A tracked folder outside any repository has none.
+    let plain = world.project("plain folder");
+    world.track(&plain);
+    assert_eq!(world.worktrees_of(&plain).await.worktrees, []);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s16_a_project_the_host_does_not_know_is_refused_before_git_is_asked() {
+    let world = World::new();
+    let host = world.host().await;
+    let repo = world.repository("unknown repo");
+    // A session runs there, which does not make the folder a project.
+    let _lead = world.session(CLAUDE, &repo.root, "lead").await;
+    hand_made_worktree(&repo, "spare");
+
+    let refused = world
+        .client()
+        .await
+        .request::<ListAgentWorktrees>(&WorktreesProject {
+            project: text(&repo.root),
+        })
+        .await
+        .expect_err("an unknown project is refused");
+    assert!(
+        refused.message.contains("not a folder Floti knows"),
+        "{refused:?}"
+    );
+    let refused = world
+        .client()
+        .await
+        .request::<RemoveAgentWorktree>(&RemoveWorktreeRequest {
+            project: text(&repo.root),
+            folder: text(&repo.worktree("spare")),
+        })
+        .await
+        .expect_err("an unknown project is refused");
+    assert!(
+        refused.message.contains("not a folder Floti knows"),
+        "{refused:?}"
+    );
+    assert!(repo.worktree("spare").is_dir());
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s17_a_clean_worktree_no_session_works_in_is_removed_and_its_branch_and_work_stay() {
+    let world = World::new();
+    let host = world.host().await;
+    let repo = world.repository("removal repo");
+    world.track(&repo.root);
+    let lead = world.session(CLAUDE, &repo.root, "lead").await;
+    lead.start(json!({ "task": "work", "name": "doer", "worktree": "tidy" }))
+        .await
+        .done();
+    let kid = world.child_of(&lead, "doer").await;
+    let folder = repo.worktree("tidy");
+    std::fs::write(folder.join("done.txt"), "work").unwrap();
+    git_in(&folder, &["add", "done.txt"]);
+    git_in(&folder, &["commit", "-q", "-m", "its work"]);
+    let kept = hand_made_worktree(&repo, "kept");
+    lead.stop("doer").await.done();
+    world.ended("the child to end", &[kid.id()]).await;
+
+    let removal = world.remove_worktree(&repo.root, &folder).await;
+
+    assert_eq!(
+        removal,
+        WorktreeRemoval {
+            removed: true,
+            refusal: None
+        }
+    );
+    assert!(!folder.exists());
+    assert!(kept.is_dir(), "another worktree is not touched");
+    assert_eq!(repo.agent_branches(), ["agent/kept", "agent/tidy"]);
+    assert_eq!(
+        repo.repo
+            .git(&["log", "-1", "--format=%s", "agent/tidy"])
+            .trim(),
+        "its work"
+    );
+    let listed = world.worktrees_of(&repo.root).await.worktrees;
+    assert_eq!(
+        listed.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(),
+        ["kept"]
+    );
+    assert!(
+        !repo.repo.git(&["worktree", "list"]).contains("tidy"),
+        "git no longer lists it"
+    );
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s18_a_worktree_with_modified_or_untracked_files_is_refused_and_left_as_it_is() {
+    let world = World::new();
+    let host = world.host().await;
+    let repo = world.repository("dirty repo");
+    world.track(&repo.root);
+    let modified = hand_made_worktree(&repo, "modified");
+    let untracked = hand_made_worktree(&repo, "untracked");
+    std::fs::write(modified.join("README.md"), "edited\n").unwrap();
+    std::fs::write(untracked.join("new file.txt"), "new\n").unwrap();
+
+    for (folder, kept) in [(&modified, "README.md"), (&untracked, "new file.txt")] {
+        let removal = world.remove_worktree(&repo.root, folder).await;
+        assert!(!removal.removed);
+        let sentence = removal.refusal.expect("a sentence");
+        assert!(sentence.contains("uncommitted changes"), "{sentence}");
+        assert!(folder.join(kept).is_file(), "{kept} is still there");
+    }
+
+    let listed = world.worktrees_of(&repo.root).await.worktrees;
+    assert_eq!(
+        listed
+            .iter()
+            .map(|w| (w.name.as_str(), w.uncommitted))
+            .collect::<Vec<_>>(),
+        [("modified", Some(true)), ("untracked", Some(true))]
+    );
+    assert_eq!(repo.agent_branches(), ["agent/modified", "agent/untracked"]);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s19_a_worktree_a_running_child_works_in_is_refused_naming_it_until_it_ends() {
+    let world = World::new();
+    let host = world.host().await;
+    let repo = world.repository("busy removal repo");
+    world.track(&repo.root);
+    let lead = world.session(CLAUDE, &repo.root, "lead").await;
+    lead.start(json!({ "task": "work", "name": "tenant", "worktree": "occupied" }))
+        .await
+        .done();
+    let tenant = world.child_of(&lead, "tenant").await;
+    let folder = repo.worktree("occupied");
+
+    let removal = world.remove_worktree(&repo.root, &folder).await;
+
+    assert!(!removal.removed);
+    let sentence = removal.refusal.expect("a sentence");
+    assert!(sentence.contains("tenant"), "{sentence}");
+    assert!(sentence.contains("running"), "{sentence}");
+    assert!(folder.is_dir());
+    assert_eq!(repo.agent_branches(), ["agent/occupied"]);
+
+    // Once the child has ended the same request removes it.
+    lead.stop("tenant").await.done();
+    world.ended("the tenant to end", &[tenant.id()]).await;
+    let removal = world.remove_worktree(&repo.root, &folder).await;
+    assert_eq!(removal.refusal, None);
+    assert!(removal.removed);
+    assert!(!folder.exists());
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s19_a_folder_that_is_not_an_agent_worktree_of_the_project_is_refused_without_being_touched()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let repo = world.repository("guarded repo");
+    world.track(&repo.root);
+    let other = world.repository("other repo");
+    let own = hand_made_worktree(&repo, "own");
+    let foreign = hand_made_worktree(&other, "foreign");
+    let elsewhere = world.dirs.folder("workspace/not agent");
+    std::fs::remove_dir(&elsewhere).unwrap();
+    repo.repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "plain",
+        &text(&elsewhere),
+        "HEAD",
+    ]);
+    let below = own.join("sub");
+    std::fs::create_dir_all(&below).unwrap();
+    let outside = world.dirs.folder("an unrelated folder");
+    std::fs::write(outside.join("keep.txt"), "mine").unwrap();
+
+    for folder in [
+        &repo.root,
+        &elsewhere,
+        &foreign,
+        &below,
+        &repo.root.join(".floti/worktrees"),
+        &repo.root.join(".floti/worktrees/missing"),
+        &outside,
+    ] {
+        let removal = world.remove_worktree(&repo.root, folder).await;
+        assert!(!removal.removed, "{} was removed", folder.display());
+        let sentence = removal.refusal.expect("a sentence");
+        assert!(
+            sentence.contains("not one of the agent worktrees"),
+            "{sentence}"
+        );
+    }
+
+    for kept in [
+        repo.root.join("README.md"),
+        elsewhere.join("README.md"),
+        foreign.join("README.md"),
+        own.join("README.md"),
+        below.clone(),
+        outside.join("keep.txt"),
+    ] {
+        assert!(kept.exists(), "{} was touched", kept.display());
+    }
+    assert_eq!(repo.agent_branches(), ["agent/own"]);
     host.stop(HostStopReason::Stop).await;
 }

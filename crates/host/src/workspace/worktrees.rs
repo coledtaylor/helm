@@ -12,8 +12,14 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use floti_protocol::channels::workspace::{
+    AgentWorktree, AgentWorktrees, WorktreeChild, WorktreeRemoval,
+};
+use rusqlite::Connection;
+
 use super::discovery::git::{GIT_TIMEOUT, run_git};
 use super::files::paths::resolves_inside;
+use super::roots::key;
 use crate::config_console::normalize;
 
 /// Floti's folder in a repository.
@@ -67,6 +73,25 @@ impl Repository {
     pub(crate) fn of(folder: &Path) -> Result<Self, String> {
         let listed = run_git(folder, &["worktree", "list", "--porcelain"], GIT_TIMEOUT)
             .map_err(|problem| not_a_repository(folder, &problem))?;
+        Self::from_listing(&listed, folder)
+    }
+
+    /// The repository `folder` is in, or `None` when it is in none.
+    ///
+    /// # Errors
+    ///
+    /// A sentence when git could not be run or the repository has no working
+    /// tree.
+    pub(crate) fn find(folder: &Path) -> Result<Option<Self>, String> {
+        match run_git(folder, &["worktree", "list", "--porcelain"], GIT_TIMEOUT) {
+            Ok(listed) => Self::from_listing(&listed, folder).map(Some),
+            Err(problem) if git_did_not_run(&problem) => Err(problem),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// The repository `git worktree list --porcelain` printed `listed` in.
+    fn from_listing(listed: &str, folder: &Path) -> Result<Self, String> {
         let main = listed
             .lines()
             .next()
@@ -234,10 +259,16 @@ impl Made {
     }
 }
 
+/// Whether `problem` (from [`run_git`]) says git could not be run or did not
+/// answer, rather than what git itself said about a folder.
+fn git_did_not_run(problem: &str) -> bool {
+    problem.starts_with("Floti could not run git") || problem.starts_with("git did not answer")
+}
+
 /// The sentence for a folder git says is no repository, or git that did not
 /// answer.
 fn not_a_repository(folder: &Path, problem: &str) -> String {
-    if problem.starts_with("Floti could not run git") || problem.starts_with("git did not answer") {
+    if git_did_not_run(problem) {
         return format!("{problem} No worktree was made and no agent was started.");
     }
     format!(
@@ -308,6 +339,253 @@ pub(crate) fn choose_name<'a>(wanted: &str, taken: impl IntoIterator<Item = &'a 
         .unwrap_or(base)
 }
 
+/// One agent worktree as git lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Listed {
+    /// Its root.
+    folder: PathBuf,
+    /// The branch checked out there; `None` for a detached checkout.
+    branch: Option<String>,
+}
+
+impl Repository {
+    /// The worktrees under `.floti/worktrees`, from `git worktree list`: the
+    /// repository's own working tree, its other worktrees and a worktree
+    /// whose folder is gone (git marks it prunable) are left out.
+    ///
+    /// # Errors
+    ///
+    /// A sentence when git could not be asked.
+    fn agent_worktrees(&self) -> Result<Vec<Listed>, String> {
+        let listed = run_git(
+            &self.main,
+            &["worktree", "list", "--porcelain"],
+            GIT_TIMEOUT,
+        )?;
+        let holder = key(&self.worktrees_folder());
+        Ok(parse_listing(&listed)
+            .into_iter()
+            .filter(|entry| {
+                entry
+                    .folder
+                    .parent()
+                    .is_some_and(|parent| key(parent) == holder)
+            })
+            .collect())
+    }
+}
+
+/// The worktrees in the text of `git worktree list --porcelain`, whose
+/// entries are blocks of lines separated by an empty one.
+fn parse_listing(text: &str) -> Vec<Listed> {
+    let mut found = Vec::new();
+    for block in text.replace("\r\n", "\n").split("\n\n") {
+        let mut folder: Option<PathBuf> = None;
+        let mut branch: Option<String> = None;
+        let mut prunable = false;
+        for line in block.lines() {
+            if let Some(path) = line.strip_prefix("worktree ") {
+                folder = Some(normalize(Path::new(path.trim())));
+            } else if let Some(name) = line.strip_prefix("branch ") {
+                branch = Some(name.trim().trim_start_matches("refs/heads/").to_owned());
+            } else if line == "prunable" || line.starts_with("prunable ") {
+                prunable = true;
+            }
+        }
+        if let (Some(folder), false) = (folder, prunable) {
+            found.push(Listed { folder, branch });
+        }
+    }
+    found
+}
+
+/// A session that worked in, or works in, a folder under `.floti/worktrees`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Worker {
+    /// The folder it runs in.
+    cwd: String,
+    /// Its child name, else its label, else its name.
+    name: String,
+    /// The name of the session that started it.
+    parent: Option<String>,
+    running: bool,
+}
+
+/// Every running session, and every session that ran under a
+/// `.floti/worktrees` folder, oldest first.
+fn workers(conn: &Connection) -> Result<Vec<Worker>, String> {
+    let mut select = conn
+        .prepare(
+            "SELECT cwd, \
+                    coalesce(nullif(child_name, ''), nullif(label, ''), name), \
+                    (SELECT coalesce(nullif(parent.label, ''), parent.name) FROM sessions AS parent \
+                     WHERE parent.id = sessions.parent_session_id), \
+                    status = 'running' \
+             FROM sessions \
+             WHERE status = 'running' \
+                OR lower(replace(cwd, char(92), '/')) LIKE '%/.floti/worktrees/%' \
+             ORDER BY id",
+        )
+        .map_err(sql)?;
+    let rows = select
+        .query_map([], |row| {
+            Ok(Worker {
+                cwd: row.get(0)?,
+                name: row.get(1)?,
+                parent: row.get(2)?,
+                running: row.get(3)?,
+            })
+        })
+        .map_err(sql)?;
+    rows.collect::<Result<_, _>>().map_err(sql)
+}
+
+fn sql(err: rusqlite::Error) -> String {
+    format!("Floti could not read its record of sessions: {err}")
+}
+
+/// The worker that works in `worktree` now, else the one that did last.
+fn worker_in<'a>(workers: &'a [Worker], worktree: &Path) -> Option<&'a Worker> {
+    let inside = |worker: &&Worker| resolves_inside(worktree, Path::new(&worker.cwd));
+    workers
+        .iter()
+        .rev()
+        .filter(inside)
+        .find(|worker| worker.running)
+        .or_else(|| workers.iter().rev().find(inside))
+}
+
+/// The agent worktrees of the repository `project` is in, with the session
+/// that last worked in each and whether git sees changes there. A folder in no
+/// repository has none.
+///
+/// # Errors
+///
+/// A sentence when git could not be asked or the record of sessions read.
+pub(crate) fn list(project: &Path, conn: &Connection) -> Result<AgentWorktrees, String> {
+    let none = || AgentWorktrees {
+        worktrees: Vec::new(),
+    };
+    if !project.is_dir() {
+        return Ok(none());
+    }
+    let Some(repository) = Repository::find(project)? else {
+        return Ok(none());
+    };
+    let listed = repository.agent_worktrees()?;
+    if listed.is_empty() {
+        return Ok(none());
+    }
+    let workers = workers(conn)?;
+    let mut worktrees: Vec<AgentWorktree> = listed
+        .into_iter()
+        .map(|entry| AgentWorktree {
+            name: folder_name(&entry.folder),
+            child: worker_in(&workers, &entry.folder).map(|worker| WorktreeChild {
+                name: worker.name.clone(),
+                parent: worker.parent.clone(),
+                running: worker.running,
+            }),
+            uncommitted: has_changes(&entry.folder),
+            folder: entry.folder.display().to_string(),
+            branch: entry.branch,
+        })
+        .collect();
+    worktrees.sort_by_key(|worktree| worktree.name.to_lowercase());
+    Ok(AgentWorktrees { worktrees })
+}
+
+fn folder_name(folder: &Path) -> String {
+    folder
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Whether git sees a modified or untracked file in `folder`; `None` when it
+/// could not be asked.
+fn has_changes(folder: &Path) -> Option<bool> {
+    run_git(folder, &["status", "--porcelain"], GIT_TIMEOUT)
+        .ok()
+        .map(|printed| !printed.trim().is_empty())
+}
+
+/// Removes the agent worktree at `folder` of the repository `project` is in,
+/// with `git worktree remove` and never `--force`, so git itself also refuses
+/// a checkout with changes, and never a recursive delete, which can walk a
+/// junction. The `agent/<name>` branch stays, with the work on it.
+///
+/// A worktree that cannot be removed is a refusal in the answer, and is left
+/// as it is: a folder that is not one of the repository's agent worktrees, one
+/// a running session works in (named), and one with uncommitted changes.
+///
+/// # Errors
+///
+/// A sentence when git could not be asked or the record of sessions read.
+pub(crate) fn remove(
+    project: &Path,
+    folder: &Path,
+    conn: &Connection,
+) -> Result<WorktreeRemoval, String> {
+    let refused = |sentence: String| {
+        Ok(WorktreeRemoval {
+            removed: false,
+            refusal: Some(sentence),
+        })
+    };
+    let Some(repository) = Repository::find(project)? else {
+        return refused(format!(
+            "{} is not in a git repository, so it has no agent worktrees.",
+            project.display()
+        ));
+    };
+    let Some(entry) = repository.agent_worktrees()?.into_iter().find(|entry| {
+        resolves_inside(&entry.folder, folder) && resolves_inside(folder, &entry.folder)
+    }) else {
+        return refused(format!(
+            "{} is not one of the agent worktrees of {}, so it was left alone.",
+            folder.display(),
+            repository.main().display()
+        ));
+    };
+    let name = folder_name(&entry.folder);
+    if let Some(worker) = workers(conn)?
+        .iter()
+        .rev()
+        .find(|worker| worker.running && resolves_inside(&entry.folder, Path::new(&worker.cwd)))
+    {
+        return refused(format!(
+            "The worktree {name} was not removed: {} is running in it. Stop it first.",
+            worker.name
+        ));
+    }
+    match has_changes(&entry.folder) {
+        Some(false) => {}
+        Some(true) => {
+            return refused(format!(
+                "The worktree {name} has uncommitted changes, so it was not removed. Commit or discard them first."
+            ));
+        }
+        None => {
+            return refused(format!(
+                "Floti could not tell whether the worktree {name} has uncommitted changes, so it was not removed."
+            ));
+        }
+    }
+    let path = entry.folder.display().to_string();
+    match run_git(
+        repository.main(),
+        &["worktree", "remove", &path],
+        CHECKOUT_TIMEOUT,
+    ) {
+        Ok(_) => Ok(WorktreeRemoval {
+            removed: true,
+            refusal: None,
+        }),
+        Err(problem) => refused(format!("The worktree {name} was not removed: {problem}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +642,26 @@ mod tests {
             .make(repo.path(), "kept")
             .expect("a worktree");
         assert_eq!(made.name, "kept-2");
+    }
+
+    #[test]
+    fn the_listing_keeps_the_folders_git_prints_with_their_branch_and_drops_a_prunable_one() {
+        let text = "worktree /work/a repo\nHEAD 1111\nbranch refs/heads/main\n\n\
+                    worktree /work/a repo/.floti/worktrees/ledger\nHEAD 2222\nbranch refs/heads/agent/ledger\n\n\
+                    worktree /work/a repo/.floti/worktrees/loose\nHEAD 3333\ndetached\n\n\
+                    worktree /work/a repo/.floti/worktrees/gone\nHEAD 4444\nbranch refs/heads/agent/gone\nprunable gitdir file points to non-existent location\n";
+        let listed = parse_listing(text);
+        assert_eq!(
+            listed
+                .iter()
+                .map(|entry| (folder_name(&entry.folder), entry.branch.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("a repo".to_owned(), Some("main")),
+                ("ledger".to_owned(), Some("agent/ledger")),
+                ("loose".to_owned(), None),
+            ]
+        );
     }
 
     #[test]
