@@ -14,6 +14,40 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.4.1-preview.8
+
+A preview, not a release: nothing offers it as an update.
+
+**Updating**
+
+- When this PC's host runs an older floti than the one Helm carries, Settings >
+  Hosts and the status bar say so, name both versions and offer Restart host to
+  update. Your sessions and terminals keep running in their tabs through the
+  restart, with their screens, including when the host is from
+  2.4.1-preview.7.
+- Restart host to update asks first, and says how many sessions it would end.
+  When it ends none, the button to go ahead is an ordinary one rather than a
+  red one. Cancel changes nothing.
+- A session the new host cannot take back is offered back once, and Restore
+  resumes it in its own tab.
+- When Helm and a host cannot talk to each other because their versions
+  differ, Helm says which one to update: the host, or Helm on this PC.
+- After installing this preview over 2.4.1-preview.7, click Restart host to
+  update when Helm offers it. Until you do, the window cannot reach the old
+  host, though its sessions keep running there.
+
+**Plugins**
+
+- Plugins can now use version 2 of the plugin API. A version 2 plugin's
+  background runs on the host, so its tools answer your sessions with no Helm
+  window open, on a remote or headless host too.
+- Version 2 pages use the `floti` bridge. Version 1 plugins keep working beside
+  them, as before.
+- For plugin authors: plugin SDK 1.5.0 checks, types, documents and creates
+  version 2 plugins. `npx @coledtaylor/helm-plugin-sdk create` now makes a
+  version 2 plugin, and the SDK's README says how to move a version 1 plugin
+  to version 2.
+
 ## 2.4.1-preview.7
 
 A preview, not a release: nothing offers it as an update.

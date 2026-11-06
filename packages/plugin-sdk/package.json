@@ -1,6 +1,6 @@
 {
   "name": "@coledtaylor/helm-plugin-sdk",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Types, the manifest schema and helpers for building Helm plugins. The runtime - the window.floti and window.helm bridges, theme tokens and primitives stylesheet - comes from the running Helm.",
   "keywords": [
     "helm-plugin",
