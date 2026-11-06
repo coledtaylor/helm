@@ -29,6 +29,12 @@ export interface FamilyFrameProps {
   axis: FamilyAxis | null
   /** The parent's own terminal. It stays in the same place in the tree whatever the axis, so it never remounts. */
   parent: ReactNode
+  /**
+   * The tab's own report note, above the terminal, when the session in this tab
+   * is itself a child that has reported. It is a slot beside the terminal, so
+   * its coming and going never remounts the terminal.
+   */
+  note?: ReactNode
   /** The children (`FamilyKids`), drawn only while there is an axis. */
   children?: ReactNode
 }
@@ -39,7 +45,7 @@ export interface FamilyFrameProps {
  * headers, which is what keeps the parent's terminal from reflowing as they
  * shrink, swap, end or close.
  */
-export function FamilyFrame({ axis, parent, children }: FamilyFrameProps): JSX.Element {
+export function FamilyFrame({ axis, parent, note, children }: FamilyFrameProps): JSX.Element {
   return (
     <div
       data-family-view={axis ?? undefined}
@@ -50,7 +56,12 @@ export function FamilyFrame({ axis, parent, children }: FamilyFrameProps): JSX.E
         className="relative min-h-0 min-w-0"
         style={{ flex: axis === null ? '1 1 0%' : `0 0 ${String(Math.round(FAMILY_PARENT_SHARE * 1000) / 10)}%` }}
       >
-        <div className="absolute inset-0">{parent}</div>
+        <div className="absolute inset-0 flex flex-col">
+          {note}
+          <div className="relative min-h-0 flex-1">
+            <div className="absolute inset-0">{parent}</div>
+          </div>
+        </div>
       </div>
       {axis !== null && children}
     </div>
@@ -143,10 +154,11 @@ export interface ReportNoteProps {
 }
 
 /**
- * A child's report as a note under its card's header: what it is and the start
- * of what it says on one line, in `accent-text` on `accent-soft` with the 2px
- * accent edge a selected row wears. Pressing it shows all of the report, and
- * pressing it again folds it back to the line.
+ * A child's report as a note under its card's header (or above its terminal,
+ * in a child's own tab): what it is and the start of what it says on one line,
+ * in `accent-text` on `accent-soft`, with the 2px accent edge a selected row
+ * wears, drawn inside the note as a zero-blur inset line. Pressing it shows
+ * all of the report, wrapped, and pressing it again folds it back to the line.
  *
  * What the note says and whether there is one are decided where the window
  * keeps its sessions (`reportNote`); a card with no report is drawn without
@@ -156,28 +168,23 @@ export interface ReportNoteProps {
 export function ReportNote({ label, text }: ReportNoteProps): JSX.Element {
   const [open, setOpen] = useState(false)
   return (
-    <div
+    <button
+      type="button"
       data-family-note
-      className="relative shrink-0 border-b border-border bg-accent-soft transition-colors hover:bg-accent-soft-hover"
+      onClick={() => setOpen((was) => !was)}
+      aria-expanded={open}
+      className="flex min-h-[30px] w-full shrink-0 cursor-pointer items-baseline gap-2 border-b border-border bg-accent-soft pt-[7px] pr-2.5 pb-1.5 pl-3 text-left text-[11.5px] leading-[1.45] text-accent-text shadow-[inset_2px_0_0_var(--color-accent)] hover:bg-accent-soft-hover focus-visible:outline-offset-[-2px]"
     >
-      <span aria-hidden className="absolute inset-y-0 left-0 w-[2px] bg-accent" />
-      <button
-        type="button"
-        onClick={() => setOpen((was) => !was)}
-        aria-expanded={open}
-        className="flex min-h-[30px] w-full cursor-pointer items-baseline gap-2 pt-[7px] pr-2.5 pb-1.5 pl-3 text-left text-[11.5px] leading-[1.45] text-accent-text focus-visible:outline-offset-[-2px]"
+      <span data-family-note-label className="shrink-0 font-medium">
+        {label}
+      </span>
+      <span
+        data-family-note-text
+        className={cn('min-w-0 overflow-hidden text-ellipsis', open ? 'whitespace-normal' : 'whitespace-nowrap')}
       >
-        <span data-family-note-label className="shrink-0 font-medium">
-          {label}
-        </span>
-        <span
-          data-family-note-text
-          className={cn('min-w-0 flex-1', open ? 'max-h-36 overflow-y-auto break-words whitespace-pre-wrap' : 'truncate')}
-        >
-          {text}
-        </span>
-      </button>
-    </div>
+        {text}
+      </span>
+    </button>
   )
 }
 

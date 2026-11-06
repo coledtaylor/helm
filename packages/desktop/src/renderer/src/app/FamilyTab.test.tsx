@@ -137,6 +137,7 @@ function Harness({
         tab={TAB}
         host={LOCAL_HOST_KEY}
         front={front}
+        own={parent}
         kids={kids}
         family={familyOf(panes, TAB)}
         now={NOW}
@@ -514,10 +515,11 @@ describe('a child’s report note', () => {
   it('shows all of the report when the note is pressed', async () => {
     const { container } = mount(WIDE, [LEAD, reported(2, 'reviewer', 'done')])
     const text = noteOf(container, 'reviewer')!.querySelector('[data-family-note-text]')!
-    expect(text.className).toContain('truncate')
+    expect(text.className).toContain('whitespace-nowrap')
 
     await userEvent.click(within(card(container, 'reviewer')).getByRole('button', { name: /^Reported done/ }))
-    expect(text.className).not.toContain('truncate')
+    expect(text.className).toContain('whitespace-normal')
+    expect(text.className).not.toContain('whitespace-nowrap')
     expect(text.textContent).toBe(REPORT)
     // Pressing the note is not pressing the header: the card stays.
     expect(cardNames(container)).toEqual(['reviewer'])
@@ -535,7 +537,7 @@ describe('a child’s report note', () => {
   it('shows a later report as a new note, folded', async () => {
     const view = mount(WIDE, [LEAD, reported(2, 'reviewer', 'done')])
     await userEvent.click(within(card(view.container, 'reviewer')).getByRole('button', { name: /^Reported done/ }))
-    expect(noteOf(view.container, 'reviewer')!.querySelector('button')!.getAttribute('aria-expanded')).toBe('true')
+    expect(noteOf(view.container, 'reviewer')!.getAttribute('aria-expanded')).toBe('true')
 
     view.list([
       LEAD,
@@ -543,7 +545,7 @@ describe('a child’s report note', () => {
     ])
     const next = noteOf(view.container, 'reviewer')!
     expect(next.querySelector('[data-family-note-label]')!.textContent).toBe('Reported stuck')
-    expect(next.querySelector('button')!.getAttribute('aria-expanded')).toBe('false')
+    expect(next.getAttribute('aria-expanded')).toBe('false')
   })
 
   it('never shows one on a command child’s card, and none on a child that has reported nothing', () => {
@@ -555,6 +557,60 @@ describe('a child’s report note', () => {
     expect(cardNames(container)).toEqual(['tests', 'tester'])
     expect(noteOf(container, 'tests')).toBeNull()
     expect(noteOf(container, 'tester')).toBeNull()
+  })
+
+  describe('in the tab of a child that was opened as a tab', () => {
+    // The tab's own session is a child of another session, which is not open here.
+    const OWN = (fields: Partial<SessionRecord> = {}): SessionRecord =>
+      session(1, {
+        name: 'worker',
+        parentId: 9,
+        parentName: 'boss',
+        lastReport: { state: 'done', text: REPORT, at: '2026-11-06T10:00:00.000Z' },
+        ...fields
+      })
+    /** The same session once the host lists it without a report. */
+    const QUIET = (): SessionRecord => {
+      const row = OWN()
+      delete row.lastReport
+      return row
+    }
+    const ownNote = (root: HTMLElement): HTMLElement | null =>
+      root.querySelector<HTMLElement>('[data-family-parent] [data-family-note]')
+
+    it('draws the report above its terminal, as it is drawn in its parent’s card', () => {
+      const { container } = mount(WIDE, [OWN()])
+      const note = ownNote(container)!
+      expect(note.querySelector('[data-family-note-label]')!.textContent).toBe('Reported done')
+      expect(note.querySelector('[data-family-note-text]')!.textContent).toBe(REPORT)
+      const column = container.querySelector('[data-family-parent]')!.firstElementChild!
+      expect([...column.children].map((part) => part === note)).toEqual([true, false])
+      expect(column.children[1]!.contains(getTerminal(1)!.element)).toBe(true)
+    })
+
+    it('shows all of it when pressed, and takes it away without remounting the terminal when the next turn starts', async () => {
+      const view = mount(WIDE, [OWN()])
+      await userEvent.click(within(view.container).getByRole('button', { name: /^Reported done/ }))
+      expect(ownNote(view.container)!.getAttribute('aria-expanded')).toBe('true')
+
+      const terminal = getTerminal(1)!.element
+      const made = Terminal.instances.length
+      view.list([QUIET()])
+      expect(ownNote(view.container)).toBeNull()
+      expect(getTerminal(1)!.element).toBe(terminal)
+      expect(Terminal.instances).toHaveLength(made)
+    })
+
+    it('has none when it has reported nothing', () => {
+      expect(ownNote(mount(WIDE, [QUIET()]).container)).toBeNull()
+    })
+
+    it('is drawn with the family view around the terminal when the child has children of its own', () => {
+      const { container } = mount(WIDE, [OWN(), child(2, 'reviewer', { parentName: 'worker' })])
+      expect(cardNames(container)).toEqual(['reviewer'])
+      expect(ownNote(container)).not.toBeNull()
+      expect(card(container, 'reviewer').querySelector('[data-family-note]')).toBeNull()
+    })
   })
 
   it('has no note on a header or on an ended child’s last screen', async () => {

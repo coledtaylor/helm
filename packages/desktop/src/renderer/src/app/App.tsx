@@ -4942,6 +4942,7 @@ export function App(): JSX.Element {
                 tab={paneId(ref)}
                 host={hostOf(ref)}
                 front={remoteFront}
+                own={there}
                 kids={kidsOf(ref)}
                 family={familyOf(open, paneId(ref))}
                 now={now}
@@ -4971,6 +4972,7 @@ export function App(): JSX.Element {
               tab={paneId(ref)}
               host={LOCAL_HOST_KEY}
               front={isFront}
+              own={session}
               kids={kidsOf(ref)}
               family={familyOf(open, paneId(ref))}
               now={now}

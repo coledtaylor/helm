@@ -54,7 +54,9 @@ pub(super) struct Observed<'a> {
 pub(super) struct Seen {
     /// Events to write, in order.
     pub events: Vec<(EventKind, Facts)>,
-    /// The child's next turn started in this pass.
+    /// The child's next turn started in this pass, so the report of the turn
+    /// before it is no longer its latest. False when the child already
+    /// reported in the turn this pass saw begin: that report is this turn's own.
     pub turn_started: bool,
 }
 
@@ -129,7 +131,9 @@ impl Tracker {
             match now.activity {
                 Some(SessionActivity::Busy | SessionActivity::Shell) if !working(before) => {
                     self.reported_this_turn = reported_between;
-                    seen.turn_started = true;
+                    // A report made before this pass saw the turn begin was
+                    // made in it, so the turn starting does not take it away.
+                    seen.turn_started = !reported_between;
                 }
                 Some(SessionActivity::Waiting) => {
                     seen.events
@@ -583,6 +587,22 @@ mod tests {
         tracker.reported();
         tracker.observe(&at(Some(Busy)));
         assert!(tracker.observe(&at(Some(Idle))).events.is_empty());
+    }
+
+    #[test]
+    fn a_report_made_before_the_pass_saw_its_turn_start_stays_until_the_turn_after() {
+        let mut tracker = Tracker::default();
+        tracker.observe(&at(Some(Busy)));
+        tracker.observe(&at(Some(Idle)));
+
+        // The child begins a turn and reports in it, between two passes: the
+        // pass that sees the turn begin does not take its report away.
+        tracker.reported();
+        assert!(!tracker.observe(&at(Some(Busy))).turn_started);
+        tracker.observe(&at(Some(Idle)));
+
+        // The turn after it does, as a turn whose report came later would.
+        assert!(tracker.observe(&at(Some(Busy))).turn_started);
     }
 
     #[test]

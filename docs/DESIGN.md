@@ -922,12 +922,15 @@ overrides the gate; keep it.
   `agents_report` until its next turn starts: "Reported done", "Reported
   stuck" or "Note" in weight 500 and the start of the report on one line, in
   11.5px `accent-text` on `accent-soft` (`accent-soft-hover` under the pointer)
-  with the 2px accent edge a selected row wears and a 1px `border` below, at
-  least 30px high. Pressing it shows all of the report (a stuck report keeps
-  its lines), up to 9rem before it scrolls, and pressing it again folds it
-  back; the card's terminal gives up the room. A running agent child's card
-  has one while it reports; a command child's, a header and an ended child's
-  last screen never do.
+  with a 2px accent edge and a 1px `border` below, at least 30px high. It is
+  one button: the edge is an inset line on the button itself
+  (`shadow-[inset_2px_0_0_var(--color-accent)]`, no blur and no offset, so it is
+  an edge and not an elevation shadow), and it has no transition. Pressing it
+  shows all of the report wrapped as one paragraph, with no height limit, and
+  pressing it again folds it back to the line; the card's terminal gives up the
+  room. A running agent child's card has one while it reports, and so does a
+  child that is open as its own tab, above its terminal; a command child's, a
+  header and an ended child's last screen never do.
 - **Project shell**: a project page carries a plain shell (PowerShell, cwd at
   the project) as a terminal island below it. It is furniture, not a session:
   no row, no history, no notification. Each page owns its shell and its

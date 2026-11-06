@@ -53,6 +53,12 @@ export interface FamilyTabProps {
   front: boolean
   /** The parent's own terminal. It is drawn whether or not there is a family view around it. */
   parent: ReactNode
+  /**
+   * The session this tab is for. When it is itself a child that has reported,
+   * its report is a note above its terminal, as it is on its card in its
+   * parent's tab.
+   */
+  own?: SessionRecord
   /** The children this tab holds, ended ones included: none when this device does not show them here. */
   kids: readonly FamilyKid[]
   /** How the user arranged them. */
@@ -95,6 +101,7 @@ export function FamilyTab({
   host,
   front,
   parent,
+  own,
   kids,
   family,
   now,
@@ -177,9 +184,19 @@ export function FamilyTab({
     )
   }
 
+  // This tab's own session, when it is a child that has reported. A command
+  // child never has a report from the host, so the guard `command` gives a card
+  // is not needed here.
+  const ownNote = own === undefined ? null : reportNote(own)
+
   return (
     <div ref={bodyRef} className={cn('absolute inset-0', front ? 'block' : 'hidden')} aria-hidden={!front}>
-      <FamilyFrame axis={drawn === null ? null : drawn.axis} parent={parent}>
+      <FamilyFrame
+        axis={drawn === null ? null : drawn.axis}
+        parent={parent}
+        // A later report is another note, which starts folded.
+        note={ownNote === null ? null : <ReportNote key={ownNote.at} label={ownNote.label} text={ownNote.text} />}
+      >
         {drawn !== null && (
           <FamilyKids
             axis={drawn.axis}

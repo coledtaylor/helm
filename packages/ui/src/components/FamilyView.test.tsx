@@ -142,44 +142,72 @@ describe('ReportNote', () => {
     (label) => {
       const { container } = render(<ReportNote label={label} text={REPORT} />)
       const note = container.querySelector<HTMLElement>('[data-family-note]')!
+      // The note is the one button, as the frame's `.b-rep` is.
+      expect(note.tagName).toBe('BUTTON')
       expect(note.className).toContain('bg-accent-soft')
-      const press = within(note).getByRole('button')
-      expect(press.className).toContain('text-accent-text')
+      expect(note.className).toContain('text-accent-text')
       expect(container.querySelector('[data-family-note-label]')?.textContent).toBe(label)
       const text = container.querySelector('[data-family-note-text]')!
       expect(text.textContent).toBe(REPORT)
       // On one line, cut short by the width of the card.
-      expect(text.className).toContain('truncate')
-      expect(press.getAttribute('aria-expanded')).toBe('false')
+      expect(text.className).toContain('whitespace-nowrap')
+      expect(text.className).toContain('text-ellipsis')
+      expect(note.getAttribute('aria-expanded')).toBe('false')
     }
   )
 
-  it('shows all of the report when pressed, and folds it back to a line when pressed again', async () => {
+  it('shows all of the report, wrapped with no height limit, when pressed, and folds it back to a line when pressed again', async () => {
     const { container } = render(<ReportNote label="Reported done" text={REPORT} />)
     const press = screen.getByRole('button', { name: /Reported done/ })
     const text = container.querySelector('[data-family-note-text]')!
 
     await userEvent.click(press)
     expect(press.getAttribute('aria-expanded')).toBe('true')
-    expect(text.className).not.toContain('truncate')
-    expect(text.className).toContain('whitespace-pre-wrap')
+    expect(text.className).toContain('whitespace-normal')
+    expect(text.className).not.toContain('whitespace-nowrap')
+    // The frame's open note has no height limit and keeps no line breaks.
+    expect(text.className).not.toMatch(/max-h|overflow-y|pre-wrap|break-words/)
     expect(text.textContent).toBe(REPORT)
 
     await userEvent.click(press)
     expect(press.getAttribute('aria-expanded')).toBe('false')
-    expect(text.className).toContain('truncate')
+    expect(text.className).toContain('whitespace-nowrap')
   })
 
-  it('draws its edge and fill from the tokens, with no shadow, no raw colour and no weight past medium', () => {
+  it('is one button that carries its fill, its line below, its hover tint and its 2px edge, with no transition', () => {
     const { container } = render(<ReportNote label="Reported stuck" text={'Which table?\nA or B.\nI suggest A.'} />)
     const note = container.querySelector<HTMLElement>('[data-family-note]')!
     expect(note.className).toContain('border-b border-border')
     expect(note.className).toContain('hover:bg-accent-soft-hover')
-    expect(note.querySelector('span[aria-hidden]')?.className).toContain('bg-accent')
-    expect(note.querySelector('span[aria-hidden]')?.className).toContain('w-[2px]')
-    const classes = [...note.querySelectorAll('*')].map((element) => element.getAttribute('class') ?? '').join(' ')
+    expect(note.className).toContain('shadow-[inset_2px_0_0_var(--color-accent)]')
+    expect(note.className).not.toContain('transition')
+    // Nothing else draws the edge, and nothing wraps the button.
+    expect(note.querySelector('span[aria-hidden]')).toBeNull()
+    expect(note.parentElement).toBe(container)
+    const classes = [note, ...note.querySelectorAll('*')].map((element) => element.getAttribute('class') ?? '').join(' ')
     expect(classes).not.toMatch(/font-(semibold|bold|extrabold|black)/)
-    expect(classes).not.toMatch(/#[0-9a-f]{3,8}|shadow/i)
+    expect(classes).not.toMatch(/#[0-9a-f]{3,8}/i)
+  })
+})
+
+describe('FamilyFrame with a report note', () => {
+  it('draws the note above the parent’s terminal without moving the terminal when the note comes and goes', () => {
+    const terminal = <p data-testid="terminal">parent terminal</p>
+    const { container, rerender } = render(<FamilyFrame axis={null} parent={terminal} />)
+    expect(container.querySelector('[data-family-note]')).toBeNull()
+    const before = screen.getByTestId('terminal')
+
+    rerender(<FamilyFrame axis={null} parent={terminal} note={<ReportNote label="Reported done" text="Tests pass." />} />)
+    const slot = container.querySelector<HTMLElement>('[data-family-parent]')!
+    const column = slot.firstElementChild!
+    expect([...column.children].map((part) => part.hasAttribute('data-family-note'))).toEqual([true, false])
+    expect(column.children[1]!.contains(before)).toBe(true)
+    // The same element: the terminal was not remounted.
+    expect(screen.getByTestId('terminal')).toBe(before)
+
+    rerender(<FamilyFrame axis={null} parent={terminal} />)
+    expect(container.querySelector('[data-family-note]')).toBeNull()
+    expect(screen.getByTestId('terminal')).toBe(before)
   })
 })
 
@@ -195,7 +223,7 @@ describe('FamilyCard with a report note', () => {
       </FamilyCard>
     )
     const card = container.querySelector<HTMLElement>('[data-family-card="worker"]')!
-    expect([...card.children].map((part) => part.tagName.toLowerCase())).toEqual(['header', 'div', 'div'])
+    expect([...card.children].map((part) => part.tagName.toLowerCase())).toEqual(['header', 'button', 'div'])
     expect(card.children[1]?.hasAttribute('data-family-note')).toBe(true)
     expect(card.textContent).toBe('the headerReported doneTests pass.the terminal')
   })
