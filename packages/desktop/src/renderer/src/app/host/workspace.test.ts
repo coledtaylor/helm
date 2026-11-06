@@ -217,6 +217,14 @@ describe('the window’s workspace over its own connection', () => {
     expect(connection.payloads('settings:write')).toEqual([])
   })
 
+  it('keeps showing children in their parent’s tab with this device, and never tells the host', async () => {
+    const { adapter, own, connection } = world()
+    const next = await ask(adapter, 'settings:write', { showChildrenInParentTab: false })
+    expect(own.writes).toEqual([{ showChildrenInParentTab: false }])
+    expect(connection.payloads('settings:write')).toEqual([])
+    expect(next).toMatchObject({ showChildrenInParentTab: false })
+  })
+
   it('tells the window when either half changes, with the other laid over', async () => {
     const { adapter, own, connection, emitted, listen, link } = world()
     listen()
