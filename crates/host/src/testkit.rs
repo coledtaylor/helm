@@ -10,6 +10,10 @@
 //!   (`floti-fake-agent`, in `testkit/fake_agent.rs`), its records and a
 //!   backend that runs it. Integration tests get one with
 //!   [`fake_agent!`](crate::fake_agent).
+//! - [`OtherAgent`] and [`OtherAgentBackend`]: a second fake agent
+//!   (`test/fake-agents/other-agent.mjs`, under Node) shaped unlike Claude
+//!   Code, its run records and a backend (`other-agent`) that runs it, for a
+//!   test that must not assume one agent.
 //! - [`RunningHost`]: a host serving on a thread and runtime of its own,
 //!   which the test stops.
 //! - [`TestClient`]: a protocol client that runs the Noise handshake as the
@@ -31,11 +35,15 @@
 //! fake running.
 
 mod client;
+mod other_agent;
 #[path = "../testkit/owner.rs"]
 pub mod owner;
 mod process;
 
 pub use client::{PATIENCE, TestClient, names_unserved_channel};
+pub use other_agent::{
+    OTHER_AGENT_HOME_VAR, OtherAgent, OtherAgentBackend, OtherAgentRecord, OtherAgentServer,
+};
 pub use process::{
     HostCrash, HostProcess, host_key_when_made, raw_connection, read_until_closed, run_floti,
 };
@@ -832,6 +840,8 @@ impl FakeAgentBackend {
         conversation_id: String,
         folder: &LaunchFolder,
     ) -> Result<Launch> {
+        // It enforces no tool rule, so none is dropped silently.
+        self.check_rules(&composition.tool_lists())?;
         let tools = match self.agent_tools() {
             Some(tools) => tools.register(&composition.agent_tools, folder)?,
             None => Registration::default(),
@@ -883,7 +893,7 @@ impl AgentTools for FakeAgentBackend {
         let mut args: Vec<OsString> = vec!["--mcp-config".into(), file.into_os_string()];
         let allowed: Vec<OsString> = servers
             .iter()
-            .flat_map(|server| server.allowed_tool_rules())
+            .flat_map(|server| server.allow_rules(self))
             .map(OsString::from)
             .collect();
         if !allowed.is_empty() {
@@ -894,6 +904,14 @@ impl AgentTools for FakeAgentBackend {
             args,
             env: Vec::new(),
         })
+    }
+
+    fn tool_rule(&self, server: &str, tool: &str) -> String {
+        format!("mcp__{server}__{tool}")
+    }
+
+    fn command_rule(&self, command: &str) -> String {
+        format!("Bash({command}:*)")
     }
 }
 
@@ -1044,6 +1062,28 @@ mod tests {
         let a = TestDirs::new();
         let b = TestDirs::new();
         assert_ne!(a.endpoint(), b.endpoint());
+    }
+
+    #[test]
+    fn fake_agent_backend_has_mcp_tools_only_when_it_takes_agent_tools() {
+        let dirs = TestDirs::new();
+        let agent = FakeAgent::new("fake agent.exe", &dirs);
+        let support = |has_tools: bool| crate::agent::ToolSupport {
+            backgrounds_long_calls: false,
+            mcp_tasks: false,
+            mcp_tools: has_tools,
+        };
+        assert_eq!(
+            agent.backend(["--fake-child"]).tool_support(),
+            support(false)
+        );
+        assert_eq!(
+            agent
+                .backend(["--fake-child"])
+                .with_agent_tools()
+                .tool_support(),
+            support(true)
+        );
     }
 
     #[test]

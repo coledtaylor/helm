@@ -107,7 +107,9 @@ export class UsageError extends Error {}
  *   `{ key, arity }`, where `arity` is `flag` (no value), `value` (exactly
  *   one), `optional` (one, unless the next argument starts with a dash) or
  *   `variadic` (every argument up to the next one that starts with a dash, or
- *   `--`).
+ *   `--`) or `repeat` (exactly one, taken whatever it looks like, and added to
+ *   a list each time the option is given, so a positional argument after it
+ *   stays a positional argument).
  * - `--flag=value` is accepted for an option that takes a value.
  * - `--` ends the options: everything after it is positional, whatever it
  *   starts with. That is what keeps a prompt out of a variadic list.
@@ -157,6 +159,11 @@ export function parseArgv(argv, spec) {
       if (inline !== undefined) options[key] = inline
       else if (takesValue(argv[at + 1])) options[key] = argv[++at]
       else options[key] = true
+    } else if (arity === 'repeat') {
+      const list = (options[key] ??= [])
+      if (inline !== undefined) list.push(inline)
+      else if (at + 1 < argv.length) list.push(argv[++at])
+      else throw new UsageError(`option '${name}' argument missing`)
     } else {
       const list = (options[key] ??= [])
       if (inline !== undefined) list.push(inline)

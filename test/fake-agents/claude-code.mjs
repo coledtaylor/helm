@@ -437,8 +437,33 @@ loadSettings()
 loadMcpServers()
 loadInstructions()
 log.openingPrompt = parsed.positionals[0] ?? null
-// Each value may hold several, split on commas or spaces, as the real CLI reads them.
-log.allowedTools = (opts.allowedTools ?? []).flatMap((value) => value.split(/[\s,]+/).filter(Boolean))
+log.allowedTools = toolRules(opts.allowedTools ?? [])
+log.disallowedTools = toolRules(opts.disallowedTools ?? [])
+
+/**
+ * The tool rules in `values`. Each value may hold several, split on commas or
+ * spaces outside parentheses, as the real CLI reads them: `Bash(git log:*)` is
+ * one rule.
+ */
+function toolRules(values) {
+  const rules = []
+  for (const value of values) {
+    let depth = 0
+    let current = ''
+    for (const char of value) {
+      if (char === '(') depth += 1
+      if (char === ')' && depth > 0) depth -= 1
+      if (depth === 0 && (char === ',' || /\s/.test(char))) {
+        if (current !== '') rules.push(current)
+        current = ''
+      } else {
+        current += char
+      }
+    }
+    if (current !== '') rules.push(current)
+  }
+  return rules
+}
 
 if (resume !== undefined) {
   const recorded = resume === null ? null : findTranscript(resume)

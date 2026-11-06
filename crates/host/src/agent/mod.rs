@@ -17,6 +17,15 @@
 //!
 //! Every backend lists the credential paths it must never open
 //! ([`AgentBackend::credential_paths`]); nothing in the host opens them.
+//!
+//! What the agents feature needs from an agent is asked here too, and the
+//! agents feature names no agent: [`AgentBackend::tool_support`] says whether
+//! the agent moves a long tool call to the background, supports MCP tasks and
+//! has MCP tools at all; a role's [`ToolRules`] are written once and each
+//! adapter translates them or refuses the first it cannot enforce
+//! ([`AgentBackend::check_rules`]); and the shell commands a launch allows up
+//! front are rendered by the adapter beside the allowed tools
+//! ([`AgentTools::command_rule`]).
 
 pub mod claude_code;
 pub mod harness;
@@ -33,7 +42,7 @@ use floti_protocol::{
     BackendDescriptor, BackendFeature, BackendId, HarnessPart, HarnessSupport, Knowable,
 };
 
-use crate::Result;
+use crate::{Error, Result};
 
 pub use claude_code::ClaudeCodeBackend;
 pub use launch_folder::{LaunchFolder, sweep_launch_folders};
@@ -116,6 +125,39 @@ pub trait AgentBackend: Send + Sync {
         HarnessSupport::default()
     }
 
+    /// What its agent does with a tool call, as this adapter declares it.
+    /// The default is a plain command line's answer: it moves no call to the
+    /// background and supports no MCP tasks, and it has MCP tools only when
+    /// it takes agent tools.
+    fn tool_support(&self) -> ToolSupport {
+        ToolSupport {
+            backgrounds_long_calls: false,
+            mcp_tasks: false,
+            mcp_tools: self.agent_tools().is_some(),
+        }
+    }
+
+    /// Whether the agent can enforce each of `rules`, and if it cannot, a
+    /// refusal naming the first rule it cannot and this backend. Nothing is
+    /// launched either way. An agent with no way to take a rule enforces
+    /// none of them, so the default refuses any rule at all.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Backend`] naming the rule, such as
+    /// `other-agent cannot enforce the disallowed_tools rule Bash(rm:*)`.
+    fn check_rules(&self, rules: &ToolRules) -> Result<()> {
+        for rule in rules.rules() {
+            let enforced = self
+                .permissions()
+                .is_some_and(|permissions| permissions.can_enforce(&rule));
+            if !enforced {
+                return Err(Error::backend(self.id(), format!("enforce the {rule}")));
+            }
+        }
+        Ok(())
+    }
+
     /// The backend's id, name and declared features, derived from the parts
     /// it has.
     fn capabilities(&self) -> BackendDescriptor {
@@ -168,12 +210,107 @@ pub trait AgentTools: Send + Sync {
     /// The arguments and variables that register `servers` for one launch,
     /// writing any file it needs into `folder`. No servers, nothing at all.
     fn register(&self, servers: &[AgentToolServer], folder: &LaunchFolder) -> Result<Registration>;
+
+    /// The agent's own permission rule that lets a session call `tool` of
+    /// the family `server` without asking.
+    fn tool_rule(&self, server: &str, tool: &str) -> String;
+
+    /// The agent's own permission rule that lets a session run the shell
+    /// command `command` without asking, whatever arguments follow it.
+    /// `command` is one command named in full, such as `floti agent start`.
+    fn command_rule(&self, command: &str) -> String;
 }
 
 /// Maps Floti's permission choice to the agent's flags.
 pub trait Permissions: Send + Sync {
-    /// The arguments for `mode`.
+    /// The arguments for `mode`. A mode this agent has no equivalent for
+    /// gives none: an ordinary launch keeps what it can pass, and
+    /// [`AgentBackend::check_rules`] is what refuses a mode for a child that
+    /// must not start without it.
     fn arguments(&self, mode: PermissionMode) -> Vec<OsString>;
+
+    /// Whether this agent can enforce `rule` as the role wrote it.
+    fn can_enforce(&self, rule: &ToolRule) -> bool;
+}
+
+/// A role's rules about what its agent may do, written once. Tool names are
+/// spelled as Claude Code spells them (`Read`, `Bash(git status:*)`,
+/// `mcp__<server>__<tool>`); each backend's adapter translates them to its
+/// agent's nearest equivalent, or refuses the first it cannot enforce, so no
+/// child starts with a rule dropped.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolRules {
+    pub permission_mode: Option<PermissionMode>,
+    /// Tools the agent may use without asking.
+    pub allowed_tools: Vec<String>,
+    /// Tools the agent may never use.
+    pub disallowed_tools: Vec<String>,
+}
+
+impl ToolRules {
+    /// Every rule, one at a time and in this order: the permission mode, each
+    /// allowed tool, then each disallowed tool.
+    pub fn rules(&self) -> impl Iterator<Item = ToolRule> + '_ {
+        self.permission_mode
+            .map(ToolRule::PermissionMode)
+            .into_iter()
+            .chain(
+                self.allowed_tools
+                    .iter()
+                    .cloned()
+                    .map(ToolRule::AllowedTool),
+            )
+            .chain(
+                self.disallowed_tools
+                    .iter()
+                    .cloned()
+                    .map(ToolRule::DisallowedTool),
+            )
+    }
+}
+
+/// One of a role's rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolRule {
+    PermissionMode(PermissionMode),
+    AllowedTool(String),
+    DisallowedTool(String),
+}
+
+impl std::fmt::Display for ToolRule {
+    /// The rule as a refusal names it, such as `allowed_tools rule Read`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PermissionMode(mode) => write!(f, "permission mode {}", mode_label(*mode)),
+            Self::AllowedTool(tool) => write!(f, "allowed_tools rule {tool}"),
+            Self::DisallowedTool(tool) => write!(f, "disallowed_tools rule {tool}"),
+        }
+    }
+}
+
+/// A permission mode as a person says it.
+fn mode_label(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Plan => "plan",
+        PermissionMode::DontAsk => "don't ask",
+        PermissionMode::Manual => "manual",
+        PermissionMode::AcceptEdits => "accept edits",
+        PermissionMode::Auto => "auto",
+        PermissionMode::BypassPermissions => "bypass permissions",
+    }
+}
+
+/// What an agent does with a tool call, as its adapter declares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolSupport {
+    /// Whether the agent moves a long tool call to the background on its own,
+    /// so a call that has not answered is not a call that failed.
+    pub backgrounds_long_calls: bool,
+    /// Whether the agent supports MCP tasks, which let a long call answer
+    /// later.
+    pub mcp_tasks: bool,
+    /// Whether the agent has MCP tools at all.
+    pub mcp_tools: bool,
 }
 
 /// The agent's transcripts, and its record of prompts when it keeps one.
@@ -325,6 +462,34 @@ pub struct Composition {
     pub agent: Option<String>,
     /// Floti's agent tool families switched on, for this session alone.
     pub agent_tools: Vec<AgentToolServer>,
+    /// A role's allowed tools, as [`ToolRules`] spells them. A backend whose
+    /// agent cannot enforce one fails the launch rather than dropping it.
+    pub allowed_tools: Vec<String>,
+    /// A role's disallowed tools, as [`ToolRules`] spells them, refused the
+    /// same way.
+    pub disallowed_tools: Vec<String>,
+}
+
+impl Composition {
+    /// The rules this composition carries: its permission mode and tool lists.
+    pub fn tool_rules(&self) -> ToolRules {
+        ToolRules {
+            permission_mode: self.permission_mode,
+            allowed_tools: self.allowed_tools.clone(),
+            disallowed_tools: self.disallowed_tools.clone(),
+        }
+    }
+
+    /// The tool lists alone, which a launch must enforce or fail on. The
+    /// permission mode is passed where the agent has a flag for it and is
+    /// refused by [`AgentBackend::check_rules`] for a child, so an ordinary
+    /// launch of an agent without one is not stopped by a profile's mode.
+    pub fn tool_lists(&self) -> ToolRules {
+        ToolRules {
+            permission_mode: None,
+            ..self.tool_rules()
+        }
+    }
 }
 
 /// One family of Floti's agent tools: a loopback address and the session's
@@ -339,15 +504,25 @@ pub struct AgentToolServer {
     /// lists them under: the ones it lists as read-only. Fixed at launch, as
     /// an allow rule is; a deny rule of the user's still wins.
     pub allowed_tools: Vec<String>,
+    /// Shell commands the session runs without asking beside those tools,
+    /// each one command named in full, such as `floti agent start`. Never a
+    /// shorter prefix that would allow its siblings with it.
+    pub allowed_commands: Vec<String>,
 }
 
 impl AgentToolServer {
-    /// Each allowed tool as the agent's permission rules name it:
-    /// `mcp__<server>__<tool>`.
-    pub fn allowed_tool_rules(&self) -> impl Iterator<Item = String> + '_ {
+    /// Everything this family allows up front, as `agent` names it: each
+    /// allowed tool, then each allowed command.
+    pub fn allow_rules(&self, agent: &dyn AgentTools) -> Vec<String> {
         self.allowed_tools
             .iter()
-            .map(|tool| format!("mcp__{}__{tool}", self.name))
+            .map(|tool| agent.tool_rule(&self.name, tool))
+            .chain(
+                self.allowed_commands
+                    .iter()
+                    .map(|command| agent.command_rule(command)),
+            )
+            .collect()
     }
 }
 
@@ -582,6 +757,17 @@ pub enum VersionCheck {
     Tested(Version),
     Untested { version: Version, warning: String },
     Unknown,
+}
+
+impl VersionCheck {
+    /// The version the executable reported, tested or not; `None` when it
+    /// did not report one that could be read.
+    pub fn version(&self) -> Option<Version> {
+        match self {
+            Self::Tested(version) | Self::Untested { version, .. } => Some(*version),
+            Self::Unknown => None,
+        }
+    }
 }
 
 /// A `major.minor.patch` version.

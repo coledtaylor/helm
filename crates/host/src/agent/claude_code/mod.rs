@@ -37,7 +37,8 @@ use super::{
     AgentBackend, AgentToolServer, AgentTools, Composition, ConfigSource, Conversation,
     ExecutableSetup, HistorySource, Launch, LaunchFolder, LaunchRequest, LaunchSpec, Permissions,
     PromptRecord, PromptTail, Registration, ResumeRequest, Resumer, SessionRef, SignIn,
-    SignInCheck, StatusSource, TestedVersions, Transcript, UsageSource, Version, VersionCheck,
+    SignInCheck, StatusSource, TestedVersions, ToolRule, ToolSupport, Transcript, UsageSource,
+    Version, VersionCheck,
 };
 use crate::platform::folders::UserEnv;
 use crate::platform::launcher::{self, Program, ProgramLauncher};
@@ -56,6 +57,9 @@ pub const TESTED_VERSIONS: TestedVersions = TestedVersions {
     min: Version(2, 1, 277),
     below: Version(2, 2, 0),
 };
+
+/// The first Claude Code version that supports MCP tasks.
+pub const MCP_TASKS_FROM: Version = Version(2, 1, 304);
 
 /// The settings every launch passes with `--settings`, so a harness and a
 /// repository written in different shapes both reach the session: Claude Code
@@ -259,7 +263,12 @@ impl ClaudeCodeBackend {
             ));
         });
 
-        let registration = self.register(&composition.agent_tools, folder)?;
+        self.check_rules(&composition.tool_lists())?;
+        let registration = self.tool_arguments(composition, folder)?;
+        let permission_args = composition
+            .permission_mode
+            .map(|mode| self.arguments(mode))
+            .unwrap_or_default();
         let session_id = match resume {
             Some(id) => id.to_owned(),
             None => super::new_conversation_id(),
@@ -276,7 +285,7 @@ impl ClaudeCodeBackend {
             tool_args: &registration.args,
             model: composition.model.as_deref(),
             effort: composition.effort,
-            permission_mode: composition.permission_mode,
+            permission_args: &permission_args,
             agent: composition.agent.as_deref(),
             prompt,
         });
@@ -404,6 +413,21 @@ impl AgentBackend for ClaudeCodeBackend {
         Some(TESTED_VERSIONS)
     }
 
+    /// Claude Code moves a long tool call to the background, has MCP tools,
+    /// and supports MCP tasks from [`MCP_TASKS_FROM`] on, by the version the
+    /// installed executable reports. A version that cannot be read is not
+    /// taken to support them.
+    fn tool_support(&self) -> ToolSupport {
+        ToolSupport {
+            backgrounds_long_calls: true,
+            mcp_tasks: self
+                .version_check()
+                .version()
+                .is_some_and(|version| version >= MCP_TASKS_FROM),
+            mcp_tools: self.agent_tools().is_some(),
+        }
+    }
+
     /// Instructions from `CLAUDE.md` and `AGENTS.md`; skills, commands,
     /// subagents and workflows through the overlay. Nothing it cannot take.
     fn harness(&self) -> HarnessSupport {
@@ -442,44 +466,79 @@ impl StatusSource for ClaudeCodeBackend {
     }
 }
 
-impl AgentTools for ClaudeCodeBackend {
-    /// One `--mcp-config` file in the launch folder naming each family with
-    /// the session's bearer token, then `--allowedTools` naming each tool a
-    /// family lists as read-only. No families, no file and no flag. Both
-    /// flags are variadic, so they come in that order before the next flag
-    /// (see `argv`), and no rule is passed for a server the file does not
-    /// name.
-    fn register(&self, servers: &[AgentToolServer], folder: &LaunchFolder) -> Result<Registration> {
-        if servers.is_empty() {
-            return Ok(Registration::default());
+impl ClaudeCodeBackend {
+    /// A launch's tool arguments: one `--mcp-config` file in the launch
+    /// folder naming each family with the session's bearer token; one
+    /// `--allowedTools` holding what each family allows up front (its
+    /// read-only tools and its named shell commands) and the role's allowed
+    /// tools; then `--disallowedTools` holding the role's disallowed tools.
+    /// Each flag is left out when it would hold nothing. All three are
+    /// variadic, so they come in that order before the next flag (see
+    /// `argv`), and no rule is passed for a server the file does not name.
+    fn tool_arguments(
+        &self,
+        composition: &Composition,
+        folder: &LaunchFolder,
+    ) -> Result<Registration> {
+        let servers = &composition.agent_tools;
+        let mut args: Vec<OsString> = Vec::new();
+        if !servers.is_empty() {
+            let mut document = serde_json::Map::new();
+            for server in servers {
+                document.insert(
+                    server.name.clone(),
+                    serde_json::json!({
+                        "type": "http",
+                        "url": server.url,
+                        "headers": { "Authorization": format!("Bearer {}", server.token) },
+                    }),
+                );
+            }
+            let json = serde_json::json!({ "mcpServers": document });
+            let file = folder.write("mcp.json", serde_json::to_vec_pretty(&json).expect("json"))?;
+            args.extend(["--mcp-config".into(), file.into_os_string()]);
         }
-        let mut document = serde_json::Map::new();
-        for server in servers {
-            document.insert(
-                server.name.clone(),
-                serde_json::json!({
-                    "type": "http",
-                    "url": server.url,
-                    "headers": { "Authorization": format!("Bearer {}", server.token) },
-                }),
-            );
-        }
-        let json = serde_json::json!({ "mcpServers": document });
-        let file = folder.write("mcp.json", serde_json::to_vec_pretty(&json).expect("json"))?;
-        let mut args: Vec<OsString> = vec!["--mcp-config".into(), file.into_os_string()];
         let allowed: Vec<OsString> = servers
             .iter()
-            .flat_map(|server| server.allowed_tool_rules())
+            .flat_map(|server| server.allow_rules(self))
+            .chain(composition.allowed_tools.iter().cloned())
             .map(OsString::from)
             .collect();
         if !allowed.is_empty() {
             args.push("--allowedTools".into());
             args.extend(allowed);
         }
+        if !composition.disallowed_tools.is_empty() {
+            args.push("--disallowedTools".into());
+            args.extend(composition.disallowed_tools.iter().map(OsString::from));
+        }
         Ok(Registration {
             args,
             env: Vec::new(),
         })
+    }
+}
+
+impl AgentTools for ClaudeCodeBackend {
+    /// The families' arguments alone: see `tool_arguments`.
+    fn register(&self, servers: &[AgentToolServer], folder: &LaunchFolder) -> Result<Registration> {
+        self.tool_arguments(
+            &Composition {
+                agent_tools: servers.to_vec(),
+                ..Composition::default()
+            },
+            folder,
+        )
+    }
+
+    fn tool_rule(&self, server: &str, tool: &str) -> String {
+        format!("mcp__{server}__{tool}")
+    }
+
+    /// `Bash(<command>:*)`: the command and any arguments after it, and
+    /// nothing named by a shorter prefix.
+    fn command_rule(&self, command: &str) -> String {
+        format!("Bash({command}:*)")
     }
 }
 
@@ -489,6 +548,19 @@ impl Permissions for ClaudeCodeBackend {
             "--permission-mode".into(),
             argv::permission_mode_name(mode).into(),
         ]
+    }
+
+    /// Every mode has a name for `--permission-mode` and tool rules pass
+    /// through in the spelling they are written in. A tool rule that is
+    /// empty, or starts with a dash and would be read as another flag, is
+    /// not one the command line can carry.
+    fn can_enforce(&self, rule: &ToolRule) -> bool {
+        match rule {
+            ToolRule::PermissionMode(_) => true,
+            ToolRule::AllowedTool(tool) | ToolRule::DisallowedTool(tool) => {
+                !tool.trim().is_empty() && !tool.starts_with('-')
+            }
+        }
     }
 }
 

@@ -1276,6 +1276,9 @@ fn composition_of(profile: Option<&Profile>) -> Composition {
         agent: profile.agent.clone(),
         // Granted per launch, in `run`: a profile names no token.
         agent_tools: Vec::new(),
+        // Only a role names these.
+        allowed_tools: Vec::new(),
+        disallowed_tools: Vec::new(),
     }
 }
 

@@ -313,6 +313,7 @@ impl AgentToolsListener {
                 url: format!("http://127.0.0.1:{port}{}", family.route()),
                 token: token.clone(),
                 allowed_tools: read_only_tools(family.as_ref()),
+                allowed_commands: Vec::new(),
             })
             .collect();
         Ok(Some(Grant { id, servers }))

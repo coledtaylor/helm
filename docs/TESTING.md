@@ -541,7 +541,10 @@ config dir is `CLAUDE_CONFIG_DIR`, or `~/.claude`.
 
 - `--add-dir`, `--mcp-config` and `--allowedTools` are variadic, and
   `--plugin-dir` takes one path per flag; the opening prompt is the first
-  positional. The tools `--allowedTools` allows are logged as `allowedTools`.
+  positional. The tools `--allowedTools` allows are logged as `allowedTools`
+  and the ones `--disallowedTools` denies as `disallowedTools`, each value read
+  as the real CLI reads it: split on commas and spaces outside parentheses, so
+  `Bash(git log:*)` is one rule.
 - `--settings` takes a file or inline JSON; a missing file fails as the CLI
   does. User, project and local settings are loaded too, and logged in order.
 - Instructions: `<config dir>/CLAUDE.md`, then each folder from the root down
@@ -563,6 +566,37 @@ line naming it, as an HTML page, a POST with its body), `/flood <n>` writes `n` 
 then `flood done`, `/links` asks for the mouse as the fullscreen CLI
 does and prints a hyperlink and a bare address (logging the mouse reports it
 is sent), and anything else is a prompt it records and answers.
+
+### Other agent (`other-agent.mjs`)
+
+A second agent shaped unlike Claude Code, for tests that must not assume one
+agent: a parent on one backend starting children on another, and rules one
+agent can enforce and the other cannot. Its backend id is `other-agent`; the
+host's testkit runs it as `OtherAgentBackend` (`OtherAgent::new(&dirs)`), and
+reads its run logs as `OtherAgentRecord`. Its home is `OTHER_AGENT_HOME`, or
+`~/.other-agent`, and it writes `<home>/fake-agent/<pid>.json` in the shared
+run-log shape, with `conversation`, `resumed`, `title`, `model`, `mode`,
+`allowedTools` and `allowedShell` of its own.
+
+- The opening prompt is the last positional argument, with no `--` before it
+  (a prompt that starts with a dash needs one). `--allow-tool` and
+  `--allow-shell` repeat, one value each, so the prompt after them stays a
+  prompt (`repeat` in `parseArgv`).
+- Agent tools come from `--tools-config <file>`, a JSON `{ "servers": [{
+  "name", "url", "bearer" }] }`: a list, with the token as `bearer`. A tool is
+  allowed as `<server>.<tool>` or by one of its own names (`read`, `write`,
+  `edit`, `find`, `search`, `shell`); a command with `--allow-shell`.
+- `--mode plan|ask|edit|yolo` is its only permission flag. It has no flag that
+  disallows a tool, so its adapter refuses a role's `disallowed_tools`, a mode
+  it has no name for, and an allowed tool it has no equivalent for.
+- `--conversation <id>` names a new conversation and `--continue <id>` reopens
+  one, in the folder it was recorded in. It writes no status record.
+- It declares MCP tools, and neither moves a long call to the background nor
+  supports MCP tasks.
+
+At its prompt: `/exit` and `/crash` end it with 0 and 3, and anything else is a
+prompt it records and answers. It exits once the test process that owns it is
+gone, as every fake does.
 
 A new backend gets its fake here, written to the same pattern, before its
 backend code: the backend's tests drive the fake, never the real CLI.

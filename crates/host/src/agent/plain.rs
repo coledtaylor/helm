@@ -4,7 +4,9 @@
 //! agent tools, because Floti cannot know where an unknown CLI keeps them.
 //! Its status comes only from its program's own OSC 7501 reports, which the
 //! host reads from every session's output. Of a harness it takes the folder
-//! only.
+//! only. It moves no tool call to the background, supports no MCP tasks and
+//! has no MCP tools, and it enforces no tool rule: asked to, it refuses
+//! ([`AgentBackend::check_rules`]).
 
 use std::ffi::OsString;
 
@@ -52,6 +54,9 @@ impl AgentBackend for PlainCommandBackend {
         if request.prompt.is_some() {
             return Err(Error::backend(&self.id, "take an opening prompt"));
         }
+        // It has no way to enforce a tool rule, so a launch that carries one
+        // is refused rather than started without it.
+        self.check_rules(&request.composition.tool_lists())?;
         let mut launch = Launch::plain(LaunchSpec {
             program: self.program.clone(),
             args: self.args.clone(),
@@ -71,10 +76,11 @@ impl AgentBackend for PlainCommandBackend {
 mod tests {
     use std::path::PathBuf;
 
+    use floti_protocol::channels::common::PermissionMode;
     use floti_protocol::{BackendFeature, HarnessPart, Support};
 
     use super::*;
-    use crate::agent::Composition;
+    use crate::agent::{Composition, ToolRules, ToolSupport};
     use crate::testkit::TestDirs;
 
     fn backend() -> PlainCommandBackend {
@@ -154,6 +160,84 @@ mod tests {
             launch.not_taken,
             vec![HarnessPart::Instructions, HarnessPart::Commands]
         );
+    }
+
+    #[test]
+    fn it_moves_no_call_to_the_background_supports_no_mcp_tasks_and_has_no_mcp_tools() {
+        assert_eq!(
+            backend().tool_support(),
+            ToolSupport {
+                backgrounds_long_calls: false,
+                mcp_tasks: false,
+                mcp_tools: false,
+            }
+        );
+    }
+
+    #[test]
+    fn it_enforces_no_rule_and_refuses_each_naming_the_rule_and_the_backend() {
+        let backend = backend();
+        let refused = |rules: ToolRules| {
+            backend
+                .check_rules(&rules)
+                .expect_err("the rule is refused")
+                .to_string()
+        };
+        assert_eq!(
+            refused(ToolRules {
+                permission_mode: Some(PermissionMode::Plan),
+                ..ToolRules::default()
+            }),
+            "my-cli cannot enforce the permission mode plan"
+        );
+        assert_eq!(
+            refused(ToolRules {
+                allowed_tools: vec!["Read".into()],
+                ..ToolRules::default()
+            }),
+            "my-cli cannot enforce the allowed_tools rule Read"
+        );
+        assert_eq!(
+            refused(ToolRules {
+                disallowed_tools: vec!["Bash(rm:*)".into()],
+                ..ToolRules::default()
+            }),
+            "my-cli cannot enforce the disallowed_tools rule Bash(rm:*)"
+        );
+        // No rule at all is nothing to enforce.
+        backend.check_rules(&ToolRules::default()).unwrap();
+
+        // A launch carrying a tool list is refused, not started without it;
+        // a permission mode alone is not a reason to stop an ordinary tab.
+        let dirs = TestDirs::new();
+        let launch_folder = LaunchFolder::create(&dirs.data).unwrap();
+        let request = |composition: Composition| LaunchRequest {
+            folder: "C:/work".into(),
+            composition,
+            ..LaunchRequest::default()
+        };
+        let err = backend
+            .launch(
+                &request(Composition {
+                    disallowed_tools: vec!["Edit".into()],
+                    ..Composition::default()
+                }),
+                &launch_folder,
+            )
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "my-cli cannot enforce the disallowed_tools rule Edit"
+        );
+        backend
+            .launch(
+                &request(Composition {
+                    permission_mode: Some(PermissionMode::Plan),
+                    ..Composition::default()
+                }),
+                &launch_folder,
+            )
+            .unwrap();
     }
 
     #[test]

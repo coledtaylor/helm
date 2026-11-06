@@ -93,6 +93,30 @@ fn a_backend_that_only_runs_answers_unknown_to_every_other_question() {
 }
 
 #[test]
+fn a_backend_that_only_runs_says_no_to_each_tool_call_question_and_enforces_no_rule() {
+    let backend = RunOnly::new();
+    assert_eq!(
+        backend.tool_support(),
+        ToolSupport {
+            backgrounds_long_calls: false,
+            mcp_tasks: false,
+            mcp_tools: false,
+        }
+    );
+    backend.check_rules(&ToolRules::default()).unwrap();
+    let err = backend
+        .check_rules(&ToolRules {
+            allowed_tools: vec!["Read".into()],
+            ..ToolRules::default()
+        })
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "run-only cannot enforce the allowed_tools rule Read"
+    );
+}
+
+#[test]
 fn a_backend_declares_exactly_the_parts_it_has() {
     let descriptor = RunOnly::new().capabilities();
     assert_eq!(descriptor.features, vec![BackendFeature::Run]);

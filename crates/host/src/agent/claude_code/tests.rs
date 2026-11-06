@@ -23,7 +23,7 @@ use floti_protocol::{BackendFeature, HarnessPart, Knowable};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::agent::{BackendAnswers, Composition, sweep_launch_folders};
+use crate::agent::{BackendAnswers, Composition, ToolRules, ToolSupport, sweep_launch_folders};
 use crate::platform::links::is_link;
 use crate::platform::process_tree::{self, Ending, ProcessTree};
 use crate::testkit::{PATIENCE, TestDirs};
@@ -270,6 +270,7 @@ fn server(name: &str, token: &str) -> AgentToolServer {
         url: format!("http://127.0.0.1:41000/mcp/{name}"),
         token: token.to_owned(),
         allowed_tools: Vec::new(),
+        allowed_commands: Vec::new(),
     }
 }
 
@@ -583,6 +584,228 @@ fn a_permission_choice_is_passed_exactly_and_no_choice_passes_no_flag() {
             vec![OsString::from("--permission-mode"), OsString::from(name)]
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Declarations and a role's tool rules
+// ---------------------------------------------------------------------------
+
+/// A world whose `claude --version` answers `version` and nothing else.
+fn world_reporting(version: &str) -> World {
+    let script = format!("process.stdout.write('{version} (Claude Code)\\n')");
+    World::with(|settings| {
+        settings.leading_args = vec!["-e".into(), script.into(), "--".into()];
+    })
+}
+
+#[test]
+fn it_moves_long_calls_to_the_background_has_mcp_tools_and_supports_mcp_tasks_from_the_version_that_offers_them()
+ {
+    let declared = |tasks: bool| ToolSupport {
+        backgrounds_long_calls: true,
+        mcp_tasks: tasks,
+        mcp_tools: true,
+    };
+    // The fake reports 2.1.999.
+    assert_eq!(World::new().backend.tool_support(), declared(true));
+    for (version, tasks) in [
+        ("2.0.999", false),
+        ("2.1.303", false),
+        ("2.1.304", true),
+        ("2.1.305", true),
+        ("2.2.0", true),
+    ] {
+        assert_eq!(
+            world_reporting(version).backend.tool_support(),
+            declared(tasks),
+            "{version}"
+        );
+    }
+    // A version that cannot be read is not taken to support them.
+    let unknown = World::with(|settings| {
+        settings.program = "floti-no-such-claude-anywhere".into();
+        settings.leading_args = Vec::new();
+    });
+    assert_eq!(unknown.backend.tool_support(), declared(false));
+}
+
+#[test]
+fn a_roles_tool_rules_reach_its_flags_in_one_allow_list_and_one_deny_list() {
+    let world = World::new();
+    let mut agents = server("floti-agents", "t");
+    agents.allowed_tools = vec!["agents_start".into(), "agents_stop".into()];
+    agents.allowed_commands = vec!["floti agent start".into(), "floti agent stop".into()];
+    let (launch, _folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "child".into(),
+        composition: Composition {
+            agent_tools: vec![server("helm-sessions", "t"), agents],
+            permission_mode: Some(PermissionMode::Plan),
+            allowed_tools: vec!["Read".into(), "Bash(git status:*)".into()],
+            disallowed_tools: vec!["Bash(rm:*)".into(), "WebFetch".into()],
+            model: Some("opus".into()),
+            ..Composition::default()
+        },
+        prompt: Some("go".into()),
+    });
+    let args = world.args(&launch);
+    let allowed = args.iter().position(|arg| arg == "--allowedTools").unwrap();
+    assert_eq!(
+        args[allowed + 1..allowed + 8],
+        [
+            "mcp__floti-agents__agents_start",
+            "mcp__floti-agents__agents_stop",
+            "Bash(floti agent start:*)",
+            "Bash(floti agent stop:*)",
+            "Read",
+            "Bash(git status:*)",
+            "--disallowedTools",
+        ]
+    );
+    assert_eq!(args[allowed + 8..allowed + 10], ["Bash(rm:*)", "WebFetch"]);
+    assert_eq!(args[allowed + 10], "--model");
+    for flag in ["--allowedTools", "--disallowedTools", "--permission-mode"] {
+        assert_eq!(args.iter().filter(|arg| *arg == flag).count(), 1, "{flag}");
+    }
+    // Each command is named on its own, never as a wildcard over its siblings.
+    assert!(
+        !args.iter().any(|arg| arg.contains("floti agent:*")),
+        "{args:?}"
+    );
+    assert_eq!(args[args.len() - 2..], ["--", "go"]);
+
+    // The CLI's own parser reads them back as the same rules, spaces inside a
+    // rule's parentheses and all.
+    let (output, log) = world.run(&launch, "/exit\n");
+    succeeded(&output);
+    assert_eq!(
+        strings(&log, "allowedTools"),
+        [
+            "mcp__floti-agents__agents_start",
+            "mcp__floti-agents__agents_stop",
+            "Bash(floti agent start:*)",
+            "Bash(floti agent stop:*)",
+            "Read",
+            "Bash(git status:*)",
+        ]
+    );
+    assert_eq!(strings(&log, "disallowedTools"), ["Bash(rm:*)", "WebFetch"]);
+    assert!(
+        strings(&log, "argv")
+            .windows(2)
+            .any(|pair| pair == ["--permission-mode", "plan"])
+    );
+    assert_eq!(log["openingPrompt"], "go");
+
+    // Only the lists asked for: no deny list, no flag.
+    let (plain, _folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "plain".into(),
+        composition: Composition {
+            allowed_tools: vec!["Read".into()],
+            ..Composition::default()
+        },
+        ..LaunchRequest::default()
+    });
+    let args = world.args(&plain);
+    assert!(!args.contains(&"--disallowedTools".to_owned()));
+    assert!(!args.contains(&"--mcp-config".to_owned()));
+    let at = args.iter().position(|arg| arg == "--allowedTools").unwrap();
+    assert_eq!(args[at + 1], "Read");
+}
+
+#[test]
+fn shell_commands_and_tools_are_named_the_way_claude_code_names_them() {
+    let world = World::new();
+    let tools = world.backend.agent_tools().unwrap();
+    assert_eq!(
+        tools.command_rule("floti agent start"),
+        "Bash(floti agent start:*)"
+    );
+    assert_eq!(
+        tools.tool_rule("floti-agents", "agents_stop"),
+        "mcp__floti-agents__agents_stop"
+    );
+    // The family's own rules, tools first, then commands.
+    let mut agents = server("floti-agents", "t");
+    agents.allowed_tools = vec!["agents_list".into()];
+    agents.allowed_commands = vec!["floti agent stop".into()];
+    assert_eq!(
+        agents.allow_rules(tools),
+        ["mcp__floti-agents__agents_list", "Bash(floti agent stop:*)"]
+    );
+}
+
+#[test]
+fn a_tool_rule_the_command_line_cannot_carry_is_refused_naming_the_rule_and_claude_code() {
+    let world = World::new();
+    // Everything a role can mean passes, every mode included.
+    for mode in [
+        PermissionMode::Plan,
+        PermissionMode::DontAsk,
+        PermissionMode::Manual,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Auto,
+        PermissionMode::BypassPermissions,
+    ] {
+        world
+            .backend
+            .check_rules(&ToolRules {
+                permission_mode: Some(mode),
+                allowed_tools: vec!["Read".into(), "mcp__a__b".into()],
+                disallowed_tools: vec!["Bash(rm:*)".into()],
+            })
+            .unwrap();
+    }
+    world.backend.check_rules(&ToolRules::default()).unwrap();
+
+    // A rule that is empty, or starts with a dash and would be read as
+    // another flag, is not one it can pass.
+    let refused = |rules: ToolRules| {
+        world
+            .backend
+            .check_rules(&rules)
+            .expect_err("the rule is refused")
+            .to_string()
+    };
+    assert_eq!(
+        refused(ToolRules {
+            allowed_tools: vec!["Read".into(), "--dangerously-skip-permissions".into()],
+            ..ToolRules::default()
+        }),
+        "claude-code cannot enforce the allowed_tools rule --dangerously-skip-permissions"
+    );
+    assert_eq!(
+        refused(ToolRules {
+            disallowed_tools: vec!["  ".into()],
+            ..ToolRules::default()
+        }),
+        "claude-code cannot enforce the disallowed_tools rule   "
+    );
+
+    // A launch carrying one is refused too, before anything is written.
+    let folder = world.launch_folder();
+    let err = world
+        .backend
+        .launch(
+            &LaunchRequest {
+                folder: world.folder("work"),
+                name: "refused".into(),
+                composition: Composition {
+                    agent_tools: vec![server("helm-sessions", "t")],
+                    allowed_tools: vec!["-x".into()],
+                    ..Composition::default()
+                },
+                ..LaunchRequest::default()
+            },
+            &folder,
+        )
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "claude-code cannot enforce the allowed_tools rule -x"
+    );
+    assert!(!folder.path().join("mcp.json").exists());
 }
 
 // ---------------------------------------------------------------------------

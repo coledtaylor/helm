@@ -32,7 +32,8 @@ pub(super) struct Argv<'a> {
     pub tool_args: &'a [OsString],
     pub model: Option<&'a str>,
     pub effort: Option<EffortLevel>,
-    pub permission_mode: Option<PermissionMode>,
+    /// The permission flag, already composed by the backend's permissions.
+    pub permission_args: &'a [OsString],
     pub agent: Option<&'a str>,
     pub prompt: Option<&'a str>,
 }
@@ -81,9 +82,8 @@ pub(super) fn build(argv: &Argv<'_>) -> Vec<OsString> {
     if let Some(effort) = argv.effort {
         push(&[&"--effort", &effort_name(effort)]);
     }
-    if let Some(mode) = argv.permission_mode {
-        push(&[&"--permission-mode", &permission_mode_name(mode)]);
-    }
+    out.extend(argv.permission_args.iter().cloned());
+    let mut push = |args: &[&dyn AsRefOs]| out.extend(args.iter().map(|arg| arg.os()));
     if let Some(agent) = argv.agent.filter(|agent| !agent.trim().is_empty()) {
         push(&[&"--agent", &agent]);
     }
