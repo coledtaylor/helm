@@ -103,6 +103,7 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     agentLimits: {
       agentChildrenPerParent: 4,
       agentSessionsPerHost: 8,
+      agentHeavyPerHost: 1,
       agentDepth: 2,
       agentStartsPerParent: 16
     },

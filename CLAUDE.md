@@ -674,7 +674,11 @@ app's folder, on any OS.
   that is none of the project's agent worktrees, for one a running session
   works in (naming it) and for one with uncommitted changes (modified or
   untracked). Whether a worktree has uncommitted changes is `null` when git
-  could not be asked, never "clean".
+  could not be asked, never "clean". The project page of a folder on this PC
+  lists them as its Agent worktrees section (`LocalProjectPane`, read when the
+  page opens, after a removal and when a session in the project starts or
+  ends) and Remove asks nothing first, because the host already refuses what
+  would lose work and says why on that row.
 - Every backend resumes in the directory history recorded; for Claude Code,
   `claude --resume` there. Claude Code's transcripts are found by scanning
   `projects/*` for `<uuid>.jsonl`, never by deriving a path.
