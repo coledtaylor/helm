@@ -97,6 +97,7 @@ impl World {
             mcp: Vec::new(),
             opening_prompt: Some("/recap".into()),
             pinned_order: None,
+            session_agents: None,
         }
     }
 

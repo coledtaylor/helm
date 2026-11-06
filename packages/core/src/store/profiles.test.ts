@@ -52,6 +52,20 @@ describe('profile CRUD', () => {
     expect(profileDraft(readProfile(store, created.id)!)).toEqual(draft())
   })
 
+  it('keeps a profile that turns the session agents off, and a draft that leaves the choice out follows the setting', () => {
+    const off = createProfile(store, draft({ name: 'No agents', sessionAgents: false }))
+    expect(readProfile(store, off.id)?.sessionAgents).toBe(false)
+    expect(profileDraft(off).sessionAgents).toBe(false)
+
+    const silent = createProfile(store, draft({ name: 'Silent' }))
+    expect(readProfile(store, silent.id)?.sessionAgents).toBeNull()
+    expect(profileDraft(silent)).not.toHaveProperty('sessionAgents')
+
+    // On is what following the setting already is, so it is stored as that.
+    const on = createProfile(store, draft({ name: 'On', sessionAgents: true }))
+    expect(readProfile(store, on.id)?.sessionAgents).toBeNull()
+  })
+
   it('updates in place and stamps updated_at', () => {
     const created = createProfile(store, draft())
     const updated = updateProfile(store, created.id, draft({ model: 'sonnet', mcp: [] }))

@@ -1,7 +1,7 @@
 // Generated from the floti-protocol crate by `cargo run -p floti-protocol --bin generate`. Do not edit.
 
 /** The protocol version these declarations describe. */
-export const PROTOCOL_VERSION = { major: 2, minor: 0 } as const;
+export const PROTOCOL_VERSION = { major: 2, minor: 1 } as const;
 
 /** The link version of the session keeper a host of this build takes back. */
 export const KEEPER_LINK_VERSION = 1;
@@ -1528,7 +1528,29 @@ sessionMcp: boolean,
 /**
  * Reopen the sessions a crash took without asking first.
  */
-restoreWithoutAsking: boolean, };
+restoreWithoutAsking: boolean, 
+/**
+ * Whether the sessions the host starts can start, list and stop
+ * sessions of their own. A profile can turn it off for its own sessions.
+ * A host before protocol 2.1 sends none, which reads as on.
+ */
+sessionAgents: boolean, 
+/**
+ * How many children one session may have running at once.
+ */
+agentChildrenPerParent: number, 
+/**
+ * How many agent-started sessions may run on the host at once.
+ */
+agentSessionsPerHost: number, 
+/**
+ * How many generations of sessions a session may start below it.
+ */
+agentDepth: number, 
+/**
+ * How many children one session may start in its life.
+ */
+agentStartsPerParent: number, };
 
 /**
  * A change to some settings. A field left out is unchanged; a nullable
@@ -1538,7 +1560,7 @@ export type HostSettingsPatch = { scanRoots?: Array<string>, pinnedProjects?: Ar
 /**
  * Replaces the whole map.
  */
-backendPaths?: { [key in BackendId]?: string }, terminalShell?: string | null, transcriptArchiveMaxBytes?: number, browserMcp?: boolean, browserMcpLocalOnly?: boolean, sessionMcp?: boolean, restoreWithoutAsking?: boolean, };
+backendPaths?: { [key in BackendId]?: string }, terminalShell?: string | null, transcriptArchiveMaxBytes?: number, browserMcp?: boolean, browserMcpLocalOnly?: boolean, sessionMcp?: boolean, restoreWithoutAsking?: boolean, sessionAgents?: boolean, agentChildrenPerParent?: number, agentSessionsPerHost?: number, agentDepth?: number, agentStartsPerParent?: number, };
 
 /**
  * Why the host is being stopped, which decides what its sessions become.
@@ -2311,6 +2333,13 @@ openingPrompt: string | null,
  */
 pinnedOrder: number | null, 
 /**
+ * Whether this profile's sessions can start agents: null follows the
+ * host's setting, false turns the agents tools off for them. A profile
+ * cannot turn them on against the setting, so the host keeps true as
+ * null.
+ */
+sessionAgents?: boolean | null, 
+/**
  * ISO 8601.
  */
 createdAt: string, 
@@ -2339,7 +2368,13 @@ yaml: string, };
 /**
  * A profile before the host has given it an identity.
  */
-export type ProfileDraft = { name: string, root: string, overlays: Array<string>, access: Array<string>, model: string | null, effort: EffortLevel | null, permissionMode: PermissionMode | null, agent: string | null, mcp: Array<string>, openingPrompt: string | null, pinnedOrder: number | null, };
+export type ProfileDraft = { name: string, root: string, overlays: Array<string>, access: Array<string>, model: string | null, effort: EffortLevel | null, permissionMode: PermissionMode | null, agent: string | null, mcp: Array<string>, openingPrompt: string | null, pinnedOrder: number | null, 
+/**
+ * Whether this profile's sessions can start agents, as a saved
+ * profile's `sessionAgents` says. A client before protocol 2.1 sends
+ * none, which follows the host's setting.
+ */
+sessionAgents?: boolean | null, };
 
 /**
  * Names one profile.
@@ -2881,7 +2916,24 @@ endedAt: string | null, durationMs: number | null,
  * Null while running, and for a session whose exit code was never
  * observed.
  */
-exitCode: number | null, };
+exitCode: number | null, 
+/**
+ * The session that started this one with an agent tool, as its row id,
+ * or null for a session a person started. A child that outlived its
+ * parent keeps naming it. Absent from a host before protocol 2.1, which
+ * reads as null.
+ */
+parentId?: number | null, 
+/**
+ * What the parent is called on screen (its label, else its name), or
+ * null for a session with no parent.
+ */
+parentName?: string | null, 
+/**
+ * The role the session was started in, or null for a session started
+ * with none.
+ */
+role?: string | null, };
 
 export type SessionResizeRequest = { id: number, cols: number, rows: number, };
 

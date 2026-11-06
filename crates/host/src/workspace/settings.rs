@@ -16,11 +16,15 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use floti_protocol::BackendId;
-use floti_protocol::channels::workspace::{HostSettings, HostSettingsPatch};
+use floti_protocol::channels::workspace::{
+    DEFAULT_AGENT_CHILDREN_PER_PARENT, DEFAULT_AGENT_DEPTH, DEFAULT_AGENT_SESSIONS_PER_HOST,
+    DEFAULT_AGENT_STARTS_PER_PARENT, DEFAULT_SESSION_AGENTS, HostSettings, HostSettingsPatch,
+};
 use rusqlite::{Connection, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -45,6 +49,19 @@ const BROWSER_MCP: &str = "browserMcp";
 const BROWSER_MCP_LOCAL_ONLY: &str = "browserMcpLocalOnly";
 const SESSION_MCP: &str = "sessionMcp";
 const RESTORE_WITHOUT_ASKING: &str = "restoreWithoutAsking";
+const SESSION_AGENTS: &str = "sessionAgents";
+const AGENT_CHILDREN_PER_PARENT: &str = "agentChildrenPerParent";
+const AGENT_SESSIONS_PER_HOST: &str = "agentSessionsPerHost";
+const AGENT_DEPTH: &str = "agentDepth";
+const AGENT_STARTS_PER_PARENT: &str = "agentStartsPerParent";
+
+/// What each limit may be set to. A limit of none is the setting "Sessions
+/// can start agents" turned off, so the lowest is one; the highest keeps a
+/// typed number from being a runaway tree of processes.
+pub const AGENT_CHILDREN_PER_PARENT_RANGE: RangeInclusive<u32> = 1..=32;
+pub const AGENT_SESSIONS_PER_HOST_RANGE: RangeInclusive<u32> = 1..=128;
+pub const AGENT_DEPTH_RANGE: RangeInclusive<u32> = 1..=8;
+pub const AGENT_STARTS_PER_PARENT_RANGE: RangeInclusive<u32> = 1..=1000;
 
 /// The settings of a host nobody has changed anything on.
 pub fn defaults() -> HostSettings {
@@ -61,6 +78,11 @@ pub fn defaults() -> HostSettings {
         browser_mcp_local_only: false,
         session_mcp: true,
         restore_without_asking: false,
+        session_agents: DEFAULT_SESSION_AGENTS,
+        agent_children_per_parent: DEFAULT_AGENT_CHILDREN_PER_PARENT,
+        agent_sessions_per_host: DEFAULT_AGENT_SESSIONS_PER_HOST,
+        agent_depth: DEFAULT_AGENT_DEPTH,
+        agent_starts_per_parent: DEFAULT_AGENT_STARTS_PER_PARENT,
     }
 }
 
@@ -100,6 +122,35 @@ pub fn read(conn: &Connection) -> Result<HostSettings> {
     take(RESTORE_WITHOUT_ASKING, &mut |text| {
         set(text, &mut settings.restore_without_asking)
     });
+    take(SESSION_AGENTS, &mut |text| {
+        set(text, &mut settings.session_agents)
+    });
+    // A limit outside its range keeps its default, as a value that does not
+    // parse does: a row another build wrote must not widen a limit.
+    take(AGENT_CHILDREN_PER_PARENT, &mut |text| {
+        set_within(
+            text,
+            &AGENT_CHILDREN_PER_PARENT_RANGE,
+            &mut settings.agent_children_per_parent,
+        )
+    });
+    take(AGENT_SESSIONS_PER_HOST, &mut |text| {
+        set_within(
+            text,
+            &AGENT_SESSIONS_PER_HOST_RANGE,
+            &mut settings.agent_sessions_per_host,
+        )
+    });
+    take(AGENT_DEPTH, &mut |text| {
+        set_within(text, &AGENT_DEPTH_RANGE, &mut settings.agent_depth)
+    });
+    take(AGENT_STARTS_PER_PARENT, &mut |text| {
+        set_within(
+            text,
+            &AGENT_STARTS_PER_PARENT_RANGE,
+            &mut settings.agent_starts_per_parent,
+        )
+    });
     match rows.get(BACKEND_PATHS) {
         Some(text) => {
             set(text, &mut settings.backend_paths);
@@ -127,6 +178,17 @@ fn set<T: DeserializeOwned>(text: &str, field: &mut T) -> bool {
             true
         }
         Err(_) => false,
+    }
+}
+
+/// [`set`], for a count that must lie in `range`.
+fn set_within(text: &str, range: &RangeInclusive<u32>, field: &mut u32) -> bool {
+    match serde_json::from_str::<u32>(text) {
+        Ok(value) if range.contains(&value) => {
+            *field = value;
+            true
+        }
+        _ => false,
     }
 }
 
@@ -176,6 +238,37 @@ pub fn problems(patch: &HostSettingsPatch) -> Vec<String> {
                 CEILING_RANGE.end()
             )),
         );
+    }
+    for (key, value, range) in [
+        (
+            AGENT_CHILDREN_PER_PARENT,
+            patch.agent_children_per_parent,
+            AGENT_CHILDREN_PER_PARENT_RANGE,
+        ),
+        (
+            AGENT_SESSIONS_PER_HOST,
+            patch.agent_sessions_per_host,
+            AGENT_SESSIONS_PER_HOST_RANGE,
+        ),
+        (AGENT_DEPTH, patch.agent_depth, AGENT_DEPTH_RANGE),
+        (
+            AGENT_STARTS_PER_PARENT,
+            patch.agent_starts_per_parent,
+            AGENT_STARTS_PER_PARENT_RANGE,
+        ),
+    ] {
+        if let Some(value) = value
+            && !range.contains(&value)
+        {
+            check(
+                key,
+                Some(format!(
+                    "expected {} to {}, got {value}",
+                    range.start(),
+                    range.end()
+                )),
+            );
+        }
     }
     out
 }
@@ -327,6 +420,21 @@ pub fn write(
     }
     if let Some(value) = &patch.restore_without_asking {
         put(RESTORE_WITHOUT_ASKING, value);
+    }
+    if let Some(value) = &patch.session_agents {
+        put(SESSION_AGENTS, value);
+    }
+    if let Some(value) = &patch.agent_children_per_parent {
+        put(AGENT_CHILDREN_PER_PARENT, value);
+    }
+    if let Some(value) = &patch.agent_sessions_per_host {
+        put(AGENT_SESSIONS_PER_HOST, value);
+    }
+    if let Some(value) = &patch.agent_depth {
+        put(AGENT_DEPTH, value);
+    }
+    if let Some(value) = &patch.agent_starts_per_parent {
+        put(AGENT_STARTS_PER_PARENT, value);
     }
     let edit = conn.transaction().map_err(sql("write the settings"))?;
     for (key, value) in &values {

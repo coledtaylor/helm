@@ -106,6 +106,51 @@ pub struct HostSettings {
     pub session_mcp: bool,
     /// Reopen the sessions a crash took without asking first.
     pub restore_without_asking: bool,
+    /// Whether the sessions the host starts can start, list and stop
+    /// sessions of their own. A profile can turn it off for its own sessions.
+    /// A host before protocol 2.1 sends none, which reads as on.
+    #[serde(default = "default_session_agents")]
+    pub session_agents: bool,
+    /// How many children one session may have running at once.
+    #[serde(default = "default_agent_children_per_parent")]
+    pub agent_children_per_parent: u32,
+    /// How many agent-started sessions may run on the host at once.
+    #[serde(default = "default_agent_sessions_per_host")]
+    pub agent_sessions_per_host: u32,
+    /// How many generations of sessions a session may start below it.
+    #[serde(default = "default_agent_depth")]
+    pub agent_depth: u32,
+    /// How many children one session may start in its life.
+    #[serde(default = "default_agent_starts_per_parent")]
+    pub agent_starts_per_parent: u32,
+}
+
+/// What an agents setting reads as when nobody has set it, and when a host
+/// before protocol 2.1 sends none.
+pub const DEFAULT_SESSION_AGENTS: bool = true;
+pub const DEFAULT_AGENT_CHILDREN_PER_PARENT: u32 = 4;
+pub const DEFAULT_AGENT_SESSIONS_PER_HOST: u32 = 8;
+pub const DEFAULT_AGENT_DEPTH: u32 = 2;
+pub const DEFAULT_AGENT_STARTS_PER_PARENT: u32 = 16;
+
+fn default_session_agents() -> bool {
+    DEFAULT_SESSION_AGENTS
+}
+
+fn default_agent_children_per_parent() -> u32 {
+    DEFAULT_AGENT_CHILDREN_PER_PARENT
+}
+
+fn default_agent_sessions_per_host() -> u32 {
+    DEFAULT_AGENT_SESSIONS_PER_HOST
+}
+
+fn default_agent_depth() -> u32 {
+    DEFAULT_AGENT_DEPTH
+}
+
+fn default_agent_starts_per_parent() -> u32 {
+    DEFAULT_AGENT_STARTS_PER_PARENT
 }
 
 /// A change to some settings. A field left out is unchanged; a nullable
@@ -154,6 +199,21 @@ pub struct HostSettingsPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub restore_without_asking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session_agents: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_children_per_parent: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_sessions_per_host: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_depth: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_starts_per_parent: Option<u32>,
 }
 
 /// What setup found for each agent backend the host can run.

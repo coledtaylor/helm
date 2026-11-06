@@ -255,6 +255,9 @@ mod tests {
             ended_at: None,
             duration_ms: None,
             exit_code: None,
+            parent_id: None,
+            parent_name: None,
+            role: None,
         }
     }
 

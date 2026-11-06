@@ -69,6 +69,23 @@ pub struct SessionRecord {
     /// Null while running, and for a session whose exit code was never
     /// observed.
     pub exit_code: Option<i32>,
+    /// The session that started this one with an agent tool, as its row id,
+    /// or null for a session a person started. A child that outlived its
+    /// parent keeps naming it. Absent from a host before protocol 2.1, which
+    /// reads as null.
+    #[serde(default)]
+    #[ts(type = "number | null", optional = nullable)]
+    pub parent_id: Option<u64>,
+    /// What the parent is called on screen (its label, else its name), or
+    /// null for a session with no parent.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub parent_name: Option<String>,
+    /// The role the session was started in, or null for a session started
+    /// with none.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub role: Option<String>,
 }
 
 /// How a session asks before it acts. The values are the ones the launcher

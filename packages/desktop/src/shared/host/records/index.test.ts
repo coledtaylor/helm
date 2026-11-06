@@ -1,5 +1,35 @@
 import { describe, expect, it } from 'vitest'
-import { splitSettingsPatch } from './index'
+import type * as P from '../protocol'
+import { profileFromHost, splitSettingsPatch } from './index'
+
+const hostProfile = (patch: Partial<P.Profile> = {}): P.Profile => ({
+  id: 3,
+  name: 'hub dev',
+  root: '/work/hub',
+  overlays: [],
+  access: [],
+  model: null,
+  effort: null,
+  permissionMode: null,
+  agent: null,
+  mcp: [],
+  openingPrompt: null,
+  pinnedOrder: null,
+  createdAt: '2026-10-29T09:00:00.000Z',
+  updatedAt: '2026-10-29T09:00:00.000Z',
+  ...patch
+})
+
+describe('a host profile, as the window reads it', () => {
+  it('keeps the choice to turn the session agents off', () => {
+    expect(profileFromHost(hostProfile({ sessionAgents: false })).sessionAgents).toBe(false)
+  })
+
+  it('has no choice where the host has none or follows the setting', () => {
+    expect(profileFromHost(hostProfile())).not.toHaveProperty('sessionAgents')
+    expect(profileFromHost(hostProfile({ sessionAgents: null }))).not.toHaveProperty('sessionAgents')
+  })
+})
 
 describe('a window settings patch, split between the host and Helm', () => {
   it('keeps what quitting does on this device, never in the host', () => {

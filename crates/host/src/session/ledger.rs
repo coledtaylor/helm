@@ -57,6 +57,28 @@ pub struct SessionOrigin {
     /// The branch its folder had checked out when it was launched, read
     /// before the spawn: what a session's detail calls the branch at spawn.
     pub branch: Option<String>,
+    /// The session that started it with an agent tool, when one did.
+    pub parent: Option<ParentLink>,
+}
+
+/// What a child's row keeps of the session that started it, so the link
+/// outlives both processes: a host restart restores it with the sessions, and
+/// a child that outlived its parent is found again by the parent's
+/// conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParentLink {
+    /// The parent's row.
+    pub session: SessionId,
+    /// The conversation the parent was in when it started this child.
+    pub conversation_id: Option<String>,
+    /// What the parent calls this child, unique among its children.
+    pub name: String,
+    /// The role it was started in.
+    pub role: Option<String>,
+    /// Whether it keeps running when its parent ends.
+    pub outlive: bool,
+    /// Whether it may start children of its own.
+    pub can_start: bool,
 }
 
 /// The record of sessions: a row on spawn, its end when the program ends.
@@ -91,12 +113,15 @@ impl SessionLedger for Mutex<Store> {
         let argv = serde_json::to_string(&row.argv)
             .map_err(|err| Error::io("record the session's arguments", io::Error::other(err)))?;
         let store = self.lock().unwrap_or_else(PoisonError::into_inner);
+        let parent = row.origin.parent.as_ref();
         let id = store
             .connection()
             .query_row(
                 "INSERT INTO sessions (name, cwd, argv, claude_session_id, backend, \
-                 project_path, profile_id, permission_mode, branch, status) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'running') RETURNING id",
+                 project_path, profile_id, permission_mode, branch, parent_session_id, \
+                 parent_conversation_id, child_name, role, outlive, can_start, status) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
+                 'running') RETURNING id",
                 params![
                     row.name,
                     row.cwd.to_string_lossy(),
@@ -106,7 +131,13 @@ impl SessionLedger for Mutex<Store> {
                     row.origin.project_path,
                     row.origin.profile_id,
                     row.origin.permission_mode,
-                    row.origin.branch
+                    row.origin.branch,
+                    parent.map(|link| link.session.0),
+                    parent.and_then(|link| link.conversation_id.as_deref()),
+                    parent.map(|link| link.name.as_str()),
+                    parent.and_then(|link| link.role.as_deref()),
+                    parent.is_some_and(|link| link.outlive),
+                    parent.is_some_and(|link| link.can_start),
                 ],
                 |found| found.get(0),
             )

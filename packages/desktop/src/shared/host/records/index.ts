@@ -96,6 +96,8 @@ export function profileFromHost(profile: P.Profile): Profile {
     mcp: profile.mcp,
     openingPrompt: profile.openingPrompt,
     pinnedOrder: profile.pinnedOrder,
+    // Only the off choice is a value; null and absent both follow the setting.
+    ...(profile.sessionAgents === false ? { sessionAgents: false } : {}),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt
   }

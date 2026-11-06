@@ -225,6 +225,11 @@ fn settings() -> HostSettings {
         browser_mcp_local_only: false,
         session_mcp: true,
         restore_without_asking: false,
+        session_agents: false,
+        agent_children_per_parent: 3,
+        agent_sessions_per_host: 6,
+        agent_depth: 1,
+        agent_starts_per_parent: 10,
     }
 }
 

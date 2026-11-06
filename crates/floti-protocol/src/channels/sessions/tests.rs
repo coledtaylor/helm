@@ -207,6 +207,9 @@ fn record(id: u64) -> SessionRecord {
         ended_at: Some("2026-10-27T11:00:00Z".into()),
         duration_ms: Some(3_600_000),
         exit_code: Some(-1),
+        parent_id: Some(2),
+        parent_name: Some("lead".into()),
+        role: Some("reviewer".into()),
     }
 }
 
@@ -234,6 +237,7 @@ fn profile() -> Profile {
         mcp: vec!["github".into()],
         opening_prompt: Some("Read the plan.".into()),
         pinned_order: Some(0),
+        session_agents: Some(false),
         created_at: "2026-10-01T09:00:00Z".into(),
         updated_at: "2026-10-02T09:00:00Z".into(),
     }
@@ -686,6 +690,7 @@ fn profile_channels_round_trip_over_cbor_and_the_dialogs_stay_in_the_client() {
                 mcp: vec![],
                 opening_prompt: None,
                 pinned_order: None,
+                session_agents: Some(false),
             },
         },
         SaveProfileResult {

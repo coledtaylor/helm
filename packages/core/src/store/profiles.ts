@@ -28,6 +28,7 @@ function toProfile(row: Row): Profile {
     mcp: row.mcp,
     openingPrompt: row.openingPrompt,
     pinnedOrder: row.pinnedOrder,
+    sessionAgents: row.sessionAgents,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   }
@@ -49,7 +50,8 @@ export function profileDraft(profile: Profile): ProfileDraft {
     agent: profile.agent,
     mcp: profile.mcp,
     openingPrompt: profile.openingPrompt,
-    pinnedOrder: profile.pinnedOrder
+    pinnedOrder: profile.pinnedOrder,
+    ...(profile.sessionAgents === false ? { sessionAgents: false } : {})
   }
 }
 
@@ -65,7 +67,9 @@ function toValues(draft: ProfileDraft): Omit<Row, 'id' | 'createdAt' | 'updatedA
     agent: draft.agent,
     mcp: draft.mcp,
     openingPrompt: draft.openingPrompt,
-    pinnedOrder: draft.pinnedOrder
+    pinnedOrder: draft.pinnedOrder,
+    // Only the off choice is kept: on is what following the setting already is.
+    sessionAgents: draft.sessionAgents === false ? false : null
   }
 }
 

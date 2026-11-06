@@ -26,8 +26,15 @@ use crate::{Error, Result};
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
 /// The columns [`read_record`] reads, in its order.
+///
+/// The parent's name is read from its row (its label, else its name): a
+/// parent whose row is gone names nothing, as a session with none does.
 const RECORD_COLUMNS: &str = "id, name, label, cwd, branch, project_path, profile_id, argv, \
-     claude_session_id, status, started_at, ended_at, duration_ms, exit_code, backend";
+     claude_session_id, status, started_at, ended_at, duration_ms, exit_code, backend, \
+     parent_session_id, \
+     (SELECT coalesce(nullif(parent.label, ''), parent.name) FROM sessions AS parent \
+      WHERE parent.id = sessions.parent_session_id), \
+     role";
 
 /// The backend a row ran on, from its `backend` column.
 ///
@@ -271,7 +278,8 @@ pub(crate) fn record_stopped(store: &Store, ids: &[SessionId]) -> Result<()> {
 
 /// The columns [`profile_row`] reads, in its order.
 pub(crate) const PROFILE_COLUMNS: &str = "id, name, root, overlays, access, model, effort, \
-     permission_mode, agent, mcp, opening_prompt, pinned_order, created_at, updated_at";
+     permission_mode, agent, mcp, opening_prompt, pinned_order, created_at, updated_at, \
+     session_agents";
 
 /// Profile `id` as its row in `profiles` holds it, or `None` when it has
 /// been deleted.
@@ -315,6 +323,9 @@ pub(crate) fn profile_row(row: &Row<'_>) -> rusqlite::Result<Profile> {
         pinned_order: row
             .get::<_, Option<i64>>(11)?
             .and_then(|order| u32::try_from(order).ok()),
+        // Only the choice to turn the agents tools off is kept; anything else
+        // follows the host's setting.
+        session_agents: row.get::<_, Option<bool>>(14)?.filter(|on| !on),
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
     })
@@ -523,12 +534,21 @@ fn record_from(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         exit_code: row
             .get::<_, Option<i64>>(13)?
             .map(|code| i32::try_from(code).unwrap_or(i32::MAX)),
+        parent_id: row.get::<_, Option<i64>>(15)?.map(unsigned),
+        parent_name: row.get(16)?,
+        role: row.get::<_, Option<String>>(17)?.and_then(|role| {
+            let role = role.trim();
+            (!role.is_empty()).then(|| role.to_owned())
+        }),
     })
 }
 
 fn unsigned(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests;
 
 fn sql(action: &'static str) -> impl Fn(rusqlite::Error) -> Error {
     move |err| Error::io(action, io::Error::other(err))

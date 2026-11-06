@@ -144,5 +144,18 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
     "statements": [
       "ALTER TABLE `sessions` ADD `agent_tools` text;"
     ]
+  },
+  {
+    "tag": "0018_closed_ares",
+    "statements": [
+      "ALTER TABLE `profiles` ADD `session_agents` integer;",
+      "ALTER TABLE `sessions` ADD `parent_session_id` integer REFERENCES sessions(id) ON DELETE set null;",
+      "ALTER TABLE `sessions` ADD `parent_conversation_id` text;",
+      "ALTER TABLE `sessions` ADD `child_name` text;",
+      "ALTER TABLE `sessions` ADD `role` text;",
+      "ALTER TABLE `sessions` ADD `outlive` integer DEFAULT false NOT NULL;",
+      "ALTER TABLE `sessions` ADD `can_start` integer DEFAULT false NOT NULL;",
+      "CREATE INDEX `sessions_parent_idx` ON `sessions` (`parent_session_id`);"
+    ]
   }
 ]

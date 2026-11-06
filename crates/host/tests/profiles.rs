@@ -83,6 +83,7 @@ fn sample(world: &World) -> ProfileDraft {
         mcp: vec!["clickup".into()],
         opening_prompt: Some("/recap".into()),
         pinned_order: None,
+        session_agents: None,
     }
 }
 
@@ -185,11 +186,34 @@ fn a_profile_with_everything_unset_round_trips_too() {
         mcp: Vec::new(),
         opening_prompt: None,
         pinned_order: None,
+        session_agents: None,
     };
     assert_eq!(
         profile_from_yaml(&profile_to_yaml(&bare, home), home).unwrap(),
         bare
     );
+}
+
+#[test]
+fn a_profile_that_turns_the_agents_tools_off_says_so_in_its_document_and_keeps_it_through_an_import()
+ {
+    let world = World::new();
+    let home = Some(world.home.as_path());
+    let off = ProfileDraft {
+        session_agents: Some(false),
+        ..sample(&world)
+    };
+    let yaml = profile_to_yaml(&off, home);
+    assert!(yaml.contains("session_agents: false"), "{yaml}");
+    assert_eq!(profile_from_yaml(&yaml, home).unwrap(), off);
+
+    // One that follows the setting lists the key unset, like the others.
+    let following = profile_to_yaml(&sample(&world), home);
+    assert!(following.contains("session_agents: null"), "{following}");
+
+    // A document written by hand that says true follows the setting too.
+    let yaml = yaml.replace("session_agents: false", "session_agents: true");
+    assert_eq!(profile_from_yaml(&yaml, home).unwrap().session_agents, None);
 }
 
 #[test]
@@ -295,6 +319,50 @@ fn a_profile_updates_in_place_and_stamps_updated_at() {
     assert_eq!(updated.mcp, Vec::<String>::new());
     assert!(updated.updated_at >= created.updated_at);
     assert_eq!(store::list(world.conn()).unwrap().len(), 1);
+}
+
+#[test]
+fn a_profile_that_turns_the_agents_tools_off_keeps_the_choice_and_another_profile_does_not_inherit_it()
+ {
+    let world = World::new();
+    let off = store::create(
+        world.conn(),
+        &ProfileDraft {
+            session_agents: Some(false),
+            ..draft(&world)
+        },
+    )
+    .unwrap();
+    let other = store::create(world.conn(), &named(&world, "Other")).unwrap();
+    assert_eq!(off.session_agents, Some(false));
+    assert_eq!(
+        store::read(world.conn(), off.id)
+            .unwrap()
+            .unwrap()
+            .session_agents,
+        Some(false)
+    );
+    assert_eq!(other.session_agents, None, "a profile follows the setting");
+
+    // Saving it again with the choice taken back follows the setting again.
+    let back = store::update(world.conn(), off.id, &draft(&world))
+        .unwrap()
+        .unwrap();
+    assert_eq!(back.session_agents, None);
+}
+
+#[test]
+fn a_profile_cannot_turn_the_agents_tools_on_against_the_setting_so_on_is_kept_as_following_it() {
+    let world = World::new();
+    let created = store::create(
+        world.conn(),
+        &ProfileDraft {
+            session_agents: Some(true),
+            ..draft(&world)
+        },
+    )
+    .unwrap();
+    assert_eq!(created.session_agents, None);
 }
 
 #[test]
@@ -616,6 +684,7 @@ impl HostWorld {
             mcp: Vec::new(),
             opening_prompt: Some("/recap".into()),
             pinned_order: None,
+            session_agents: None,
         }
     }
 
@@ -905,6 +974,24 @@ async fn over_a_client_connection_a_saved_profile_is_listed_whole_every_problem_
     assert_eq!(next_list(&mut watcher).await, ["hub dev"]);
     assert_eq!(next_list(&mut watcher).await, Vec::<String>::new());
 
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn over_a_client_connection_a_profile_that_turns_the_agents_tools_off_keeps_it_and_the_others_follow_the_setting()
+ {
+    let mut world = HostWorld::start().await;
+    let mut quiet_draft = world.draft("Quiet");
+    quiet_draft.session_agents = Some(false);
+    let quiet = world.save_draft(None, quiet_draft).await.profile.unwrap();
+    let busy = world.save("Busy").await.profile.unwrap();
+    assert_eq!(quiet.session_agents, Some(false));
+    assert_eq!(busy.session_agents, None);
+
+    let listed = world.list().await;
+    let choice = |id: u64| listed.iter().find(|p| p.id == id).unwrap().session_agents;
+    assert_eq!(choice(quiet.id), Some(false));
+    assert_eq!(choice(busy.id), None);
     world.stop().await;
 }
 

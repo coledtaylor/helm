@@ -53,7 +53,7 @@ impl fmt::Display for ProtocolVersion {
 }
 
 /// The version this crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(2, 1);
 
 /// The version of the link between a host and its session keeper, which a
 /// keeper names in its greeting. A host takes back a keeper that speaks this

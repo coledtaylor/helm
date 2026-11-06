@@ -1038,6 +1038,12 @@ export interface Profile {
   openingPrompt: string | null
   /** Launcher ordering; null means unpinned. */
   pinnedOrder: number | null
+  /**
+   * `false` turns the session-agents tools off for sessions launched from this
+   * profile. Null or absent follows the setting; a profile cannot turn them on
+   * where the setting has them off.
+   */
+  sessionAgents?: boolean | null
   createdAt: string
   updatedAt: string
 }

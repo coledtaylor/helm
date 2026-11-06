@@ -255,6 +255,117 @@ fn a_new_store_reads_as_the_defaults() {
 }
 
 #[test]
+fn the_agents_settings_default_to_on_with_4_children_8_on_the_host_depth_2_and_16_starts() {
+    let world = World::new();
+    let settings = world.stored();
+    assert!(settings.session_agents);
+    assert_eq!(settings.agent_children_per_parent, 4);
+    assert_eq!(settings.agent_sessions_per_host, 8);
+    assert_eq!(settings.agent_depth, 2);
+    assert_eq!(settings.agent_starts_per_parent, 16);
+}
+
+#[test]
+fn a_new_limit_is_kept_reported_to_every_listener_and_read_by_the_next_judge() {
+    let world = World::new();
+    let written = world
+        .service
+        .write(&HostSettingsPatch {
+            session_agents: Some(false),
+            agent_children_per_parent: Some(2),
+            agent_sessions_per_host: Some(5),
+            agent_depth: Some(3),
+            agent_starts_per_parent: Some(40),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!written.session_agents);
+    assert_eq!(
+        (
+            written.agent_children_per_parent,
+            written.agent_sessions_per_host,
+            written.agent_depth,
+            written.agent_starts_per_parent
+        ),
+        (2, 5, 3, 40)
+    );
+    assert_eq!(world.told(), vec![written.clone()]);
+    assert_eq!(world.stored(), written, "a later read finds what was kept");
+
+    // One limit at a time: the rest stay as they were.
+    let depth = world
+        .service
+        .write(&HostSettingsPatch {
+            agent_depth: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(depth.agent_depth, 1);
+    assert_eq!(depth.agent_children_per_parent, 2);
+    assert!(!depth.session_agents);
+}
+
+#[test]
+fn a_limit_outside_its_range_is_refused_in_its_own_sentence_and_writes_nothing() {
+    let world = World::new();
+    for (patch, sentence) in [
+        (
+            HostSettingsPatch {
+                agent_children_per_parent: Some(0),
+                ..Default::default()
+            },
+            "agentChildrenPerParent: expected 1 to 32, got 0",
+        ),
+        (
+            HostSettingsPatch {
+                agent_sessions_per_host: Some(129),
+                ..Default::default()
+            },
+            "agentSessionsPerHost: expected 1 to 128, got 129",
+        ),
+        (
+            HostSettingsPatch {
+                agent_depth: Some(9),
+                ..Default::default()
+            },
+            "agentDepth: expected 1 to 8, got 9",
+        ),
+        (
+            HostSettingsPatch {
+                agent_starts_per_parent: Some(0),
+                ..Default::default()
+            },
+            "agentStartsPerParent: expected 1 to 1000, got 0",
+        ),
+    ] {
+        assert_eq!(
+            world.refusal(patch),
+            format!("settings rejected: {sentence}")
+        );
+    }
+    assert_eq!(world.stored(), defaults());
+}
+
+#[test]
+fn an_unreadable_or_out_of_range_agents_row_keeps_its_default() {
+    let world = World::new();
+    world.raw("sessionAgents", "\"yes\"");
+    world.raw("agentChildrenPerParent", "0");
+    world.raw("agentSessionsPerHost", "{ not json");
+    world.raw("agentDepth", "99");
+    world.raw("agentStartsPerParent", "30");
+    let settings = world.stored();
+    assert!(settings.session_agents, "a string is not a boolean");
+    assert_eq!(
+        settings.agent_children_per_parent, 4,
+        "0 is below the range"
+    );
+    assert_eq!(settings.agent_sessions_per_host, 8);
+    assert_eq!(settings.agent_depth, 2, "99 is above the range");
+    assert_eq!(settings.agent_starts_per_parent, 30, "a good row is read");
+}
+
+#[test]
 fn an_unreadable_row_falls_back_to_its_default_and_the_rest_still_load() {
     let world = World::new();
     let roots = vec![world.path("projects")];

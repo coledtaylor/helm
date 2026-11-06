@@ -87,8 +87,8 @@ pub fn create(conn: &Connection, draft: &ProfileDraft) -> Result<Profile> {
     conn.query_row(
         &format!(
             "INSERT INTO profiles (name, root, overlays, access, model, effort, \
-             permission_mode, agent, mcp, opening_prompt, pinned_order) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+             permission_mode, agent, mcp, opening_prompt, pinned_order, session_agents) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
              RETURNING {PROFILE_COLUMNS}"
         ),
         params![
@@ -103,6 +103,7 @@ pub fn create(conn: &Connection, draft: &ProfileDraft) -> Result<Profile> {
             values.mcp,
             draft.opening_prompt,
             draft.pinned_order,
+            values.session_agents,
         ],
         profile_row,
     )
@@ -120,8 +121,9 @@ pub fn update(conn: &Connection, id: u64, draft: &ProfileDraft) -> Result<Option
         &format!(
             "UPDATE profiles SET name = ?1, root = ?2, overlays = ?3, access = ?4, \
              model = ?5, effort = ?6, permission_mode = ?7, agent = ?8, mcp = ?9, \
-             opening_prompt = ?10, pinned_order = ?11, updated_at = ({NOW}) \
-             WHERE id = ?12 RETURNING {PROFILE_COLUMNS}"
+             opening_prompt = ?10, pinned_order = ?11, session_agents = ?12, \
+             updated_at = ({NOW}) \
+             WHERE id = ?13 RETURNING {PROFILE_COLUMNS}"
         ),
         params![
             values.name,
@@ -135,6 +137,7 @@ pub fn update(conn: &Connection, id: u64, draft: &ProfileDraft) -> Result<Option
             values.mcp,
             draft.opening_prompt,
             draft.pinned_order,
+            values.session_agents,
             id,
         ],
         profile_row,
@@ -182,6 +185,10 @@ struct Values {
     mcp: String,
     effort: Option<String>,
     permission_mode: Option<String>,
+    /// Null follows the host's setting; false turns the agents tools off.
+    /// The one choice a profile makes is to turn them off, so a draft that
+    /// says on is stored as following the setting.
+    session_agents: Option<bool>,
 }
 
 impl Values {
@@ -194,6 +201,7 @@ impl Values {
             mcp: json(&draft.mcp),
             effort: draft.effort.map(protocol_name),
             permission_mode: draft.permission_mode.map(protocol_name),
+            session_agents: draft.session_agents.filter(|on| !on),
         }
     }
 }

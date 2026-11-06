@@ -40,7 +40,7 @@ pub(crate) mod tests;
 
 pub use activity::{ActivityPass, ActivityTracker, HostedView};
 pub use env::{STRIPPED_ENV, TERMINAL_ENV, session_env};
-pub use ledger::{NewSessionRow, SessionId, SessionLedger, SessionOrigin};
+pub use ledger::{NewSessionRow, ParentLink, SessionId, SessionLedger, SessionOrigin};
 pub use live::{
     Attachment, ClientId, GRACE, Session, SessionExit, SessionHost, SessionOutput, StartSession,
 };

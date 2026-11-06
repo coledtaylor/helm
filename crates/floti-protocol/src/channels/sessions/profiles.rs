@@ -97,6 +97,13 @@ pub struct Profile {
     pub opening_prompt: Option<String>,
     /// Launcher ordering; null means unpinned.
     pub pinned_order: Option<u32>,
+    /// Whether this profile's sessions can start agents: null follows the
+    /// host's setting, false turns the agents tools off for them. A profile
+    /// cannot turn them on against the setting, so the host keeps true as
+    /// null.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub session_agents: Option<bool>,
     /// ISO 8601.
     pub created_at: String,
     /// ISO 8601.
@@ -118,6 +125,12 @@ pub struct ProfileDraft {
     pub mcp: Vec<String>,
     pub opening_prompt: Option<String>,
     pub pinned_order: Option<u32>,
+    /// Whether this profile's sessions can start agents, as a saved
+    /// profile's `sessionAgents` says. A client before protocol 2.1 sends
+    /// none, which follows the host's setting.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub session_agents: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

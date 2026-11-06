@@ -37,6 +37,7 @@ struct Document<'a> {
     agent: Option<&'a str>,
     mcp: &'a [String],
     opening_prompt: Option<&'a str>,
+    session_agents: Option<bool>,
 }
 
 /// `profile` as its YAML document. `home` is the user's home folder, which
@@ -55,6 +56,7 @@ pub fn profile_to_yaml(profile: &ProfileDraft, home: Option<&Path>) -> String {
         agent: profile.agent.as_deref(),
         mcp: &profile.mcp,
         opening_prompt: profile.opening_prompt.as_deref(),
+        session_agents: profile.session_agents,
     };
     // A struct of strings, lists of strings and plain enums always
     // serialises.
@@ -100,6 +102,12 @@ pub fn profile_from_yaml(text: &str, home: Option<&Path>) -> Result<ProfileDraft
         mcp: string_list(parsed.get("mcp")),
         opening_prompt: nullable_string(parsed.get("opening_prompt")),
         pinned_order: None,
+        // Only `false` is a choice; `true` and anything else follow the
+        // host's setting.
+        session_agents: match parsed.get("session_agents") {
+            Some(Value::Bool(false)) => Some(false),
+            _ => None,
+        },
     })
 }
 
@@ -118,6 +126,7 @@ pub fn profile_draft(profile: &Profile) -> ProfileDraft {
         mcp: profile.mcp.clone(),
         opening_prompt: profile.opening_prompt.clone(),
         pinned_order: profile.pinned_order,
+        session_agents: profile.session_agents,
     }
 }
 

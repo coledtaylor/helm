@@ -65,6 +65,21 @@ fn a_host_on_a_new_major_accepts_only_its_own_version() {
 }
 
 #[test]
+fn a_host_on_2_1_welcomes_a_client_on_2_0_and_speaks_2_0_to_it() {
+    let host = HostIdentity {
+        protocol: PROTOCOL_VERSION,
+        host_version: "2.5.0".into(),
+        backends: Vec::new(),
+    };
+    for client in [ProtocolVersion::new(2, 0), PROTOCOL_VERSION] {
+        match answer(&host, &hello(client.major, client.minor)) {
+            Message::Welcome(welcome) => assert_eq!(welcome.protocol, client),
+            other => panic!("{client} should be accepted by {PROTOCOL_VERSION}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn an_older_minor_is_refused_naming_both_versions_and_the_client_as_the_side_to_update() {
     let refused = refusal(answer(&host(4), &hello(1, 2)));
     assert_eq!(refused.update, UpdateSide::Client);
@@ -221,7 +236,7 @@ fn the_restart_frames_encode_to_their_frozen_bytes_and_decode_back() {
 }
 
 #[test]
-fn s1_this_release_speaks_protocol_2_0() {
-    assert_eq!(PROTOCOL_VERSION, ProtocolVersion::new(2, 0));
-    assert_eq!(PROTOCOL_VERSION.to_string(), "2.0");
+fn s1_this_release_speaks_protocol_2_1() {
+    assert_eq!(PROTOCOL_VERSION, ProtocolVersion::new(2, 1));
+    assert_eq!(PROTOCOL_VERSION.to_string(), "2.1");
 }

@@ -4220,6 +4220,34 @@
     "HostSettings": {
       "description": "The host's settings.\n\nOne set for every client. What belongs to one client's window (theme,\nlayout, the terminal's look, the browser pane) is that client's own.",
       "properties": {
+        "agentChildrenPerParent": {
+          "default": 4,
+          "description": "How many children one session may have running at once.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "agentDepth": {
+          "default": 2,
+          "description": "How many generations of sessions a session may start below it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "agentSessionsPerHost": {
+          "default": 8,
+          "description": "How many agent-started sessions may run on the host at once.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "agentStartsPerParent": {
+          "default": 16,
+          "description": "How many children one session may start in its life.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "backendPaths": {
           "additionalProperties": {
             "type": "string"
@@ -4260,6 +4288,11 @@
           },
           "type": "array"
         },
+        "sessionAgents": {
+          "default": true,
+          "description": "Whether the sessions the host starts can start, list and stop\nsessions of their own. A profile can turn it off for its own sessions.\nA host before protocol 2.1 sends none, which reads as on.",
+          "type": "boolean"
+        },
         "sessionMcp": {
           "description": "Whether the host tells a session what other sessions are doing.",
           "type": "boolean"
@@ -4293,6 +4326,38 @@
     "HostSettingsPatch": {
       "description": "A change to some settings. A field left out is unchanged; a nullable\nfield sent as null is cleared.",
       "properties": {
+        "agentChildrenPerParent": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "agentDepth": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "agentSessionsPerHost": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "agentStartsPerParent": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "backendPaths": {
           "additionalProperties": {
             "type": "string"
@@ -4342,6 +4407,12 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "sessionAgents": {
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -7100,6 +7171,14 @@
           "description": "The folder the session runs in.",
           "type": "string"
         },
+        "sessionAgents": {
+          "default": null,
+          "description": "Whether this profile's sessions can start agents: null follows the\nhost's setting, false turns the agents tools off for them. A profile\ncannot turn them on against the setting, so the host keeps true as\nnull.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "updatedAt": {
           "description": "ISO 8601.",
           "type": "string"
@@ -7218,6 +7297,14 @@
         },
         "root": {
           "type": "string"
+        },
+        "sessionAgents": {
+          "default": null,
+          "description": "Whether this profile's sessions can start agents, as a saved\nprofile's `sessionAgents` says. A client before protocol 2.1 sends\nnone, which follows the host's setting.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
@@ -8664,6 +8751,24 @@
           "description": "The name handed to the agent, so the session can be found in its own\nresume list later. Never rewritten; a rename writes `label`.",
           "type": "string"
         },
+        "parentId": {
+          "default": null,
+          "description": "The session that started this one with an agent tool, as its row id,\nor null for a session a person started. A child that outlived its\nparent keeps naming it. Absent from a host before protocol 2.1, which\nreads as null.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "parentName": {
+          "default": null,
+          "description": "What the parent is called on screen (its label, else its name), or\nnull for a session with no parent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "profileId": {
           "description": "The profile it was launched from, if it was one. The session outlives\na deleted profile.",
           "format": "uint64",
@@ -8675,6 +8780,14 @@
         },
         "projectPath": {
           "description": "The discovered project it was launched against, if it was one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "default": null,
+          "description": "The role the session was started in, or null for a session started\nwith none.",
           "type": [
             "string",
             "null"
@@ -12050,5 +12163,5 @@
   ],
   "x-defaultInitialCredit": 262144,
   "x-maxFrameLen": 16777216,
-  "x-protocolVersion": "2.0"
+  "x-protocolVersion": "2.1"
 }

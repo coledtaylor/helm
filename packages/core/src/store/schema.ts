@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm'
 import {
+  type AnySQLiteColumn,
   blob,
   index,
   integer,
@@ -43,6 +44,14 @@ export const profiles = sqliteTable(
     openingPrompt: text('opening_prompt'),
     /** Launcher ordering; null means unpinned. */
     pinnedOrder: integer('pinned_order'),
+    /**
+     * Whether this profile's sessions can start agents of their own. Null
+     * follows the host's "Sessions can start agents" setting; 0 turns the
+     * agents tools off for the sessions started from this profile. There is no
+     * 1: a profile cannot turn them on against the setting, so the column
+     * holds only the one choice a profile makes.
+     */
+    sessionAgents: integer('session_agents', { mode: 'boolean' }),
     createdAt: text('created_at').notNull().default(now),
     updatedAt: text('updated_at').notNull().default(now)
   },
@@ -225,6 +234,35 @@ export const sessions = sqliteTable(
      * Null for a launch given none, and for every row this app writes.
      */
     agentTools: text('agent_tools'),
+    /**
+     * The session that started this one with an agent tool, or null for a
+     * session a person started. The row stays when the parent's does not: a
+     * child that outlives its parent keeps naming it, and a row deleted from
+     * history leaves its children as top-level sessions.
+     */
+    parentSessionId: integer('parent_session_id').references((): AnySQLiteColumn => sessions.id, {
+      onDelete: 'set null'
+    }),
+    /**
+     * The agent's conversation id of the parent when this was started, so a
+     * child that outlived its parent is found again when that conversation is
+     * resumed: the resumed session is a new row, and the conversation is what
+     * names it. Null when the parent had no conversation id or this has no
+     * parent.
+     */
+    parentConversationId: text('parent_conversation_id'),
+    /**
+     * What the parent calls this child: unique among the parent's children,
+     * taken from the role by default (`reviewer`, `reviewer-2`). Null for a
+     * session with no parent.
+     */
+    childName: text('child_name'),
+    /** The role it was started in, or null for none. */
+    role: text('role'),
+    /** Whether it keeps running when its parent ends. */
+    outlive: integer('outlive', { mode: 'boolean' }).notNull().default(false),
+    /** Whether it may start children of its own (the second generation). */
+    canStart: integer('can_start', { mode: 'boolean' }).notNull().default(false),
     status: text('status', { enum: ['running', 'exited', 'lost'] })
       .notNull()
       .default('running'),
@@ -235,8 +273,13 @@ export const sessions = sqliteTable(
   },
   // The launcher lists sessions newest-first across every project, which is
   // the one query
-  // this table is going to be asked for at any size.
-  (t) => [index('sessions_started_idx').on(t.startedAt), index('sessions_status_idx').on(t.status)]
+  // this table is going to be asked for at any size. A parent's children are
+  // looked up by their parent's row.
+  (t) => [
+    index('sessions_started_idx').on(t.startedAt),
+    index('sessions_status_idx').on(t.status),
+    index('sessions_parent_idx').on(t.parentSessionId)
+  ]
 )
 
 /**

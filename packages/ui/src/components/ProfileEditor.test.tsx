@@ -41,7 +41,7 @@ const BLANK: ProfileDraft = {
   pinnedOrder: null
 }
 
-const agent = (invocation: string, namespace: string | null): EffectiveEntry => ({
+const agent =(invocation: string, namespace: string | null): EffectiveEntry => ({
   invocation,
   name: invocation.split(':').at(-1) ?? invocation,
   source: namespace === null ? 'cwd' : 'overlay',
@@ -151,6 +151,14 @@ describe('ProfileEditor', () => {
       model: 'sonnet',
       openingPrompt: '/recap'
     })
+  })
+
+  it('keeps the choice of a profile that turns the session agents off when it is saved again', () => {
+    const props = renderEditor({
+      initial: { ...BLANK, name: 'No agents', root: HUB, sessionAgents: false }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
+    expect(props.onSave).toHaveBeenCalledWith(expect.objectContaining({ sessionAgents: false }))
   })
 
   it('ticks Access when Compose is ticked, and Access can be unticked after', () => {

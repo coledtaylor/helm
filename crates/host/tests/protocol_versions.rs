@@ -160,12 +160,14 @@ async fn welcomed(host: &Host, client: ProtocolVersion) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn s6_a_desktop_on_the_hosts_version_or_one_minor_behind_connects() {
-    assert_eq!(PROTOCOL_VERSION, ProtocolVersion::new(2, 0));
-    let host = start_host(ProtocolVersion::new(2, 0));
+    assert_eq!(PROTOCOL_VERSION, ProtocolVersion::new(2, 1));
+    let host = start_host(PROTOCOL_VERSION);
+    welcomed(&host, PROTOCOL_VERSION).await;
+    // The release before this one: 2.0 asks for 2.0 and is told 2.0.
     welcomed(&host, ProtocolVersion::new(2, 0)).await;
     host.stop().await;
 
-    let host = start_host(ProtocolVersion::new(2, 1));
+    let host = start_host(ProtocolVersion::new(2, 0));
     welcomed(&host, ProtocolVersion::new(2, 0)).await;
     host.stop().await;
 }

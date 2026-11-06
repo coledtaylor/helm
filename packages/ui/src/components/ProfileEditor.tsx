@@ -272,7 +272,9 @@ export function ProfileEditor({
       agent: agent.trim() || null,
       mcp,
       openingPrompt: openingPrompt.trim() || null,
-      pinnedOrder: 'pinnedOrder' in initial ? initial.pinnedOrder : null
+      pinnedOrder: 'pinnedOrder' in initial ? initial.pinnedOrder : null,
+      // Not edited here: a profile that turns the session agents off keeps it.
+      ...(initial.sessionAgents === false ? { sessionAgents: false } : {})
     })
   }
 
