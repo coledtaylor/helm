@@ -298,6 +298,64 @@
       ],
       "type": "object"
     },
+    "AgentWorktree": {
+      "description": "One checkout under `.floti/worktrees`.",
+      "properties": {
+        "branch": {
+          "description": "The branch checked out there; null for a detached checkout.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "child": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeChild"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The session that last worked there, a running one first; null when\nnone ever did."
+        },
+        "folder": {
+          "description": "The checkout's root.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The folder's name, which is also the branch's after `agent/`.",
+          "type": "string"
+        },
+        "uncommitted": {
+          "description": "Whether git sees a modified or untracked file there. Null when git\ncould not be asked, which is not the same as nothing changed.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "folder"
+      ],
+      "type": "object"
+    },
+    "AgentWorktrees": {
+      "description": "A project's agent worktrees, by name.",
+      "properties": {
+        "worktrees": {
+          "items": {
+            "$ref": "#/$defs/AgentWorktree"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "worktrees"
+      ],
+      "type": "object"
+    },
     "AppInfo": {
       "description": "The host's identity.",
       "properties": {
@@ -4257,6 +4315,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "agentHeavyPerHost": {
+          "default": 1,
+          "description": "How many heavy children (those started in a role whose class is heavy)\nmay run on the host at once.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "agentSessionsPerHost": {
           "default": 8,
           "description": "How many agent-started sessions may run on the host at once.",
@@ -4358,6 +4423,14 @@
           ]
         },
         "agentDepth": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "agentHeavyPerHost": {
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -7622,6 +7695,23 @@
       ],
       "type": "object"
     },
+    "RemoveWorktreeRequest": {
+      "description": "One agent worktree to remove.",
+      "properties": {
+        "folder": {
+          "description": "The worktree's folder, as `worktrees:list` gave it.",
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "folder"
+      ],
+      "type": "object"
+    },
     "RenameConfigRequest": {
       "properties": {
         "name": {
@@ -10212,6 +10302,63 @@
       },
       "type": "object"
     },
+    "WorktreeChild": {
+      "description": "The session that worked in a worktree.",
+      "properties": {
+        "name": {
+          "description": "The child's name; a session a person started has its own name.",
+          "type": "string"
+        },
+        "parent": {
+          "description": "The name of the session that started it; null for a session a person\nstarted, or when that session's record is gone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "running": {
+          "description": "Whether it is running now.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "running"
+      ],
+      "type": "object"
+    },
+    "WorktreeRemoval": {
+      "description": "What removing a worktree came to.",
+      "properties": {
+        "refusal": {
+          "description": "Why it was not removed, as a sentence; null when it was.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "removed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "removed"
+      ],
+      "type": "object"
+    },
+    "WorktreesProject": {
+      "description": "A project whose agent worktrees are asked for.",
+      "properties": {
+        "project": {
+          "description": "The project's folder, as the host knows it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "type": "object"
+    },
     "WriteConfigRequest": {
       "properties": {
         "content": {
@@ -12185,6 +12332,28 @@
           "$ref": "#/$defs/UsageSnapshot"
         },
         "type": "array"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "worktrees:list",
+      "request": {
+        "$ref": "#/$defs/WorktreesProject"
+      },
+      "response": {
+        "$ref": "#/$defs/AgentWorktrees"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "worktrees:remove",
+      "request": {
+        "$ref": "#/$defs/RemoveWorktreeRequest"
+      },
+      "response": {
+        "$ref": "#/$defs/WorktreeRemoval"
       }
     },
     {

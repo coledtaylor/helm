@@ -931,6 +931,16 @@ overrides the gate; keep it.
   room. A running agent child's card has one while it reports, and so does a
   child that is open as its own tab, above its terminal; a command child's, a
   header and an ended child's last screen never do.
+- **Agent worktrees**: a project page for a folder on this PC lists the
+  checkouts Floti made for its agents in a section of its own, under the
+  sections above it and shown only when the repository has any. One row each:
+  the worktree's name and branch in mono, the session that worked there with its
+  state (running or ended), a warn-toned "Uncommitted changes" where there are
+  some, and a quiet secondary **Remove**. Remove asks nothing first: a clean
+  worktree's removal loses nothing and its branch stays, and a removal the host
+  refuses (uncommitted changes, a running session) shows its sentence in the
+  danger tone under that row, which stays. It is read when the page opens, after
+  a removal and when a session in the project starts or ends.
 - **Project shell**: a project page carries a plain shell (PowerShell, cwd at
   the project) as a terminal island below it. It is furniture, not a session:
   no row, no history, no notification. Each page owns its shell and its

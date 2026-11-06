@@ -482,7 +482,7 @@ impl AgentBackend for OtherAgentBackend {
 
 impl Resumer for OtherAgentBackend {
     /// `--continue <id>` in the folder history recorded, with this launch's
-    /// tools and rules and no prompt.
+    /// tools and rules, and the prompt as the next turn when there is one.
     fn resume(&self, request: &ResumeRequest, folder: &LaunchFolder) -> Result<Launch> {
         if request.conversation_id.trim().is_empty() {
             return Err(Error::backend(&self.id, "resume a conversation with no id"));
@@ -492,7 +492,7 @@ impl Resumer for OtherAgentBackend {
             vec!["--continue".into(), request.conversation_id.clone().into()],
             request.conversation_id.clone(),
             &request.composition,
-            None,
+            request.prompt.as_deref(),
             folder,
         )
     }
@@ -955,6 +955,7 @@ mod tests {
                     &ResumeRequest {
                         conversation_id: conversation.clone(),
                         folder,
+                        prompt: None,
                         composition: Composition::default(),
                     },
                     &launch_folder,

@@ -1,4 +1,6 @@
 import type {
+  AgentWorktree,
+  AgentWorktreeRemoval,
   AppSettings,
   LocalHostRestartOffer,
   ArchiveStats,
@@ -1513,6 +1515,21 @@ export interface IpcRequests {
    * cannot leave watches behind it.
    */
   'files:watch': { request: { roots: string[] }; response: void }
+  /**
+   * The git worktrees Floti made for a project's agents: each folder under
+   * `<repo>/.floti/worktrees`, and no other worktree of the repository, with
+   * the session that last worked there and whether it has uncommitted changes.
+   * The host answers; a project it does not know is refused with a sentence,
+   * and one outside a repository has none.
+   */
+  'worktrees:list': { request: { project: string }; response: AgentWorktree[] }
+  /**
+   * Removes one agent worktree with git, keeping its `agent/<name>` branch and
+   * the work on it. One a running session works in, one with uncommitted
+   * changes and a folder that is none of the project's agent worktrees are
+   * refused in a sentence and left as they are.
+   */
+  'worktrees:remove': { request: { project: string; folder: string }; response: AgentWorktreeRemoval }
   /** VS Code's name here, or null where nothing on this machine opens `vscode://`. */
   'files:editor': { request: void; response: { name: string | null } }
   /**
@@ -2354,6 +2371,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'files:read': true,
   'files:list': true,
   'files:watch': true,
+  'worktrees:list': true,
+  'worktrees:remove': true,
   'files:editor': true,
   'files:openInEditor': true,
   'clipboard:read': true,

@@ -770,7 +770,8 @@ describe('sessions through the local host', () => {
             agentChildrenPerParent: 6,
             agentSessionsPerHost: 12,
             agentDepth: 3,
-            agentStartsPerParent: 20
+            agentStartsPerParent: 20,
+            agentHeavyPerHost: 2
           },
           '/bin/claude'
         )
@@ -785,20 +786,22 @@ describe('sessions through the local host', () => {
         agentChildrenPerParent: 6,
         agentSessionsPerHost: 12,
         agentDepth: 3,
-        agentStartsPerParent: 20
+        agentStartsPerParent: 20,
+        agentHeavyPerHost: 2
       })
       expect(
         hostSettingsFor({ ...DEFAULT_SETTINGS, browserMcp: true, browserMcpLocalOnly: false, sessionMcp: true }, null)
       ).toMatchObject({ browserMcp: true, browserMcpLocalOnly: false, sessionMcp: true })
     })
 
-    it('tells the host the defaults - agents on, 4 children, 8 on the host, 2 deep, 16 starts - when the user has changed none', () => {
+    it('tells the host the defaults - agents on, 4 children, 8 on the host, 2 deep, 16 starts, 1 heavy - when the user has changed none', () => {
       expect(hostSettingsFor(DEFAULT_SETTINGS, null)).toMatchObject({
         sessionAgents: true,
         agentChildrenPerParent: 4,
         agentSessionsPerHost: 8,
         agentDepth: 2,
-        agentStartsPerParent: 16
+        agentStartsPerParent: 16,
+        agentHeavyPerHost: 1
       })
     })
   })

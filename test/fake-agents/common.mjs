@@ -188,7 +188,9 @@ export function parseArgv(argv, spec) {
  * - `instructionFiles`: every instruction file it loaded, outermost first.
  * - `composedInstructions`: text it was handed to add to its instructions
  *   (Claude Code's `--append-system-prompt-file`), or null.
- * - `openingPrompt`: the prompt it was started with, or null.
+ * - `openingPrompt`: the prompt it was started with, or null. A reopened
+ *   conversation records the prompt given with it, the next turn, the same way
+ *   (`resumed` says it was reopened).
  * - `mcpServers`: the MCP servers it loaded, by name.
  * - `received`: every line typed at its prompt.
  * - `shell`: every command `/shell` ran, as `{ command, stdout, stderr, code }`

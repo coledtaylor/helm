@@ -3,6 +3,7 @@ import {
   ACCENT_SWATCHES,
   AGENT_CHILDREN_PER_PARENT,
   AGENT_DEPTH,
+  AGENT_HEAVY_PER_HOST,
   AGENT_SESSIONS_PER_HOST,
   AGENT_STARTS_PER_PARENT,
   offerableUsageModes,
@@ -327,10 +328,14 @@ export type TerminalSettings = Pick<
   | 'projectShellHeightPct'
 >
 
-/** The four limits on a family of agents, named once for the group that edits them. */
+/** The limits on a family of agents, named once for the group that edits them. */
 export type AgentLimitSettings = Pick<
   AppSettings,
-  'agentChildrenPerParent' | 'agentSessionsPerHost' | 'agentDepth' | 'agentStartsPerParent'
+  | 'agentChildrenPerParent'
+  | 'agentSessionsPerHost'
+  | 'agentHeavyPerHost'
+  | 'agentDepth'
+  | 'agentStartsPerParent'
 >
 
 /** What a fact reads when there is nothing to put in it. */
@@ -1756,7 +1761,7 @@ function AgentsGroup({
 }
 
 /**
- * The four limits on a family of agents.
+ * The limits on a family of agents.
  *
  * Its own group under the two choices, because the design puts every number in
  * Settings, Agents, and the choices above are drawn alone as a pair. The host
@@ -1805,6 +1810,22 @@ function AgentLimitsGroup({
           label="Agent sessions per host"
           data-settings-agent-sessions-per-host={String(limits.agentSessionsPerHost)}
           onCommit={(agentSessionsPerHost) => onLimitsChange({ agentSessionsPerHost })}
+        />
+      </Row>
+
+      <Divider />
+
+      <Row
+        label="Heavy agents on this host"
+        hint="Agents started in a heavy role (an emulator, an end-to-end stack, a full build or suite) that may run on one host at once. A heavy start past it is refused, naming the one that holds the slot."
+      >
+        <NumberField
+          value={limits.agentHeavyPerHost}
+          min={AGENT_HEAVY_PER_HOST.min}
+          max={AGENT_HEAVY_PER_HOST.max}
+          label="Heavy agents on this host"
+          data-settings-agent-heavy-per-host={String(limits.agentHeavyPerHost)}
+          onCommit={(agentHeavyPerHost) => onLimitsChange({ agentHeavyPerHost })}
         />
       </Row>
 

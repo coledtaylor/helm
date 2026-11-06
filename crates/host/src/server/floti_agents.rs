@@ -297,29 +297,42 @@ async fn start(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
         Ok(asked) => asked,
         Err(refusal) => return problem(&refusal),
     };
+    let resumed = request.resume.is_some();
     let (hosted, me) = (Arc::clone(from.hosted), from.me);
     let started = match blocking(move || hosted.start_child(me, request)).await {
         Ok(started) => started,
         Err(refusal) => return problem(&refusal),
     };
     let branch = started.branch.as_deref().unwrap_or("none");
+    let verb = if resumed { "Resumed" } else { "Started" };
     let mut text = format!(
-        "Started {name}.\nname: {name}\nbackend: {backend}\nfolder: {folder}\nbranch: {branch}",
+        "{verb} {name}.
+name: {name}
+backend: {backend}
+folder: {folder}
+branch: {branch}",
         name = started.name,
         backend = started.backend,
         folder = started.folder,
     );
+    if let Some(worktree) = &started.worktree {
+        text.push_str(&format!("
+worktree: {worktree}"));
+    }
     let mut body = json!({
         "name": started.name,
         "backend": started.backend,
         "folder": started.folder,
         "branch": started.branch,
+        "worktree": started.worktree,
     });
     if wait {
         // Only that child's news: the rest stays in the inbox for a wait.
         match from.wait(WaitFor::Any, vec![started.name.clone()]).await {
             Ok(waited) => {
-                text.push_str("\n\n");
+                text.push_str("
+
+");
                 text.push_str(&waited_text(&waited));
                 if let (Some(body), Value::Object(news)) =
                     (body.as_object_mut(), waited_json(&waited))
@@ -329,7 +342,9 @@ async fn start(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
             }
             Err(refusal) => {
                 text.push_str(&format!(
-                    "\n\nIt is running, but waiting on it failed: {refusal}"
+                    "
+
+It is running, but waiting on it failed: {refusal}"
                 ));
             }
         }
@@ -427,7 +442,9 @@ async fn blocking<T: Send + 'static>(
 fn start_request(arguments: &JsonObject) -> Result<StartChild, String> {
     let task = text_argument(arguments, "task")
         .ok_or_else(|| "Give the agent its task: task is what it is to do.".to_owned())?;
-    for key in ["role", "backend", "folder", "profile", "name"] {
+    for key in [
+        "role", "backend", "folder", "profile", "name", "worktree", "resume",
+    ] {
         if !matches!(
             arguments.get(key),
             None | Some(Value::Null | Value::String(_))
@@ -442,8 +459,10 @@ fn start_request(arguments: &JsonObject) -> Result<StartChild, String> {
         folder: text_argument(arguments, "folder"),
         profile: text_argument(arguments, "profile"),
         name: text_argument(arguments, "name"),
+        worktree: text_argument(arguments, "worktree"),
         outlive: flag(arguments, "outlive")?.unwrap_or(false),
         can_start: flag(arguments, "can_start")?,
+        resume: text_argument(arguments, "resume"),
     })
 }
 
@@ -533,13 +552,15 @@ fn listing_text(listed: &ChildrenListed) -> String {
     }
     let limits = &listed.limits;
     out.push_str(&format!(
-        "Limits left: {} of {} running at once, {} of {} starts, {} of {} on this host.",
+        "Limits left: {} of {} running at once, {} of {} starts, {} of {} on this host, {} of {} heavy on this host.",
         limits.children_left,
         limits.children_per_parent,
         limits.starts_left,
         limits.starts_per_parent,
         limits.host_left,
         limits.sessions_per_host,
+        limits.heavy_left,
+        limits.heavy_per_host,
     ));
     if let Some(reason) = &limits.cannot_start {
         out.push_str(&format!(" {reason}"));
@@ -594,6 +615,8 @@ fn listing_json(listed: &ChildrenListed) -> Value {
             "startsLeft": limits.starts_left,
             "sessionsPerHost": limits.sessions_per_host,
             "hostLeft": limits.host_left,
+            "heavyPerHost": limits.heavy_per_host,
+            "heavyLeft": limits.heavy_left,
             "depth": limits.depth,
             "cannotStart": limits.cannot_start,
         },
