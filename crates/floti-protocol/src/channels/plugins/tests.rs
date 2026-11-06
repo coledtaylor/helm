@@ -182,6 +182,7 @@ fn record() -> SessionRecord {
         parent_id: None,
         parent_name: None,
         role: None,
+        stopped: false,
     }
 }
 

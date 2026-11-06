@@ -291,6 +291,28 @@ describe('sessions over the window’s own connection', () => {
     expect(connection.streamsFor('session:data', 9)).toHaveLength(2)
   })
 
+  it('lets go of a session the last show named and this one leaves out, ending nothing on the host', async () => {
+    const { adapters, connection } = world({ listed: [row(), row({ id: 9, name: 'api' }), row({ id: 10, name: 'docs' })] })
+    await ask(adapters, 'session:list')
+    adapters.show([7, 9])
+    send(adapters, 'session:focus', { ids: [9] })
+    adapters.show([7, 10])
+    expect(connection.streamsFor('session:data', 9)[0]?.closed).toBe(true)
+    expect(connection.payloads('session:focus').at(-1)).toEqual({ ids: [] })
+    expect(connection.streamsFor('session:data', 7)[0]?.closed).toBe(false)
+    expect(connection.streamsFor('session:data', 10)).toHaveLength(1)
+
+    // Shown again, it is drawn afresh from a new stream.
+    adapters.show([7, 9])
+    expect(connection.streamsFor('session:data', 9)).toHaveLength(2)
+    expect(connection.streamsFor('session:data', 10)[0]?.closed).toBe(true)
+
+    adapters.show([])
+    expect(connection.streamsFor('session:data', 7)[0]?.closed).toBe(true)
+    expect(connection.streamsFor('session:data', 9)[1]?.closed).toBe(true)
+    expect(connection.payloads('session:close')).toEqual([])
+  })
+
   it('carries a session this window started from the start, before the window has said it has a tab', async () => {
     const { adapters, connection } = world()
     await ask(adapters, 'session:start', { cwd: '/work dir/app', projectPath: '/work dir/app', cols: 100, rows: 30 })

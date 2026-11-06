@@ -5,7 +5,9 @@ import {
   EMPTY_LAYOUT,
   notOpenHere,
   openTab,
+  returnsToFamily,
   sessionRef,
+  sessionTabIds,
   type PaneLayout,
   type SessionRecord
 } from '@helm/core/types'
@@ -22,6 +24,7 @@ import {
   keepRemoteTab,
   useSessionConfirm,
   useShownSessionTabs,
+  type FamilyScope,
   type RemoteTabsView
 } from './hostTabs'
 
@@ -287,5 +290,139 @@ describe('a build-box session’s tab', () => {
     expect(keepRemoteTab(ref, { ...viewOf([]), byHost: new Map() })).toBe(true)
     // This PC's tabs are not this function's to decide.
     expect(keepRemoteTab(sessionRef(7), viewOf([]))).toBeUndefined()
+  })
+})
+
+describe('a child shown in its parent’s tab on build-box', () => {
+  const lead = row({ id: 7, name: 'lead' })
+  const reviewer = row({ id: 8, name: 'reviewer', parentId: 7, parentName: 'lead', role: 'reviewer' })
+  const worker = row({ id: 9, name: 'worker', parentId: 7, parentName: 'lead', role: 'worker' })
+  const hasRoom = (): boolean => true
+  const noRoom = (): boolean => false
+
+  /** build-box listing a parent and two children, connected, with the parent’s tab the only one here. */
+  async function connected() {
+    const first = buildBox([lead, reviewer, worker])
+    const w = world(first)
+    w.tell({ [BUILD]: { state: 'connected' } })
+    await settle()
+    const records = await w.listed()
+    const scope = (roomOf: (tab: string) => boolean): FamilyScope => ({
+      sessions: new Map([[BUILD, records]]),
+      roomOf
+    })
+    return { first, w, records, scope }
+  }
+
+  it('is open here: the connection carries its terminal live, and the sessions pane does not list it as not open here', async () => {
+    const { first, w, records, scope } = await connected()
+    const layout = openTab(EMPTY_LAYOUT, sessionRef(7, BUILD))
+    const family = scope(hasRoom)
+    renderHook(() => useShownSessionTabs(layout, [BUILD], w.show, family))
+    await settle()
+
+    expect(w.shown.at(-1)).toEqual({ host: BUILD, ids: [7, 8, 9] })
+    for (const id of [7, 8, 9]) expect(first.streamsFor('session:data', id)).toHaveLength(1)
+    first.streamsFor('session:data', 8)[0]!.send('reviewing…')
+    expect(w.drawn).toContainEqual({ id: 8, data: 'reviewing…' })
+    expect(notOpenHere(layout, records, BUILD, family.roomOf)).toEqual([])
+  })
+
+  it('is listed as not open here, and not carried, while this device does not show children in their parent’s tab', async () => {
+    const { first, w, records } = await connected()
+    const layout = openTab(EMPTY_LAYOUT, sessionRef(7, BUILD))
+    renderHook(() => useShownSessionTabs(layout, [BUILD], w.show, null))
+    await settle()
+
+    expect(w.shown.at(-1)).toEqual({ host: BUILD, ids: [7] })
+    expect(first.streamsFor('session:data', 8)).toEqual([])
+    expect(notOpenHere(layout, records, BUILD).map((record) => record.id)).toEqual([8, 9])
+  })
+
+  it('is carried again by itself when its pane gains room, and let go when the room goes', async () => {
+    const { first, w, scope } = await connected()
+    const layout = openTab(EMPTY_LAYOUT, sessionRef(7, BUILD))
+    const crowded = scope(noRoom)
+    const roomy = scope(hasRoom)
+    const shown = renderHook(({ family }) => useShownSessionTabs(layout, [BUILD], w.show, family), {
+      initialProps: { family: crowded }
+    })
+    await settle()
+    expect(w.shown.at(-1)).toEqual({ host: BUILD, ids: [7] })
+
+    shown.rerender({ family: roomy })
+    await settle()
+    expect(w.shown.at(-1)).toEqual({ host: BUILD, ids: [7, 8, 9] })
+    expect(first.streamsFor('session:data', 8)).toHaveLength(1)
+
+    shown.rerender({ family: crowded })
+    await settle()
+    expect(w.shown.at(-1)).toEqual({ host: BUILD, ids: [7] })
+    expect(first.streamsFor('session:data', 8)[0]?.closed).toBe(true)
+  })
+
+  it('goes back to its parent’s family view on Close tab, keep running, keeping its stream and its terminal', async () => {
+    const { first, w, records, scope } = await connected()
+    let layout: PaneLayout = openTab(openTab(EMPTY_LAYOUT, sessionRef(7, BUILD)), sessionRef(8, BUILD))
+    const family = scope(hasRoom)
+    const shown = renderHook(({ at }) => useShownSessionTabs(at, [BUILD], w.show, family), {
+      initialProps: { at: layout }
+    })
+    await settle()
+    expect(w.shown.at(-1)).toEqual({ host: BUILD, ids: [7, 8, 9] })
+    const stream = first.streamsFor('session:data', 8)[0]!
+
+    const disposed: Array<[number, string]> = []
+    closeKeepingRunning(
+      8,
+      BUILD,
+      {
+        release: (id, host) => w.bridges.hostBridge(host).sessions.release(id),
+        disposeTerminal: (id, host) => disposed.push([id, host]),
+        commit: (op) => {
+          layout = op(layout)
+        }
+      },
+      returnsToFamily(layout, records, 8, BUILD, family.roomOf)
+    )
+    shown.rerender({ at: layout })
+    await settle()
+
+    expect(sessionTabIds(layout, BUILD)).toEqual(new Set([7]))
+    expect(disposed).toEqual([])
+    expect(stream.closed).toBe(false)
+    expect(first.streamsFor('session:data', 8)).toHaveLength(1)
+    expect(notOpenHere(layout, records, BUILD, family.roomOf)).toEqual([])
+    expect(first.payloads('session:close')).toEqual([])
+  })
+
+  it('lets go of its stream and terminal on Close tab, keep running where its parent’s tab would not show it', async () => {
+    const { first, w, records } = await connected()
+    let layout: PaneLayout = openTab(EMPTY_LAYOUT, sessionRef(8, BUILD))
+    const shown = renderHook(({ at }) => useShownSessionTabs(at, [BUILD], w.show, null), {
+      initialProps: { at: layout }
+    })
+    await settle()
+    const stream = first.streamsFor('session:data', 8)[0]!
+
+    const disposed: Array<[number, string]> = []
+    closeKeepingRunning(
+      8,
+      BUILD,
+      {
+        release: (id, host) => w.bridges.hostBridge(host).sessions.release(id),
+        disposeTerminal: (id, host) => disposed.push([id, host]),
+        commit: (op) => {
+          layout = op(layout)
+        }
+      },
+      returnsToFamily(layout, records, 8, BUILD, null)
+    )
+    shown.rerender({ at: layout })
+    await settle()
+
+    expect(disposed).toEqual([[8, BUILD]])
+    expect(stream.closed).toBe(true)
+    expect(notOpenHere(layout, records, BUILD).map((record) => record.id)).toEqual([7, 8, 9])
   })
 })

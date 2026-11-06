@@ -388,6 +388,31 @@ describe('settings', () => {
       expect(validateSetting('paneLayout', one({ kind: 'history', host: 'h-build' }))).toMatch(/no host/)
     })
 
+    it('keeps how each parent tab arranges its children, and refuses an arrangement that is not one', () => {
+      const withFamilies = (families: unknown) => ({
+        root: { panes: [{ kind: 'session', id: 1 }], activeId: null },
+        focused: 0,
+        families
+      })
+      const arranged = withFamilies({
+        'session:1': { order: [3, 4, 5], shrunk: [4], closed: [6], screens: [7] }
+      })
+      expect(validateSetting('paneLayout', arranged)).toBeNull()
+      writeSettings(store, { paneLayout: arranged as never })
+      expect(readSettings(store).paneLayout).toEqual(arranged)
+
+      expect(validateSetting('paneLayout', withFamilies({}))).toBeNull()
+      expect(validateSetting('paneLayout', withFamilies([]))).toMatch(/arrangements/)
+      expect(validateSetting('paneLayout', withFamilies({ 'session:1': [] }))).toMatch(/arrangement for/)
+      expect(validateSetting('paneLayout', withFamilies({ 'session:1': { order: 'x' } }))).toMatch(/order/)
+      expect(validateSetting('paneLayout', withFamilies({ 'session:1': { shrunk: [0] } }))).toMatch(/shrunk/)
+      expect(validateSetting('paneLayout', withFamilies({ 'session:1': { closed: [1.5] } }))).toMatch(/closed/)
+      // More arrangements than the layout has tabs to hold them.
+      expect(
+        validateSetting('paneLayout', withFamilies({ 'session:1': { order: [2] }, 'session:2': { order: [3] } }))
+      ).toMatch(/at most/)
+    })
+
     it('reads a value that is neither shape as no layout, and no key for the old divider', () => {
       raw('paneLayout', { panes: [] })
       raw('paneSplitPct', 62)

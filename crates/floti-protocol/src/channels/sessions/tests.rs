@@ -210,6 +210,7 @@ fn record(id: u64) -> SessionRecord {
         parent_id: Some(2),
         parent_name: Some("lead".into()),
         role: Some("reviewer".into()),
+        stopped: false,
     }
 }
 

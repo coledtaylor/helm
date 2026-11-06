@@ -271,6 +271,14 @@ export const sessions = sqliteTable(
     childClass: text('child_class', { enum: ['light', 'heavy'] }),
     /** Whether the role it was started in asks for a worktree of its own. */
     childWorktree: integer('child_worktree', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * Whether the host ended the session itself - Stop or End, an agent's stop,
+     * its parent ending, a quit that ends it - and not the program: marked
+     * before the process exits, so a session whose program exited on its own
+     * is never marked. A finished child's header reads "Stopped" for one and
+     * "Done" for the other.
+     */
+    stopped: integer('stopped', { mode: 'boolean' }).notNull().default(false),
     status: text('status', { enum: ['running', 'exited', 'lost'] })
       .notNull()
       .default('running'),

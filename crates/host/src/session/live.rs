@@ -722,6 +722,7 @@ impl Session {
         if self.exit().is_some() {
             return;
         }
+        self.mark_ending();
         match &self.ender {
             Ender::Here(tree) => {
                 let _ = tree.end_tree(self.pid, Ending::Polite);
@@ -753,6 +754,7 @@ impl Session {
         if self.exit().is_some() {
             return Ok(());
         }
+        self.mark_ending();
         let ended = match &self.ender {
             Ender::Here(tree) => tree.end_tree(self.pid, Ending::Forced),
             Ender::Kept { link, handle } => {
@@ -762,6 +764,15 @@ impl Session {
         };
         drop(lock(&self.pty).take());
         ended
+    }
+
+    /// Writes down, before the program is touched, that the host is the one
+    /// ending it: an exit that follows is then the host's doing, and an exit
+    /// nobody asked for is the program finishing on its own.
+    fn mark_ending(&self) {
+        if let Some(shared) = self.host.upgrade() {
+            shared.ledger.ending(self.id);
+        }
     }
 
     /// Waits up to `timeout` for the program to exit and the session to be

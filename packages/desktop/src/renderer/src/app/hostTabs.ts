@@ -5,7 +5,9 @@ import {
   hostOf,
   paneId,
   sessionRef,
-  sessionTabIds,
+  shownSessionIds,
+  type FamilyMember,
+  type FamilyRoomOf,
   type PaneLayout,
   type PaneRef
 } from '@helm/core/types'
@@ -62,15 +64,29 @@ export function keepRemoteTab(ref: PaneRef, view: RemoteTabsView): boolean | und
   }
 }
 
-/** The ids of `host`'s sessions with a tab here, in order, as one string a memo can compare. */
-const tabbedIds = (layout: PaneLayout, host: string): string =>
-  [...sessionTabIds(layout, host)].sort((a, b) => a - b).join(',')
+/**
+ * What the window knows of children shown in their parent's tab, passed while
+ * this device shows them and null while it does not. Memoised by the caller:
+ * a new object is a new question about who is open here.
+ */
+export interface FamilyScope {
+  /** The sessions each host lists, running or ended, children among them. */
+  sessions: ReadonlyMap<string, readonly FamilyMember[]>
+  /** Whether a parent tab's pane has room for its family view (`FamilyRoomOf`). */
+  roomOf: FamilyRoomOf
+}
 
-/** Tells one host's connection which of its sessions have a tab in this window. */
+/** The ids of `host`'s sessions this window shows, in order, as one string a memo can compare. */
+const shownIds = (layout: PaneLayout, host: string, family: FamilyScope | null): string =>
+  shownSessionIds(layout, family?.sessions.get(host) ?? [], host, family?.roomOf ?? null).join(',')
+
+/** Tells one host's connection which of its sessions are shown in this window. */
 export type ShowSessionTabs = (ids: readonly number[], host: string) => void
 
 /**
- * Which sessions each host's connection carries: those with a tab here.
+ * Which sessions each host's connection carries: those with a tab here, and
+ * the running children a parent's tab here shows in its family view (`family`),
+ * which count as open here though none has a tab.
  *
  * This PC's is told each time the layout changes. Each host on another
  * computer is told while the window is connected to it, and told
@@ -81,28 +97,43 @@ export type ShowSessionTabs = (ids: readonly number[], host: string) => void
 export function useShownSessionTabs(
   layout: PaneLayout,
   connected: readonly string[],
-  show: ShowSessionTabs
+  show: ShowSessionTabs,
+  family: FamilyScope | null = null
 ): void {
   const showRef = useRef(show)
   useEffect(() => {
     showRef.current = show
   }, [show])
-  const local = useMemo(() => tabbedIds(layout, LOCAL_HOST_KEY), [layout])
+  const local = useMemo(() => shownIds(layout, LOCAL_HOST_KEY, family), [layout, family])
+  // A host is told when it has something shown, and once more when the last of
+  // it goes, so a child that lost its pane's room is let go of.
+  const toldLocal = useRef('')
   useEffect(() => {
-    if (local === '') return
-    showRef.current(local.split(',').map(Number), LOCAL_HOST_KEY)
+    const before = toldLocal.current
+    toldLocal.current = local
+    if (local === '' && before === '') return
+    showRef.current(local === '' ? [] : local.split(',').map(Number), LOCAL_HOST_KEY)
   }, [local])
   const remote = useMemo(
-    () => connected.map((host) => `${host}=${tabbedIds(layout, host)}`).join('\n'),
-    [connected, layout]
+    () => connected.map((host) => `${host}=${shownIds(layout, host, family)}`).join('\n'),
+    [connected, layout, family]
   )
+  const toldRemote = useRef(new Map<string, string>())
   useEffect(() => {
-    if (remote === '') return
-    for (const line of remote.split('\n')) {
+    const told = toldRemote.current
+    for (const host of [...told.keys()]) {
+      if (!connected.includes(host)) told.delete(host)
+    }
+    for (const line of remote === '' ? [] : remote.split('\n')) {
       const at = line.lastIndexOf('=')
       const shown = line.slice(at + 1)
-      if (shown !== '') showRef.current(shown.split(',').map(Number), line.slice(0, at))
+      const host = line.slice(0, at)
+      const before = told.get(host) ?? ''
+      told.set(host, shown)
+      if (shown === '' && before === '') continue
+      showRef.current(shown === '' ? [] : shown.split(',').map(Number), host)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `remote` is `connected` and the layout, joined
   }, [remote])
 }
 
@@ -167,9 +198,20 @@ export interface KeepRunningDeps {
  * its terminal to this window, and nothing is asked or ended there. The
  * session stays listed under its host as not open here, where Open brings its
  * tab back on a new stream.
+ *
+ * A child that `returnsToFamily` is the exception: its parent's tab shows it
+ * in its family view next, so its stream and its terminal stay, and only the
+ * tab goes.
  */
-export function closeKeepingRunning(id: number, host: string, deps: KeepRunningDeps): void {
-  deps.release(id, host)
-  deps.disposeTerminal(id, host)
+export function closeKeepingRunning(
+  id: number,
+  host: string,
+  deps: KeepRunningDeps,
+  staysInFamily = false
+): void {
+  if (!staysInFamily) {
+    deps.release(id, host)
+    deps.disposeTerminal(id, host)
+  }
   deps.commit((layout) => closeTab(layout, paneId(sessionRef(id, host))))
 }

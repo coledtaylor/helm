@@ -86,6 +86,14 @@ pub struct SessionRecord {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub role: Option<String>,
+    /// Whether the host ended the session itself - a client's Stop or End, an
+    /// agent's stop, its parent ending, a quit that ends it - and not the
+    /// program, which exited on its own. Marked before the process exits, so
+    /// a finished child reads "Stopped" or "Done". Absent reads false, as it
+    /// does from a host before protocol 2.1.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub stopped: bool,
 }
 
 /// How a session asks before it acts. The values are the ones the launcher

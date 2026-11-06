@@ -164,5 +164,11 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "ALTER TABLE `sessions` ADD `child_class` text;",
       "ALTER TABLE `sessions` ADD `child_worktree` integer DEFAULT false NOT NULL;"
     ]
+  },
+  {
+    "tag": "0020_calm_smasher",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `stopped` integer DEFAULT false NOT NULL;"
+    ]
   }
 ]

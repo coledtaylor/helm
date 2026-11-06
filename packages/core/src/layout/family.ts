@@ -166,19 +166,29 @@ export function resolveFamilyPress<T extends FamilyMember>(
   tabbed: ReadonlySet<number>
 ): FamilyPress {
   if (tabbed.has(id)) return { to: 'own-tab', id }
-  const byId = new Map<number, T>()
-  for (const session of sessions) byId.set(session.id, session)
+  const holder = tabHolder(new Map(sessions.map((session) => [session.id, session])), id, tabbed)
+  return holder === null ? { to: 'open', id } : { to: 'parent-tab', id: holder }
+}
 
-  // A parent that ended is not holding its children any more, so only running
-  // parents are climbed through; `seen` stops a loop in the links.
+/**
+ * The nearest ancestor of session `id` that is running and has a tab, by row
+ * id, or null. A parent that ended is not holding its children any more, so
+ * only running parents are climbed through; a loop in the links is not climbed
+ * twice.
+ */
+export function tabHolder<T extends FamilyMember>(
+  byId: ReadonlyMap<number, T>,
+  id: number,
+  tabbed: ReadonlySet<number>
+): number | null {
   const seen = new Set<number>([id])
   let current = byId.get(id)
   while (current !== undefined && isChild(current)) {
     const parent = byId.get(current.parentId as number)
     if (parent === undefined || parent.status !== 'running' || seen.has(parent.id)) break
-    if (tabbed.has(parent.id)) return { to: 'parent-tab', id: parent.id }
+    if (tabbed.has(parent.id)) return parent.id
     seen.add(parent.id)
     current = parent
   }
-  return { to: 'open', id }
+  return null
 }

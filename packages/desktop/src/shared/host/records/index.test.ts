@@ -41,6 +41,17 @@ describe('a host session, as the window reads it', () => {
     expect(record).toMatchObject({ role: 'reviewer' })
     expect(record).not.toHaveProperty('parentId')
   })
+
+  it('carries that the host ended a session, and nothing for one that ended by itself', () => {
+    const endedAt = '2026-11-05T09:30:00.000Z'
+    expect(sessionFromHost(hostSession({ status: 'exited', endedAt, stopped: true }))).toMatchObject({
+      status: 'exited',
+      stopped: true
+    })
+    for (const done of [hostSession({ status: 'exited', endedAt }), hostSession({ status: 'exited', endedAt, stopped: false })]) {
+      expect(sessionFromHost(done)).not.toHaveProperty('stopped')
+    }
+  })
 })
 
 const hostProfile = (patch: Partial<P.Profile> = {}): P.Profile => ({
@@ -96,6 +107,18 @@ describe('a window settings patch, split between the host and Helm', () => {
     const split = splitSettingsPatch({ paneLayout })
 
     expect(split.own).toEqual({ paneLayout })
+    expect(split.host).toEqual({})
+  })
+
+  it('keeps which children are shown, shrunk or opened as tabs, and the setting for it, on this device', () => {
+    const paneLayout = {
+      root: { panes: [{ kind: 'session' as const, id: 7 }], activeId: 'session:7' },
+      focused: 0,
+      families: { 'session:7': { order: [9, 8], shrunk: [8], closed: [], screens: [] } }
+    }
+    const split = splitSettingsPatch({ paneLayout, showChildrenInParentTab: false })
+
+    expect(split.own).toEqual({ paneLayout, showChildrenInParentTab: false })
     expect(split.host).toEqual({})
   })
 })

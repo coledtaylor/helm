@@ -141,6 +141,13 @@
       "when": 1793957237031,
       "tag": "0019_cool_slayback",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1793961374281,
+      "tag": "0020_calm_smasher",
+      "breakpoints": true
     }
   ]
 }

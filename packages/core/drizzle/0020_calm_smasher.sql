@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `stopped` integer DEFAULT false NOT NULL;

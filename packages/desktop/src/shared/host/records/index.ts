@@ -72,7 +72,9 @@ export function sessionFromHost(record: P.SessionRecord): SessionRecord {
     // A session a person started names no parent and no role, and the window's
     // record then has neither: a protocol before 2.1 says nothing of them.
     ...(record.parentId == null ? {} : { parentId: record.parentId, parentName: record.parentName ?? null }),
-    ...(record.role == null ? {} : { role: record.role })
+    ...(record.role == null ? {} : { role: record.role }),
+    // Set only when the host ended it; a protocol before 2.1 never says.
+    ...(record.stopped === true ? { stopped: true } : {})
   }
 }
 

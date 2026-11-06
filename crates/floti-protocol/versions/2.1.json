@@ -9849,6 +9849,9 @@
         },
         "status": {
           "$ref": "#/$defs/SessionStatus"
+        },
+        "stopped": {
+          "type": "boolean"
         }
       },
       "required": [

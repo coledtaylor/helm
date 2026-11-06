@@ -57,11 +57,17 @@ export * from './theme/themes'
 /**
  * The pane layout, re-exported for the same reason: the renderer arranges tabs
  * into groups with it on every render. `layout/panes.ts` imports nothing but a
- * type from this file, and the host key from `hosts.ts`, which is as pure.
+ * type from this file, the host key from `hosts.ts`, which is as pure, and the
+ * family modules beside it, which import nothing at all. The family view's
+ * room rule, state and layout operations are re-exported with it: the window
+ * draws and arranges the family view from them.
  */
 export * from './layout/panes'
 export * from './layout/pluginPages'
 export * from './layout/family'
+export * from './layout/familyRoom'
+export * from './layout/familyState'
+export * from './layout/familyView'
 
 /**
  * A plugin's tab and rail id, re-exported for the same reason: the renderer
@@ -367,6 +373,14 @@ export interface SessionRecord {
   parentName?: string | null
   /** The role the session was started in, or null for one started with none. */
   role?: string | null
+  /**
+   * Whether the host ended it - its parent stopped it, a person ended it, or
+   * the host went down with it - as against its agent exiting by itself. Only
+   * a session that has ended carries it, and absent reads as false: the end of
+   * a child reads "Stopped" when it is set and "Done" when it is not
+   * (`endedHeaderText`).
+   */
+  stopped?: boolean
 }
 
 /**

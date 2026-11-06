@@ -1,6 +1,7 @@
 import { LOCAL_HOST_KEY } from '../hosts'
 import type { WorkspaceTab } from '../types'
-import { isChild } from './family'
+import { isChild, tabHolder, type FamilyMember } from './family'
+import { pruneFamilyState, readFamilyStates, type FamilyState, type FamilyStates } from './familyState'
 import { pluginPagesId, pluginTabId } from '../plugins/tabs'
 
 /**
@@ -149,6 +150,13 @@ export interface PaneLayout {
    * life, so an id held across an `await` cannot come to mean another pane.
    */
   readonly nextId: number
+  /**
+   * How each parent's tab arranges its children (`familyView.ts`), by the
+   * parent tab's `paneId`. A parent that never had a child shrunk, closed or
+   * swapped has no entry, and an entry goes with the tab it belongs to.
+   * Per device, like everything here: it is never told to a host.
+   */
+  readonly families: FamilyStates
 }
 
 /** One group as `AppSettings.paneLayout` stores it. See `SavedPane`. */
@@ -177,6 +185,8 @@ export function isSavedSplit(node: SavedPaneNode): node is SavedPaneSplit {
 export interface SavedPaneLayout {
   root: SavedPaneNode
   focused: number
+  /** `PaneLayout.families`; absent when no parent's tab has an arrangement. */
+  families?: FamilyStates
 }
 
 /** The window with nothing open: one group, empty, focused. */
@@ -184,7 +194,8 @@ export const EMPTY_LAYOUT: PaneLayout = {
   root: { group: 1 },
   groups: [{ id: 1, tabs: [], activeId: null }],
   focused: 1,
-  nextId: 2
+  nextId: 2,
+  families: {}
 }
 
 /**
@@ -378,17 +389,18 @@ function survivor(order: readonly number[], keep: ReadonlySet<number>, focused: 
  * window always has one, so an empty layout is one empty group rather than
  * none. A tab id that appears twice keeps its first place in reading order,
  * and the focus follows the group it was on, or `survivor` when that group
- * went.
+ * went. What a layout carries beside its tree (`Carried`) goes through
+ * unchanged, except that a parent's arrangement goes with its tab.
  */
 function normalize(
   root: PaneNode,
   groups: readonly PaneGroup[],
   focused: number,
-  nextId: number
+  carried: Carried
 ): PaneLayout {
   const byId = new Map(groups.map((group) => [group.id, group]))
   const placed = leafIds(root).filter((id) => byId.has(id))
-  const next = Math.max(nextId, ...groups.map((group) => group.id + 1))
+  const next = Math.max(carried.nextId, ...groups.map((group) => group.id + 1))
 
   // A group the tree does not place has nowhere to be drawn, and its tabs join
   // the last group that is placed rather than vanish. No operation here makes
@@ -396,7 +408,12 @@ function normalize(
   const stray = groups.filter((group) => !placed.includes(group.id)).flatMap((group) => group.tabs)
   if (placed.length === 0) {
     const id = groups[0]?.id ?? next
-    return normalize({ group: id }, [{ id, tabs: stray, activeId: groups[0]?.activeId ?? null }], id, next)
+    return normalize(
+      { group: id },
+      [{ id, tabs: stray, activeId: groups[0]?.activeId ?? null }],
+      id,
+      { ...carried, nextId: next }
+    )
   }
 
   const seen = new Set<string>()
@@ -415,7 +432,13 @@ function normalize(
   const keep = new Set(placed.filter((id) => cleaned.get(id)!.tabs.length > 0))
   if (keep.size === 0) {
     const id = cleaned.has(focused) ? focused : placed[0]!
-    return { root: { group: id }, groups: [{ id, tabs: [], activeId: null }], focused: id, nextId: next }
+    return {
+      root: { group: id },
+      groups: [{ id, tabs: [], activeId: null }],
+      focused: id,
+      nextId: next,
+      families: EMPTY_LAYOUT.families
+    }
   }
 
   const pruned = prune(root, keep)!
@@ -426,8 +449,23 @@ function normalize(
       return { id, tabs: group.tabs, activeId: paneId(activeRef(group)!) }
     }),
     focused: survivor(placed, keep, focused),
-    nextId: next
+    nextId: next,
+    families: familiesOnTabs(carried.families, seen)
   }
+}
+
+/** What `normalize` passes through from the layout it was given. */
+type Carried = Pick<PaneLayout, 'nextId' | 'families'>
+
+/**
+ * The arrangements of the parents whose tab is in `tabs`. The very same
+ * object when none goes, so a layout that did not change compares equal to
+ * itself.
+ */
+function familiesOnTabs(families: FamilyStates, tabs: ReadonlySet<string>): FamilyStates {
+  const gone = Object.keys(families).filter((tab) => !tabs.has(tab))
+  if (gone.length === 0) return families
+  return Object.fromEntries(Object.entries(families).filter(([tab]) => tabs.has(tab)))
 }
 
 /** The layout's groups with some of them replaced, matched by id. */
@@ -574,7 +612,7 @@ export function openTab(layout: PaneLayout, ref: PaneRef, group = layout.focused
     layout.root,
     replaced(layout, { id: target.id, tabs: [...target.tabs, ref], activeId: id }),
     target.id,
-    layout.nextId
+    layout
   )
 }
 
@@ -584,7 +622,7 @@ export function activateTab(layout: PaneLayout, id: string): PaneLayout {
   if (at === null) return layout
   const group = groupById(layout, at.group)!
   if (group.activeId === id && layout.focused === at.group) return layout
-  return normalize(layout.root, replaced(layout, { ...group, activeId: id }), at.group, layout.nextId)
+  return normalize(layout.root, replaced(layout, { ...group, activeId: id }), at.group, layout)
 }
 
 /**
@@ -614,7 +652,7 @@ export function closeTab(layout: PaneLayout, id: string): PaneLayout {
     layout.root,
     replaced(layout, without(groupById(layout, at.group)!, at.index)),
     layout.focused,
-    layout.nextId
+    layout
   )
 }
 
@@ -639,7 +677,7 @@ export function moveTab(layout: PaneLayout, id: string, toGroup: number, toIndex
     const at = Math.max(0, Math.min(toIndex, remaining.length))
     if (at === from.index) return activateTab(layout, id)
     const tabs = [...remaining.slice(0, at), ref, ...remaining.slice(at)]
-    return normalize(layout.root, replaced(layout, { id: source.id, tabs, activeId: id }), source.id, layout.nextId)
+    return normalize(layout.root, replaced(layout, { id: source.id, tabs, activeId: id }), source.id, layout)
   }
 
   const at = Math.max(0, Math.min(toIndex, target.tabs.length))
@@ -648,7 +686,7 @@ export function moveTab(layout: PaneLayout, id: string, toGroup: number, toIndex
     layout.root,
     replaced(layout, without(source, from.index), { id: target.id, tabs, activeId: id }),
     target.id,
-    layout.nextId
+    layout
   )
 }
 
@@ -670,7 +708,7 @@ export function splitWith(layout: PaneLayout, id: string, target: number, edge: 
     insertBeside(layout.root, target, { group: created }, edge),
     [...replaced(layout, without(source, from.index)), { id: created, tabs: [source.tabs[from.index]!], activeId: id }],
     created,
-    created + 1
+    { nextId: created + 1, families: layout.families }
   )
 }
 
@@ -807,7 +845,7 @@ function placeTab(
     const group = groupById(layout, target)!
     const tabs = group.tabs.map((tab) => (paneId(tab) === still ? ref : tab))
     return {
-      layout: normalize(layout.root, replaced(layout, { id: target, tabs, activeId: id }), target, layout.nextId),
+      layout: normalize(layout.root, replaced(layout, { id: target, tabs, activeId: id }), target, layout),
       preview: id
     }
   }
@@ -848,7 +886,7 @@ export function closeGroup(layout: PaneLayout, id: number): PaneLayout {
       { id, tabs: [], activeId: null }
     ),
     heir.id,
-    layout.nextId
+    layout
   )
 }
 
@@ -870,7 +908,7 @@ export function resizeSplit(layout: PaneLayout, path: readonly number[], sizes: 
     return { ...node, children: node.children.map((current, index) => (index === at ? changed : current)) }
   }
   const root = walk(layout.root, 0)
-  return root === null ? layout : normalize(root, layout.groups, layout.focused, layout.nextId)
+  return root === null ? layout : normalize(root, layout.groups, layout.focused, layout)
 }
 
 /**
@@ -907,7 +945,38 @@ export function reconcile(
     const target = groups[into]!
     groups[into] = { ...target, tabs: [...target.tabs, ...added] }
   }
-  return normalize(layout.root, groups, layout.focused, layout.nextId)
+  return normalize(layout.root, groups, layout.focused, {
+    nextId: layout.nextId,
+    families: familiesOfExisting(layout.families, groups, keep)
+  })
+}
+
+/**
+ * The arrangements with the children that are gone taken out: a child whose
+ * session `keep` no longer knows is no longer shrunk, closed or ordered.
+ *
+ * `keep` answers true for every session until the first list has been read,
+ * so a window that has only just reloaded does not forget its arrangement
+ * before it has been told which children still run.
+ */
+function familiesOfExisting(
+  families: FamilyStates,
+  groups: readonly PaneGroup[],
+  keep: (ref: PaneRef) => boolean
+): FamilyStates {
+  const entries = Object.entries(families)
+  if (entries.length === 0) return families
+  const parents = new Map(groups.flatMap((group) => group.tabs.map((ref) => [paneId(ref), ref] as const)))
+  const kept: Record<string, FamilyState> = {}
+  let pruned = false
+  for (const [tab, state] of entries) {
+    const parent = parents.get(tab)
+    const next =
+      parent === undefined ? null : pruneFamilyState(state, (id) => keep(sessionRef(id, hostOf(parent))))
+    if (next !== null) kept[tab] = next
+    if (next !== state) pruned = true
+  }
+  return pruned ? kept : families
 }
 
 /**
@@ -940,17 +1009,124 @@ export function sessionTabIds(layout: PaneLayout, host: string = LOCAL_HOST_KEY)
 }
 
 /**
- * The running sessions on `host` (this PC's by default) this layout has no
- * tab for: the sessions pane lists them as not open here, with Open and End.
- * An ended session has nothing to open.
+ * The children each of this layout's session tabs on `host` holds in its
+ * family view, by the row id of the session whose tab it is: every child with
+ * no tab of its own whose nearest running ancestor with a tab here is that
+ * session (`tabHolder`), in the order the sessions are given.
+ *
+ * Ended children are held too - the family view keeps one until it is closed -
+ * and whether the view fits the pane is no part of it: a child is the tab's
+ * whether the pane has room to draw it or not.
  */
-export function notOpenHere<T extends { id: number; status: string }>(
+export function familiesHere<T extends FamilyMember>(
   layout: PaneLayout,
   sessions: readonly T[],
   host: string = LOCAL_HOST_KEY
+): Map<number, T[]> {
+  const tabbed = sessionTabIds(layout, host)
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  const held = new Map<number, T[]>()
+  for (const session of sessions) {
+    if (!isChild(session) || tabbed.has(session.id)) continue
+    const holder = tabHolder(byId, session.id, tabbed)
+    if (holder === null) continue
+    const family = held.get(holder)
+    if (family === undefined) held.set(holder, [session])
+    else family.push(session)
+  }
+  return held
+}
+
+/**
+ * Whether the pane a parent's tab is in has room for its family view, by the
+ * tab's `paneId`: what the window measured (`familyRoom`), or true for a pane
+ * it has not measured yet. Passed where the answer changes who is open here,
+ * and `null` there means this device does not show children in their parent's
+ * tab at all.
+ */
+export type FamilyRoomOf = (tab: string) => boolean
+
+/**
+ * The running sessions on `host` (this PC's by default) that a family view
+ * here shows, none of which has a tab: the running children of a tab here
+ * whose pane has room for them. They are open here all the same - the
+ * connection carries their terminals, and the sessions pane does not list them
+ * as not open.
+ */
+export function familyViewIds(
+  layout: PaneLayout,
+  sessions: readonly FamilyMember[],
+  host: string,
+  roomOf: FamilyRoomOf
+): Set<number> {
+  const ids = new Set<number>()
+  for (const [holder, family] of familiesHere(layout, sessions, host)) {
+    if (!roomOf(paneId(sessionRef(holder, host)))) continue
+    for (const child of family) if (child.status === 'running') ids.add(child.id)
+  }
+  return ids
+}
+
+/**
+ * The running sessions on `host` (this PC's by default) this layout has no
+ * tab for: the sessions pane lists them as not open here, with Open and End.
+ * An ended session has nothing to open.
+ *
+ * With `roomOf` (this device shows children in their parent's tab), a child
+ * its parent's tab here shows is not one of them: it is open here, in that
+ * tab. A child in a pane without room is, and so is any child when `roomOf` is
+ * null.
+ */
+export function notOpenHere<T extends FamilyMember>(
+  layout: PaneLayout,
+  sessions: readonly T[],
+  host: string = LOCAL_HOST_KEY,
+  roomOf: FamilyRoomOf | null = null
 ): T[] {
   const tabs = sessionTabIds(layout, host)
-  return sessions.filter((session) => session.status === 'running' && !tabs.has(session.id))
+  const inFamilies = roomOf === null ? new Set<number>() : familyViewIds(layout, sessions, host, roomOf)
+  return sessions.filter(
+    (session) => session.status === 'running' && !tabs.has(session.id) && !inFamilies.has(session.id)
+  )
+}
+
+/**
+ * The ids of the sessions on `host` the window's connection to it carries
+ * the terminals of, in id order: those with a tab here, and with `roomOf`,
+ * the running children a family view here shows (`familyViewIds`).
+ */
+export function shownSessionIds(
+  layout: PaneLayout,
+  sessions: readonly FamilyMember[],
+  host: string = LOCAL_HOST_KEY,
+  roomOf: FamilyRoomOf | null = null
+): number[] {
+  const ids = sessionTabIds(layout, host)
+  if (roomOf !== null) for (const id of familyViewIds(layout, sessions, host, roomOf)) ids.add(id)
+  return [...ids].sort((a, b) => a - b)
+}
+
+/**
+ * Whether closing session `id`'s tab leaves it in a family view here: it is a
+ * child, this device shows children in their parent's tab (`roomOf`), and a
+ * running ancestor still has a tab whose pane has room. Close tab, keep
+ * running on such a tab lets nothing of it go, because the family view is
+ * where it is on screen next.
+ */
+export function returnsToFamily(
+  layout: PaneLayout,
+  sessions: readonly FamilyMember[],
+  id: number,
+  host: string = LOCAL_HOST_KEY,
+  roomOf: FamilyRoomOf | null = null
+): boolean {
+  if (roomOf === null) return false
+  const session = sessions.find((each) => each.id === id)
+  if (session === undefined || !isChild(session)) return false
+  const tabbed = sessionTabIds(layout, host)
+  tabbed.delete(id)
+  const holder = tabHolder(new Map(sessions.map((each) => [each.id, each])), id, tabbed)
+  return holder !== null && roomOf(paneId(sessionRef(holder, host)))
 }
 
 /**
@@ -1003,7 +1179,15 @@ export function toSaved(layout: PaneLayout): SavedPaneLayout {
       ? { axis: node.axis, children: node.children.map(write), sizes: [...node.sizes] }
       : written.get(node.group)!
   const focus = survivor(leafIds(layout.root), keep, layout.focused)
-  return { root: write(root), focused: leafIds(root).indexOf(focus) }
+  const families = familiesOnTabs(
+    layout.families,
+    new Set([...written.values()].flatMap((group) => group.panes.map(paneId)))
+  )
+  return {
+    root: write(root),
+    focused: leafIds(root).indexOf(focus),
+    ...(Object.keys(families).length === 0 ? {} : { families })
+  }
 }
 
 /** A saved layout's groups, in reading order. */
@@ -1042,7 +1226,10 @@ export function fromSaved(saved: SavedPaneLayout | null): PaneLayout {
     return { group: id }
   }
   const root = read(saved.root)
-  return normalize(root, groups, groups[saved.focused]?.id ?? 1, groups.length + 1)
+  return normalize(root, groups, groups[saved.focused]?.id ?? 1, {
+    nextId: groups.length + 1,
+    families: saved.families ?? EMPTY_LAYOUT.families
+  })
 }
 
 /**
@@ -1058,7 +1245,13 @@ export function fromSaved(saved: SavedPaneLayout | null): PaneLayout {
 export function upgradeSavedLayout(value: unknown, splitPct: unknown): SavedPaneLayout | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
-  if (typeof record.root === 'object' && record.root !== null) return value as SavedPaneLayout
+  if (typeof record.root === 'object' && record.root !== null) {
+    if (record.families === undefined) return value as SavedPaneLayout
+    // Each parent's arrangement that reads is kept, the rest dropped.
+    const { families: written, ...rest } = record
+    const families = readFamilyStates(written)
+    return (families === null ? rest : { ...rest, families }) as unknown as SavedPaneLayout
+  }
   const { groups, focused } = record
   if (!Array.isArray(groups) || groups.length === 0) return null
   const list = groups as SavedPaneGroup[]
@@ -1144,7 +1337,10 @@ export function replaceSessionTabs(
             : paneId(tabs.at(-1)!)
     return { ...group, tabs, activeId }
   })
-  return { ...layout, groups }
+  // A reopened session is a new tab, and the arrangement of its predecessor's
+  // children does not carry to a family that is not those children.
+  const tabs = new Set(groups.flatMap((group) => group.tabs.map(paneId)))
+  return { ...layout, groups, families: familiesOnTabs(layout.families, tabs) }
 }
 
 /**
@@ -1269,6 +1465,6 @@ export function placeRestored(
     root,
     [...groups].map(([id, group]) => ({ id, ...group })),
     focused,
-    nextId
+    { nextId, families: layout.families }
   )
 }

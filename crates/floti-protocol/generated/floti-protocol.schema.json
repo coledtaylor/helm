@@ -8799,6 +8799,10 @@
         },
         "status": {
           "$ref": "#/$defs/SessionStatus"
+        },
+        "stopped": {
+          "description": "Whether the host ended the session itself - a client's Stop or End, an\nagent's stop, its parent ending, a quit that ends it - and not the\nprogram, which exited on its own. Marked before the process exits, so\na finished child reads \"Stopped\" or \"Done\". Absent reads false, as it\ndoes from a host before protocol 2.1.",
+          "type": "boolean"
         }
       },
       "required": [

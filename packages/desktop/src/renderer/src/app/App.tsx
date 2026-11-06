@@ -23,6 +23,7 @@ import {
   fromSaved,
   groupById,
   hostOf,
+  isChild,
   isLoopbackUrl,
   isSessionOn,
   isProjectPinned,
@@ -41,7 +42,7 @@ import {
   replaceSessionTabs,
   reconcile,
   resizeSplit,
-  resolveFamilyPress,
+  returnsToFamily,
   savedGroups,
   sendBeside,
   sessionLabel,
@@ -211,7 +212,7 @@ import {
   type AddHostActions,
 } from "@helm/ui";
 import { sidebarFor, type SidebarView } from "./sidebarFor";
-import { treeEntries } from "./treeFamilies";
+import { pressTreeSession, treeEntries } from "./treeFamilies";
 import type { PanelActionIcon } from "@coledtaylor/helm-plugin-sdk";
 import type {
   AppMode,
@@ -283,7 +284,9 @@ import {
   keepRemoteTab,
   useSessionConfirm,
   useShownSessionTabs,
+  type FamilyScope,
 } from "./hostTabs";
+import { familyCapacity, useFamilyRoomOf } from "./familyRooms";
 import { useUpdate } from "./useUpdate";
 import { useOwnDataCopy } from "./useOwnDataCopy";
 import { useUsage } from "./useUsage";
@@ -1148,21 +1151,51 @@ export function App(): JSX.Element {
     });
   }, []);
 
-  /** The running sessions this device has no tab for. */
-  const notOpen = useMemo(() => notOpenHere(open, sessions), [open, sessions]);
+  /**
+   * What the window knows of children shown in their parent's tab, while this
+   * device shows them (Settings > Agents): the sessions each host lists, and
+   * which parent tabs' panes have room (`familyRooms.ts`). A child shown there
+   * has no tab and is open here all the same.
+   */
+  const showChildren =
+    settings?.showChildrenInParentTab ??
+    DEFAULT_SETTINGS.showChildrenInParentTab;
+  const roomOf = useFamilyRoomOf();
+  const family = useMemo<FamilyScope | null>(
+    () =>
+      showChildren
+        ? {
+            sessions: new Map<string, readonly SessionRecord[]>([
+              [LOCAL_HOST_KEY, sessions],
+              ...listedHostIds.map(
+                (host): [string, readonly SessionRecord[]] => [
+                  host,
+                  hostWork.byHost.get(host)?.sessions ?? [],
+                ],
+              ),
+            ]),
+            roomOf,
+          }
+        : null,
+    [showChildren, sessions, listedHostIds, hostWork.byHost, roomOf],
+  );
+
+  /** The running sessions this device has no tab for and no family view shows. */
+  const notOpen = useMemo(
+    () =>
+      notOpenHere(open, sessions, LOCAL_HOST_KEY, family?.roomOf ?? null),
+    [open, sessions, family],
+  );
   /**
    * The window's connection carries the terminals of the sessions with a tab
-   * here, and only those: one opened from the sessions pane starts on a new
-   * stream that draws its screen as it is.
+   * here and of the children a parent's tab here shows, and only those: one
+   * opened from the sessions pane starts on a new stream that draws its screen
+   * as it is.
    */
   // The same for each host on another computer, told again each time the
   // window is connected to it again: a tab whose host dropped kept its last
   // screen, and reattaches here.
-  useShownSessionTabs(
-    open,
-    connectedHostIds,
-    hostSessionTabs.show,
-  );
+  useShownSessionTabs(open, connectedHostIds, hostSessionTabs.show, family);
 
   const shownMax =
     maximized !== null && groupById(open, maximized) !== undefined
@@ -2292,12 +2325,24 @@ export function App(): JSX.Element {
 
   const keepRunning = useCallback(
     (id: number, host: string = LOCAL_HOST_KEY) =>
-      closeKeepingRunning(id, host, {
-        release: hostSessionTabs.release,
-        disposeTerminal,
-        commit,
-      }),
-    [commit],
+      closeKeepingRunning(
+        id,
+        host,
+        {
+          release: hostSessionTabs.release,
+          disposeTerminal,
+          commit,
+        },
+        // A child its parent's tab shows next stays on its stream.
+        returnsToFamily(
+          open,
+          family?.sessions.get(host) ?? [],
+          id,
+          host,
+          family?.roomOf ?? null,
+        ),
+      ),
+    [commit, open, family],
   );
   /** The session a tab id names, on whichever host, or null for any other tab. */
   const sessionTabRef = useCallback(
@@ -3119,11 +3164,21 @@ export function App(): JSX.Element {
       ),
     );
     const tabbed = sessionTabIds(open, host.id);
-    // Listed: running, or ended with a tab here. A child whose parent is not
-    // among them stands on its own, naming the parent.
-    const listed = (work?.sessions ?? []).filter(
+    // Listed: running, or ended with a tab here, or ended and a child of one
+    // that runs - it stays under its parent after its family view has closed
+    // it. A child whose parent is not among them stands on its own, naming the
+    // parent.
+    const hosted = work?.sessions ?? [];
+    const running = new Set(
+      hosted
+        .filter((session) => session.status === "running")
+        .map((session) => session.id),
+    );
+    const listed = hosted.filter(
       (session) =>
-        (session.status === "running" || tabbed.has(session.id)) &&
+        (session.status === "running" ||
+          tabbed.has(session.id) ||
+          (isChild(session) && running.has(session.parentId as number))) &&
         sessionAt({ id: session.id, host: host.id }) !== null,
     );
     const rowOf = (session: SessionRecord): TreeSession => {
@@ -3170,18 +3225,30 @@ export function App(): JSX.Element {
     };
   });
 
+  /**
+   * A press on a session's row in the tree, on `host`: the session whose tab
+   * comes forward or opens. A child with no tab whose parent's tab is here
+   * shows in that tab's family view first (`pressSessionRow`), the last card
+   * shrinking in its place, and no tab is added.
+   */
+  const pressRow = useCallback(
+    (host: string, there: readonly SessionRecord[], id: number): number =>
+      pressTreeSession(host, there, id, {
+        layout: open,
+        enabled: showChildren,
+        capacityOf: familyCapacity,
+        commit,
+      }),
+    [open, commit, showChildren],
+  );
+
   const openTreeSession = useCallback(
     (id: string) => {
       if (id.startsWith("session:")) {
         // A child's tab comes forward if it has one here, else its parent's
         // does; only a child with neither opens a tab, on this press. Any other
         // session not open here opens in a tab here.
-        const press = resolveFamilyPress(
-          sessions,
-          sessionIdOf(id),
-          sessionTabIds(open, LOCAL_HOST_KEY),
-        );
-        openSession(press.id);
+        openSession(pressRow(LOCAL_HOST_KEY, sessions, sessionIdOf(id)));
         return;
       }
       // Somebody else's session has no tab; its row in the sessions pane is
@@ -3189,7 +3256,7 @@ export function App(): JSX.Element {
       setSelectedLivePid(Number(id.slice("pid:".length)));
       openSessions();
     },
-    [openSession, openSessions, sessions, open],
+    [openSession, openSessions, sessions, pressRow],
   );
 
   /** What each host's group in the tree asks for, through that host. */
@@ -3210,10 +3277,7 @@ export function App(): JSX.Element {
       );
       if (session === undefined) return;
       // The same press as on this PC: the child's tab, else its parent's.
-      openRemoteSession(
-        host,
-        resolveFamilyPress(there, session.id, sessionTabIds(open, host)).id,
-      );
+      openRemoteSession(host, pressRow(host, there, session.id));
     },
     onTogglePin: (host: string, path: string) =>
       host === LOCAL_HOST_KEY

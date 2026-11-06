@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { resolveFamilyPress, type FamilyMember } from '@helm/core/types'
+import {
+  LOCAL_HOST_KEY,
+  activeRef,
+  familyEntries,
+  familyOf,
+  fromSaved,
+  openTab,
+  paneId,
+  resolveFamilyPress,
+  sessionTabIds,
+  shrinkFamilyChild,
+  type FamilyMember,
+  type PaneLayout,
+  type PaneRef,
+  type SavedPane,
+  type SavedPaneLayout
+} from '@helm/core/types'
 import type { TreeSession } from '@helm/ui'
-import { treeEntries } from './treeFamilies'
+import { pressTreeSession, treeEntries } from './treeFamilies'
 
 /**
  * What the Sessions tree is given for sessions that started sessions: a child's
@@ -124,5 +140,117 @@ describe('where pressing a child’s row goes', () => {
 
   it('S20: opens the child’s tab, on this press, only when neither has one', () => {
     expect(resolveFamilyPress(family, 2, new Set())).toEqual({ to: 'open', id: 2 })
+  })
+})
+
+describe('pressing a child’s row when its parent’s tab is here', () => {
+  const parentTab: PaneRef = { kind: 'session', id: 1 }
+  const children = [3, 4, 5, 6]
+  const family = [
+    session(1, 'lead', 'C:\\work\\helm'),
+    ...children.map((id) =>
+      session(id, `worker ${String(id)}`, 'C:\\work\\trackr', { parentId: 1, parentName: 'lead' })
+    )
+  ]
+  /** The panes as the window keeps them, with the parent’s tab behind History and a second pane beside it. */
+  const panes = (): { layout: PaneLayout } => {
+    const saved: SavedPaneLayout = {
+      root: {
+        axis: 'row',
+        children: [
+          { panes: [parentTab as SavedPane, { kind: 'history' }], activeId: 'history' },
+          { panes: [{ kind: 'settings' }], activeId: 'settings' }
+        ],
+        sizes: [0.6, 0.4]
+      },
+      focused: 1
+    }
+    return { layout: fromSaved(saved) }
+  }
+  const press = (
+    id: number,
+    options: { enabled?: boolean; capacity?: number | null; layout?: PaneLayout } = {}
+  ): { to: number; layout: PaneLayout; start: PaneLayout } => {
+    const world = panes()
+    const start = options.layout ?? world.layout
+    let layout = start
+    const to = pressTreeSession(LOCAL_HOST_KEY, family, id, {
+      layout: start,
+      enabled: options.enabled ?? true,
+      capacityOf: () => (options.capacity === undefined ? 2 : options.capacity),
+      commit: (op) => {
+        layout = op(layout)
+      }
+    })
+    return { to, layout, start }
+  }
+
+  it('brings the parent’s tab forward and shows the child as a card, the last card shrinking in its place, with no tab added', () => {
+    const { to, layout, start } = press(5)
+    expect(to).toBe(1)
+    expect(activeRef(layout.groups[0]!)).toEqual(parentTab)
+    expect(layout.focused).toBe(layout.groups[0]!.id)
+    const state = familyOf(layout, paneId(parentTab))
+    expect(familyEntries(family.slice(1), state, 2).map((e) => `${e.shape}${String(e.child.id)}`)).toEqual([
+      'card3',
+      'card5',
+      'header4',
+      'header6'
+    ])
+    expect(layout.groups.map((group) => group.tabs)).toEqual(start.groups.map((group) => group.tabs))
+    expect(sessionTabIds(layout)).toEqual(new Set([1]))
+  })
+
+  it('shows a shrunk child as a card the same way', () => {
+    const shrunk = shrinkFamilyChild(panes().layout, paneId(parentTab), family[1]!)
+    const { layout } = press(3, { layout: shrunk })
+    const state = familyOf(layout, paneId(parentTab))
+    expect(familyEntries(family.slice(1), state, 2).map((e) => `${e.shape}${String(e.child.id)}`)).toEqual([
+      'card4',
+      'card3',
+      'header5',
+      'header6'
+    ])
+  })
+
+  it('moves no card when the child is already one, and only brings the parent’s tab forward', () => {
+    const { layout, start } = press(4)
+    expect(layout.families).toEqual({})
+    expect(activeRef(layout.groups[0]!)).toEqual(parentTab)
+    expect(layout.groups.map((group) => group.tabs)).toEqual(start.groups.map((group) => group.tabs))
+  })
+
+  it('puts the child first in a pane that has not been drawn yet, so it is a card whatever the pane holds', () => {
+    const { layout } = press(6, { capacity: null })
+    expect(familyOf(layout, paneId(parentTab)).order[0]).toBe(6)
+  })
+
+  it('brings the parent’s tab forward and leaves how it is arranged alone while the setting is off', () => {
+    const { to, layout } = press(5, { enabled: false })
+    expect(to).toBe(1)
+    expect(layout.families).toEqual({})
+    expect(activeRef(layout.groups[0]!)).toEqual(parentTab)
+  })
+
+  it('asks nothing of the panes for a child with a tab of its own, or for one whose parent has none here', () => {
+    const own = openTab(panes().layout, { kind: 'session', id: 5 })
+    const owned = press(5, { layout: own })
+    expect(owned.to).toBe(5)
+    expect(owned.layout).toBe(own)
+
+    const parentless = pressTreeSession(
+      LOCAL_HOST_KEY,
+      [session(8, 'x', 'C:\\work', { parentId: 7, parentName: 'gone' })],
+      8,
+      {
+        layout: panes().layout,
+        enabled: true,
+        capacityOf: () => 2,
+        commit: () => {
+          throw new Error('the panes are not changed for a press that opens a tab')
+        }
+      }
+    )
+    expect(parentless).toBe(8)
   })
 })

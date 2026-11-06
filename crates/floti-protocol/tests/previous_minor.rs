@@ -228,6 +228,60 @@ fn s31_a_2_0_record_read_by_a_2_1_client_has_no_parent_and_no_role() {
     assert_eq!(read.profile_id, Some(4));
 }
 
+fn stopped_child(parent: &SessionRecord) -> SessionRecord {
+    SessionRecord {
+        status: SessionStatus::Exited,
+        ended_at: Some("2026-10-03T14:52:00Z".into()),
+        stopped: true,
+        ..child_of(parent)
+    }
+}
+
+#[test]
+fn a_2_1_record_says_stopped_only_for_a_session_the_host_ended_and_omits_it_otherwise() {
+    let parent = session_v21();
+    let stopped = stopped_child(&parent);
+
+    let read: SessionRecord = from_payload(&to_payload(&stopped).unwrap()).unwrap();
+    assert!(read.stopped);
+    assert_eq!(
+        serde_json::to_value(&stopped).unwrap()["stopped"],
+        Value::Bool(true)
+    );
+
+    // A session that exited by itself carries nothing, so its record is the
+    // record a 2.0 host sends.
+    let wire = serde_json::to_value(child_of(&parent)).unwrap();
+    assert!(wire.get("stopped").is_none(), "{wire}");
+    assert!(!parent.stopped);
+}
+
+#[test]
+fn a_record_from_a_host_before_2_1_reads_as_not_stopped() {
+    let wire = to_payload(&session_v20()).unwrap();
+    let read: SessionRecord = from_payload(&wire).unwrap();
+    assert!(!read.stopped);
+
+    let read: SessionRecord = serde_json::from_value(json!({
+        "id": 9, "name": "a", "label": null, "cwd": "C:\\work", "branch": null,
+        "projectPath": null, "profileId": null, "argv": [], "conversationId": null,
+        "backend": "claude-code", "status": "exited", "startedAt": "2026-10-03T14:00:00Z",
+        "endedAt": "2026-10-03T14:52:00Z", "durationMs": 1, "exitCode": 0
+    }))
+    .unwrap();
+    assert!(!read.stopped);
+}
+
+#[test]
+fn a_2_0_client_reads_every_field_it_knows_of_a_stopped_childs_record() {
+    let stopped = stopped_child(&session_v21());
+    let read: SessionRecordV20 = from_payload(&to_payload(&stopped).unwrap())
+        .expect("a 2.0 client reads a 2.1 record that says stopped");
+    assert_eq!(read.id, stopped.id);
+    assert_eq!(read.status, SessionStatus::Exited);
+    assert_eq!(read.ended_at.as_deref(), Some("2026-10-03T14:52:00Z"));
+}
+
 #[test]
 fn s31_a_2_1_host_negotiates_the_version_a_2_0_client_speaks() {
     assert_eq!(PROTOCOL_VERSION, ProtocolVersion::new(2, 1));
@@ -394,7 +448,10 @@ fn protocol_2_1_adds_only_optional_fields_and_these_are_all_of_them() {
         serde_json::from_str(&record::record(PROTOCOL_VERSION, &Catalogue::protocol())).unwrap();
     assert_eq!(v21["version"], "2.1");
     let added = [
-        ("SessionRecord", vec!["parentId", "parentName", "role"]),
+        (
+            "SessionRecord",
+            vec!["parentId", "parentName", "role", "stopped"],
+        ),
         (
             "HostSettings",
             vec![

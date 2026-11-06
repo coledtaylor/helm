@@ -1,4 +1,10 @@
-import { sessionFamilies, type FamilyMember, type FamilyRow } from '@helm/core/types'
+import {
+  pressSessionRow,
+  sessionFamilies,
+  type FamilyMember,
+  type FamilyRow,
+  type PaneLayout
+} from '@helm/core/types'
 import type { TreeSession } from '@helm/ui'
 
 /** A session the Sessions tree lists in a folder's own list, and the row it draws. */
@@ -31,4 +37,39 @@ export function treeEntries<T extends FamilyMember>(
     }
   }
   return sessionFamilies(sessions).map((family) => ({ session: family.session, row: build(family) }))
+}
+
+/** What a press on a session's row in the tree reads and changes of this window. */
+export interface TreePressDeps {
+  /** The panes now. */
+  layout: PaneLayout
+  /** Whether this device shows children in their parent's tab. */
+  enabled: boolean
+  /** How many cards the parent tab `tab` holds, or null when its pane has not been measured. */
+  capacityOf: (tab: string) => number | null
+  /** The one way the panes change; a functional update, composed with any other in the same event. */
+  commit: (op: (layout: PaneLayout) => PaneLayout) => void
+}
+
+/**
+ * A press on session `id`'s row in the tree, on `host`, whose sessions are
+ * `there`: the id of the session whose tab comes forward or opens.
+ *
+ * A child with no tab whose parent's tab is here is shown in that tab's family
+ * view first, the last card shrinking in its place when it was a header, and
+ * the parent's tab is what comes forward; no tab is added. Only a child with
+ * neither opens a tab, on this press (`pressSessionRow`).
+ */
+export function pressTreeSession(
+  host: string,
+  there: readonly FamilyMember[],
+  id: number,
+  deps: TreePressDeps
+): number {
+  const scope = { enabled: deps.enabled, capacityOf: deps.capacityOf }
+  const { press } = pressSessionRow(deps.layout, there, id, host, scope)
+  if (press.to === 'parent-tab') {
+    deps.commit((current) => pressSessionRow(current, there, id, host, scope).layout)
+  }
+  return press.id
 }

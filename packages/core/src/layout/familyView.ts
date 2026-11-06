@@ -1,0 +1,115 @@
+import { tabHolder, type FamilyMember, type FamilyPress } from './family'
+import {
+  PLAIN_FAMILY,
+  closeChild,
+  isPlainFamily,
+  shrinkChild,
+  showChild,
+  type FamilyState
+} from './familyState'
+import {
+  activateTab,
+  familiesHere,
+  findTab,
+  paneId,
+  sessionRef,
+  sessionTabIds,
+  type PaneLayout
+} from './panes'
+
+/**
+ * The family view's arrangement as operations on a layout. Each takes the
+ * layout and returns one, the very same layout when nothing changed, and none
+ * adds a tab or a pane: a parent's children are drawn inside its tab, and the
+ * arrangement is kept in `PaneLayout.families` with the panes, per device.
+ */
+
+/** The arrangement of the parent whose tab is `tab`: a plain family when nobody arranged it. */
+export function familyOf(layout: PaneLayout, tab: string): FamilyState {
+  return layout.families[tab] ?? PLAIN_FAMILY
+}
+
+/**
+ * The layout with `tab`'s arrangement changed by `change`. Left alone for a
+ * tab the layout does not have, and an arrangement that comes to say nothing a
+ * plain family does not is removed rather than kept.
+ */
+export function arrangeFamily(
+  layout: PaneLayout,
+  tab: string,
+  change: (state: FamilyState) => FamilyState
+): PaneLayout {
+  if (findTab(layout, tab) === null) return layout
+  const before = familyOf(layout, tab)
+  const after = change(before)
+  if (after === before) return layout
+  const others = Object.entries(layout.families).filter(([key]) => key !== tab)
+  const families = Object.fromEntries(isPlainFamily(after) ? others : [...others, [tab, after]])
+  return { ...layout, families }
+}
+
+/** A card's header pressed: the child shrinks to a header. */
+export function shrinkFamilyChild(layout: PaneLayout, tab: string, child: FamilyMember): PaneLayout {
+  return arrangeFamily(layout, tab, (state) => shrinkChild(state, child))
+}
+
+/** Close pressed on an ended child: it leaves the family view, and its row in the Sessions tree stays. */
+export function closeFamilyChild(layout: PaneLayout, tab: string, id: number): PaneLayout {
+  return arrangeFamily(layout, tab, (state) => closeChild(state, id))
+}
+
+/**
+ * A header pressed: the child shows as a card, and the last card shrinks in
+ * its place when every card place is taken (`showChild`).
+ */
+export function showFamilyChild<T extends FamilyMember>(
+  layout: PaneLayout,
+  tab: string,
+  children: readonly T[],
+  capacity: number | null,
+  id: number
+): PaneLayout {
+  return arrangeFamily(layout, tab, (state) => showChild(state, children, capacity, id))
+}
+
+/** What a press on a session's row needs to know of this device's family view. */
+export interface FamilyPressScope {
+  /** Whether this device shows children in their parent's tab. */
+  enabled: boolean
+  /** How many cards the parent tab `tab` has room for, or null when it has not been measured. */
+  capacityOf: (tab: string) => number | null
+}
+
+/**
+ * A press on a session's row in the Sessions tree: where it goes, and the
+ * layout that goes with it.
+ *
+ * A session with a tab here is brought forward, the layout unchanged. A child
+ * with no tab whose parent's tab is here comes with that tab to the front,
+ * and while the family view is on it shows as a card in it, the last card
+ * shrinking in its place when it was a header; no tab is added. Anything else
+ * is `open`, which is the one press that gives a session a tab, and the
+ * caller opens it as any running session not open here is.
+ *
+ * With the family view off, the parent's tab still comes forward and its
+ * arrangement is left as it was.
+ */
+export function pressSessionRow<T extends FamilyMember>(
+  layout: PaneLayout,
+  sessions: readonly T[],
+  id: number,
+  host: string,
+  scope: FamilyPressScope
+): { layout: PaneLayout; press: FamilyPress } {
+  const tabbed = sessionTabIds(layout, host)
+  if (tabbed.has(id)) return { layout, press: { to: 'own-tab', id } }
+  const holder = tabHolder(new Map(sessions.map((session) => [session.id, session])), id, tabbed)
+  if (holder === null) return { layout, press: { to: 'open', id } }
+
+  const tab = paneId(sessionRef(holder, host))
+  const press: FamilyPress = { to: 'parent-tab', id: holder }
+  if (!scope.enabled) return { layout: activateTab(layout, tab), press }
+  const family = familiesHere(layout, sessions, host).get(holder) ?? []
+  const shown = showFamilyChild(layout, tab, family, scope.capacityOf(tab), id)
+  return { layout: activateTab(shown, tab), press }
+}

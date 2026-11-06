@@ -95,6 +95,13 @@ pub trait SessionLedger: Send + Sync {
     /// then.
     fn finished(&self, id: SessionId, exit: &SessionExit) -> Result<()>;
 
+    /// Records that the host is about to end session `id` itself - a close, a
+    /// stop, its parent ending, a quit - before its program exits, so the
+    /// exit that follows reads as stopped and not as the program finishing
+    /// on its own. A row that is no longer running is left as it is. Nothing
+    /// to record is not a failure: a ledger with no row to mark does nothing.
+    fn ending(&self, _id: SessionId) {}
+
     /// Records that session `id` was lost: the session keeper holding it went
     /// away, and how it ended is not known. Where nothing tells the two
     /// apart, it ended with code 1.
@@ -168,6 +175,19 @@ impl SessionLedger for Mutex<Store> {
             .optional()
             .map_err(sql("record the session's end"))?;
         Ok(())
+    }
+
+    fn ending(&self, id: SessionId) {
+        let store = self.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(err) = store.connection().execute(
+            "UPDATE sessions SET stopped = 1 WHERE id = ?1 AND status = 'running'",
+            params![id.0],
+        ) {
+            log_line!(
+                "floti host: {}",
+                sql("record that the session is ending")(err)
+            );
+        }
     }
 }
 

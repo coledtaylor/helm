@@ -29,11 +29,12 @@ use floti_host::testkit::{
     OtherAgent, OtherAgentRecord, PATIENCE, RunningHost, ShellRun, TestClient, TestDirs,
     link_folder,
 };
+use floti_protocol::channel::EventChannel;
 use floti_protocol::channels::common::{PermissionMode, SessionRecord};
 use floti_protocol::channels::host::{HostQuit, HostQuitRequest, HostStopReason};
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, HistoryRefresh, HistoryResume, ResumeSessionRequest, SessionClose,
-    SessionList, SessionStart, StartSessionRequest,
+    SessionExit, SessionList, SessionStart, StartSessionRequest,
 };
 use floti_protocol::channels::workspace::{HostSettingsPatch, WriteSettings};
 use floti_protocol::{BackendId, Knowable};
@@ -1694,6 +1695,147 @@ async fn s22_with_no_client_attached_a_session_starts_lists_and_stops_children_a
         world
             .ended("the parent and child to end", &[parent.id(), second.id()])
             .await;
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// How a session ended
+// ---------------------------------------------------------------------------
+
+/// A client listening for sessions to end, which reads each end's record as
+/// the host sent it.
+struct Ends(TestClient);
+
+impl Ends {
+    async fn listen(world: &World) -> Self {
+        let mut client = world.client().await;
+        client.subscribe_quietly(1, SessionExit::NAME).await;
+        Self(client)
+    }
+
+    /// The record sent when session `id` ended.
+    async fn of(&mut self, what: &str, id: u64) -> SessionRecord {
+        self.0
+            .event_on::<SessionRecord>(1, what, |row| row.id == id)
+            .await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_child_its_parent_stops_is_recorded_stopped_and_one_that_exits_by_itself_is_not() {
+    let world = World::new();
+    let host = world.host().await;
+    let mut ends = Ends::listen(&world).await;
+    let folder = world.project("how it ended");
+    for backend in [CLAUDE, OTHER] {
+        let parent = world
+            .session(CLAUDE, &folder, &format!("parent of {backend}"))
+            .await;
+        for name in ["stopper", "finisher", "running"] {
+            parent
+                .start(json!({ "task": "work", "name": name, "backend": backend }))
+                .await
+                .done();
+        }
+        let stopper = world.child_of(&parent, "stopper").await;
+        let finisher = world.child_of(&parent, "finisher").await;
+        let running = world.child_of(&parent, "running").await;
+
+        parent.stop("stopper").await.done();
+        world.type_line(&finisher, "/exit").await;
+
+        let stopped = ends.of("the stopped child to end", stopper.id()).await;
+        assert!(stopped.stopped, "{backend}: stopped by its parent");
+        let finished = ends.of("the finished child to end", finisher.id()).await;
+        assert!(
+            !finished.stopped,
+            "{backend}: a child whose agent exited by itself"
+        );
+        assert_eq!(world.status(running.id()), "running");
+        assert!(
+            !world.record(running.id()).await.stopped,
+            "{backend}: a child still running"
+        );
+
+        world.close(&parent).await;
+        let last = ends.of("the last child to end", running.id()).await;
+        assert!(last.stopped, "{backend}: ended with its parent");
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_the_user_ends_or_whose_parent_ends_is_recorded_stopped_and_one_that_exits_by_itself_is_not()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let mut ends = Ends::listen(&world).await;
+    for backend in [CLAUDE, OTHER] {
+        // End, on the session itself.
+        let ended = world.session(backend, &world.project("end"), "ended").await;
+        world.close(&ended).await;
+        let record = ends.of("the ended session", ended.id()).await;
+        assert!(record.stopped, "{backend}: End");
+
+        // An agent that exits by itself.
+        let done = world.session(backend, &world.project("done"), "done").await;
+        world.type_line(&done, "/exit").await;
+        let record = ends.of("the session that exited", done.id()).await;
+        assert!(!record.stopped, "{backend}: /exit");
+
+        // A parent that exits by itself is not stopped, and the child the host
+        // ends with it is.
+        let parent = world
+            .session(backend, &world.project("parent exits"), "parent")
+            .await;
+        parent
+            .start(json!({ "task": "work", "name": "below", "backend": backend }))
+            .await
+            .done();
+        let below = world.child_of(&parent, "below").await;
+        world.type_line(&parent, "/exit").await;
+        let record = ends.of("the parent that exited", parent.id()).await;
+        assert!(!record.stopped, "{backend}: a parent that exited by itself");
+        let record = ends.of("its child", below.id()).await;
+        assert!(record.stopped, "{backend}: the child that ended with it");
+
+        // A parent the user ends takes its child with it, both stopped.
+        let lead = world
+            .session(backend, &world.project("parent ends"), "lead")
+            .await;
+        lead.start(json!({ "task": "work", "name": "below", "backend": backend }))
+            .await
+            .done();
+        let under = world.child_of(&lead, "below").await;
+        world.close(&lead).await;
+        let record = ends.of("the parent that was ended", lead.id()).await;
+        assert!(record.stopped, "{backend}: the parent");
+        let record = ends.of("its child", under.id()).await;
+        assert!(record.stopped, "{backend}: its child");
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_quit_that_ends_a_clients_sessions_records_them_and_their_children_stopped() {
+    let world = World::new();
+    let host = world.host().await;
+    let mut ends = Ends::listen(&world).await;
+    for backend in [CLAUDE, OTHER] {
+        let parent = world
+            .session(backend, &world.project("quit"), "quitting")
+            .await;
+        parent
+            .start(json!({ "task": "work", "name": "below", "backend": backend }))
+            .await
+            .done();
+        let below = world.child_of(&parent, "below").await;
+        world.quit(true).await;
+        let record = ends.of("the parent to end", parent.id()).await;
+        assert!(record.stopped, "{backend}: the parent");
+        let record = ends.of("its child to end", below.id()).await;
+        assert!(record.stopped, "{backend}: its child");
     }
     host.stop(HostStopReason::Stop).await;
 }

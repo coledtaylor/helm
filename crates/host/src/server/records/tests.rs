@@ -161,6 +161,55 @@ fn a_session_without_a_link_keeps_the_defaults_for_outlive_and_can_start() {
     assert_eq!(child_name, None);
 }
 
+fn exit(code: u32) -> SessionExit {
+    SessionExit { code, signal: None }
+}
+
+#[test]
+fn a_session_the_host_ends_reads_stopped_before_its_program_exits_and_one_that_exits_by_itself_does_not()
+ {
+    let world = World::new();
+    let stopped = world.start("stopped", None);
+    let alone = world.start("alone", None);
+    assert!(!world.record(stopped).stopped);
+
+    // Marked while it still runs, so the exit that follows is the host's doing.
+    world.store.ending(stopped);
+    let marked = world.record(stopped);
+    assert_eq!(marked.status, SessionStatus::Running);
+    assert!(marked.stopped);
+
+    world.store.finished(stopped, &exit(143)).unwrap();
+    world.store.finished(alone, &exit(0)).unwrap();
+    assert!(world.record(stopped).stopped);
+    assert_eq!(world.record(stopped).status, SessionStatus::Exited);
+    assert!(!world.record(alone).stopped);
+    assert_eq!(world.record(alone).exit_code, Some(0));
+}
+
+#[test]
+fn ending_a_session_that_already_ended_marks_nothing() {
+    let world = World::new();
+    let done = world.start("done", None);
+    world.store.finished(done, &exit(0)).unwrap();
+    world.store.ending(done);
+    assert!(!world.record(done).stopped);
+}
+
+#[test]
+fn a_deliberate_stop_records_each_row_exited_and_stopped_and_leaves_an_ended_row_alone() {
+    let world = World::new();
+    let running = world.start("running", None);
+    let done = world.start("done", None);
+    world.store.finished(done, &exit(0)).unwrap();
+
+    record_stopped(&world.store.lock().unwrap(), &[running, done]).unwrap();
+    let record = world.record(running);
+    assert_eq!(record.status, SessionStatus::Exited);
+    assert!(record.stopped);
+    assert!(!world.record(done).stopped);
+}
+
 #[test]
 fn deleting_a_parents_row_leaves_its_child_with_no_parent_and_keeps_the_conversation_to_find_it_by()
 {

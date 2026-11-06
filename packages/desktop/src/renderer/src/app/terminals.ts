@@ -6,7 +6,7 @@ import {
   type TerminalHost,
   type TerminalReport
 } from '../terminal'
-import { LOCAL_HOST_KEY } from '@helm/core/types'
+import { LOCAL_HOST_KEY, gridOf, type CellSize } from '@helm/core/types'
 import { bridgeFor, helm } from './bridge'
 import { attachSessionSink, forgetSession } from './sessionStream'
 import { onTerminalPrefs, terminalPrefs } from './termprefs'
@@ -160,17 +160,23 @@ export function estimateGrid(container: HTMLElement | null): { cols: number; row
   const cell = measureCell(prefs)
   if (cell === null) return fallback
 
-  // The strip FitAddon holds back for the overview ruler, which is where the
-  // scrollbar is drawn. A flat 14 CSS pixels, and its own constant rather than
-  // a measurement - so this has to be its own constant too, or the estimate is
-  // a column or two wide on every pane and two columns out is a whole repaint
-  // for a TUI that laid itself out to the number it was given.
-  const rulerReserve = prefs.scrollback === 0 ? 0 : 14
+  // The same arithmetic the family view's room rule runs (`gridOf`), so a pane
+  // the rule calls wide enough for 80 columns is one a terminal fits 80 in.
+  return gridOf({ width, height }, cell, prefs.scrollback)
+}
 
-  return {
-    cols: Math.max(Math.floor((width - rulerReserve) / cell.width), 2),
-    rows: Math.max(Math.floor(height / cell.height), 2)
-  }
+/**
+ * One cell of this device's terminal font as `estimateGrid` measures it, or
+ * null when it cannot be measured. The family view's room rule reads it, so a
+ * larger font in Settings needs more pixels for the same floors in columns.
+ */
+export function terminalCell(): CellSize | null {
+  return measureCell(terminalPrefs())
+}
+
+/** The lines of scrollback this device's terminals keep, which decide the ruler's strip (`gridOf`). */
+export function terminalScrollback(): number {
+  return terminalPrefs().scrollback
 }
 
 /** Enough characters that a sub-pixel advance averages out, as xterm uses. */

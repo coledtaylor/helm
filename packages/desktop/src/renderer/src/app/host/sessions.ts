@@ -82,8 +82,10 @@ export type SessionsAdapters = HostAdapter[] & {
   /** A session the host started for a plugin: kept with the window's tabs, its terminal carried. */
   adopt(row: P.SessionRecord): SessionRecord
   /**
-   * The sessions this window has a tab for. Each running one not carried yet
-   * is carried from here on, on a new stream that starts with its screen.
+   * The sessions this window shows: those with a tab, and the children a
+   * parent's tab shows. Each running one not carried yet is carried from here
+   * on, on a new stream that starts with its screen, and one the last call named
+   * that this does not is let go.
    */
   show(ids: readonly number[]): void
   /** A tab closed with its session kept running: its terminal is no longer carried. */
@@ -507,22 +509,32 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
   })
   shellStreamClosed = terminals.streamClosed
 
+  /** A session no longer shown here: its terminal is no longer carried. */
+  const release = (id: number): void => {
+    shown.delete(id)
+    streams.close('session:data', id)
+    if (focused.includes(id)) {
+      focused = focused.filter((each) => each !== id)
+      sendFocus()
+    }
+  }
+  /** What the last `show` named, so the next lets go of whatever it no longer names. */
+  let named = new Set<number>()
+
   return Object.assign([sessions, terminals], {
     adopt: (row: P.SessionRecord) => adopt(sessionFromHost(row)),
     show: (ids: readonly number[]) => {
+      const next = new Set(ids)
+      // A child its parent's tab stopped showing (the pane lost its room, the
+      // setting went off, the parent's tab closed) is no longer carried.
+      for (const id of named) if (!next.has(id)) release(id)
+      named = next
       for (const id of ids) {
         shown.add(id)
         const record = records.get(id)
         if (record !== undefined) carry(record)
       }
     },
-    release: (id: number) => {
-      shown.delete(id)
-      streams.close('session:data', id)
-      if (focused.includes(id)) {
-        focused = focused.filter((each) => each !== id)
-        sendFocus()
-      }
-    }
+    release
   })
 }

@@ -255,6 +255,41 @@ const QUIT_SESSIONS_HOSTS_MAX = 64
 /** Room for a key's fingerprint or address; not a statement about what keys look like. */
 const QUIT_SESSIONS_HOST_KEY_MAX = 200
 
+/** The most children one parent's arrangement names in a list; a family is a handful, and this bounds a hand edit. */
+const FAMILY_LIST_MAX = 500
+
+/**
+ * Why a saved layout's `families` are not parents' arrangements, or null when
+ * they are: an object holding at most one entry for each of the layout's
+ * `tabs`, each entry four lists (`order`, `shrunk`, `closed`, `screens`) of
+ * child session ids. Refused whole, like the tree it sits beside.
+ */
+function familiesProblem(value: unknown, tabs: number): string | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return `expected the parents' arrangements, got ${describe(value)}`
+  }
+  const entries = Object.entries(value)
+  if (entries.length > tabs) {
+    return `expected an arrangement for at most each of ${String(tabs)} tabs, got ${String(entries.length)}`
+  }
+  for (const [tab, state] of entries) {
+    if (typeof state !== 'object' || state === null || Array.isArray(state)) {
+      return `expected an arrangement for ${JSON.stringify(tab)}, got ${describe(state)}`
+    }
+    for (const list of ['order', 'shrunk', 'closed', 'screens'] as const) {
+      const ids = (state as Record<string, unknown>)[list]
+      if (ids === undefined) continue
+      if (!Array.isArray(ids) || ids.length > FAMILY_LIST_MAX) {
+        return `expected up to ${String(FAMILY_LIST_MAX)} session ids in ${list}, got ${describe(ids)}`
+      }
+      if (!ids.every((id) => Number.isInteger(id) && (id as number) > 0)) {
+        return `expected every session id in ${list} to be a positive whole number`
+      }
+    }
+  }
+  return null
+}
+
 /**
  * Why a saved pane tree is not one, or null when it is, counting its groups
  * and tabs into `count` as it goes.
@@ -431,7 +466,7 @@ export const SETTING_VALIDATORS: SettingValidators = {
     if (typeof value !== 'object' || Array.isArray(value)) {
       return `expected a pane layout or null, got ${describe(value)}`
     }
-    const { root, focused } = value as Record<string, unknown>
+    const { root, focused, families } = value as Record<string, unknown>
     const count = { groups: 0, panes: 0 }
     const problem = paneTreeProblem(root, 0, count)
     if (problem !== null) return problem
@@ -443,7 +478,7 @@ export const SETTING_VALIDATORS: SettingValidators = {
     if (count.groups > Math.max(1, count.panes)) {
       return `expected every group to hold a tab, got ${String(count.groups)} groups for ${String(count.panes)} tabs`
     }
-    return null
+    return families === undefined ? null : familiesProblem(families, count.panes)
   },
 
   /** A timestamp, or null for "has not happened". Parsed, not pattern-matched. */

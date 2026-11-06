@@ -34,7 +34,7 @@ const RECORD_COLUMNS: &str = "id, name, label, cwd, branch, project_path, profil
      parent_session_id, \
      (SELECT coalesce(nullif(parent.label, ''), parent.name) FROM sessions AS parent \
       WHERE parent.id = sessions.parent_session_id), \
-     role";
+     role, stopped";
 
 /// The backend a row ran on, from its `backend` column.
 ///
@@ -142,6 +142,15 @@ impl SessionLedger for HostLedger {
         };
         self.notify(id);
         written
+    }
+
+    /// The host is ending the session: its row says so before its program
+    /// exits. Once the host is stopping the rows are settled, and a stop for
+    /// an update leaves them for the next start to find lost.
+    fn ending(&self, id: SessionId) {
+        if !self.frozen.load(Ordering::SeqCst) {
+            self.store.as_ref().ending(id);
+        }
     }
 
     /// The session's keeper went away with it: its row is lost and offered
@@ -264,13 +273,14 @@ pub(crate) fn running_ids(store: &Store) -> Result<Vec<SessionId>> {
 }
 
 /// Records `ids` as exited now, with no exit code, as a deliberate stop does
-/// before it ends their processes, so none is offered for restore. A row
-/// that is no longer running is left as it is.
+/// before it ends their processes, so none is offered for restore, and as
+/// stopped, because the host is ending them. A row that is no longer running
+/// is left as it is.
 pub(crate) fn record_stopped(store: &Store, ids: &[SessionId]) -> Result<()> {
     let mut statement = store
         .connection()
         .prepare(&format!(
-            "UPDATE sessions SET status = 'exited', ended_at = {NOW}, \
+            "UPDATE sessions SET status = 'exited', stopped = 1, ended_at = {NOW}, \
              duration_ms = CAST((julianday({NOW}) - julianday(started_at)) * 86400000 AS INTEGER) \
              WHERE id = ?1 AND status = 'running'"
         ))
@@ -552,6 +562,7 @@ fn record_from(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
             let role = role.trim();
             (!role.is_empty()).then(|| role.to_owned())
         }),
+        stopped: row.get(18)?,
     })
 }
 

@@ -175,12 +175,18 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 - Every client sees every session in the host, and tabs, panes and splits are kept per device: `paneLayout`
   stays in `helm.db` and never reaches the host. A window gives a tab only to
   a session its saved layout names or that it opened (`unplacedSessionTabs`
-  in `core/layout/panes.ts`), and its connection carries only those
-  sessions' terminals. Every other running session is in the sessions pane
+  in `core/layout/panes.ts`). A running child of a session it has a tab for
+  is shown inside that tab while "Show children in their parent's tab" is on
+  and the pane has room (`familyRoom`), and counts as open here, so the
+  window's connection carries its terminal (`shownSessionIds`) along with
+  those of the sessions that have a tab. Which children are shown, shrunk or
+  opened as tabs is this device's `paneLayout` (`families`) and never reaches
+  the host. Every other running session is in the sessions pane
   as not open here, with Open (a tab whose screen comes through the host's
   attach, never a second restore path) and End. Closing a running session's
   tab asks first, naming its host, which the window names; Close tab, keep
-  running in the tab's menu ends nothing.
+  running in the tab's menu ends nothing, and puts a child back in its
+  parent's family view.
 - Do not use `@anthropic-ai/claude-agent-sdk`.
 - Helm renders nothing for a live session and answers no permission
   prompt. The host reads one thing in a session's output, OSC 7501 status
