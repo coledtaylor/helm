@@ -18,9 +18,10 @@ child.
 - Start a child for work that needs editing: a worker, in its own worktree, for
   each piece of work, and a reviewer for a check that reads and does not change.
   The task you give is all a child gets, so write it as a complete brief.
-- Respect the limits on children. A heavy child runs alone on a host, so
-  anything else heavy waits behind it. When a limit holds, wait for news from
-  your children before you start another.
+- Respect the limits on children. A host runs one heavy child at a time unless
+  its heavy limit was raised, so anything else heavy waits behind it; the
+  listing of your agents shows the heavy slots left. When a limit holds, wait
+  for news from your children before you start another.
 - When a child stops, check where its item really is before you tell the user
   anything about it.
 

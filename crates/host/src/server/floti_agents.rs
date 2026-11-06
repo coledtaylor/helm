@@ -326,13 +326,15 @@ fn listing_text(listed: &ChildrenListed) -> String {
     }
     let limits = &listed.limits;
     out.push_str(&format!(
-        "Limits left: {} of {} running at once, {} of {} starts, {} of {} on this host.",
+        "Limits left: {} of {} running at once, {} of {} starts, {} of {} on this host, {} of {} heavy on this host.",
         limits.children_left,
         limits.children_per_parent,
         limits.starts_left,
         limits.starts_per_parent,
         limits.host_left,
         limits.sessions_per_host,
+        limits.heavy_left,
+        limits.heavy_per_host,
     ));
     if let Some(reason) = &limits.cannot_start {
         out.push_str(&format!(" {reason}"));
@@ -387,6 +389,8 @@ fn listing_json(listed: &ChildrenListed) -> Value {
             "startsLeft": limits.starts_left,
             "sessionsPerHost": limits.sessions_per_host,
             "hostLeft": limits.host_left,
+            "heavyPerHost": limits.heavy_per_host,
+            "heavyLeft": limits.heavy_left,
             "depth": limits.depth,
             "cannotStart": limits.cannot_start,
         },

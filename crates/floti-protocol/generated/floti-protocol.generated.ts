@@ -1582,7 +1582,12 @@ agentDepth: number,
 /**
  * How many children one session may start in its life.
  */
-agentStartsPerParent: number, };
+agentStartsPerParent: number, 
+/**
+ * How many heavy children (those started in a role whose class is heavy)
+ * may run on the host at once.
+ */
+agentHeavyPerHost: number, };
 
 /**
  * A change to some settings. A field left out is unchanged; a nullable
@@ -1592,7 +1597,7 @@ export type HostSettingsPatch = { scanRoots?: Array<string>, pinnedProjects?: Ar
 /**
  * Replaces the whole map.
  */
-backendPaths?: { [key in BackendId]?: string }, terminalShell?: string | null, transcriptArchiveMaxBytes?: number, browserMcp?: boolean, browserMcpLocalOnly?: boolean, sessionMcp?: boolean, restoreWithoutAsking?: boolean, sessionAgents?: boolean, agentChildrenPerParent?: number, agentSessionsPerHost?: number, agentDepth?: number, agentStartsPerParent?: number, };
+backendPaths?: { [key in BackendId]?: string }, terminalShell?: string | null, transcriptArchiveMaxBytes?: number, browserMcp?: boolean, browserMcpLocalOnly?: boolean, sessionMcp?: boolean, restoreWithoutAsking?: boolean, sessionAgents?: boolean, agentChildrenPerParent?: number, agentSessionsPerHost?: number, agentDepth?: number, agentStartsPerParent?: number, agentHeavyPerHost?: number, };
 
 /**
  * Why the host is being stopped, which decides what its sessions become.

@@ -5662,6 +5662,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "agentHeavyPerHost": {
+          "default": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "agentSessionsPerHost": {
           "default": 8,
           "format": "uint32",
@@ -5749,6 +5755,14 @@
           ]
         },
         "agentDepth": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "agentHeavyPerHost": {
           "format": "uint32",
           "minimum": 0,
           "type": [

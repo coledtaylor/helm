@@ -4292,6 +4292,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "agentHeavyPerHost": {
+          "default": 1,
+          "description": "How many heavy children (those started in a role whose class is heavy)\nmay run on the host at once.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "agentSessionsPerHost": {
           "default": 8,
           "description": "How many agent-started sessions may run on the host at once.",
@@ -4393,6 +4400,14 @@
           ]
         },
         "agentDepth": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "agentHeavyPerHost": {
           "format": "uint32",
           "minimum": 0,
           "type": [

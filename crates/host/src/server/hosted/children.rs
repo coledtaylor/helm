@@ -201,9 +201,19 @@ pub(crate) struct LimitsLeft {
     pub starts_left: u32,
     pub sessions_per_host: u32,
     pub host_left: u32,
+    pub heavy_per_host: u32,
+    /// How many more heavy agents the host takes.
+    pub heavy_left: u32,
     pub depth: u32,
     /// Why the session cannot start children at all, when it cannot.
     pub cannot_start: Option<String>,
+}
+
+/// What runs on the host now that the limits count: every agent-started
+/// session, and the heavy ones among them.
+struct HostLoad {
+    running: Vec<SessionId>,
+    heavy: Vec<rows::HeavyHolder>,
 }
 
 /// What `agents_list` answers.
@@ -345,7 +355,7 @@ impl Hosted {
             let settings = settings::read(store.connection()).map_err(|err| err.to_string())?;
             let existing = rows::children_of(&store, parent, facts.conversation_id.as_deref())
                 .map_err(|err| err.to_string())?;
-            let host_running = self.agent_sessions_running(&store)?;
+            let load = self.host_load(&store)?;
             let running: Vec<&rows::ChildRow> = existing
                 .iter()
                 .filter(|child| child.running && self.sessions.get(child.id).is_some())
@@ -356,7 +366,8 @@ impl Hosted {
                 &running,
                 existing.len(),
                 &existing,
-                &host_running,
+                &load,
+                role.class == RoleClass::Heavy,
             )
             .err();
             let wanted = request.name.as_deref().unwrap_or(&role.name);
@@ -489,13 +500,13 @@ impl Hosted {
             ));
         }
 
-        let (settings, existing, host_running) = {
+        let (settings, existing, load) = {
             let store = self.ledger.store();
             (
                 settings::read(store.connection()).map_err(|err| err.to_string())?,
                 rows::children_of(&store, parent, facts.conversation_id.as_deref())
                     .map_err(|err| err.to_string())?,
-                self.agent_sessions_running(&store)?,
+                self.host_load(&store)?,
             )
         };
         let running: Vec<&rows::ChildRow> = existing
@@ -576,7 +587,8 @@ impl Hosted {
             &running,
             existing.len(),
             &existing,
-            &host_running,
+            &load,
+            child.class == RoleClass::Heavy,
         )?;
 
         // Everything is judged: only now does anything run.
@@ -660,7 +672,7 @@ impl Hosted {
         let settings = settings::read(store.connection()).map_err(|err| err.to_string())?;
         let existing = rows::children_of(&store, parent, facts.conversation_id.as_deref())
             .map_err(|err| err.to_string())?;
-        let host_running = self.agent_sessions_running(&store)?;
+        let load = self.host_load(&store)?;
         let mut children = Vec::new();
         for child in &existing {
             let Some(session) = self.sessions.get(child.id).filter(|_| child.running) else {
@@ -685,7 +697,8 @@ impl Hosted {
         }
         let running = u32::try_from(children.len()).unwrap_or(u32::MAX);
         let made = u32::try_from(existing.len()).unwrap_or(u32::MAX);
-        let on_host = u32::try_from(host_running.len()).unwrap_or(u32::MAX);
+        let on_host = u32::try_from(load.running.len()).unwrap_or(u32::MAX);
+        let heavy_on_host = u32::try_from(load.heavy.len()).unwrap_or(u32::MAX);
         Ok(ChildrenListed {
             children,
             limits: LimitsLeft {
@@ -695,6 +708,8 @@ impl Hosted {
                 starts_left: settings.agent_starts_per_parent.saturating_sub(made),
                 sessions_per_host: settings.agent_sessions_per_host,
                 host_left: settings.agent_sessions_per_host.saturating_sub(on_host),
+                heavy_per_host: settings.agent_heavy_per_host,
+                heavy_left: settings.agent_heavy_per_host.saturating_sub(heavy_on_host),
                 depth: settings.agent_depth,
                 cannot_start: depth_refusal(&settings, &facts),
             },
@@ -847,16 +862,20 @@ impl Hosted {
             .ok()
     }
 
-    /// The agent-started sessions running on this host now.
-    fn agent_sessions_running(
-        &self,
-        store: &crate::store::Store,
-    ) -> Result<Vec<SessionId>, String> {
-        Ok(rows::agent_sessions_running(store)
+    /// The agent-started sessions running on this host now, and the heavy
+    /// ones among them.
+    fn host_load(&self, store: &crate::store::Store) -> Result<HostLoad, String> {
+        let running = rows::agent_sessions_running(store)
             .map_err(|err| err.to_string())?
             .into_iter()
             .filter(|id| self.sessions.get(*id).is_some())
-            .collect())
+            .collect();
+        let heavy = rows::heavy_running(store)
+            .map_err(|err| err.to_string())?
+            .into_iter()
+            .filter(|holder| self.sessions.get(holder.id).is_some())
+            .collect();
+        Ok(HostLoad { running, heavy })
     }
 
     /// The role a start asks for, read now: the default role when it names
@@ -1170,8 +1189,10 @@ fn judge(
     running: &[&rows::ChildRow],
     starts_made: usize,
     made: &[rows::ChildRow],
-    host_running: &[SessionId],
+    load: &HostLoad,
+    heavy: bool,
 ) -> Result<(), String> {
+    let host_running = &load.running;
     if let Some(refusal) = depth_refusal(settings, facts) {
         return Err(refusal);
     }
@@ -1195,6 +1216,24 @@ fn judge(
         return Err(format!(
             "The limit of {per_host} agent sessions running on this host holds: {} are running, {yours}. Wait for news and start again.",
             host_running.len()
+        ));
+    }
+    let heavy_limit = settings.agent_heavy_per_host as usize;
+    if heavy && load.heavy.len() >= heavy_limit {
+        let holders: Vec<String> = load
+            .heavy
+            .iter()
+            .map(|holder| format!("{} (started by {})", holder.name, holder.started_by))
+            .collect();
+        return Err(format!(
+            "The heavy limit of {heavy_limit} holds: {} heavy agent{} running on this host, {}. Wait for news and start again.",
+            load.heavy.len(),
+            if load.heavy.len() == 1 {
+                " is"
+            } else {
+                "s are"
+            },
+            holders.join(", ")
         ));
     }
     let per_life = settings.agent_starts_per_parent as usize;

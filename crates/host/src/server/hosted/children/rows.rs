@@ -211,6 +211,39 @@ pub(super) fn agent_sessions_running(store: &Store) -> Result<Vec<SessionId>> {
         .map_err(sql("read the agent sessions running"))
 }
 
+/// A running agent-started session whose role is heavy, and who started it.
+pub(super) struct HeavyHolder {
+    pub id: SessionId,
+    pub name: String,
+    /// The session that started it, by its agent name when it is one, else
+    /// its session name.
+    pub started_by: String,
+}
+
+/// Every agent-started session the rows say is running whose role is heavy,
+/// oldest first. Sessions a person starts have no class, so hold no slot.
+pub(super) fn heavy_running(store: &Store) -> Result<Vec<HeavyHolder>> {
+    let mut select = store
+        .connection()
+        .prepare(
+            "SELECT s.id, s.child_name, COALESCE(p.child_name, p.name, 'a session') \
+             FROM sessions s LEFT JOIN sessions p ON p.id = s.parent_session_id \
+             WHERE s.child_name IS NOT NULL AND s.child_class = 'heavy' \
+             AND s.status = 'running' ORDER BY s.id",
+        )
+        .map_err(sql("read the heavy agents running"))?;
+    select
+        .query_map([], |row| {
+            Ok(HeavyHolder {
+                id: SessionId(row.get(0)?),
+                name: row.get(1)?,
+                started_by: row.get(2)?,
+            })
+        })
+        .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+        .map_err(sql("read the heavy agents running"))
+}
+
 /// A session the rows say is running, and where.
 pub(super) struct RunningSession {
     pub id: SessionId,

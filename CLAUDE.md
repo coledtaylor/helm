@@ -317,9 +317,9 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   `session_tools.json` and `floti_agents.json`. Main reads the browser table
   too, for the tools it answers.
 - Main tells the host `browserMcp`, `browserMcpLocalOnly`, `sessionMcp`,
-  `sessionAgents` ("Sessions can start agents") and the four agent limits
+  `sessionAgents` ("Sessions can start agents") and the five agent limits
   (`agentChildrenPerParent`, `agentSessionsPerHost`, `agentDepth`,
-  `agentStartsPerParent`) on each connect and each change (`hostSettingsFor`).
+  `agentStartsPerParent`, `agentHeavyPerHost`) on each connect and each change (`hostSettingsFor`).
 - Each plugin offering tools is a family, `helm-plugin-<id>`, on while the
   plugin is on and its tools are not switched off in Settings. The host
   checks the token, then hands the call on with its caller: an id it minted
@@ -383,7 +383,14 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   enforce, naming the rule and the backend), a folder Floti tracks on the path
   it leads to (a session's own folder does not make one tracked), a permission
   mode never above the parent's, then the limits read afresh from the settings
-  and counted from the child rows, so they hold across a host restart. A
+  and counted from the child rows, so they hold across a host restart. One
+  of them is the heavy limit (`agentHeavyPerHost`, 1 to 8, default 1): the
+  running agent-started sessions whose row says `child_class` heavy are
+  counted, and a start or a resume of a heavy-role child is refused when they
+  reach it, naming the limit and each holder by its name and the session that
+  started it, and saying to wait for news and start again. Light starts and
+  sessions a person starts are not counted, and `agents_list` shows the heavy
+  slots left. A
   child ends when its parent ends, however it ends, and its own children with
   it, unless it was started to `outlive`; its row keeps the parent's row and
   conversation, so a restart restores the links and resuming the parent's
