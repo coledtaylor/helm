@@ -4120,21 +4120,25 @@ async fn a_command_child_ends_with_its_exit_code_and_its_parent_is_told_the_last
     host.stop(HostStopReason::Stop).await;
 }
 
-/// What a command that exits with the `--code` this file's crash tests give
-/// (-1073741819, 0xC0000005 as Windows reports it) ends with, as the OS gave
-/// it and as the host tells it. On Windows the process ends with 0xC0000005
-/// and the host tells -1073741819, as PowerShell's `$LASTEXITCODE` says. A
-/// process on macOS or Linux cannot end with such a code: the OS keeps its low
-/// 8 bits, so the same test asserts that, and the unit tests prove the
-/// wrapping there.
+/// The `--code` this file's crash tests give: 0xC0000005 as PowerShell's
+/// `$LASTEXITCODE` says it.
 const CRASH_CODE: &str = "-1073741819";
 
-fn crash_codes() -> (&'static str, i32) {
-    if cfg!(windows) {
-        ("3221225477", -1_073_741_819)
-    } else {
-        ("5", 5)
-    }
+/// What a process that exits with [`CRASH_CODE`] ends with, as the OS gives it
+/// (the ledger keeps that) and as the host tells it (wrapped to a signed
+/// 32-bit value). The OS answers: Windows keeps the whole 32 bits, 0xC0000005
+/// (3221225477), and macOS and Linux keep the low 8 bits (5). The unit tests
+/// prove the wrapping of a code above i32 on every OS.
+fn crash_codes() -> (String, i32) {
+    let status = std::process::Command::new("node")
+        .args(["-e", &format!("process.exit({CRASH_CODE})")])
+        .status()
+        .expect("run node");
+    let wrapped = status.code().expect("the process ended with a code");
+    (
+        u32::from_ne_bytes(wrapped.to_ne_bytes()).to_string(),
+        wrapped,
+    )
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -4153,7 +4157,7 @@ async fn an_agent_that_crashes_with_a_code_above_i32_is_recorded_and_told_with_i
         assert_eq!(record.exit_code, Some(wrapped), "{backend}: {record:?}");
         assert_eq!(
             world.row_text(session.id(), "exit_code").as_deref(),
-            Some(as_given),
+            Some(as_given.as_str()),
             "{backend}"
         );
     }
@@ -4185,7 +4189,7 @@ async fn a_command_that_crashes_with_a_code_above_i32_ends_with_it_wrapped_in_it
         // reads carries it wrapped.
         assert_eq!(
             world.row_text(child, "exit_code").as_deref(),
-            Some(as_given)
+            Some(as_given.as_str())
         );
         assert_eq!(world.row_text(child, "stopped").as_deref(), Some("0"));
         let record = ends.of("the command's exit", child).await;
