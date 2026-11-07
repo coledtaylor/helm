@@ -415,9 +415,12 @@ pub(super) fn ended_of(store: &Store, id: SessionId) -> Result<Option<Ended>> {
             |row| {
                 Ok(Ended {
                     link: link_row(row)?,
-                    exit_code: row
-                        .get::<_, Option<i64>>(3)?
-                        .and_then(|code| i32::try_from(code).ok()),
+                    // The column holds the code as the OS gave it (a `u32`).
+                    // Windows reports an NTSTATUS such as 0xC0000005 that
+                    // way; the signed value (-1073741819) is what
+                    // PowerShell's `$LASTEXITCODE` says, so keep the low 32
+                    // bits and never drop or clamp it.
+                    exit_code: row.get::<_, Option<i64>>(3)?.map(|code| code as i32),
                     stopped: row.get(4)?,
                 })
             },
@@ -484,4 +487,68 @@ pub(super) fn profiles(store: &Store) -> Result<Vec<Profile>> {
 
 fn sql(action: &'static str) -> impl Fn(rusqlite::Error) -> Error {
     move |err| Error::io(action, io::Error::other(err))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use floti_protocol::BackendId;
+
+    use super::*;
+    use crate::session::{NewSessionRow, ParentLink, SessionExit, SessionLedger, SessionOrigin};
+    use crate::testkit::TestDirs;
+
+    /// A parent and its command child in a store, the child ended with `code`.
+    fn ended_child(code: u32) -> (TestDirs, Mutex<Store>, SessionId) {
+        let dirs = TestDirs::new();
+        let store = Mutex::new(Store::open(&dirs.data).unwrap());
+        let row = |name: &str, parent: Option<ParentLink>| NewSessionRow {
+            name: name.to_owned(),
+            cwd: dirs.folder("work"),
+            argv: Vec::new(),
+            conversation_id: None,
+            backend: BackendId::claude_code(),
+            origin: SessionOrigin {
+                parent,
+                ..SessionOrigin::default()
+            },
+        };
+        let parent = store.started(&row("lead", None)).unwrap();
+        let link = ParentLink {
+            session: parent,
+            conversation_id: None,
+            name: "tests".to_owned(),
+            role: None,
+            command: Some("pnpm test".to_owned()),
+            outlive: false,
+            can_start: false,
+            heavy: false,
+            worktree: false,
+        };
+        let child = store.started(&row("lead-tests", Some(link))).unwrap();
+        store
+            .finished(child, &SessionExit { code, signal: None })
+            .unwrap();
+        (dirs, store, child)
+    }
+
+    #[test]
+    fn a_command_that_exited_above_i32_reads_as_the_signed_code_powershell_says() {
+        // 0xC0000005, which Windows reports as a u32; PowerShell's
+        // $LASTEXITCODE says -1073741819.
+        let (_dirs, store, child) = ended_child(0xC000_0005);
+        let ended = ended_of(&store.lock().unwrap(), child).unwrap().unwrap();
+        assert_eq!(ended.exit_code, Some(-1_073_741_819));
+        assert!(!ended.stopped);
+    }
+
+    #[test]
+    fn a_code_that_fits_i32_reads_as_it_was_and_the_largest_u32_reads_minus_one() {
+        for (code, read) in [(0, 0), (3, 3), (i32::MAX as u32, i32::MAX), (u32::MAX, -1)] {
+            let (_dirs, store, child) = ended_child(code);
+            let ended = ended_of(&store.lock().unwrap(), child).unwrap().unwrap();
+            assert_eq!(ended.exit_code, Some(read), "{code}");
+        }
+    }
 }

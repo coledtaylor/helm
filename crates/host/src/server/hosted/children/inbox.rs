@@ -479,6 +479,21 @@ mod tests {
         assert_eq!(json["lastLines"].as_array().map(Vec::len), Some(40));
         assert_eq!(json["lastLines"][39], "line 40");
         assert!(json.get("text").is_none() && json.get("stoppedBy").is_none());
+        // A command that crashed with a code above i32 gives it wrapped, as
+        // PowerShell's $LASTEXITCODE says, with its last lines.
+        let crashed = news(
+            EventKind::Ended,
+            Some("exited"),
+            Some("last line"),
+            Some(-1_073_741_819),
+        );
+        assert_eq!(
+            crashed.line(),
+            "reviewer ended with exit code -1073741819. Its last lines:
+last line"
+        );
+        assert_eq!(crashed.json()["exitCode"], -1_073_741_819);
+        assert_eq!(crashed.json()["lastLines"][0], "last line");
         let stopped = news(EventKind::Ended, Some("stopped"), Some("parent"), None);
         assert_eq!(stopped.line(), "reviewer was stopped by its parent.");
         assert_eq!(stopped.json()["stoppedBy"], "parent");

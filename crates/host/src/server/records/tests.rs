@@ -109,6 +109,44 @@ fn a_command_childs_record_carries_its_command_and_once_it_exited_its_exit_code(
 }
 
 #[test]
+fn a_command_that_exited_above_i32_is_listed_and_told_as_the_signed_code_powershell_says() {
+    // Windows reports 0xC0000005 as a u32; the ledger keeps it as given in an
+    // i64 column, and a row an earlier build wrote reads the same value.
+    let world = World::new();
+    let parent = world.start("lead", None);
+    let mut running = link(parent, "tests");
+    running.role = None;
+    running.command = Some("pnpm test".to_owned());
+    let child = world.start("lead-tests", Some(running));
+    world.store.finished(child, &exit(0xC000_0005)).unwrap();
+    let column: i64 = world
+        .store
+        .lock()
+        .unwrap()
+        .connection()
+        .query_row(
+            "SELECT exit_code FROM sessions WHERE id = ?1",
+            [child.0],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        column, 3_221_225_477,
+        "the row holds the code as the OS gave it"
+    );
+
+    let record = world.record(child);
+    assert_eq!(record.exit_code, Some(-1_073_741_819));
+    // A 2.0 reader reads the same number: the field is a signed 32-bit one.
+    let json = serde_json::to_value(&record).unwrap();
+    assert_eq!(json["exitCode"], -1_073_741_819);
+
+    let largest = world.start("lead-all", None);
+    world.store.finished(largest, &exit(u32::MAX)).unwrap();
+    assert_eq!(world.record(largest).exit_code, Some(-1));
+}
+
+#[test]
 fn an_agent_childs_record_and_a_session_started_by_a_person_carry_no_command() {
     let world = World::new();
     let parent = world.start("lead", None);

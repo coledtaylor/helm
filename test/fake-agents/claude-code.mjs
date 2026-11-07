@@ -53,7 +53,9 @@
 //
 // Commands typed at its prompt:
 //   /exit        exit 0
-//   /crash       exit 3
+//   /crash [code]  exit with code, 3 when none; a crash with a large code, such as
+//                  /crash -1073741819 (0xC0000005 on Windows), ends the way a
+//                  crashed Windows program does
 //   /wait        report status "waiting" until y or n is pressed; everything
 //                else typed, pasted or pressed is ignored until then
 //   /busy <ms>   report status "busy" for that long, or until Escape
@@ -674,6 +676,11 @@ function serveScript(port) {
 }
 
 let exiting = false
+/** The code `/crash <code>` ends with: the one given, 3 when none or not a whole number. */
+function crashCode(arg) {
+  return /^-?[0-9]+$/.test(arg ?? '') ? Number(arg) : 3
+}
+
 function exit(code) {
   if (exiting) return
   exiting = true
@@ -1078,7 +1085,7 @@ function run(line) {
   const [command, arg] = line.trim().split(/\s+/, 2)
 
   if (command === '/exit') return exit(0)
-  if (command === '/crash') return exit(3)
+  if (command === '/crash') return exit(crashCode(arg))
   if (command === '/clear') {
     sessionId = randomUUID()
     transcriptFile = transcriptOf(sessionId)

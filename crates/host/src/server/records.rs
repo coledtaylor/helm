@@ -623,9 +623,11 @@ fn record_from(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         started_at: row.get(10)?,
         ended_at: row.get(11)?,
         duration_ms: row.get::<_, Option<i64>>(12)?.map(unsigned),
-        exit_code: row
-            .get::<_, Option<i64>>(13)?
-            .map(|code| i32::try_from(code).unwrap_or(i32::MAX)),
+        // The ledger keeps the code as the OS gave it, a `u32` in an `i64`.
+        // Windows reports an NTSTATUS such as 0xC0000005 that way, and the
+        // signed value (-1073741819) is what PowerShell's `$LASTEXITCODE`
+        // says, so the record keeps the low 32 bits and never clamps.
+        exit_code: row.get::<_, Option<i64>>(13)?.map(|code| code as i32),
         parent_id: row.get::<_, Option<i64>>(15)?.map(unsigned),
         parent_name: row.get(16)?,
         role: row.get::<_, Option<String>>(17)?.and_then(|role| {

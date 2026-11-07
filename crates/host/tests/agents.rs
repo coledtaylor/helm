@@ -4120,6 +4120,134 @@ async fn a_command_child_ends_with_its_exit_code_and_its_parent_is_told_the_last
     host.stop(HostStopReason::Stop).await;
 }
 
+/// What a command that exits with the `--code` this file's crash tests give
+/// (-1073741819, 0xC0000005 as Windows reports it) ends with, as the OS gave
+/// it and as the host tells it. On Windows the process ends with 0xC0000005
+/// and the host tells -1073741819, as PowerShell's `$LASTEXITCODE` says. A
+/// process on macOS or Linux cannot end with such a code: the OS keeps its low
+/// 8 bits, so the same test asserts that, and the unit tests prove the
+/// wrapping there.
+const CRASH_CODE: &str = "-1073741819";
+
+fn crash_codes() -> (&'static str, i32) {
+    if cfg!(windows) {
+        ("3221225477", -1_073_741_819)
+    } else {
+        ("5", 5)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_that_crashes_with_a_code_above_i32_is_recorded_and_told_with_it_wrapped() {
+    let world = World::new();
+    let host = world.host().await;
+    let mut ends = Ends::listen(&world).await;
+    let folder = world.project("agent crashes");
+    let (as_given, wrapped) = crash_codes();
+    for backend in [CLAUDE, OTHER] {
+        let session = world.session(backend, &folder, "crasher").await;
+        world
+            .type_line(&session, &format!("/crash {CRASH_CODE}"))
+            .await;
+        let record = ends.of("the crashed session's exit", session.id()).await;
+        assert_eq!(record.exit_code, Some(wrapped), "{backend}: {record:?}");
+        assert_eq!(
+            world.row_text(session.id(), "exit_code").as_deref(),
+            Some(as_given),
+            "{backend}"
+        );
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_that_crashes_with_a_code_above_i32_ends_with_it_wrapped_in_its_row_its_news_and_its_inbox()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("crashes");
+    let script = command_script(&world);
+    let (as_given, wrapped) = crash_codes();
+    let mut ends = Ends::listen(&world).await;
+    for backend in [CLAUDE, OTHER] {
+        let parent = world
+            .session(backend, &folder, &format!("parent {backend}"))
+            .await;
+        let options = format!("--count 50 --code {CRASH_CODE}");
+        let started = world
+            .shell(&parent, &run_script("--name crashed", &script, &options))
+            .await;
+        assert_eq!(started.code, Some(0), "{started:?}");
+        let child = command_child_id(&world, &parent, "crashed").await;
+        world.ended("the command to end", &[child]).await;
+
+        // The ledger keeps the code as the OS gave it; the record a client
+        // reads carries it wrapped.
+        assert_eq!(
+            world.row_text(child, "exit_code").as_deref(),
+            Some(as_given)
+        );
+        assert_eq!(world.row_text(child, "stopped").as_deref(), Some("0"));
+        let record = ends.of("the command's exit", child).await;
+        assert_eq!(record.exit_code, Some(wrapped), "{record:?}");
+
+        // The ended event in the parent's inbox: the wrapped code and the
+        // command's last 40 lines.
+        let inbox = eventually("the exit to reach its parent's inbox", async || {
+            world
+                .db()
+                .query_row(
+                    "SELECT CAST(exit_code AS TEXT), detail FROM agent_inbox                      WHERE child_session_id = ?1 AND event = 'ended'",
+                    [i64::try_from(child).unwrap()],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+                )
+                .ok()
+        })
+        .await;
+        assert_eq!(inbox.0, Some(wrapped.to_string()), "{inbox:?}");
+        assert_eq!(inbox.1.lines().count(), 40, "{inbox:?}");
+        assert_eq!(inbox.1.lines().last(), Some("line 50"), "{inbox:?}");
+
+        // floti agent wait --json: the same code and lines, never i32::MAX.
+        let news = exit_news(&world, &parent, "crashed").await;
+        assert_eq!(news["event"], "ended", "{news}");
+        assert_eq!(news["exitCode"], wrapped, "{news}");
+        assert_ne!(news["exitCode"], i32::MAX, "{news}");
+        let lines = strings(&news["lastLines"]);
+        assert_eq!(lines.len(), 40, "{lines:?}");
+        assert_eq!(lines.last().map(String::as_str), Some("line 50"));
+
+        // run --wait: its text and --json carry it, and its own exit status is
+        // the code where it fits one (1 to 255) and 1 where it does not.
+        let status = if wrapped > 0 { wrapped } else { 1 };
+        let waited = world
+            .shell(
+                &parent,
+                &run_script("--wait --name waited", &script, &options),
+            )
+            .await;
+        assert_eq!(waited.code, Some(status), "{waited:?}");
+        assert!(
+            waited
+                .stdout
+                .contains(&format!("waited ended with exit code {wrapped}.")),
+            "{waited:?}"
+        );
+        assert!(waited.stdout.contains("line 50"), "{waited:?}");
+        let as_json = world
+            .shell(
+                &parent,
+                &run_script("--wait --json --name shaped", &script, &options),
+            )
+            .await;
+        assert_eq!(as_json.code, Some(status), "{as_json:?}");
+        let answer: Value = serde_json::from_str(as_json.stdout.trim()).expect("the tool's JSON");
+        assert_eq!(answer["news"][0]["exitCode"], wrapped, "{answer}");
+        assert_eq!(strings(&answer["news"][0]["lastLines"]).len(), 40);
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn run_wait_returns_the_name_exit_code_and_lines_and_exits_with_the_commands_code() {
     let world = World::new();

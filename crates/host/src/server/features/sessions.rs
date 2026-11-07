@@ -567,17 +567,24 @@ async fn publish_terminal_exits(mut exits: broadcast::Receiver<TerminalExit>, ev
     loop {
         match exits.recv().await {
             Ok(exit) => {
-                let ended = PtermExited {
-                    id: u64::try_from(exit.id.0).unwrap_or(0),
-                    exit_code: i32::try_from(exit.code).unwrap_or(i32::MAX),
-                };
-                if let Err(err) = events.emit::<PtermExit>(&ended) {
+                if let Err(err) = events.emit::<PtermExit>(&terminal_exited(exit)) {
                     log_line!("floti host: {err}");
                 }
             }
             Err(RecvError::Lagged(_)) => {}
             Err(RecvError::Closed) => return,
         }
+    }
+}
+
+/// What a client is told of a plain terminal whose shell ended.
+fn terminal_exited(exit: TerminalExit) -> PtermExited {
+    PtermExited {
+        id: u64::try_from(exit.id.0).unwrap_or(0),
+        // Windows reports an NTSTATUS such as 0xC0000005 as a `u32`; the
+        // signed value (-1073741819) is what PowerShell's `$LASTEXITCODE`
+        // says, so keep the low 32 bits and never clamp.
+        exit_code: exit.code as i32,
     }
 }
 
@@ -599,6 +606,25 @@ mod tests {
 
     const A: ClientId = ClientId(1);
     const B: ClientId = ClientId(2);
+
+    #[test]
+    fn a_shell_that_exited_above_i32_is_told_as_the_signed_code_powershell_says() {
+        use crate::session::SessionId;
+        for (code, told) in [
+            (0, 0),
+            (3, 3),
+            (0xC000_0005, -1_073_741_819),
+            (u32::MAX, -1),
+        ] {
+            let exit = TerminalExit {
+                id: SessionId(7),
+                code,
+            };
+            let ended = terminal_exited(exit);
+            assert_eq!(ended.id, 7);
+            assert_eq!(ended.exit_code, told, "{code}");
+        }
+    }
 
     #[test]
     fn an_exit_is_worth_a_notification_only_for_a_client_whose_user_cannot_see_it() {

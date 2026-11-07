@@ -7556,6 +7556,7 @@
     "PtermExited": {
       "properties": {
         "exitCode": {
+          "description": "The shell's exit code as the OS reports it, wrapped to a signed 32-bit\nvalue: Windows' 0xC0000005 reads -1073741819.",
           "format": "int32",
           "type": "integer"
         },
@@ -8864,7 +8865,7 @@
           ]
         },
         "exitCode": {
-          "description": "Null while running, and for a session whose exit code was never\nobserved.",
+          "description": "Null while running, and for a session whose exit code was never\nobserved. The code as the OS reports it, wrapped to a signed 32-bit\nvalue: Windows' 0xC0000005 reads -1073741819, as PowerShell's\n`$LASTEXITCODE` says.",
           "format": "int32",
           "type": [
             "integer",
