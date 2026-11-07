@@ -52,6 +52,8 @@ export interface PeekTarget {
   anchor: PeekAnchor
   /** The grid the child's terminal has, once the host has said it (or could not, which is `CHILD_GRID`); null until then. */
   grid: PeekGrid | null
+  /** Whether any of the child's screen has reached the window: a child that ended before this window saw it sends none. */
+  screenSeen: boolean
 }
 
 /** What the store needs of the window. */
@@ -91,7 +93,7 @@ export interface PeekStore {
    * comes. Returns the way to stop. The terminal that mounts last wins.
    */
   attach(sink: (text: string) => void): () => void
-  /** Stop: asks the question stopping a running session asks, then ends the child and closes the peek. */
+  /** Stop: closes the peek, asks the question stopping a running session asks, and ends the child when the user agrees. */
   stop(): Promise<void>
   /** Open: gives the child a tab, and closes the peek. */
   openAsTab(): void
@@ -130,6 +132,10 @@ export function createPeek(initial: PeekDeps): PeekStore {
   const take = (text: string): void => {
     kept.push(text)
     keptLength += text.length
+    if (target !== null && !target.screenSeen) {
+      target = { ...target, screenSeen: true }
+      changed()
+    }
     while (keptLength > REPLAY_LIMIT && kept.length > 1) keptLength -= kept.shift()!.length
     sink?.(text)
   }
@@ -151,7 +157,7 @@ export function createPeek(initial: PeekDeps): PeekStore {
         return
       }
       end()
-      const mine: PeekTarget = { host, id, anchor, grid: null }
+      const mine: PeekTarget = { host, id, anchor, grid: null, screenSeen: false }
       target = mine
       const close = deps.watch(host, id, {
         size: (grid) => {
@@ -188,8 +194,10 @@ export function createPeek(initial: PeekDeps): PeekStore {
     async stop() {
       const stopping = target
       if (stopping === null) return
-      const ended = await deps.stop(stopping.host, stopping.id)
-      if (ended && target === stopping) store.close()
+      // The question takes the peek's place, as the design has it: declining it
+      // leaves the child running and the peek closed.
+      store.close()
+      await deps.stop(stopping.host, stopping.id)
     },
     openAsTab() {
       const opening = target

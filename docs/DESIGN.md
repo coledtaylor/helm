@@ -986,7 +986,7 @@ overrides the gate; keep it.
   from its row in the Sessions tree (beside the row) or from a chip (under it),
   470px wide on `surface-raised` with a `border-strong` hairline, `rounded-well`
   and no shadow. Beside a row it sits level with the row's top; under a chip its
-  right edge is the chip's right edge, 6px below it. It is an overlay (`overlayMounted`), so a browser view stands
+  left edge is 8px left of the chip's (and 8px inside the window), 6px below it. It is an overlay (`overlayMounted`), so a browser view stands
   down for it; Escape, the close button and a press outside close it, and
   focus goes back to the row or chip. Top to bottom: the child's mark, name and
   a state chip in the dot's tone, with the close button at the end; the facts as
@@ -1000,11 +1000,10 @@ overrides the gate; keep it.
   with the 2px accent edge, under a "Last report · done" label in 10px small
   caps at weight 600 (the one text weight past 500, which the frame sets and no
   other text takes); and the foot: "Watching only. Open it to type." in
-  `fg-subtle`, Stop in `danger` (it asks first, as stopping any session does,
-  and the peek stays up for the question) and Open in the accent outline. A
-  child that has ended gets a peek too: its chip reads "ended", its screen is
+  `fg-subtle`, Stop in `danger` (it closes the peek and asks, as stopping any session does) and Open in the accent outline. A
+  child that has ended gets a peek too: its chip says how it ended ("stopped", "ended", or "exited 0" for a command), its screen is
   the last one this window received, the foot reads "Ended. Open shows its last
-  screen." and there is no Stop.
+  screen." ("Ended. This window saw none of its screen." when it ended before any reached this window) and there is no Stop. The Mode row says the mode in lower case ("manual").
 
   **A child that needs a person has a toast, and a window that connects to a
   host with notices standing has While you were away.** Both are cards on

@@ -3703,9 +3703,15 @@ async fn s19_the_hosts_close_question_names_who_ends_and_who_outlives_and_agreei
     assert_eq!(outliving, [keeper.id(), kept_leaf.id()]);
     assert_eq!(question.confirm_label, "End 3 sessions");
     assert_eq!(question.session_names, ["parent", "middle", "leaf"]);
-    for name in ["middle", "leaf", "keeper", "stayer"] {
-        assert!(question.detail.contains(name), "{}", question.detail);
-    }
+    // The question counts who ends with the parent; the window names them from
+    // the ids above, and the sessions that outlive it from `outliving_ids`.
+    assert!(
+        question
+            .detail
+            .contains("2 sessions it started, which end with it:"),
+        "{}",
+        question.detail
+    );
 
     // No ends nothing. The answer is settled in its request, so the sessions
     // are all still running once it returns.

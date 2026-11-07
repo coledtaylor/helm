@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { overlayOpen } from '../lib/overlay'
@@ -86,6 +86,12 @@ describe('the peek', () => {
     expect(within(dialog).getByRole('button', { name: 'Open' })).toBeTruthy()
   })
 
+  it('an ended child that sent no screen to this window says so', () => {
+    render(<ChildPeek {...peek({ ended: true, screenSeen: false })} />)
+    expect(screen.getByText('Ended. This window saw none of its screen.')).toBeTruthy()
+    expect(screen.queryByText('Ended. Open shows its last screen.')).toBeNull()
+  })
+
   it('S2: is an overlay while it is mounted, so a browser view stands down for it', () => {
     expect(overlayOpen()).toBe(false)
     const view = render(<ChildPeek {...peek()} />)
@@ -128,25 +134,12 @@ describe('the peek', () => {
     anchor.remove()
   })
 
-  it('S5: Stop asks the window, and the peek stays up for the question: a press on it and Escape do not close it', async () => {
-    let answer: () => void = () => undefined
-    const props = peek({ onStop: vi.fn(() => new Promise<void>((resolve) => (answer = resolve))) })
+  it('S5: Stop is the window to answer: it closes the peek as the question opens, so the peek closes nothing itself', async () => {
+    const props = peek()
     render(<ChildPeek {...props} />)
     await userEvent.click(screen.getByRole('button', { name: 'Stop' }))
     expect(props.onStop).toHaveBeenCalledTimes(1)
-
-    // The question is a dialog elsewhere in the window.
-    fireEvent.pointerDown(document.body)
-    await userEvent.keyboard('{Escape}')
     expect(props.onClose).not.toHaveBeenCalled()
-
-    await act(async () => {
-      answer()
-      await Promise.resolve()
-    })
-    // Answered: the peek is a peek again.
-    fireEvent.pointerDown(document.body)
-    expect(props.onClose).toHaveBeenCalledTimes(1)
   })
 
   it('S6: Open is the window’s to answer', async () => {

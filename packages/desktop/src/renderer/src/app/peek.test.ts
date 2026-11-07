@@ -46,7 +46,7 @@ describe('the peek', () => {
   it('S1: opens on a child from its row and watches only that child, on a stream of its own', () => {
     const { store, opened } = world()
     store.open(LOCAL_HOST_KEY, 8, { kind: 'row' })
-    expect(store.get()).toEqual({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'row' }, grid: null })
+    expect(store.get()).toEqual({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'row' }, grid: null, screenSeen: false })
     expect(opened.map(({ host, id }) => ({ host, id }))).toEqual([{ host: LOCAL_HOST_KEY, id: 8 }])
   })
 
@@ -148,21 +148,38 @@ describe('the peek', () => {
     expect(gone.store.get()).toBeNull()
   })
 
-  it('S5: Stop ends the child once the user agrees to the question, and closes the peek', async () => {
-    const { store, stops, opened } = world()
+  it('S5: Stop closes the peek as its question opens, and asks to end that child', async () => {
+    let answer: (agreed: boolean) => void = () => undefined
+    const { store, stops, opened } = world({ stop: () => new Promise<boolean>((resolve) => (answer = resolve)) })
     store.open('devbox', 8, { kind: 'row' })
-    await store.stop()
+    const asked = store.stop()
     expect(stops).toEqual([{ host: 'devbox', id: 8 }])
     expect(store.get()).toBeNull()
     expect(opened[0]?.closedHere).toBe(true)
+    answer(true)
+    await asked
+    expect(store.get()).toBeNull()
   })
 
-  it('S5: leaves the peek open and the child running when the user declines the question', async () => {
+  it('S5: the peek stays closed when the user declines the question', async () => {
     const { store, stops } = world({ stop: () => Promise.resolve(false) })
     store.open(LOCAL_HOST_KEY, 8, { kind: 'row' })
     await store.stop()
     expect(stops).toEqual([{ host: LOCAL_HOST_KEY, id: 8 }])
-    expect(store.get()).not.toBeNull()
+    expect(store.get()).toBeNull()
+  })
+
+  it('says whether any of the child screen reached the window, for a child that ended before it was seen', () => {
+    const { store, opened } = world()
+    store.open(LOCAL_HOST_KEY, 8, { kind: 'row' })
+    opened[0]?.closed(null)
+    expect(store.get()?.screenSeen).toBe(false)
+    let told = 0
+    store.subscribe(() => told++)
+    opened[0]?.data('a')
+    opened[0]?.data('b')
+    expect(store.get()?.screenSeen).toBe(true)
+    expect(told).toBe(1)
   })
 
   it('S6: Open gives the child a tab and closes the peek and its stream', () => {

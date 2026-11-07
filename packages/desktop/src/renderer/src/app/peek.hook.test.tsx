@@ -23,7 +23,7 @@ describe('the peek in the window', () => {
   it('S1: stays open while its child has nowhere on screen or is a chip', () => {
     const { result, rerenderWith } = mount({ place: 'nowhere', running: true })
     act(() => result.current.store.open(LOCAL_HOST_KEY, 8, { kind: 'row' }))
-    expect(result.current.target).toEqual({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'row' }, grid: null })
+    expect(result.current.target).toEqual({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'row' }, grid: null, screenSeen: false })
     rerenderWith({ place: 'chip', running: true })
     expect(result.current.target).not.toBeNull()
   })

@@ -1,5 +1,5 @@
 import type { JSX, ReactNode, RefObject } from 'react'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import { cn } from '../lib/cn'
 import { usePopup, type PopupAnchor } from '../lib/popup'
 import { ChildMarkIcon, type ChildMarkView } from './ChildMark'
@@ -39,6 +39,8 @@ export interface ChildPeekProps {
   report: { state: string; text: string } | null
   /** It has ended: the peek says so, and has no Stop. Its screen is the last one the window kept. */
   ended?: boolean | undefined
+  /** Whether any of its screen reached the window. An ended child that sent none has nothing for Open to show but its tab. */
+  screenSeen?: boolean | undefined
   /** The child's screen, live and read-only. */
   screen: ReactNode
   /** Where the popover goes: beside a row (a point), or under a chip. */
@@ -46,7 +48,7 @@ export interface ChildPeekProps {
   /** The row or chip it opened from, whose press is not outside the peek. */
   anchorRef?: RefObject<HTMLElement | null> | undefined
   onClose: () => void
-  /** Stop: the window asks before it ends the child. Settles when the question is answered. */
+  /** Stop: the window closes the peek and asks before it ends the child. */
   onStop: () => Promise<void> | void
   onOpen: () => void
 }
@@ -61,9 +63,8 @@ const BUTTON = 'rounded-well border px-[9px] py-[3px] text-[11.5px] font-medium 
  * that has ended gets one too, which says so and has no Stop.
  *
  * It is an overlay (`usePopup`), so a browser tab's native view stands down for
- * it; Escape and its close button close it, and so does a press outside it. The
- * press that answers Stop's question is not outside: the peek holds open while
- * the question is up, and closes when the child ends. Focus goes to the close
+ * it; Escape and its close button close it, and so does a press outside it. Stop
+ * is the window's: it closes the peek as its question opens. Focus goes to the close
  * button when it opens and back to what had it when it closes, which is the row
  * or chip the user pressed.
  *
@@ -82,6 +83,7 @@ export function ChildPeek({
   runsIn,
   report,
   ended = false,
+  screenSeen = true,
   screen,
   at,
   anchorRef,
@@ -92,8 +94,7 @@ export function ChildPeek({
   const ref = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const titleId = useId()
-  const [asking, setAsking] = useState(false)
-  const place = usePopup({ ref, at, anchorRef, holdOpen: asking, onDismiss: onClose })
+  const place = usePopup({ ref, at, anchorRef, onDismiss: onClose })
 
   // Focus: the close button while it is open, and back where it came from.
   useEffect(() => {
@@ -107,10 +108,8 @@ export function ChildPeek({
     }
   }, [])
 
-  // Escape closes it, except while the question about stopping is up: that
-  // dialog's own Escape means "no", and the peek stays for it.
+  // Escape closes it.
   useEffect(() => {
-    if (asking) return
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape' || event.defaultPrevented) return
       event.preventDefault()
@@ -118,12 +117,7 @@ export function ChildPeek({
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [asking, onClose])
-
-  const stop = (): void => {
-    setAsking(true)
-    void Promise.resolve(onStop()).finally(() => setAsking(false))
-  }
+  }, [onClose])
 
   const rows: Array<{ label: string; value: string; title?: string | undefined; strong?: boolean }> =
     command === undefined
@@ -215,13 +209,17 @@ export function ChildPeek({
 
       <div className="flex items-center gap-1.5 px-3 py-2.5">
         <span className="mr-auto text-[11px] text-fg-subtle">
-          {ended ? 'Ended. Open shows its last screen.' : 'Watching only. Open it to type.'}
+          {ended
+            ? screenSeen
+              ? 'Ended. Open shows its last screen.'
+              : 'Ended. This window saw none of its screen.'
+            : 'Watching only. Open it to type.'}
         </span>
         {!ended && (
           <button
             type="button"
             data-peek-stop
-            onClick={stop}
+            onClick={() => void onStop()}
             className={cn(BUTTON, 'border-danger/45 text-danger hover:bg-danger/10')}
           >
             Stop

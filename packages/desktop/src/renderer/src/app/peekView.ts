@@ -1,6 +1,6 @@
 import { LOCAL_HOST_KEY, sessionLabel, type ChildMark, type PermissionMode, type SessionRecord } from '@helm/core/types'
 import { SESSION_STATE_LABEL, type ChildPeekProps, type PeekTone, type PopupAnchor, type TabIndicator } from '@helm/ui'
-import type { PeekTarget } from './peek'
+import type { PeekAnchor as PeekOpenedFrom, PeekTarget } from './peek'
 
 /**
  * What the peek says of a child, from its row and its state. The wording lives
@@ -8,8 +8,15 @@ import type { PeekTarget } from './peek'
  * what a state is called.
  */
 
-/** What a state chip says and how it is toned: the dot's own tones, in a word. */
-export function peekState(state: TabIndicator): { label: string; tone: PeekTone } {
+/**
+ * What a state chip says and how it is toned: the dot's own tones, in a word.
+ * A child that has ended says how: 'stopped' when the host ended it, 'exited 0'
+ * for a command's exit code, and 'ended' otherwise.
+ */
+export function peekState(
+  state: TabIndicator,
+  how: { stopped?: boolean | undefined; exitCode?: number | undefined } = {}
+): { label: string; tone: PeekTone } {
   switch (state) {
     case 'busy':
       return { label: 'working', tone: 'working' }
@@ -24,13 +31,16 @@ export function peekState(state: TabIndicator): { label: string; tone: PeekTone 
     case 'failed':
       return { label: state === 'error' ? 'error' : 'failed', tone: 'danger' }
     case 'ended':
-      return { label: 'ended', tone: 'neutral' }
+      return {
+        label: how.exitCode !== undefined ? `exited ${String(how.exitCode)}` : how.stopped === true ? 'stopped' : 'ended',
+        tone: 'neutral'
+      }
   }
 }
 
-/** A permission mode as the peek's Mode row says it: the launcher's words, lower case, as the frame sets it in mono. */
+/** A permission mode as the peek's Mode row says it, in lower case, as the frame sets it in mono. */
 const MODE_WORDS: Readonly<Record<PermissionMode, string>> = {
-  manual: 'ask first',
+  manual: 'manual',
   plan: 'plan',
   acceptEdits: 'accept edits',
   auto: 'auto',
@@ -61,13 +71,13 @@ export function peekFacts(
   child: SessionRecord,
   indicator: TabIndicator,
   mark: ChildMark,
-  command?: { line: string; runsIn?: string }
+  command?: { line: string; runsIn?: string; exitCode?: number }
 ): PeekFacts {
   const report = child.lastReport
   return {
     name: sessionLabel(child),
     mark,
-    state: peekState(indicator),
+    state: peekState(indicator, { stopped: child.stopped, exitCode: command?.exitCode }),
     role: child.role ?? null,
     command: command?.line,
     folder: folderOf(child.cwd),
@@ -125,10 +135,27 @@ export function peekPlace(
   }
   const rect = element.getBoundingClientRect()
   if (target.anchor.kind === 'chip') {
-    // Under the chip, its right edge on the chip's, as the design sets it.
-    return { at: { x: rect.right - PEEK_WIDTH, y: rect.bottom + 6 }, element }
+    // Under the chip, 8px left of its left edge, and inside the window by 8px.
+    const x = Math.min(Math.max(8, rect.left - 8), window.innerWidth - PEEK_WIDTH - 8)
+    return { at: { x, y: rect.bottom + 6 }, element }
   }
   return { at: { x: rect.right + 10, y: rect.top - 16 }, element }
+}
+
+/**
+ * What the peek of a child opens from when a toast asks for it rather than a
+ * press: the child's chip in its parent's crumb when that
+ * crumb is on screen with one, and its row otherwise.
+ */
+export function peekAnchorFor(
+  host: string,
+  child: Pick<SessionRecord, 'id' | 'parentId'>,
+  doc: Document = document
+): PeekOpenedFrom {
+  if (child.parentId === undefined || child.parentId === null) return { kind: 'row' }
+  const key = chipKey(host, child.id)
+  const chip = [...doc.querySelectorAll<HTMLElement>('[data-crumb-chip]')].some((each) => each.dataset.crumbChip === key)
+  return chip ? { kind: 'chip', parentId: child.parentId } : { kind: 'row' }
 }
 
 /** The mark's state in words, for a chip's label. */

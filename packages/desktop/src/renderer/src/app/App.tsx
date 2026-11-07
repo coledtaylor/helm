@@ -226,7 +226,7 @@ import { sidebarFor, type SidebarView } from "./sidebarFor";
 import { pressTreeSession, treeEntries } from "./treeFamilies";
 import { openChildTab, usePeek } from "./peek";
 import { PeekTerminal } from "./PeekTerminal";
-import { chipKey, markLabel, peekFacts, peekPlace } from "./peekView";
+import { chipKey, markLabel, peekAnchorFor, peekFacts, peekPlace } from "./peekView";
 import { useNeedsYou, type HostAttention } from "./needsYou";
 import { hostNoticesSource } from "./noticesSource";
 import {
@@ -3513,7 +3513,18 @@ export function App(): JSX.Element {
             label: toast.action === "show" ? "Show" : "Peek",
             onPress: () => {
               if (toast.action === "show") showChild(toast.host, toast.childId);
-              else peek.store.open(toast.host, toast.childId, { kind: "row" });
+              else {
+                const child = sessionsByHost
+                  .get(toast.host)
+                  ?.find((each) => each.id === toast.childId);
+                peek.store.open(
+                  toast.host,
+                  toast.childId,
+                  child === undefined
+                    ? { kind: "row" }
+                    : peekAnchorFor(toast.host, child),
+                );
+              }
               needsYou.closeToast(toast.key);
             },
           }}
@@ -3984,6 +3995,7 @@ export function App(): JSX.Element {
           childMark(peekedChild, peekedState.indicator),
         )}
         ended={peekedChild.status !== "running"}
+        screenSeen={peek.target.screenSeen}
         screen={
           peek.target.grid === null ? null : (
             <PeekTerminal
