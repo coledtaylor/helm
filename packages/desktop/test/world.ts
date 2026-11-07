@@ -68,6 +68,11 @@ export interface FakeClaudeLog {
   resized: { cols: number; rows: number }[]
   /** SGR mouse reports (`ESC [ < b ; x ; y M|m`) it was sent, after `/links` asked for them. */
   mouse: string[]
+  /**
+   * Every `/report` it made to the family, as `{ state, text, isError, answer, progress }`;
+   * `isError` and `answer` are null while the call is out.
+   */
+  reports: { state: string; text: string; isError: boolean | null; answer: string | null; progress: number }[]
   exitCode: number | null
 }
 
