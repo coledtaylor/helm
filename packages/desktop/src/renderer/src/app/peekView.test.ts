@@ -84,7 +84,8 @@ describe('how an ended child says it ended', () => {
     }
     expect(ended({ exitCode: 0 })).toEqual({ label: 'exited 0', tone: 'neutral' })
     expect(ended({ exitCode: 2 })).toEqual({ label: 'exited 2', tone: 'danger' })
-    expect(ended({ exitCode: 2147483647, stopped: true })).toEqual({ label: 'stopped', tone: 'neutral' })
+    expect(ended({ exitCode: -1073741510, stopped: true })).toEqual({ label: 'stopped', tone: 'neutral' })
+    expect(ended({ exitCode: -1073741819 })).toEqual({ label: 'exited -1073741819', tone: 'danger' })
     expect(ended({ exitCode: null })).toEqual({ label: 'ended', tone: 'neutral' })
     expect(ended({ status: 'running', exitCode: null })).toEqual({ label: 'running', tone: 'idle' })
   })
@@ -149,6 +150,17 @@ describe('what the peek says of a command child', () => {
     expect(word({ status: 'exited', exitCode: 3 })).toBe('exited 3')
     expect(word({ status: 'exited', exitCode: null })).toBe('ended')
     expect(markLabel({ glyph: 'dot', state: 'waiting' }, child())).toBe('waiting for you')
+  })
+
+  it('S26: a chip says a code the host wrapped (0xC0000005) as it is', () => {
+    const record = command({ status: 'exited', exitCode: -1073741819 })
+    expect(markLabel(childMark(record, 'ended'), record)).toBe('exited -1073741819')
+  })
+
+  it('S25: the peek’s state chip says a code the host wrapped (0xC0000005) as it is, in danger', () => {
+    const record = command({ status: 'exited', exitCode: -1073741819 })
+    const facts = peekFacts(record, 'ended', childMark(record, 'ended'), commandFacts(record))
+    expect(facts.state).toEqual({ label: 'exited -1073741819', tone: 'danger' })
   })
 })
 

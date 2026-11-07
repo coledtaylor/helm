@@ -55,4 +55,12 @@ describe('the close question as the window draws it', () => {
     ])
     expect(rows.outlives).toEqual([])
   })
+
+  it('S27: a command that exited with a wrapped code (0xC0000005) keeps its failed glyph and its command line, nothing clamps it', () => {
+    const records = [
+      { ...child(10, { command: 'npm test', exitCode: -1073741819, status: 'exited' }), role: null, branch: 'main', cwd: '/r', name: 'tests', label: null }
+    ] as unknown as Array<SessionRecord & ChildMember>
+    const rows = confirmRows(confirmChildren({ endingIds: [10] }, records, () => 'ended'))
+    expect(rows.ends.map(({ mark, meta }) => [mark, meta])).toEqual([[{ glyph: 'command', state: 'failed' }, 'command · npm test']])
+  })
 })
