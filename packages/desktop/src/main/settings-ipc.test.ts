@@ -206,7 +206,8 @@ describe('settings over IPC', () => {
         ['agentSessionsPerHost', 12],
         ['agentDepth', 3],
         ['agentStartsPerParent', 20],
-        ['agentCommandsPerParent', 2]
+        ['agentCommandsPerParent', 2],
+        ['agentHeavyPerHost', 2]
       ] as const) {
         const before = hostSettingsChanged.mock.calls.length
         await invoke('ownSettings:write', { [key]: value })
@@ -218,7 +219,8 @@ describe('settings over IPC', () => {
         agentSessionsPerHost: 12,
         agentDepth: 3,
         agentStartsPerParent: 20,
-        agentCommandsPerParent: 2
+        agentCommandsPerParent: 2,
+        agentHeavyPerHost: 2
       })
     })
 

@@ -227,22 +227,24 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
   const asking = (question: Question): Promise<boolean> =>
     new Promise((resolve) => ask(question, (agreed) => resolve(agreed)))
 
-  let relisting = false
+  let relisting: Promise<void> | null = null
   let relistAgain = false
-  /** Settles when the list now being taken, and any asked for while it runs, has been adopted. */
-  let relistRun: Promise<void> = Promise.resolve()
   /**
    * Adopts what the host lists now: a session started elsewhere, such as one a
-   * plugin asked for or a child an agent started. Resolves once it has been
-   * adopted, so the window's own `session:list` can wait for it.
+   * plugin asked for or a parent's agent tool. Settles once a list asked for
+   * after this call has been adopted, whoever else was already asking.
    */
   function relist(): Promise<void> {
-    if (relisting) {
+    if (relisting !== null) {
       relistAgain = true
-      return relistRun
+      return relisting
     }
-    relisting = true
-    relistRun = (async () => {
+    let finished: () => void = () => undefined
+    const settled = new Promise<void>((resolve) => {
+      finished = resolve
+    })
+    relisting = settled
+    void (async (): Promise<void> => {
       try {
         do {
           relistAgain = false
@@ -253,10 +255,11 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
       } catch (error) {
         log(`host: session:list failed (${(error as Error).message})`)
       } finally {
-        relisting = false
+        relisting = null
+        finished()
       }
     })()
-    return relistRun
+    return settled
   }
 
   const onExit = (row: P.SessionRecord): void => {
@@ -278,8 +281,10 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
     // list because of what it is told is answered by the list taken for it.
     const setStates = (next: readonly P.SessionActivityState[], moved: boolean): void => {
       states = activityFromHost(next)
-      if (moved) void relist()
-      events.tell('session:activity', states)
+      // A window hearing of a session it does not know asks for the list at
+      // once, so what the host lists is adopted before the word goes out.
+      if (moved) void relist().then(() => events.tell('session:activity', states))
+      else events.tell('session:activity', states)
     }
     const setOverview = (next: P.SessionsOverview, moved: boolean): void => {
       overview = overviewFromHost(next)
@@ -421,10 +426,15 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         if (entry === undefined) return { closed: true }
         if (isRunning(entry) && req.force !== true) {
           // The host is named by the window: a client names its hosts.
+          // A child's parent is told, and the question says so.
+          const parent = entry.parentId == null ? undefined : records.get(entry.parentId)
           const agreed = await asking({
             kind: 'close-session',
             message: `“${sessionLabel(entry)}” is still running on ${hostName()}.`,
-            detail: `Ending it stops the Claude Code session in ${entry.cwd}.`,
+            detail:
+              `Ending it stops the Claude Code session in ${entry.cwd}.` +
+              (parent === undefined ? '' : ` ${sessionLabel(parent)}, which started it, is told.`),
+            folder: entry.cwd,
             confirmLabel: 'End session',
             sessionNames: [sessionLabel(entry)]
           })
@@ -449,9 +459,6 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
       'session:list': async () => {
         await host()
         await listed
-        // A window asking because the host's activity named a session it does not hold
-        // is answered with that session, not with the list from before it started.
-        await relistRun
         return [...records.values()]
       },
       'session:activity': async () => {

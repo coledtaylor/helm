@@ -1694,6 +1694,26 @@
         "type": "array"
       }
     },
+    "worktrees:list": {
+      "capability": null,
+      "kind": "request",
+      "request": {
+        "$ref": "#/$defs/WorktreesProject"
+      },
+      "response": {
+        "$ref": "#/$defs/AgentWorktrees"
+      }
+    },
+    "worktrees:remove": {
+      "capability": null,
+      "kind": "request",
+      "request": {
+        "$ref": "#/$defs/RemoveWorktreeRequest"
+      },
+      "response": {
+        "$ref": "#/$defs/WorktreeRemoval"
+      }
+    },
     "wsl:keepAwake": {
       "capability": null,
       "kind": "request",
@@ -1964,6 +1984,57 @@
         "plugin",
         "tool",
         "arguments"
+      ],
+      "type": "object"
+    },
+    "AgentWorktree": {
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "child": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeChild"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "folder": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "uncommitted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "folder"
+      ],
+      "type": "object"
+    },
+    "AgentWorktrees": {
+      "properties": {
+        "worktrees": {
+          "items": {
+            "$ref": "#/$defs/AgentWorktree"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "worktrees"
       ],
       "type": "object"
     },
@@ -5616,6 +5687,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "agentHeavyPerHost": {
+          "default": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "agentSessionsPerHost": {
           "default": 8,
           "format": "uint32",
@@ -5711,6 +5788,14 @@
           ]
         },
         "agentDepth": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "agentHeavyPerHost": {
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -8774,6 +8859,21 @@
       ],
       "type": "object"
     },
+    "RemoveWorktreeRequest": {
+      "properties": {
+        "folder": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "folder"
+      ],
+      "type": "object"
+    },
     "RenameConfigRequest": {
       "properties": {
         "name": {
@@ -11160,6 +11260,55 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "WorktreeChild": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "running": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "running"
+      ],
+      "type": "object"
+    },
+    "WorktreeRemoval": {
+      "properties": {
+        "refusal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "removed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "removed"
+      ],
+      "type": "object"
+    },
+    "WorktreesProject": {
+      "properties": {
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
       "type": "object"
     },
     "WriteConfigRequest": {

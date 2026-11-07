@@ -458,8 +458,8 @@ impl AgentBackend for ClaudeCodeBackend {
 
 impl Resumer for ClaudeCodeBackend {
     /// `--resume <id>` in the folder history recorded, with this launch's
-    /// overlays, agent tools and settings file, and never `-n`,
-    /// `--session-id` or a prompt.
+    /// overlays, agent tools and settings file, and never `-n` or
+    /// `--session-id`. A prompt is passed behind `--` as the next turn.
     fn resume(&self, request: &ResumeRequest, folder: &LaunchFolder) -> Result<Launch> {
         if request.conversation_id.trim().is_empty() {
             return Err(Error::backend(&self.id, "resume a conversation with no id"));
@@ -468,7 +468,7 @@ impl Resumer for ClaudeCodeBackend {
             Composed {
                 cwd: &request.folder,
                 name: "",
-                prompt: None,
+                prompt: request.prompt.as_deref(),
                 resume: Some(&request.conversation_id),
                 composition: &request.composition,
             },

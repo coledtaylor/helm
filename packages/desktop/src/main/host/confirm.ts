@@ -74,6 +74,7 @@ function rendererAsk(window: () => BrowserWindow | null, native: Ask, channel: C
         kind: request.kind,
         message: request.message,
         detail: request.detail,
+        ...(request.folder === undefined ? {} : { folder: request.folder }),
         confirmLabel: request.confirmLabel,
         ...(request.keepLabel === undefined ? {} : { keepLabel: request.keepLabel }),
         // What the tab says, not the `-n` name: this dialog is asking about the

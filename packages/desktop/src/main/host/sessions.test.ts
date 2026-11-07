@@ -360,7 +360,14 @@ describe('sessions through the local host', () => {
     await w.host.sessions.start({ cwd: '/work/app', cols: 80, rows: 24 })
 
     await expect(w.host.sessions.close({ id: 7 })).resolves.toEqual({ closed: true })
-    expect(w.asked).toEqual([expect.objectContaining({ kind: 'close-session', confirmLabel: 'End session' })])
+    expect(w.asked).toEqual([
+      expect.objectContaining({
+        kind: 'close-session',
+        detail: 'Closing the tab ends the Claude Code session in /work/app.',
+        folder: '/work/app',
+        confirmLabel: 'End session'
+      })
+    ])
     expect(w.connection.payloads('session:close')).toEqual([{ id: 7, force: true }])
     expect(w.host.sessions.list()).toEqual([])
     expect(w.connection.streamsFor('session:data', 7)[0]?.closed).toBe(true)
@@ -771,7 +778,8 @@ describe('sessions through the local host', () => {
             agentSessionsPerHost: 12,
             agentDepth: 3,
             agentStartsPerParent: 20,
-            agentCommandsPerParent: 2
+            agentCommandsPerParent: 2,
+            agentHeavyPerHost: 2
           },
           '/bin/claude'
         )
@@ -787,21 +795,23 @@ describe('sessions through the local host', () => {
         agentSessionsPerHost: 12,
         agentDepth: 3,
         agentStartsPerParent: 20,
-        agentCommandsPerParent: 2
+        agentCommandsPerParent: 2,
+        agentHeavyPerHost: 2
       })
       expect(
         hostSettingsFor({ ...DEFAULT_SETTINGS, browserMcp: true, browserMcpLocalOnly: false, sessionMcp: true }, null)
       ).toMatchObject({ browserMcp: true, browserMcpLocalOnly: false, sessionMcp: true })
     })
 
-    it('tells the host the defaults - agents on, 4 children, 8 on the host, 2 deep, 16 starts, 4 command children - when the user has changed none', () => {
+    it('tells the host the defaults - agents on, 4 children, 8 on the host, 2 deep, 16 starts, 1 heavy, 4 command children - when the user has changed none', () => {
       expect(hostSettingsFor(DEFAULT_SETTINGS, null)).toMatchObject({
         sessionAgents: true,
         agentChildrenPerParent: 4,
         agentSessionsPerHost: 8,
         agentDepth: 2,
         agentStartsPerParent: 16,
-        agentCommandsPerParent: 4
+        agentCommandsPerParent: 4,
+        agentHeavyPerHost: 1
       })
     })
   })

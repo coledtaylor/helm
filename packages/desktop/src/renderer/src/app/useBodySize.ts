@@ -1,4 +1,29 @@
-import { useLayoutEffect, useState, type RefObject } from 'react'
+import { useLayoutEffect, useState, useSyncExternalStore, type RefObject } from 'react'
+
+/**
+ * Tells `onChange` when the window's pixel ratio changes, which it does when the
+ * window is dragged to a screen with another one. A cell is quantised to whole
+ * device pixels, so the same font is a different cell there, and the pane's own
+ * size need not change at all.
+ */
+function subscribeRatio(onChange: () => void): () => void {
+  if (typeof window.matchMedia !== 'function') return () => undefined
+  let query = window.matchMedia(`(resolution: ${String(window.devicePixelRatio)}dppx)`)
+  const changed = (): void => {
+    onChange()
+    // The query names the ratio it was made at, so it is made again at the new one.
+    query.removeEventListener('change', changed)
+    query = window.matchMedia(`(resolution: ${String(window.devicePixelRatio)}dppx)`)
+    query.addEventListener('change', changed)
+  }
+  query.addEventListener('change', changed)
+  return () => query.removeEventListener('change', changed)
+}
+
+/** The window's device pixel ratio, read again when it changes. */
+export function useDevicePixelRatio(): number {
+  return useSyncExternalStore(subscribeRatio, () => window.devicePixelRatio || 1)
+}
 
 /** A box in CSS pixels. */
 export interface BodySize {

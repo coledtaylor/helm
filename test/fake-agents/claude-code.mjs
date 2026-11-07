@@ -23,7 +23,8 @@
 //   beside it as the real CLI keeps one, `history.jsonl`, and a transcript
 //   under `projects/`.
 // - `--resume <id>` succeeds only in the directory the conversation was
-//   recorded in, as the real CLI does.
+//   recorded in, as the real CLI does. A prompt given with it is the next turn,
+//   and is logged as `openingPrompt` with `resumed` true.
 // - `mcp add-json`, `mcp remove` and `mcp list` read and write the files the
 //   real CLI does: the working folder's `.mcp.json`, and the global config,
 //   `.claude.json` in `CLAUDE_CONFIG_DIR` when that is set and in the home
@@ -70,6 +71,17 @@
 //                session is idle. Each call is logged in `mcpCalls`, with
 //                whether it was moved and how many progress notifications it
 //                was sent.
+//   /report <done|stuck|note> <text>  report to the parent that started it, as a
+//                child does with `agents_report`: a tools/call POSTed to the
+//                address in `FLOTI_AGENT_URL` with the token in
+//                `FLOTI_AGENT_TOKEN`, the way `floti agent` reaches the
+//                family from a session's shell, and answer `ok <the tool's
+//                text>` or `error <the tool's text>`. It is busy while the
+//                call is out, so it is a turn that ends with a report. With
+//                either variable unset it answers saying so and calls nothing.
+//                Each call is logged in `reports`, as `{ state, text, isError,
+//                answer, progress }`; `isError` and `answer` are null while
+//                the call is out.
 //   /bg <command>  run the command in the shell as a background command: the
 //                session is idle at once, and its output is taken as a new
 //                turn when it finishes, as the real CLI wakes a session. Each
@@ -342,6 +354,7 @@ const runLog = new RunLog(configDir, {
   resized: [],
   mouse: [],
   mcpCalls: [],
+  reports: [],
   background: [],
   turns: []
 })
@@ -670,13 +683,21 @@ async function callMcpTool(server, tool, args, entry) {
   if (config === undefined || typeof config.url !== 'string') {
     return { text: `No MCP server named ${server}.`, isError: true }
   }
-  const token = `fake-${String(process.pid)}-${String(log.mcpCalls.length)}`
-  const response = await fetch(config.url, {
+  return callTool(config.url, config.headers ?? {}, tool, args, entry)
+}
+
+/**
+ * Calls `tool` at `url` with a JSON-RPC tools/call and `headers`, reads the
+ * reply whether it is JSON or a stream, and resolves to `{ text, isError }`.
+ */
+async function callTool(url, headers, tool, args, entry) {
+  const token = `fake-${String(process.pid)}-${String(log.mcpCalls.length + log.reports.length)}`
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
-      ...(config.headers ?? {})
+      ...headers
     },
     body: JSON.stringify({
       jsonrpc: '2.0',
@@ -777,6 +798,40 @@ async function mcpCommand(server, tool, argumentsText) {
   drainTurns()
 }
 
+/**
+ * `/report`: a call to `agents_report` on the session's floti-agents family,
+ * made with the address and token the host gave its environment. It holds the
+ * session busy until it answers.
+ */
+async function reportCommand(state, text) {
+  const entry = { state, text, isError: null, answer: null, progress: 0 }
+  log.reports.push(entry)
+  const url = process.env.FLOTI_AGENT_URL ?? ''
+  const token = process.env.FLOTI_AGENT_TOKEN ?? ''
+  if (url === '' || token === '') {
+    entry.isError = true
+    entry.answer = 'FLOTI_AGENT_URL and FLOTI_AGENT_TOKEN are not set'
+    saveLog()
+    return answer(`report: ${entry.answer}`)
+  }
+  working += 1
+  setStatus('busy')
+  saveLog()
+  let result
+  try {
+    result = await callTool(url, { authorization: `Bearer ${token}` }, 'agents_report', { state, text }, entry)
+  } catch (error) {
+    result = { text: `The call failed: ${String(error.message)}`, isError: true }
+  }
+  entry.isError = result.isError
+  entry.answer = result.text
+  saveLog()
+  working -= 1
+  setStatus(working === 0 ? 'idle' : 'busy')
+  answer(`${result.isError ? 'error' : 'ok'} ${result.text}`)
+  drainTurns()
+}
+
 /** `/bg`: a shell command whose output comes back as a new turn. */
 function backgroundCommand(command) {
   const entry = { command, stdout: '', stderr: '', code: null }
@@ -857,6 +912,12 @@ function submit(line) {
     const typed = /^\/mcp\s+(\S+)\s+(\S+)\s*([\s\S]*)$/.exec(line.trim())
     if (typed === null) return answer('usage: /mcp <server> <tool> [json arguments]')
     void mcpCommand(typed[1], typed[2], typed[3])
+    return
+  }
+  if (command === '/report') {
+    const typed = /^\/report\s+(\S+)\s+([\s\S]+)$/.exec(line.trim())
+    if (typed === null) return answer('usage: /report <done|stuck|note> <text>')
+    void reportCommand(typed[1], typed[2])
     return
   }
   if (command === '/bg') {

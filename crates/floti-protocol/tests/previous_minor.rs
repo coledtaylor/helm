@@ -10,8 +10,8 @@ use floti_protocol::channels::common::{ChildReport, PermissionMode, SessionRecor
 use floti_protocol::channels::sessions::{EffortLevel, Profile, ProfileDraft};
 use floti_protocol::channels::workspace::{
     DEFAULT_AGENT_CHILDREN_PER_PARENT, DEFAULT_AGENT_COMMANDS_PER_PARENT, DEFAULT_AGENT_DEPTH,
-    DEFAULT_AGENT_SESSIONS_PER_HOST, DEFAULT_AGENT_STARTS_PER_PARENT, DEFAULT_SESSION_AGENTS,
-    HostSettings, HostSettingsPatch,
+    DEFAULT_AGENT_HEAVY_PER_HOST, DEFAULT_AGENT_SESSIONS_PER_HOST, DEFAULT_AGENT_STARTS_PER_PARENT,
+    DEFAULT_SESSION_AGENTS, HostSettings, HostSettingsPatch,
 };
 use floti_protocol::record::{self, records, records_dir};
 use floti_protocol::version::negotiate;
@@ -417,6 +417,7 @@ fn settings_from_a_host_before_2_1_read_as_the_defaults() {
         read.agent_starts_per_parent,
         DEFAULT_AGENT_STARTS_PER_PARENT
     );
+    assert_eq!(read.agent_heavy_per_host, DEFAULT_AGENT_HEAVY_PER_HOST);
     assert_eq!(
         (DEFAULT_SESSION_AGENTS, DEFAULT_AGENT_CHILDREN_PER_PARENT),
         (true, 4)
@@ -425,9 +426,10 @@ fn settings_from_a_host_before_2_1_read_as_the_defaults() {
         (
             DEFAULT_AGENT_SESSIONS_PER_HOST,
             DEFAULT_AGENT_DEPTH,
-            DEFAULT_AGENT_STARTS_PER_PARENT
+            DEFAULT_AGENT_STARTS_PER_PARENT,
+            DEFAULT_AGENT_HEAVY_PER_HOST
         ),
-        (8, 2, 16)
+        (8, 2, 16, 1)
     );
     assert_eq!(
         read.agent_commands_per_parent,
@@ -451,9 +453,10 @@ fn a_2_0_clients_settings_patch_changes_none_of_the_agents_settings() {
             patch.agent_sessions_per_host,
             patch.agent_depth,
             patch.agent_starts_per_parent,
-            patch.agent_commands_per_parent
+            patch.agent_commands_per_parent,
+            patch.agent_heavy_per_host
         ),
-        (None, None, None, None, None, None)
+        (None, None, None, None, None, None, None)
     );
     // A patch that sets none of them does not say them either.
     let said = serde_json::to_value(&patch).unwrap();
@@ -464,6 +467,7 @@ fn a_2_0_clients_settings_patch_changes_none_of_the_agents_settings() {
         "agentDepth",
         "agentStartsPerParent",
         "agentCommandsPerParent",
+        "agentHeavyPerHost",
     ] {
         assert!(said.get(key).is_none(), "{key} in {said}");
     }
@@ -579,6 +583,7 @@ fn protocol_2_1_adds_only_optional_fields_and_these_are_all_of_them() {
                 "agentDepth",
                 "agentStartsPerParent",
                 "agentCommandsPerParent",
+                "agentHeavyPerHost",
             ],
         ),
         (
@@ -590,6 +595,7 @@ fn protocol_2_1_adds_only_optional_fields_and_these_are_all_of_them() {
                 "agentDepth",
                 "agentStartsPerParent",
                 "agentCommandsPerParent",
+                "agentHeavyPerHost",
             ],
         ),
         ("Profile", vec!["sessionAgents"]),

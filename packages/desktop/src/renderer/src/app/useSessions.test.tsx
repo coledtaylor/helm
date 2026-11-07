@@ -64,27 +64,28 @@ describe('useSessions', () => {
     expect([...result.current.activity.keys()]).toEqual([1])
   })
 
-  it('lists a session an agent started once the host’s activity names it, takes no ended one, and asks again for none it holds', async () => {
+  it('adds a session the host started while the window is open, such as a child its parent started, once the activity names it', async () => {
     hosting = [record(1)]
     const { result } = await mounted()
     await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1]))
+    bridge.clearRecords()
 
+    hosting = [record(1), record(2)]
     const state = (id: number): SessionActivityState => ({
       id,
-      activity: 'idle',
+      activity: 'busy',
       waitingFor: null,
       message: null,
       claudeSessionId: null
     })
-    // Everything it names is held, and none of it is a child: a push lists nothing.
-    const listed = bridge.invoked('session:list').length
-    act(() => bridge.emit('session:activity', [state(1)]))
-    expect(bridge.invoked('session:list')).toHaveLength(listed)
-
-    hosting = [record(1), record(2, { parentId: 1, parentName: 'session 1' }), record(3, { status: 'exited', exitCode: 0 })]
-    act(() => bridge.emit('session:activity', [state(1), state(2), state(3)]))
+    act(() => bridge.emit('session:activity', [state(1), state(2)]))
     await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1, 2]))
-    expect(result.current.sessions[1]).toMatchObject({ parentId: 1 })
+    expect(bridge.invoked('session:list')).toHaveLength(1)
+
+    // Known sessions moving ask for nothing.
+    bridge.clearRecords()
+    act(() => bridge.emit('session:activity', [state(1), state(2)]))
+    expect(bridge.invoked('session:list')).toHaveLength(0)
   })
 
   it('takes the report a child holds from the host’s listing when its activity moves, and drops it when its next turn clears it', async () => {

@@ -84,7 +84,7 @@ pub struct ParentLink {
     pub can_start: bool,
     /// Whether its role is heavy, which a host runs one of at a time.
     pub heavy: bool,
-    /// Whether its role asks for a worktree of its own.
+    /// Whether it works in a worktree Floti made for it.
     pub worktree: bool,
 }
 

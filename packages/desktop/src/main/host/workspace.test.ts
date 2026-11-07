@@ -29,6 +29,7 @@ const hostSettings = (patch: Partial<P.HostSettings> = {}): P.HostSettings => ({
   agentDepth: 2,
   agentStartsPerParent: 16,
   agentCommandsPerParent: 4,
+  agentHeavyPerHost: 1,
   restoreWithoutAsking: false,
   ...patch
 })

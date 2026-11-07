@@ -174,6 +174,7 @@ describe('a build-box session’s tab', () => {
     expect(confirm.result.current.ask?.request).toMatchObject({
       kind: 'close-session',
       message: '“deploy” is still running on build-box.',
+      folder: '/srv/app',
       sessionNames: ['deploy']
     })
     // Declined: the session runs on and the tab stays.

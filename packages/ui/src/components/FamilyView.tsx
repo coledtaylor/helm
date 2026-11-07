@@ -156,8 +156,11 @@ export interface ReportNoteProps {
 /**
  * A child's report as a note under its card's header (or above its terminal,
  * in a child's own tab): what it is and the start of what it says on one line,
- * in `accent-text` on `accent-soft`, with the 2px accent edge a selected row
- * wears, drawn inside the note as a zero-blur inset line. Pressing it shows
+ * in `accent-text` on `accent-soft` laid directly on the card's ground, with the 2px accent edge a selected row
+ * wears, drawn inside the note as a zero-blur inset line. Keyboard focus takes
+ * the page's ring (2px accent, 2px outside), so the note is positioned above
+ * the terminal that follows it, which would paint over the ring's lower edge,
+ * and neither the card nor the cards' column clips. Pressing it shows
  * all of the report, wrapped, and pressing it again folds it back to the line.
  *
  * What the note says and whether there is one are decided where the window
@@ -173,7 +176,7 @@ export function ReportNote({ label, text }: ReportNoteProps): JSX.Element {
       data-family-note
       onClick={() => setOpen((was) => !was)}
       aria-expanded={open}
-      className="flex min-h-[30px] w-full shrink-0 cursor-pointer items-baseline gap-2 border-b border-border bg-accent-soft pt-[7px] pr-2.5 pb-1.5 pl-3 text-left text-[11.5px] leading-[1.45] text-accent-text shadow-[inset_2px_0_0_var(--color-accent)] hover:bg-accent-soft-hover focus-visible:outline-offset-[-2px]"
+      className="relative z-[1] flex min-h-[30px] w-full shrink-0 cursor-pointer items-baseline gap-2 border-b border-border bg-accent-soft pt-[7px] pr-2.5 pb-1.5 pl-3 text-left text-[11.5px] leading-[1.45] text-accent-text shadow-[inset_2px_0_0_var(--color-accent)] hover:bg-accent-soft-hover"
     >
       <span data-family-note-label className="shrink-0 font-medium">
         {label}
@@ -212,14 +215,15 @@ export interface ChildHeaderProps {
   onPress: () => void
   /** A running card's Open as tab. */
   onOpenAsTab?: (() => void) | undefined
-  /** A running card's Stop, which ends the child without a question. */
+  /** A running card's Stop, which the window asks about before it ends the child. */
   onStop?: (() => void) | undefined
   /** An ended child's Close, which takes it out of the family view. */
   onClose?: (() => void) | undefined
 }
 
+/** Line height is the font's own, as the frame's buttons have it: with 1px of padding and border they stand about 17px tall in the 26px header. */
 const SMALL_BUTTON =
-  'shrink-0 whitespace-nowrap rounded-well border px-[5px] py-px text-[10.5px] font-medium leading-[1.2] transition-colors'
+  'shrink-0 whitespace-nowrap rounded-well border px-[5px] py-px text-[10.5px] font-medium leading-[normal] transition-colors'
 
 /**
  * A child's one-line header.

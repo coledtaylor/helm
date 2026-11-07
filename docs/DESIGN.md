@@ -847,11 +847,12 @@ overrides the gate; keep it.
   that is what stops it. A pane is named by its place in reading order, left to
   right and top to bottom: "First pane", "Second pane". A new tab opens in the **focused**
   pane, the one last pressed anywhere inside (taken in capture, so a terminal,
-  a list or the strip all count). A session tab can hold several terminals. Its
-  terminal fills the body edge to edge on its own ground, or, for a parent whose
-  pane has room, takes 55% of it beside its children's cards, each on the same
-  ground under a themed header (below). A page is drawn on the pane's own
-  surface (§3, "A page draws no island at all").
+  a list or the strip all count). A session tab can hold several terminals.
+  Its terminal fills the body edge to edge on its own ground, or, for a parent
+  whose pane has room, takes 55% of it beside its children's cards, each on the
+  same ground under a themed header (below, "A session's tab holds its
+  children"). A page is drawn on the pane's own surface (§3, "A page draws no
+  island at all").
 
   A strip with more tabs than fit scrolls sideways under the wheel, and its
   only sign of that is a 4px thumb along its foot with no arrow buttons -
@@ -890,7 +891,8 @@ overrides the gate; keep it.
   **A session's tab holds its children** (Settings > Agents, "Show children in
   their parent's tab", on by default and kept per device). When the pane has
   room - the parent keeps 80 columns at its fixed 55%, and a child 60 columns
-  by 8 rows, at the terminal's font, measured as the terminal measures - the
+  by 8 rows, at the terminal's font, measured as the terminal measures, inside
+  the gutters and hairlines the terminals sit in - the
   parent's terminal takes 55% of the pane's long side and its children stand on
   the other 45% on the `surface` ground, in a column on the right of a pane at
   least as wide as it is tall and in a row below the parent in a taller one,
@@ -906,23 +908,30 @@ overrides the gate; keep it.
   header is 26px on `surface` with a 1px `border` below it, in 11.5px: the
   state dot (6px, the session dot's colours), the name in weight 500, the role
   as a 10px tag in `accent-text` on `accent-soft`, the state and for how long
-  at the right in 10.5px `fg-muted` ("Working - 4m"), then **Open as tab** and
+  at the right in 10.5px `fg-muted` ("Working · 4m"), then **Open as tab** and
   **Stop** as 10.5px buttons in `border-strong`, Stop in `danger` with a
-  `danger` edge at 45%. Pressing the words shrinks the card; Stop ends the child
-  with no question. The children that do not fit at 8 rows are **one-line
+  `danger` edge at 45%. Pressing the words shrinks the card; Stop asks first, in the
+  window's one question for ending a running session ("*name* is still running
+  on *host*. Ending it stops the Claude Code session in *folder*. *Parent*,
+  which started it, is told.", End session / Cancel, Cancel focused; the
+  folder is set in mono in `fg`). The children that do not fit at 8 rows are **one-line
   headers** at the end of the column, or under the row: the same 26px with a 1px
   `border` above, only the dot, name and state, and pressing one shows that
-  child and shrinks the last card in its place. A child that ended is a header
-  saying how and when ("Stopped - 14:52", "Done - 14:52") with **Close**; the
-  words open its last screen, input off, and Close takes it out of the family
-  view and leaves its row in the tree. A family with no card says "Press a
-  header to show that child here." in `fg-subtle`, 11.5px.
+  child and shrinks the last card in its place. Stop turns the card into the
+  header of a child that ended, reading "Stopped by you" and the time. A child
+  that ended is a header saying how and when ("Stopped by you · 14:52" when
+  the user stopped it from this window, "Stopped · 14:52" when its parent or
+  another client did, "Done · 14:52" when it exited by itself) with **Close**, its dot the ended tone; the words open its last
+  screen under the same header, input off and no Open as tab or Stop, and Close
+  takes it out of the family view and leaves its row in the tree. A family with
+  no card says "Press a header to show that child here." in `fg-subtle`,
+  11.5px.
 
   **A child's report is a note under its card's header**, from the child's
   `agents_report` until its next turn starts: "Reported done", "Reported
   stuck" or "Note" in weight 500 and the start of the report on one line, in
-  11.5px `accent-text` on `accent-soft` (`accent-soft-hover` under the pointer)
-  with a 2px accent edge and a 1px `border` below, at least 30px high. It is
+  11.5px `accent-text` on `accent-soft` (`accent-soft-hover` under the pointer),
+  laid directly on the card's ground, with a 2px accent edge and a 1px `border` below, at least 30px high. It is
   one button: the edge is an inset line on the button itself
   (`shadow-[inset_2px_0_0_var(--color-accent)]`, no blur and no offset, so it is
   an edge and not an elevation shadow), and it has no transition. Pressing it
@@ -930,7 +939,22 @@ overrides the gate; keep it.
   pressing it again folds it back to the line; the card's terminal gives up the
   room. A running agent child's card has one while it reports, and so does a
   child that is open as its own tab, above its terminal; a command child's, a
-  header and an ended child's last screen never do.
+  header and an ended child's last screen never do. Keyboard focus on the note
+  takes the page's ring, 2px accent at 2px outside the note, drawn whole over
+  the header and the terminal beside it and not inset like the card header's.
+  The note is as wide as the pane, so a pane clips with `overflow-clip` and
+  `overflow-clip-margin: 4px` (`FOCUS_RING_ROOM`) and the ring is whole at the
+  island's edge, over its border and the gutter.
+- **Agent worktrees**: a project page for a folder on this PC lists the
+  checkouts Floti made for its agents in a section of its own, under the
+  sections above it and shown only when the repository has any. One row each:
+  the worktree's name and branch in mono, the session that worked there with its
+  state (running or ended), a warn-toned "Uncommitted changes" where there are
+  some, and a quiet secondary **Remove**. Remove asks nothing first: a clean
+  worktree's removal loses nothing and its branch stays, and a removal the host
+  refuses (uncommitted changes, a running session) shows its sentence in the
+  danger tone under that row, which stays. It is read when the page opens, after
+  a removal and when a session in the project starts or ends.
 - **Project shell**: a project page carries a plain shell (PowerShell, cwd at
   the project) as a terminal island below it. It is furniture, not a session:
   no row, no history, no notification. Each page owns its shell and its

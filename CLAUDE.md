@@ -323,9 +323,11 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   `session_tools.json` and `floti_agents.json`. Main reads the browser table
   too, for the tools it answers.
 - Main tells the host `browserMcp`, `browserMcpLocalOnly`, `sessionMcp`,
-  `sessionAgents` ("Sessions can start agents") and the four agent limits
+  `sessionAgents` ("Sessions can start agents") and the five agent limits
   (`agentChildrenPerParent`, `agentSessionsPerHost`, `agentDepth`,
-  `agentStartsPerParent`) on each connect and each change (`hostSettingsFor`).
+  `agentStartsPerParent`, `agentHeavyPerHost`) and the command-children
+  limit (`agentCommandsPerParent`, counted apart from the agent limits) on each
+  connect and each change (`hostSettingsFor`).
 - Each plugin offering tools is a family, `helm-plugin-<id>`, on while the
   plugin is on and its tools are not switched off in Settings. The host
   checks the token, then hands the call on with its caller: an id it minted
@@ -389,7 +391,14 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   enforce, naming the rule and the backend), a folder Floti tracks on the path
   it leads to (a session's own folder does not make one tracked), a permission
   mode never above the parent's, then the limits read afresh from the settings
-  and counted from the child rows, so they hold across a host restart. A
+  and counted from the child rows, so they hold across a host restart. One
+  of them is the heavy limit (`agentHeavyPerHost`, 1 to 8, default 1): the
+  running agent-started sessions whose row says `child_class` heavy are
+  counted, and a start or a resume of a heavy-role child is refused when they
+  reach it, naming the limit and each holder by its name and the session that
+  started it, and saying to wait for news and start again. Light starts and
+  sessions a person starts are not counted, and `agents_list` shows the heavy
+  slots left. A
   child ends when its parent ends, however it ends, and its own children with
   it, unless it was started to `outlive`; its row keeps the parent's row and
   conversation, so a restart restores the links and resuming the parent's
@@ -440,6 +449,35 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   its parent and role, beside the profile's and the role's, with the
   `agents_report` sentence only where the child has the tool) and the guide
   to `floti agent` with its backend's line on waiting.
+- A child gets a git worktree when its start names one (`worktree`) or its
+  role says `worktree: yes` (named after the child; there is no opt-out of a
+  role's), made by the host with git for every backend
+  (`workspace/worktrees.rs`) after the whole start has been judged, so a
+  refused start writes nothing. It is `<repo>/.floti/worktrees/<name>` on a
+  new branch `agent/<name>` cut from the commit the parent's folder has
+  checked out, under the repository's main working tree even when the parent
+  is itself in an agent worktree; the name is made unique among those folders
+  and `agent/*` branches (`name-2`), so no two children share a checkout.
+  `/.floti/` is added to the repository's `info/exclude` once, keeping its
+  other lines. A start is refused when its folder is not in a git repository,
+  or is inside an agent worktree that a running session other than the caller
+  works in (naming it). A launch that fails after the worktree was made
+  removes it and its branch; otherwise nothing removes a worktree when its
+  child ends, because its branch holds the work.
+- `agents_start` with `resume` (`floti agent start --resume <name>`) reopens
+  one of the caller's ended children, resolved among the caller's own
+  children like every other name (ended rows and those given back by a
+  resumed parent included; anything else is not found), in the folder or
+  worktree its row recorded, through its backend's `Resumer` with the task as
+  the conversation's next turn (`ResumeRequest.prompt`) and its role composed
+  again, its permission capped by the caller's. It keeps its name, parent
+  link, `outlive` and `can_start`, so a resume that also names a role,
+  backend, folder, profile, worktree or name is refused. Also refused, with
+  nothing started: a child still running, a folder or worktree gone or no
+  longer tracked, a backend whose adapter has no `Resumer`, and a child with
+  no conversation. It is then judged against every limit as a start is, and
+  is one more start and one more running child (a resume adds a row under the
+  same name; the newest row of a name is the child).
 - `floti agent start`, `floti agent wait` and `floti agent stop` run the same
   tools from a session's own shell: the host puts its `floti` binary's folder
   first on the session's `PATH` and the session's token and the family's
@@ -679,6 +717,22 @@ app's folder, on any OS.
   session's working directory). Changed lines are the working tree against `HEAD`, said
   as that and never attributed to a session: git does not know who made a
   change. Only what is on screen is watched, and main is told the whole set.
+- A project's agent worktrees (`worktrees:list`, `worktrees:remove`, served by
+  `server/features/worktrees.rs` over `workspace/worktrees.rs`) are the folders
+  `git worktree list` gives under `<repo>/.floti/worktrees` and no other
+  worktree of the repository. The project must be one the host knows (a
+  scanned project, a harness or a profile's folder; a hosted session's working
+  directory does not make one). A removal is `git worktree remove` without
+  `--force`, never a recursive delete, and keeps the `agent/<name>` branch. It
+  is refused, in the answer and with the worktree left as it is, for a folder
+  that is none of the project's agent worktrees, for one a running session
+  works in (naming it) and for one with uncommitted changes (modified or
+  untracked). Whether a worktree has uncommitted changes is `null` when git
+  could not be asked, never "clean". The project page of a folder on this PC
+  lists them as its Agent worktrees section (`LocalProjectPane`, read when the
+  page opens, after a removal and when a session in the project starts or
+  ends) and Remove asks nothing first, because the host already refuses what
+  would lose work and says why on that row.
 - Every backend resumes in the directory history recorded; for Claude Code,
   `claude --resume` there. Claude Code's transcripts are found by scanning
   `projects/*` for `<uuid>.jsonl`, never by deriving a path.

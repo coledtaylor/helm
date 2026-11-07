@@ -96,6 +96,10 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("files:list", REQUEST, FILES),
     ("files:watch", REQUEST, FILES),
     ("files:changed", EVENT, FILES),
+    // Not in ipc.ts under these names: the project page asks for the
+    // worktrees Floti made for agents.
+    ("worktrees:list", REQUEST, None),
+    ("worktrees:remove", REQUEST, None),
 ];
 
 fn domain() -> Catalogue {
@@ -231,6 +235,7 @@ fn settings() -> HostSettings {
         agent_depth: 1,
         agent_starts_per_parent: 10,
         agent_commands_per_parent: 2,
+        agent_heavy_per_host: 2,
     }
 }
 
@@ -1519,6 +1524,80 @@ fn files_view_payloads_survive_the_wire() {
         paths: Some(vec!["src/a.rs".into(), ".git".into()]),
     });
     event::<FilesChanged>(FilesChange { root, paths: None });
+}
+
+#[test]
+fn agent_worktree_payloads_survive_the_wire() {
+    let project = "C:\\work\\a repo".to_owned();
+    let folder = "C:\\work\\a repo\\.floti\\worktrees\\ledger-store".to_owned();
+    exchange::<ListAgentWorktrees>(
+        WorktreesProject {
+            project: project.clone(),
+        },
+        AgentWorktrees {
+            worktrees: vec![
+                AgentWorktree {
+                    name: "ledger-store".into(),
+                    folder: folder.clone(),
+                    branch: Some("agent/ledger-store".into()),
+                    child: Some(WorktreeChild {
+                        name: "builder".into(),
+                        parent: Some("lead".into()),
+                        running: true,
+                    }),
+                    uncommitted: Some(true),
+                },
+                AgentWorktree {
+                    name: "spare".into(),
+                    folder: "C:\\work\\a repo\\.floti\\worktrees\\spare".into(),
+                    branch: None,
+                    child: None,
+                    uncommitted: None,
+                },
+            ],
+        },
+    );
+    exchange::<ListAgentWorktrees>(
+        WorktreesProject { project },
+        AgentWorktrees { worktrees: vec![] },
+    );
+    for removal in [
+        WorktreeRemoval {
+            removed: true,
+            refusal: None,
+        },
+        WorktreeRemoval {
+            removed: false,
+            refusal: Some("ledger-store has uncommitted changes.".into()),
+        },
+    ] {
+        exchange::<RemoveAgentWorktree>(
+            RemoveWorktreeRequest {
+                project: "C:\\work\\a repo".into(),
+                folder: folder.clone(),
+            },
+            removal,
+        );
+    }
+}
+
+#[test]
+fn an_unchecked_worktree_stays_different_from_a_clean_one() {
+    let worktree = |uncommitted| AgentWorktree {
+        name: "w".into(),
+        folder: "/r/.floti/worktrees/w".into(),
+        branch: None,
+        child: None,
+        uncommitted,
+    };
+    assert_eq!(
+        field(&encoded(&worktree(None)), "uncommitted"),
+        Some(&Value::Null)
+    );
+    assert_eq!(
+        field(&encoded(&worktree(Some(false))), "uncommitted"),
+        Some(&Value::Bool(false))
+    );
 }
 
 #[test]

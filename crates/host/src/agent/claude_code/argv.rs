@@ -21,7 +21,8 @@ const MAX_NAME: usize = 60;
 #[derive(Debug, Default)]
 pub(super) struct Argv<'a> {
     pub extra_folders: &'a [PathBuf],
-    /// A conversation to reopen; when set, no `-n`, `--session-id` or prompt.
+    /// A conversation to reopen; when set, no `-n` or `--session-id`. A prompt
+    /// given with it is the conversation's next turn.
     pub resume: Option<&'a str>,
     pub name: &'a str,
     pub plugin_dirs: &'a [PathBuf],
@@ -88,12 +89,12 @@ pub(super) fn build(argv: &Argv<'_>) -> Vec<OsString> {
         push(&[&"--agent", &agent]);
     }
 
-    // Only if it is really there: an empty string here would be a prompt.
-    if argv.resume.is_none()
-        && let Some(prompt) = argv
-            .prompt
-            .map(str::trim)
-            .filter(|prompt| !prompt.is_empty())
+    // Only if it is really there: an empty string here would be a prompt. A
+    // reopened conversation takes one too: it is the next turn.
+    if let Some(prompt) = argv
+        .prompt
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
     {
         push(&[&"--", &prompt]);
     }

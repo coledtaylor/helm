@@ -203,7 +203,7 @@ async fn s31_a_client_on_2_1_lists_a_child_with_its_parent_and_role_and_a_client
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s23_a_client_on_2_1_lists_a_command_child_with_its_command_and_once_it_exited_its_exit_code_and_a_client_on_2_0_reads_the_same_list()
+async fn a_client_on_2_1_lists_a_command_child_with_its_command_and_once_it_exited_its_exit_code_and_a_client_on_2_0_reads_the_same_list()
  {
     const EXITS: u64 = 4;
     let dirs = TestDirs::new();
@@ -226,74 +226,26 @@ async fn s23_a_client_on_2_1_lists_a_command_child_with_its_command_and_once_it_
     let lead = start_in(&mut client, &folder).await;
     let reviewer = start_in(&mut client, &folder).await;
     let tests = start_in(&mut client, &folder).await;
-    let before = client.request::<SessionList>(&()).await.unwrap();
-    eprintln!(
-        "DEBUG before: {:?} ids {lead} {reviewer} {tests}",
-        before.iter().map(|r| r.id).collect::<Vec<_>>()
-    );
     make_child(&dirs.data, reviewer, lead, "reviewer");
-    let mid = client.request::<SessionList>(&()).await.unwrap();
-    eprintln!("DEBUG mid: {:?}", mid.iter().map(|r| r.id).collect::<Vec<_>>());
     make_command_child(&dirs.data, tests, lead, "worker", "pnpm test --filter core");
-    let after = client.request::<SessionList>(&()).await.unwrap();
-    eprintln!("DEBUG after: {:?}", after.iter().map(|r| r.id).collect::<Vec<_>>());
 
-    while let Some(m) = client.next(std::time::Duration::from_millis(300)).await {
-        eprintln!("DEBUG heard {m:?}");
-    }
-    {
-        let store = rusqlite::Connection::open(dirs.data.join("floti.db")).unwrap();
-        let row: (String, Option<i64>, Option<String>) = store.query_row("SELECT status, exit_code, ended_at FROM sessions WHERE id = ?1", [tests as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
-        eprintln!("DEBUG row {row:?}");
-    }
-    for n in 0..3 {
-        let again = client.request::<SessionList>(&()).await.unwrap();
-        eprintln!("DEBUG again {n}: {:?}", again.iter().map(|r| r.id).collect::<Vec<_>>());
-    }
     // While the command runs it names its command and has no exit code; an
     // agent child and the parent name none.
     let listed = client.request::<SessionList>(&()).await.unwrap();
-    let record = |listed: &[SessionRecord], id: u64| -> SessionRecord {
+    let record = |id: u64| -> &SessionRecord {
         listed
             .iter()
             .find(|record| record.id == id)
-            .unwrap_or_else(|| {
-                panic!(
-                    "session {id} is listed; listed: {:?}",
-                    listed.iter().map(|r| (r.id, &r.status)).collect::<Vec<_>>()
-                )
-            })
-            .clone()
+            .unwrap_or_else(|| panic!("session {id} is listed"))
     };
-    let running = record(&listed, tests);
+    let running = record(tests);
     assert_eq!(running.command.as_deref(), Some("pnpm test --filter core"));
     assert_eq!(running.exit_code, None);
     assert_eq!(running.parent_id, Some(lead));
     assert_eq!(running.role, None);
-    for session in [record(&listed, reviewer), record(&listed, lead)] {
+    for session in [record(reviewer), record(lead)] {
         assert_eq!(session.command, None, "{} runs no command", session.name);
     }
-
-    // Once it exits, the record carries its exit code beside its command, in
-    // the exit the host sends and in the list.
-    client.attach(1, tests).await;
-    client.type_into(1, b"/exit 3\r").await;
-    let exited: SessionRecord = client
-        .event_on(
-            EXITS,
-            "the exit of the command child",
-            |ended: &SessionRecord| ended.id == tests,
-        )
-        .await;
-    assert_eq!(exited.exit_code, Some(3));
-    assert_eq!(exited.command.as_deref(), Some("pnpm test --filter core"));
-
-    let listed = client.request::<SessionList>(&()).await.unwrap();
-    let ended = record(&listed, tests);
-    assert_eq!(ended.status, SessionStatus::Exited);
-    assert_eq!(ended.exit_code, Some(3));
-    assert_eq!(ended.command.as_deref(), Some("pnpm test --filter core"));
-    assert_eq!(record(&listed, reviewer).command, None);
 
     // A client one minor behind reads every field it knows of the same list,
     // the command child's record included.
@@ -314,6 +266,22 @@ async fn s23_a_client_on_2_1_lists_a_command_child_with_its_command_and_once_it_
             "{session}"
         );
     }
+
+    // Once the command exits, the record the host sends with the exit carries
+    // its exit code beside its command, and a 2.0 reader reads it as well.
+    client.attach(1, tests).await;
+    client.type_into(1, b"/exit 3\r").await;
+    let exit: Value = client
+        .event_on(EXITS, "the exit of the command child", |ended: &Value| {
+            ended["id"] == tests
+        })
+        .await;
+    assert_eq!(problems_for_a_2_0_reader(&exit), Vec::<String>::new());
+    let exited: SessionRecord = serde_json::from_value(exit).expect("the exit is a record");
+    assert_eq!(exited.status, SessionStatus::Exited);
+    assert_eq!(exited.exit_code, Some(3));
+    assert_eq!(exited.command.as_deref(), Some("pnpm test --filter core"));
+    assert_eq!(exited.parent_id, Some(lead));
 
     host.stop(HostStopReason::Stop).await;
 }

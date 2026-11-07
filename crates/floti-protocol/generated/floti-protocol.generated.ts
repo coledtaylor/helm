@@ -158,6 +158,38 @@ tool: string,
 arguments: unknown, };
 
 /**
+ * One checkout under `.floti/worktrees`.
+ */
+export type AgentWorktree = { 
+/**
+ * The folder's name, which is also the branch's after `agent/`.
+ */
+name: string, 
+/**
+ * The checkout's root.
+ */
+folder: string, 
+/**
+ * The branch checked out there; null for a detached checkout.
+ */
+branch: string | null, 
+/**
+ * The session that last worked there, a running one first; null when
+ * none ever did.
+ */
+child: WorktreeChild | null, 
+/**
+ * Whether git sees a modified or untracked file there. Null when git
+ * could not be asked, which is not the same as nothing changed.
+ */
+uncommitted: boolean | null, };
+
+/**
+ * A project's agent worktrees, by name.
+ */
+export type AgentWorktrees = { worktrees: Array<AgentWorktree>, };
+
+/**
  * The host's identity.
  */
 export type AppInfo = { version: string, mode: AppMode, dataDir: string, dbFile: string, 
@@ -1573,7 +1605,12 @@ agentStartsPerParent: number,
  * How many command children one session may have running at once,
  * counted apart from every agent limit above.
  */
-agentCommandsPerParent: number, };
+agentCommandsPerParent: number, 
+/**
+ * How many heavy children (those started in a role whose class is heavy)
+ * may run on the host at once.
+ */
+agentHeavyPerHost: number, };
 
 /**
  * A change to some settings. A field left out is unchanged; a nullable
@@ -1583,7 +1620,7 @@ export type HostSettingsPatch = { scanRoots?: Array<string>, pinnedProjects?: Ar
 /**
  * Replaces the whole map.
  */
-backendPaths?: { [key in BackendId]?: string }, terminalShell?: string | null, transcriptArchiveMaxBytes?: number, browserMcp?: boolean, browserMcpLocalOnly?: boolean, sessionMcp?: boolean, restoreWithoutAsking?: boolean, sessionAgents?: boolean, agentChildrenPerParent?: number, agentSessionsPerHost?: number, agentDepth?: number, agentStartsPerParent?: number, agentCommandsPerParent?: number, };
+backendPaths?: { [key in BackendId]?: string }, terminalShell?: string | null, transcriptArchiveMaxBytes?: number, browserMcp?: boolean, browserMcpLocalOnly?: boolean, sessionMcp?: boolean, restoreWithoutAsking?: boolean, sessionAgents?: boolean, agentChildrenPerParent?: number, agentSessionsPerHost?: number, agentDepth?: number, agentStartsPerParent?: number, agentCommandsPerParent?: number, agentHeavyPerHost?: number, };
 
 /**
  * Why the host is being stopped, which decides what its sessions become.
@@ -2486,6 +2523,15 @@ client: ProtocolVersion, update: UpdateSide,
  * A sentence naming both versions and which side to update.
  */
 message: string, };
+
+/**
+ * One agent worktree to remove.
+ */
+export type RemoveWorktreeRequest = { project: string, 
+/**
+ * The worktree's folder, as `worktrees:list` gave it.
+ */
+folder: string, };
 
 export type RenameConfigRequest = { scopePath: string, 
 /**
@@ -3501,6 +3547,42 @@ export type WikilinkTarget = {
  */
 path: string | null, };
 
+/**
+ * The session that worked in a worktree.
+ */
+export type WorktreeChild = { 
+/**
+ * The child's name; a session a person started has its own name.
+ */
+name: string, 
+/**
+ * The name of the session that started it; null for a session a person
+ * started, or when that session's record is gone.
+ */
+parent: string | null, 
+/**
+ * Whether it is running now.
+ */
+running: boolean, };
+
+/**
+ * What removing a worktree came to.
+ */
+export type WorktreeRemoval = { removed: boolean, 
+/**
+ * Why it was not removed, as a sentence; null when it was.
+ */
+refusal: string | null, };
+
+/**
+ * A project whose agent worktrees are asked for.
+ */
+export type WorktreesProject = { 
+/**
+ * The project's folder, as the host knows it.
+ */
+project: string, };
+
 export type WriteConfigRequest = { 
 /**
  * The scope's base folder, recorded on the snapshot.
@@ -3678,6 +3760,8 @@ export interface RequestChannels {
   "template:rename": { request: RenameTemplateRequest; response: TemplateWriteResult; capability: null };
   "template:substitute": { request: TemplateFileRequest; response: TemplateWriteResult; capability: null };
   "usage:read": { request: null; response: Array<UsageSnapshot>; capability: null };
+  "worktrees:list": { request: WorktreesProject; response: AgentWorktrees; capability: null };
+  "worktrees:remove": { request: RemoveWorktreeRequest; response: WorktreeRemoval; capability: null };
   "wsl:keepAwake": { request: WslKeepAwakeRequest; response: null; capability: null };
 }
 
@@ -3875,6 +3959,8 @@ export const CHANNELS = [
   { name: "template:substitute", kind: "request", capability: null },
   { name: "usage:changed", kind: "event", capability: null },
   { name: "usage:read", kind: "request", capability: null },
+  { name: "worktrees:list", kind: "request", capability: null },
+  { name: "worktrees:remove", kind: "request", capability: null },
   { name: "wsl:keepAwake", kind: "request", capability: null },
 ] as const;
 

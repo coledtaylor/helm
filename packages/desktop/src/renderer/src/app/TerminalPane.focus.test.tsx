@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionRecord } from '@helm/core/types'
@@ -155,6 +155,19 @@ describe('TerminalPane', () => {
 
     await userEvent.click(container.querySelector('[data-terminal-card]')!)
     expect(terminal.term.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('as a card, keeps the keyboard it was given when the press lands on the gutter xterm does not cover', () => {
+    const child: SessionRecord = { ...SESSION, id: 7, name: 'reviewer', parentId: 3 }
+    const { container } = render(<TerminalPane card session={child} active windowsBuild={null} onClose={vi.fn()} />)
+    const gutter = container.querySelector('[data-terminal-card]')!
+
+    // Not cancelled, the browser would move the focus to the page once the press is over.
+    expect(fireEvent.mouseDown(gutter)).toBe(false)
+    expect(terminal.term.focus).toHaveBeenCalledTimes(1)
+    // Inside xterm's own area the press is xterm's, and nothing is cancelled.
+    expect(fireEvent.mouseDown(gutter.firstElementChild!)).toBe(true)
+    expect(terminal.term.focus).toHaveBeenCalledTimes(2)
   })
 
   it('as a card, says nothing in a bar of its own and takes no press on an ended session’s last screen', async () => {

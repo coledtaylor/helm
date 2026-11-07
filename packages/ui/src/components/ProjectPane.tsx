@@ -1,5 +1,5 @@
-import type { JSX, ReactNode } from 'react'
-import type { Harness, LiveSession, Project } from '@helm/core'
+import { useState, type JSX, type ReactNode } from 'react'
+import type { AgentWorktree, AgentWorktreeRemoval, Harness, LiveSession, Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { GitChip } from './GitChip'
 import {
@@ -81,6 +81,18 @@ export interface ProjectPaneProps {
    * appears on is a control that teaches people to ignore it.
    */
   onRemoveRoot?: ((project: Project) => void) | undefined
+  /**
+   * The checkouts the host made under this repository's `.floti/worktrees` for
+   * its agents. Passed **only where sessions run in this PC's host**, and the
+   * section is absent when the list is absent or empty: a project with no agent
+   * worktrees has nothing to say about them.
+   */
+  agentWorktrees?: readonly AgentWorktree[] | undefined
+  /**
+   * Asks the host to remove one. The host answers with data either way: gone,
+   * or the sentence saying why it stays, which the row shows.
+   */
+  onRemoveAgentWorktree?: ((worktree: AgentWorktree) => Promise<AgentWorktreeRemoval>) | undefined
 }
 
 /**
@@ -113,6 +125,8 @@ export function ProjectPane({
   onOpenConfig,
   onOpenFiles,
   onRemoveRoot,
+  agentWorktrees,
+  onRemoveAgentWorktree,
   host
 }: ProjectPaneProps): JSX.Element {
   const { inventory } = project
@@ -304,9 +318,155 @@ export function ProjectPane({
           )}
         </Panel>
 
+        {agentWorktrees !== undefined && agentWorktrees.length > 0 && (
+          <AgentWorktrees worktrees={agentWorktrees} onRemove={onRemoveAgentWorktree} />
+        )}
+
         {onRemoveRoot && <ScannedFolder project={project} onRemove={onRemoveRoot} />}
       </div>
     </div>
+  )
+}
+
+/**
+ * The checkouts Floti made for this repository's agents, and a way to clear one.
+ *
+ * A worktree outlives its child because its branch holds the work, so they pile
+ * up; this is where somebody looking at the repository sees them and tidies.
+ *
+ * **Remove asks nothing first.** Removing a clean worktree loses nothing: the
+ * host takes the checkout away with git and keeps its `agent/<name>` branch, and
+ * it refuses one with uncommitted changes or a running child. That refusal is the
+ * protection, so it is said on the row where the press happened and the row
+ * stays, rather than a confirmation in front of every press.
+ */
+function AgentWorktrees({
+  worktrees,
+  onRemove
+}: {
+  worktrees: readonly AgentWorktree[]
+  onRemove: ((worktree: AgentWorktree) => Promise<AgentWorktreeRemoval>) | undefined
+}): JSX.Element {
+  const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set())
+  const [refusals, setRefusals] = useState<ReadonlyMap<string, string>>(new Map())
+
+  const remove = async (worktree: AgentWorktree): Promise<void> => {
+    if (onRemove === undefined) return
+    setRemoving((current) => new Set(current).add(worktree.folder))
+    setRefusals((current) => {
+      const next = new Map(current)
+      next.delete(worktree.folder)
+      return next
+    })
+    let sentence: string | null
+    try {
+      const removal = await onRemove(worktree)
+      sentence = removal.removed ? null : (removal.refusal ?? 'The host did not remove it.')
+    } catch (err) {
+      sentence = err instanceof Error ? err.message : String(err)
+    }
+    setRemoving((current) => {
+      const next = new Set(current)
+      next.delete(worktree.folder)
+      return next
+    })
+    if (sentence !== null) {
+      const refusal = sentence
+      setRefusals((current) => new Map(current).set(worktree.folder, refusal))
+    }
+  }
+
+  return (
+    <Panel title="Agent worktrees" mark="agent-worktrees" className="mt-6">
+      <ul className="flex flex-col">
+        {worktrees.map((worktree) => (
+          <AgentWorktreeRow
+            key={worktree.folder}
+            worktree={worktree}
+            busy={removing.has(worktree.folder)}
+            refusal={refusals.get(worktree.folder) ?? null}
+            onRemove={onRemove === undefined ? undefined : () => void remove(worktree)}
+          />
+        ))}
+      </ul>
+    </Panel>
+  )
+}
+
+function AgentWorktreeRow({
+  worktree,
+  busy,
+  refusal,
+  onRemove
+}: {
+  worktree: AgentWorktree
+  busy: boolean
+  refusal: string | null
+  onRemove: (() => void) | undefined
+}): JSX.Element {
+  const { child } = worktree
+  return (
+    <li
+      data-agent-worktree={worktree.name}
+      className="border-t border-border py-2 first:border-t-0 first:pt-0"
+    >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <div className="flex min-w-0 grow basis-72 flex-col gap-0.5">
+          <div className="flex min-w-0 items-baseline gap-2 font-mono text-[11.5px]">
+            <span data-agent-worktree-name className="shrink-0 text-fg">
+              {worktree.name}
+            </span>
+            <span data-agent-worktree-branch className="min-w-0 truncate text-fg-subtle">
+              {worktree.branch ?? 'detached'}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-fg-subtle">
+            {child === null ? (
+              <span data-agent-worktree-child>No session worked here</span>
+            ) : (
+              <span data-agent-worktree-child>
+                <span className="font-mono text-fg-muted">{child.name}</span>{' '}
+                {child.running ? 'is running' : 'ended'}
+              </span>
+            )}
+            {worktree.uncommitted === true && (
+              <span data-agent-worktree-uncommitted className="text-warn">
+                Uncommitted changes
+              </span>
+            )}
+            {worktree.uncommitted === null && (
+              <span data-agent-worktree-unchecked>Changes not checked</span>
+            )}
+          </div>
+        </div>
+        {onRemove !== undefined && (
+          <button
+            type="button"
+            data-agent-worktree-remove={worktree.name}
+            onClick={onRemove}
+            disabled={busy}
+            aria-label={`Remove the ${worktree.name} worktree`}
+            title="Takes the checkout away with git. Its branch stays."
+            className={cn(
+              'shrink-0 rounded-well border border-border-strong px-3 py-1 text-[11.5px] text-fg-muted',
+              'transition-colors',
+              busy ? 'cursor-default opacity-60' : 'hover:bg-hover hover:text-fg active:bg-active'
+            )}
+          >
+            {busy ? 'Removing…' : 'Remove'}
+          </button>
+        )}
+      </div>
+      {refusal !== null && (
+        <p
+          role="alert"
+          data-agent-worktree-refusal
+          className="mt-1.5 text-[11px] leading-[1.55] text-danger"
+        >
+          {refusal}
+        </p>
+      )}
+    </li>
   )
 }
 

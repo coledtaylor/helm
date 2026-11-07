@@ -144,7 +144,9 @@ describe('ReportNote', () => {
       const note = container.querySelector<HTMLElement>('[data-family-note]')!
       // The note is the one button, as the frame's `.b-rep` is.
       expect(note.tagName).toBe('BUTTON')
+      // Laid directly on the card's ground, as the frame's `.b-rep` is on `.fc`.
       expect(note.className).toContain('bg-accent-soft')
+      expect(note.className).not.toContain('bg-surface')
       expect(note.className).toContain('text-accent-text')
       expect(container.querySelector('[data-family-note-label]')?.textContent).toBe(label)
       const text = container.querySelector('[data-family-note-text]')!
@@ -187,6 +189,42 @@ describe('ReportNote', () => {
     const classes = [note, ...note.querySelectorAll('*')].map((element) => element.getAttribute('class') ?? '').join(' ')
     expect(classes).not.toMatch(/font-(semibold|bold|extrabold|black)/)
     expect(classes).not.toMatch(/#[0-9a-f]{3,8}/i)
+  })
+})
+
+describe('ReportNote focus', () => {
+  it('takes the page’s focus ring outside the note, not an inset one, and sits above the terminal that follows it', () => {
+    const { container } = render(<ReportNote label="Reported done" text="Tests pass." />)
+    const note = container.querySelector<HTMLElement>('[data-family-note]')!
+    // No utility sets the ring: the global `:focus-visible` (2px accent at 2px offset) does.
+    expect(note.className).not.toMatch(/outline|ring-/)
+    // A positioned terminal after the note would paint over the ring's lower edge.
+    expect(note.className).toContain('relative')
+    expect(note.className).toContain('z-[1]')
+  })
+
+  it('is not inside anything that clips the ring, in a card or in a child’s own tab', () => {
+    const note = <ReportNote label="Reported done" text="Tests pass." />
+    const card = render(
+      <FamilyKids
+        axis="column"
+        cardCount={1}
+        headersMax={100}
+        headers={null}
+        cards={
+          <FamilyCard name="worker" header={<header>the header</header>} note={note}>
+            <p>the terminal</p>
+          </FamilyCard>
+        }
+      />
+    )
+    const own = render(<FamilyFrame axis={null} parent={<p>terminal</p>} note={note} />)
+    for (const { container } of [card, own]) {
+      const found = container.querySelector<HTMLElement>('[data-family-note]')!
+      for (let up = found.parentElement; up !== null && up !== container.parentElement; up = up.parentElement) {
+        expect(up.className, up.outerHTML.slice(0, 80)).not.toMatch(/overflow-(hidden|clip|auto|scroll|x-|y-)/)
+      }
+    }
   })
 })
 
@@ -251,6 +289,13 @@ describe('ChildHeader on a card', () => {
     expect(container.querySelector('[data-family-role]')?.textContent).toBe('reviewer')
     expect(container.querySelector('[data-family-status]')?.textContent).toBe('Working · 4m')
 
+    // The small buttons take the font's own line height, so they stand about 17px tall in the 26px header.
+    for (const name of ['Open reviewer as a tab', 'Stop reviewer']) {
+      const button = within(row).getByRole('button', { name })
+      expect(button.className).toContain('leading-[normal]')
+      expect(button.className).not.toContain('leading-[1.55]')
+    }
+
     await userEvent.click(within(row).getByRole('button', { name: 'Open reviewer as a tab' }))
     expect(props.onOpenAsTab).toHaveBeenCalledTimes(1)
     await userEvent.click(within(row).getByRole('button', { name: 'Stop reviewer' }))
@@ -259,6 +304,41 @@ describe('ChildHeader on a card', () => {
 
     await userEvent.click(press)
     expect(props.onPress).toHaveBeenCalledTimes(1)
+  })
+
+  it('is 26px on the island ground with the frame’s padding and gaps, the name at medium and the state in the muted 10.5px', () => {
+    const { container } = render(<ChildHeader {...header()} />)
+    const row = container.querySelector<HTMLElement>('[data-family-header="card"]')!
+    for (const token of ['bg-surface', 'pr-[3px]', 'gap-0.5', 'border-b', 'border-border']) {
+      expect(row.className).toContain(token)
+    }
+    const press = screen.getByRole('button', { name: 'Shrink reviewer, Working · 4m' })
+    expect(press.className).toContain('text-[11.5px]')
+    expect(press.className).toContain('pl-[7px]')
+    expect(press.className).toContain('gap-1')
+    const name = [...press.querySelectorAll('span')].find((span) => span.textContent === 'reviewer' && !span.hasAttribute('data-family-role'))
+    expect(name?.className).toContain('font-medium')
+    const tag = container.querySelector('[data-family-role]')
+    expect(tag?.className).toContain('bg-accent-soft')
+    expect(tag?.className).toContain('text-accent-text')
+    expect(tag?.className).toContain('text-[10px]')
+    const status = container.querySelector('[data-family-status]')
+    expect(status?.className).toContain('text-fg-muted')
+    expect(status?.className).toContain('text-[10.5px]')
+    expect(status?.className).toContain('ml-auto')
+  })
+
+  it('draws Open as tab in the strong border and Stop in danger with its edge at 45%, both at the frame’s padding and radius', () => {
+    render(<ChildHeader {...header()} />)
+    const open = screen.getByRole('button', { name: 'Open reviewer as a tab' })
+    for (const token of ['border-border-strong', 'text-fg', 'px-[5px]', 'py-px', 'rounded-well', 'font-medium', 'hover:bg-hover']) {
+      expect(open.className).toContain(token)
+    }
+    const stop = screen.getByRole('button', { name: 'Stop reviewer' })
+    for (const token of ['border-danger/45', 'text-danger', 'px-[5px]', 'py-px', 'rounded-well', 'hover:bg-danger/10']) {
+      expect(stop.className).toContain(token)
+    }
+    expect(stop.className).not.toContain('border-border-strong')
   })
 
   it('draws no tag for a child started with no role', () => {
@@ -288,6 +368,14 @@ describe('ChildHeader shrunk', () => {
     await userEvent.click(press)
     expect(props.onPress).toHaveBeenCalledTimes(1)
   })
+  it('keeps the state in the muted 10.5px and stands under the cards on a hairline', () => {
+    const { container } = render(<ChildHeader {...header({ shape: 'header', onOpenAsTab: undefined, onStop: undefined })} />)
+    const row = container.querySelector<HTMLElement>('[data-family-header="header"]')!
+    expect(row.className).toContain('border-border')
+    expect(row.style.height).toBe(`${String(FAMILY_HEADER_PX)}px`)
+    expect(container.querySelector('[data-family-status]')?.className).toContain('text-fg-muted')
+    expect(container.querySelector('[data-family-dot="busy"]')?.className).toContain('size-1.5')
+  })
 })
 
 describe('ChildHeader ended', () => {
@@ -311,6 +399,29 @@ describe('ChildHeader ended', () => {
     expect(props.onPress).not.toHaveBeenCalled()
     await userEvent.click(within(row).getByRole('button', { name: 'Show reviewer, Stopped · 14:52' }))
     expect(props.onPress).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads Stopped by you and the time for a child the user stopped, with Close drawn as the card’s small buttons are', async () => {
+    const props = header({
+      shape: 'ended',
+      state: 'ended',
+      status: 'Stopped by you · 14:53',
+      onOpenAsTab: undefined,
+      onStop: undefined,
+      onClose: vi.fn()
+    })
+    const { container } = render(<ChildHeader {...props} />)
+    const row = container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+    expect(container.querySelector('[data-family-status]')?.textContent).toBe('Stopped by you · 14:53')
+    expect(container.querySelector('[data-family-status]')?.className).toContain('text-fg-muted')
+    expect(container.querySelector('[data-family-role]')).toBeNull()
+    expect(row.className).toContain('border-t')
+    const close = within(row).getByRole('button', { name: 'Close reviewer' })
+    for (const token of ['border-border-strong', 'text-fg', 'text-[10.5px]', 'px-[5px]', 'leading-[normal]', 'hover:bg-hover']) {
+      expect(close.className).toContain(token)
+    }
+    await userEvent.click(close)
+    expect(props.onClose).toHaveBeenCalledTimes(1)
   })
 
   it('on its last screen, shrinks back when pressed and still offers Close', () => {

@@ -247,6 +247,26 @@ describe('the arrangement written down with the panes', () => {
     expect(familyOf(read, parent).shrunk).toEqual(familyOf(arranged, parent).shrunk)
   })
 
+  it('draws the same cards, headers and tabs after a restart once the host lists its sessions again', () => {
+    const family = [running(2, 1), running(4, 1), ended(5, 1)]
+    const before = closeFamilyChild(arranged, parent, 5)
+    const entries = (layout: PaneLayout): string[] =>
+      familyEntries(familiesHere(layout, [running(1), ...family]).get(1) ?? [], familyOf(layout, parent), 1).map(
+        (e) => `${e.shape}${e.child.id}`
+      )
+    const saved = JSON.parse(JSON.stringify(toSaved(before))) as unknown
+    const listed = new Set([1, 2, 3, 4, 5])
+    const restarted = reconcile(
+      fromSaved(upgradeSavedLayout(saved, null)),
+      (ref) => ref.kind !== 'session' || listed.has(ref.id),
+      []
+    )
+    expect(entries(restarted)).toEqual(entries(before))
+    expect(entries(restarted)).toEqual(['card4', 'header2'])
+    expect(sessionTabIds(restarted)).toEqual(new Set([1, 3]))
+    expect(restarted.families).toEqual(before.families)
+  })
+
   it('is kept by reconcile while the sessions have not been listed, and cut back to the children that still exist once they have', () => {
     const everything = reconcile(arranged, () => true, [])
     expect(everything.families).toEqual(arranged.families)
@@ -297,6 +317,29 @@ describe('two devices attached to one host', () => {
     expect(shownSessionIds(opened, FAMILY, LOCAL_HOST_KEY, ROOM)).toEqual([1, 2, 3, 4])
     expect(familiesHere(opened, FAMILY).get(1)?.map((child) => child.id)).toEqual([3, 4])
     expect(familiesHere(shrunk, FAMILY).get(1)?.map((child) => child.id)).toEqual([2, 3, 4])
+  })
+
+  it('leave what the other device saved byte for byte as it was when one shrinks, closes an ended child or opens one as a tab', () => {
+    const parent = paneId(session(1))
+    const family = [...FAMILY.slice(0, 3), ended(4, 1)]
+    const there = layoutOf(row([g(session(1), HISTORY), g(SETTINGS)]), 0)
+    const savedThere = JSON.stringify(toSaved(there))
+
+    let here = shrinkFamilyChild(there, parent, running(2, 1))
+    here = closeFamilyChild(here, parent, 4)
+    here = openFamilyChildAsTab(here, parent, { id: 3 })
+
+    // This device's own arrangement and strips changed, by its own layout.
+    expect(familyOf(here, parent)).toMatchObject({ shrunk: [2], closed: [4] })
+    expect(sessionTabIds(here)).toEqual(new Set([1, 3]))
+    expect(familiesHere(here, family).get(1)?.map((child) => child.id)).toEqual([2, 4])
+    // The other device's layout, and what it would write down, is untouched, and shows every child.
+    expect(JSON.stringify(toSaved(there))).toBe(savedThere)
+    expect(familyOf(there, parent)).toBe(PLAIN_FAMILY)
+    expect(familiesHere(there, family).get(1)?.map((child) => child.id)).toEqual([2, 3, 4])
+    expect(familyEntries(familiesHere(there, family).get(1)!, familyOf(there, parent), 3).map((e) => `${e.shape}${e.child.id}`)).toEqual(
+      ['card2', 'card3', 'ended4']
+    )
   })
 })
 

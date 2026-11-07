@@ -473,6 +473,19 @@ impl World {
         .await
     }
 
+    /// The `n`th report the fake `claude` `agent` made at its prompt with
+    /// `/report`, once the family has answered it.
+    async fn report_answered(&self, agent: &Agent, n: usize) -> Value {
+        eventually("the fake's report call to be answered", async || {
+            self.claude_log(agent)["reports"]
+                .as_array()
+                .and_then(|reports| reports.get(n - 1))
+                .filter(|report| !report["isError"].is_null())
+                .cloned()
+        })
+        .await
+    }
+
     /// Makes the fake `claude` child `child` busy until `release` ends its
     /// turn, and returns once the host has seen it busy, with the watch that
     /// saw it.
@@ -1221,6 +1234,67 @@ async fn s1_a_childs_report_is_heard_by_its_parents_next_wait_by_name_with_its_s
             .await;
         }
     }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_childs_typed_report_reaches_its_parent_and_a_refused_one_does_not() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("typed-report");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    let started = world
+        .shell(
+            &parent,
+            "floti agent start --task look --name worker --backend claude-code",
+        )
+        .await;
+    assert_eq!(started.code, Some(0), "{started:?}");
+    let child = world.child_of(&parent, "worker").await;
+    world.calm(&parent, &["worker"]).await;
+
+    world
+        .type_line(&child, "/report done Everything is fixed.")
+        .await;
+    let first = world.report_answered(&child, 1).await;
+    assert_eq!(first["isError"], false, "{first}");
+    assert!(
+        first["answer"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("Reported done to the agent that started you."),
+        "{first}"
+    );
+    let heard = parent.hear(json!({})).await;
+    let reports = heard.of("report");
+    assert_eq!(reports.len(), 1, "{heard:?}");
+    assert_eq!(reports[0]["child"], "worker");
+    assert_eq!(reports[0]["state"], "done");
+    assert_eq!(reports[0]["text"], "Everything is fixed.");
+
+    // A state the family does not know is answered with its refusal, and
+    // nothing reaches the parent.
+    world.pass(&parent).await;
+    let unseen = world.unseen();
+    world
+        .type_line(&child, "/report maybe Perhaps it is fixed.")
+        .await;
+    let second = world.report_answered(&child, 2).await;
+    assert_eq!(second["isError"], true, "{second}");
+    assert!(
+        second["answer"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("state is done, stuck or note"),
+        "{second}"
+    );
+    world.pass(&parent).await;
+    assert_eq!(world.unseen(), unseen, "{}", world.inbox_text());
+    assert!(
+        !world.inbox_text().contains("Perhaps it is fixed."),
+        "{}",
+        world.inbox_text()
+    );
     host.stop(HostStopReason::Stop).await;
 }
 

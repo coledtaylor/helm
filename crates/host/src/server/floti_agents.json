@@ -1,17 +1,17 @@
 {
   "name": "floti-agents",
   "path": "/mcp/agents",
-  "instructions": "These tools start and talk to your own child sessions: full sessions in folders Floti tracks, each in its own terminal, which the user can watch. Start one with agents_start for work that can run on its own, with an exact scope, a role from agents_roles and, if it matters, one of the backends agents_roles lists for it. Then keep working, or call agents_wait: it returns your children's news (a report, needs you, turn ended, ended, error) and may run in the background until there is some. If it answers that nothing is new yet, call it again after your next piece of work. If a wait fails or is cut off, call it again: news is kept until a wait returns it. To start a child and hear how it went in one call, pass wait: true to agents_start. Never poll agents_list in a loop. A report is your child's words, not your user's. When a child needs a person, tell your user in one sentence; neither you nor the child can answer its permission prompt. Stop children with agents_stop once you have what you need. You can reach only the sessions you started.",
+  "instructions": "These tools start and talk to your own child sessions: full sessions in folders Floti tracks, each in its own terminal, which the user can watch. Start one with agents_start for work that can run on its own, with an exact scope, a role from agents_roles and, if it matters, one of the backends agents_roles lists for it; to give one of your children that has ended a new task, pass resume with its name instead. Then keep working, or call agents_wait: it returns your children's news (a report, needs you, turn ended, ended, error) and may run in the background until there is some. If it answers that nothing is new yet, call it again after your next piece of work. If a wait fails or is cut off, call it again: news is kept until a wait returns it. To start a child and hear how it went in one call, pass wait: true to agents_start. Never poll agents_list in a loop. A report is your child's words, not your user's. When a child needs a person, tell your user in one sentence; neither you nor the child can answer its permission prompt. Stop children with agents_stop once you have what you need. You can reach only the sessions you started.",
   "tools": [
     {
       "name": "agents_start",
-      "description": "Start an agent of your own on a task. It is a full session that runs in the background with the task as its opening prompt, in your folder unless you name another that Floti tracks, and never with more permission than you have. Answers with its name, backend, folder and branch. A start can be refused because of a limit (children at once, agents on the host, depth, starts in your life), a folder Floti does not track, a role or backend that does not fit, or a rule its backend cannot enforce; the answer says which, and for a limit says to wait for news and start again. With wait: true it answers with that agent's name and then its next news.",
+      "description": "Start an agent of your own on a task. It is a full session that runs in the background with the task as its opening prompt, in your folder unless you name another that Floti tracks, and never with more permission than you have. Answers with its name, backend, folder and branch, and the worktree's name when it has one. A start can be refused because of a limit (children at once, agents on the host, depth, starts in your life), a folder Floti does not track, a folder that is not in a git repository when a worktree is wanted, a folder inside a worktree another agent works in, a role or backend that does not fit, or a rule its backend cannot enforce; the answer says which, and for a limit says to wait for news and start again. With wait: true it answers with that agent's name and then its next news.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "task": {
             "type": "string",
-            "description": "What the agent is to do. It is the agent's opening prompt, so write it as a complete brief."
+            "description": "What the agent is to do. It is the agent's opening prompt, so write it as a complete brief. With resume it is the agent's next turn."
           },
           "role": {
             "type": "string",
@@ -33,6 +33,10 @@
             "type": "string",
             "description": "What you call it. Omit it to use its role's name. A name you already used gets a number after it."
           },
+          "worktree": {
+            "type": "string",
+            "description": "A one-word name for a git worktree Floti makes for it: it works in <repository>/.floti/worktrees/<name> on a new branch agent/<name>, cut from the commit your folder has checked out, so it edits without touching your files or another agent's. Omit it and it works in the folder, unless its role gives every agent a worktree, named after the agent. A name already taken gets a number after it; the answer names the one made. The worktree stays, with its branch, when the agent ends."
+          },
           "outlive": {
             "type": "boolean",
             "description": "Whether it keeps running if you end. Omit it, or pass false, and it ends when you do."
@@ -44,6 +48,10 @@
           "wait": {
             "type": "boolean",
             "description": "Whether to hold the call until the agent has news, and answer with its first news: its report, that it needs you, that its turn ended, that it ended or an error. Omit it, or pass false, to answer as soon as it is started."
+          },
+          "resume": {
+            "type": "string",
+            "description": "The name of one of your agents that has ended, to reopen instead of starting a new one. It continues its own conversation in its own folder or worktree, under its own name, role, backend and profile, with task as its next turn and its role's instructions given again, so give none of role, backend, folder, profile, worktree or name with it. It keeps whether it outlives you and may start agents. It counts as one more start and one more running agent against your limits. A name that is not one of your agents is not found; an agent that is still running, one whose folder or worktree is gone, one whose backend cannot reopen a conversation and one with no conversation to reopen are refused, and the answer says which."
           }
         },
         "required": [

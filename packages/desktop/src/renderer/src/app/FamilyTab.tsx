@@ -1,5 +1,5 @@
 import type { JSX, ReactNode } from 'react'
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   closeFamilyChild,
   endedHeaderText,
@@ -11,6 +11,7 @@ import {
   sessionLabel,
   shrinkFamilyChild,
   showFamilyChild,
+  wantsCard,
   type FamilyEntry,
   type FamilyState,
   type PaneLayout,
@@ -30,7 +31,7 @@ import { forgetFamilyRoom, reportFamilyRoom } from './familyRooms'
 import { childStatus } from './sessionView'
 import { TerminalPane, type HostLost } from './TerminalPane'
 import { terminalCell } from './terminals'
-import { useBodySize } from './useBodySize'
+import { useBodySize, useDevicePixelRatio } from './useBodySize'
 import { useTerminalPrefs } from './useTerminalPrefs'
 
 /** A child held by a parent's tab, with what the window knows of what it is doing. */
@@ -72,8 +73,12 @@ export interface FamilyTabProps {
   hostLost?: HostLost | undefined
   /** Changes the window's panes, which is how a press on a header or a button is kept (`PaneLayout.families`). */
   arrange: (change: (layout: PaneLayout) => PaneLayout) => void
-  /** Stop on a card: the host ends that child, asking nothing. */
-  onStop: (id: number) => void
+  /**
+   * Stop on a card: the window asks whether to end that child and the host
+   * ends it once the user agrees. Settles true when the child was ended and
+   * false when the user declined.
+   */
+  onStop: (id: number) => Promise<boolean> | void
 }
 
 /** The dot of a header: what a running child is doing, and for an ended one only that it ended, unless it failed by itself. */
@@ -113,9 +118,21 @@ export function FamilyTab({
 }: FamilyTabProps): JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null)
   const size = useBodySize(bodyRef)
+  // The children this window's user stopped with Stop, so their headers say
+  // "Stopped by you". The host records only that a child was stopped.
+  const [stoppedByYou, setStoppedByYou] = useState<ReadonlySet<number>>(new Set())
+  const stop = (id: number): void => {
+    void Promise.resolve(onStop(id)).then((ended) => {
+      if (ended === true) setStoppedByYou((each) => new Set(each).add(id))
+    })
+  }
   const prefs = useTerminalPrefs()
-  // One cell of the terminal's font, measured again only when the font changes.
-  const cell = useMemo(() => terminalCell(prefs), [prefs])
+  // One cell of the terminal's font, measured again when the font changes or
+  // the window moves to a screen with another pixel ratio, which quantises it
+  // differently.
+  const ratio = useDevicePixelRatio()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the ratio is read by the measurement, not passed to it
+  const cell = useMemo(() => terminalCell(prefs), [prefs, ratio])
 
   const sessions = kids.map((kid) => kid.session)
   const held = familyChildren(sessions, family)
@@ -131,7 +148,8 @@ export function FamilyTab({
           cell,
           headerHeight: FAMILY_HEADER_PX,
           scrollback: prefs.scrollback,
-          children: Math.max(1, held.length)
+          children: Math.max(1, held.length),
+          wanting: held.filter((child) => wantsCard(child, family)).length
         })
   const fits = room === null ? null : room.fits
   const capacity = room !== null && room.fits ? room.cards : 0
@@ -158,7 +176,11 @@ export function FamilyTab({
         name={name}
         state={state}
         role={child.role}
-        status={running ? childStatus(child, state, kid?.since ?? null, now) : endedHeaderText(child)}
+        status={
+          running
+            ? childStatus(child, state, kid?.since ?? null, now)
+            : endedHeaderText(child, stoppedByYou.has(child.id))
+        }
         onPress={() =>
           arrange((layout) =>
             shape === 'card' || shape === 'screen'
@@ -174,7 +196,7 @@ export function FamilyTab({
                 )
             : undefined
         }
-        onStop={shape === 'card' ? () => onStop(child.id) : undefined}
+        onStop={shape === 'card' ? () => stop(child.id) : undefined}
         onClose={
           shape === 'screen' || shape === 'ended'
             ? () => arrange((layout) => closeFamilyChild(layout, tab, child.id))

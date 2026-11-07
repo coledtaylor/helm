@@ -36,6 +36,7 @@ const hostSettings = (patch: Partial<P.HostSettings> = {}): P.HostSettings => ({
   agentDepth: 2,
   agentStartsPerParent: 16,
   agentCommandsPerParent: 4,
+  agentHeavyPerHost: 1,
   restoreWithoutAsking: false,
   ...patch
 })
@@ -216,6 +217,14 @@ describe('the window’s workspace over its own connection', () => {
     await ask(adapter, 'settings:write', { windowBounds: { width: 900, height: 700, x: 1, y: 2 } })
     expect(own.writes).toEqual([{ windowBounds: { width: 900, height: 700, x: 1, y: 2 } }])
     expect(connection.payloads('settings:write')).toEqual([])
+  })
+
+  it('keeps showing children in their parent’s tab with this device, and never tells the host', async () => {
+    const { adapter, own, connection } = world()
+    const next = await ask(adapter, 'settings:write', { showChildrenInParentTab: false })
+    expect(own.writes).toEqual([{ showChildrenInParentTab: false }])
+    expect(connection.payloads('settings:write')).toEqual([])
+    expect(next).toMatchObject({ showChildrenInParentTab: false })
   })
 
   it('tells the window when either half changes, with the other laid over', async () => {
