@@ -20,14 +20,19 @@ use serde::Deserialize;
 
 use super::{TestDirs, unique_name};
 use crate::agent::{
-    AgentBackend, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder, LaunchRequest,
-    LaunchSpec, Permissions, Registration, ResumeRequest, Resumer, ToolRule, parts_not_taken,
+    AgentBackend, AgentInput, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder,
+    LaunchRequest, LaunchSpec, Permissions, Registration, ResumeRequest, Resumer, ToolRule,
+    parts_not_taken,
 };
 use crate::{Error, Result};
 
 /// The variable naming the folder the fake keeps its conversations and run
 /// logs in.
 pub const OTHER_AGENT_HOME_VAR: &str = "OTHER_AGENT_HOME";
+
+/// The pause its adapter declares between a paste and the submit key: not
+/// Claude Code's.
+pub const INPUT_PAUSE: Duration = Duration::from_millis(50);
 
 /// One server the fake loaded from its tools config.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -478,6 +483,13 @@ impl AgentBackend for OtherAgentBackend {
     fn takes_instructions(&self) -> bool {
         true
     }
+
+    /// A bracketed paste, submitted by LF after [`INPUT_PAUSE`] and stopped
+    /// by Ctrl-X: unlike Claude Code's CR, Escape and pause, so a test can
+    /// show that the keys a send presses come from the adapter.
+    fn input(&self) -> Option<AgentInput> {
+        Some(AgentInput::bracketed(b"\n", Some(b"\x18"), INPUT_PAUSE))
+    }
 }
 
 impl Resumer for OtherAgentBackend {
@@ -514,6 +526,16 @@ mod tests {
         backend: OtherAgentBackend,
         /// Last: fields drop in order, and the folder goes only once nothing in it is open.
         dirs: TestDirs,
+    }
+
+    #[test]
+    fn the_other_agent_takes_text_as_a_paste_submitted_by_lf_and_stopped_by_ctrl_x() {
+        let world = World::new();
+        let input = world.backend.input().expect("it takes typed turns");
+        assert_eq!(input.submit, b"\n");
+        assert_eq!(input.stop.as_deref(), Some(&b"\x18"[..]));
+        assert_eq!(input.pause, INPUT_PAUSE);
+        assert_eq!(input.paste("a\nb"), b"\x1b[200~a\nb\x1b[201~".to_vec());
     }
 
     impl World {

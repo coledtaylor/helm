@@ -41,13 +41,23 @@
 // process that owns them is gone: the one a `test-owner` file names in the
 // config folder or a folder above it (`watchOwner` in `common.mjs`).
 //
+// Its input is Claude Code's: it asks its terminal for bracketed paste, takes
+// a paste as one block whose newlines do not submit, submits on CR, and ends a
+// running turn on Escape. A CR that arrives in the same read as a paste's end
+// is part of the paste, so a host that wants the paste submitted presses CR in
+// a read of its own after a pause. Text submitted while a turn runs is queued
+// and taken as the next turn once that one ends. The run log records each
+// (`pastes`, `submitKeys`, `prompts`, `queued`, `interrupts`; `common.mjs`).
+//
 // Commands typed at its prompt:
 //   /exit        exit 0
 //   /crash       exit 3
-//   /wait        report status "waiting" until y or n is pressed
-//   /busy <ms>   report status "busy" for that long
-//   /busy hold   report status "busy" until `/idle` is typed, so a test ends
-//                the turn when it means to and not after a time
+//   /wait        report status "waiting" until y or n is pressed; everything
+//                else typed, pasted or pressed is ignored until then
+//   /busy <ms>   report status "busy" for that long, or until Escape
+//   /busy hold   report status "busy" until `/idle` is typed or Escape is
+//                pressed, so a test ends the turn when it means to and not
+//                after a time
 //   /idle        end the oldest turn `/busy hold` began and answer `Done.`
 //   /child       start a long-running child process, for process-tree tests
 //   /serve <port>  start a child serving HTTP on 127.0.0.1 at that port (any
@@ -112,7 +122,9 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import {
   childScript,
+  ENABLE_BRACKETED_PASTE,
   fakeVersion,
+  InputReader,
   parseArgv,
   RunLog,
   runShell,
@@ -636,12 +648,32 @@ let asking = false
 let lastInterrupt = 0
 /** Turns in progress: `/busy` and a foreground MCP call each hold one. */
 let working = 0
-/** Turns `/busy hold` began that `/idle` has not ended. */
-let heldTurns = 0
+/** The `/busy` turns in progress, oldest first: `{ held, timer }`. */
+const runningTurns = []
+/** Lines typed while a `/busy` turn ran, to be taken as the next turns. */
+const queuedLines = []
 /** Results waiting for the session to be idle, to be taken as new turns. */
 const waitingTurns = []
 
-const drawPrompt = () => out(`\r\x1b[2K> ${buffer}`)
+const drawPrompt = () => out(`\r\x1b[2K> ${buffer.replaceAll('\n', '\r\n  ')}`)
+
+/** Ends a `/busy` turn, answers `text`, and takes what waited for it. */
+function endTurn(turn, text) {
+  const at = runningTurns.indexOf(turn)
+  if (at < 0) return
+  runningTurns.splice(at, 1)
+  if (turn.timer !== null) clearTimeout(turn.timer)
+  working -= 1
+  setStatus(working === 0 ? 'idle' : 'busy')
+  answer(text)
+  drainTurns()
+  drainQueue()
+}
+
+/** Takes the lines typed during a turn as turns, one at a time, once idle. */
+function drainQueue() {
+  while (queuedLines.length > 0 && !asking && working === 0) run(queuedLines.shift())
+}
 
 function answer(text) {
   out(`\r\n${text}\r\n\r\n`)
@@ -863,9 +895,26 @@ function backgroundCommand(command) {
   answer(`running in the background: ${command}`)
 }
 
-function submit(line) {
+/**
+ * A line the user submitted with `key`: taken at once, or queued behind a
+ * turn in progress as the real CLI queues it. `/idle` is how a test ends a
+ * held turn, so it is never queued.
+ */
+function submit(line, key) {
   log.received.push(line)
+  log.submitKeys.push(key)
+  if (runningTurns.length > 0 && line.trim() !== '/idle') {
+    queuedLines.push(line)
+    log.queued.push(line)
+    saveLog()
+    return
+  }
   saveLog()
+  run(line)
+}
+
+/** Takes `line` as a command or a prompt. */
+function run(line) {
   const [command, arg] = line.trim().split(/\s+/, 2)
 
   if (command === '/exit') return exit(0)
@@ -887,25 +936,15 @@ function submit(line) {
   if (command === '/busy') {
     working += 1
     setStatus('busy')
-    if (arg === 'hold') {
-      heldTurns += 1
-      return
-    }
-    setTimeout(() => {
-      working -= 1
-      setStatus('idle')
-      answer('Done.')
-      drainTurns()
-    }, Number(arg) || 1000)
+    const turn = { held: arg === 'hold', timer: null }
+    runningTurns.push(turn)
+    if (!turn.held) turn.timer = setTimeout(() => endTurn(turn, 'Done.'), Number(arg) || 1000)
     return
   }
   if (command === '/idle') {
-    if (heldTurns === 0) return answer('no turn is held')
-    heldTurns -= 1
-    working -= 1
-    setStatus(working === 0 ? 'idle' : 'busy')
-    answer('Done.')
-    drainTurns()
+    const turn = runningTurns.find((running) => running.held)
+    if (turn === undefined) return answer('no turn is held')
+    endTurn(turn, 'Done.')
     return
   }
   if (command === '/mcp') {
@@ -972,19 +1011,42 @@ function submit(line) {
   }
   if (line.trim() === '') return drawPrompt()
 
+  log.prompts.push(line)
+  saveLog()
   setStatus('busy')
   recordPrompt(line)
   setStatus('idle')
   answer(`You said: ${line}`)
 }
 
+/** Escape, Claude Code's stop key: it ends the oldest turn in progress. */
+function onStop() {
+  if (asking || runningTurns.length === 0) return
+  log.interrupts += 1
+  saveLog()
+  endTurn(runningTurns[0], 'Interrupted.')
+}
+
+/** A paste: one block into the prompt, newlines and all, submitting nothing. */
+function onPaste(text, withSubmit) {
+  log.pastes.push({ text, withSubmit })
+  saveLog()
+  if (asking) return
+  // A submit key that came with the paste is part of it, as a line break.
+  buffer += withSubmit ? `${text}\n` : text
+  drawPrompt()
+}
+
 function onKey(key) {
   if (asking) {
     if (key !== 'y' && key !== 'n') return
     asking = false
+    log.answers.push(key)
+    saveLog()
     setStatus('idle')
     answer(key === 'y' ? 'Allowed.' : 'Denied.')
-    return drainTurns()
+    drainTurns()
+    return drainQueue()
   }
   if (key === '\x03') {
     if (buffer !== '') {
@@ -999,7 +1061,7 @@ function onKey(key) {
   if (key === '\r' || key === '\n') {
     const line = buffer
     buffer = ''
-    return submit(line)
+    return submit(line, key)
   }
   if (key === '\x7f' || key === '\b') {
     buffer = buffer.slice(0, -1)
@@ -1030,22 +1092,25 @@ out(
     (resume !== undefined ? `  Resumed ${sessionId}\r\n` : '') +
     '\r\n  ? for shortcuts\r\n'
 )
+out(ENABLE_BRACKETED_PASTE)
 drawPrompt()
 setStatus('idle')
 
 if (process.stdin.isTTY) process.stdin.setRawMode(true)
 process.stdin.setEncoding('utf8')
-process.stdin.on('data', (chunk) => {
-  // Escape sequences (arrows, focus reports) are dropped whole; matching ESC is
-  // the point of the pattern. Mouse reports (`ESC [ <`) are logged first.
-  // eslint-disable-next-line no-control-regex
-  for (const part of chunk.split(/(\x1b\[[0-?]*[ -/]*[@-~]|\x1b.)/)) {
-    if (part.startsWith('\x1b[<')) {
-      log.mouse.push(part)
-      saveLog()
-    }
-    if (part === '' || part.startsWith('\x1b')) continue
-    for (const key of part) onKey(key)
+// Escape sequences (arrows, focus reports) are dropped whole. Mouse reports
+// (`ESC [ <`) are logged first.
+const input = new InputReader({
+  submitKey: '\r',
+  stopKey: '\x1b',
+  onKey,
+  onPaste,
+  onStop,
+  onSequence: (sequence) => {
+    if (!sequence.startsWith('\x1b[<')) return
+    log.mouse.push(sequence)
+    saveLog()
   }
 })
+process.stdin.on('data', (chunk) => input.feed(chunk))
 process.stdin.on('end', () => exit(0))

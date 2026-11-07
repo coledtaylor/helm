@@ -25,11 +25,14 @@
 //! adapter translates them or refuses the first it cannot enforce
 //! ([`AgentBackend::check_rules`]); and the shell commands a launch allows up
 //! front are rendered by the adapter beside the allowed tools
-//! ([`AgentTools::command_rule`]).
+//! ([`AgentTools::command_rule`]). The keys that give an agent a turn (paste,
+//! submit, stop and the pause between) are the adapter's too
+//! ([`AgentBackend::input`], [`AgentInput`]).
 
 pub mod claude_code;
 pub mod guidance;
 pub mod harness;
+pub mod input;
 pub mod launch_folder;
 mod plain;
 
@@ -46,6 +49,7 @@ use floti_protocol::{
 use crate::{Error, Result};
 
 pub use claude_code::ClaudeCodeBackend;
+pub use input::AgentInput;
 pub use launch_folder::{LaunchFolder, sweep_launch_folders};
 pub use plain::PlainCommandBackend;
 
@@ -124,6 +128,15 @@ pub trait AgentBackend: Send + Sync {
     /// folder and nothing else.
     fn harness(&self) -> HarnessSupport {
         HarnessSupport::default()
+    }
+
+    /// The keys a parent presses to give this agent a turn: the paste markers,
+    /// the submit key, the stop key and the pause between a paste and the
+    /// submit. An agent that takes turns declares them, and nothing outside
+    /// its adapter names its keys. The default is a plain command line's
+    /// answer: none, so a plain shell or command takes no turns.
+    fn input(&self) -> Option<AgentInput> {
+        None
     }
 
     /// What its agent does with a tool call, as this adapter declares it.

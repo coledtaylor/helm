@@ -38,9 +38,26 @@
 // a `test-owner` file names in its home or a folder above it (`watchOwner` in
 // `common.mjs`).
 //
+// Its input is its own and unlike Claude Code's: it asks its terminal for
+// bracketed paste and takes a paste as one block whose newlines do not submit,
+// but it submits on LF (a typed CR still submits, as Enter does) and its stop
+// key is Ctrl-X, which ends a running turn; Escape does nothing. An LF that
+// arrives in the same read as a paste's end is part of the paste, so a host
+// that wants the paste submitted presses LF in a read of its own after a pause.
+// Text submitted while a turn runs is queued and taken as the next turn once
+// that one ends. The run log records each (`pastes`, `submitKeys`, `prompts`,
+// `queued`, `interrupts`; `common.mjs`).
+//
 // Commands typed at its prompt:
 //   /exit        exit 0
 //   /crash       exit 3
+//   /busy <ms>   run a turn for that long, or until Ctrl-X, reporting
+//                `working` and then `idle` (OSC 7501)
+//   /busy hold   run a turn until `/idle` is typed or Ctrl-X is pressed
+//   /idle        end the oldest turn `/busy hold` began and answer `Done.`
+//   /wait        report `blocked permission` (OSC 7501) and hold at a prompt
+//                until y or n is pressed; everything else typed, pasted or
+//                pressed is ignored until then
 //   /shell <command>  run the command in the shell with the session's own
 //                environment and folder, and answer `shell <exit code>`. Its
 //                output and exit code are logged in `shell`.
@@ -55,7 +72,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { fakeVersion, parseArgv, RunLog, runShell, UsageError, watchOwner } from './common.mjs'
+import {
+  ENABLE_BRACKETED_PASTE,
+  fakeVersion,
+  InputReader,
+  parseArgv,
+  RunLog,
+  runShell,
+  UsageError,
+  watchOwner
+} from './common.mjs'
 
 const BACKEND = 'other-agent'
 const VERSION = fakeVersion('1.4.0')
@@ -227,20 +253,80 @@ function exit(code) {
 // ---------------------------------------------------------------------------
 
 let buffer = ''
+let asking = false
+/** The `/busy` turns in progress, oldest first: `{ held, timer }`. */
+const runningTurns = []
+/** Lines typed while a `/busy` turn ran, to be taken as the next turns. */
+const queuedLines = []
 
-const drawPrompt = () => out(`\r\x1b[2K other> ${buffer}`)
+const drawPrompt = () => out(`\r\x1b[2K other> ${buffer.replaceAll('\n', '\r\n  ')}`)
 
 function answer(text) {
   out(`\r\n${text}\r\n\r\n`)
   drawPrompt()
 }
 
-function submit(line) {
+/** Writes the program status a CLI with no MCP tools reports itself with (OSC 7501). */
+const reportStatus = (fields) => out(`\x1b]7501;${fields.join(':')}\x07`)
+
+/** Ends a `/busy` turn, answers `text`, and takes the lines that waited for it. */
+function endTurn(turn, text) {
+  const at = runningTurns.indexOf(turn)
+  if (at < 0) return
+  runningTurns.splice(at, 1)
+  if (turn.timer !== null) clearTimeout(turn.timer)
+  if (runningTurns.length === 0) reportStatus(['state=idle'])
+  answer(text)
+  drainQueue()
+}
+
+/** Takes the lines typed during a turn as turns, one at a time, once idle. */
+function drainQueue() {
+  while (queuedLines.length > 0 && !asking && runningTurns.length === 0) run(queuedLines.shift())
+}
+
+/**
+ * A line the user submitted with `key`: taken at once, or queued behind a
+ * turn in progress. `/idle` is how a test ends a held turn, so it is never
+ * queued.
+ */
+function submit(line, key) {
   log.received.push(line)
+  log.submitKeys.push(key)
+  if (runningTurns.length > 0 && line.trim() !== '/idle') {
+    queuedLines.push(line)
+    log.queued.push(line)
+    saveLog()
+    return
+  }
   saveLog()
-  const [command] = line.trim().split(/\s+/, 1)
+  run(line)
+}
+
+/** Takes `line` as a command or a prompt. */
+function run(line) {
+  const [command, arg] = line.trim().split(/\s+/, 2)
   if (command === '/exit') return exit(0)
   if (command === '/crash') return exit(3)
+  if (command === '/busy') {
+    if (runningTurns.length === 0) reportStatus(['state=working'])
+    const turn = { held: arg === 'hold', timer: null }
+    runningTurns.push(turn)
+    if (!turn.held) turn.timer = setTimeout(() => endTurn(turn, 'Done.'), Number(arg) || 1000)
+    return
+  }
+  if (command === '/idle') {
+    const turn = runningTurns.find((running) => running.held)
+    if (turn === undefined) return answer('no turn is held')
+    endTurn(turn, 'Done.')
+    return
+  }
+  if (command === '/wait') {
+    asking = true
+    reportStatus(['state=blocked', 'kind=permission'])
+    out('\r\nAllow fake tool? (y/n)')
+    return
+  }
   if (command === '/shell') {
     const typed = line.trim().slice('/shell'.length).trim()
     runShell(typed, log, saveLog, (ran) => answer(`shell ${String(ran.code)}`))
@@ -252,19 +338,48 @@ function submit(line) {
     const fields = [`state=${state ?? ''}`]
     if (state === 'blocked' && text !== '') fields.push(`kind=${text}`)
     else if (text !== '') fields.push(`msg=${Buffer.from(text, 'utf8').toString('base64')}`)
-    out(`\x1b]7501;${fields.join(':')}\x07`)
+    reportStatus(fields)
     return answer(`reported ${state ?? ''}`)
   }
   if (line.trim() === '') return drawPrompt()
+  log.prompts.push(line)
+  saveLog()
   answer(`Noted: ${line}`)
 }
 
+/** Ctrl-X, its stop key: it ends the oldest turn in progress. */
+function onStop() {
+  if (asking || runningTurns.length === 0) return
+  log.interrupts += 1
+  saveLog()
+  endTurn(runningTurns[0], 'Interrupted.')
+}
+
+/** A paste: one block into the prompt, newlines and all, submitting nothing. */
+function onPaste(text, withSubmit) {
+  log.pastes.push({ text, withSubmit })
+  saveLog()
+  if (asking) return
+  // A submit key that came with the paste is part of it, as a line break.
+  buffer += withSubmit ? `${text}\n` : text
+  drawPrompt()
+}
+
 function onKey(key) {
+  if (asking) {
+    if (key !== 'y' && key !== 'n') return
+    asking = false
+    log.answers.push(key)
+    saveLog()
+    reportStatus(['state=idle'])
+    answer(key === 'y' ? 'Allowed.' : 'Denied.')
+    return drainQueue()
+  }
   if (key === '\x03' || (key === '\x04' && buffer === '')) return exit(0)
   if (key === '\r' || key === '\n') {
     const line = buffer
     buffer = ''
-    return submit(line)
+    return submit(line, key)
   }
   if (key === '\x7f' || key === '\b') {
     buffer = buffer.slice(0, -1)
@@ -289,6 +404,7 @@ out(
     (reopened !== undefined ? `  Reopened ${conversation}\r\n` : '') +
     '\r\n'
 )
+out(ENABLE_BRACKETED_PASTE)
 if (log.openingPrompt !== null) {
   out(` other> ${log.openingPrompt}\r\n`)
   answer(`Noted: ${log.openingPrompt}`)
@@ -298,12 +414,8 @@ if (log.openingPrompt !== null) {
 
 if (process.stdin.isTTY) process.stdin.setRawMode(true)
 process.stdin.setEncoding('utf8')
-process.stdin.on('data', (chunk) => {
-  // Escape sequences (arrows, focus reports) are dropped whole.
-  // eslint-disable-next-line no-control-regex
-  for (const part of chunk.split(/(\x1b\[[0-?]*[ -/]*[@-~]|\x1b.)/)) {
-    if (part === '' || part.startsWith('\x1b')) continue
-    for (const key of part) onKey(key)
-  }
-})
+// Escape sequences (arrows, focus reports) are dropped whole. Its submit key
+// is LF and its stop key Ctrl-X.
+const input = new InputReader({ submitKey: '\n', stopKey: '\x18', onKey, onPaste, onStop })
+process.stdin.on('data', (chunk) => input.feed(chunk))
 process.stdin.on('end', () => exit(0))

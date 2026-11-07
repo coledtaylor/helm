@@ -6,13 +6,15 @@
 //! host reads from every session's output. Of a harness it takes the folder
 //! only. It moves no tool call to the background, supports no MCP tasks and
 //! has no MCP tools, and it enforces no tool rule: asked to, it refuses
-//! ([`AgentBackend::check_rules`]).
+//! ([`AgentBackend::check_rules`]). It takes no turns, so it declares no input
+//! ([`AgentBackend::input`]), unless it is built from a role that names a
+//! submit word and a stop word ([`PlainCommandBackend::with_input_words`]).
 
 use std::ffi::OsString;
 
 use floti_protocol::BackendId;
 
-use super::{AgentBackend, Launch, LaunchFolder, LaunchRequest, LaunchSpec};
+use super::{AgentBackend, AgentInput, Launch, LaunchFolder, LaunchRequest, LaunchSpec};
 use crate::{Error, Result};
 
 /// A command line run as it is, in the session's folder.
@@ -22,6 +24,7 @@ pub struct PlainCommandBackend {
     name: String,
     program: OsString,
     args: Vec<OsString>,
+    input: Option<AgentInput>,
 }
 
 impl PlainCommandBackend {
@@ -37,7 +40,24 @@ impl PlainCommandBackend {
             name: name.into(),
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
+            input: None,
         }
+    }
+
+    /// The same command line taking turns with the keys a role names: its
+    /// `submit` and `stop` words (`enter`, `ctrl-c` and the like). A role
+    /// without a submit word leaves it taking none.
+    ///
+    /// # Errors
+    ///
+    /// The sentence naming a word that is not a key.
+    pub fn with_input_words(
+        mut self,
+        submit: Option<&str>,
+        stop: Option<&str>,
+    ) -> std::result::Result<Self, String> {
+        self.input = AgentInput::from_words(submit, stop)?;
+        Ok(self)
     }
 }
 
@@ -48,6 +68,10 @@ impl AgentBackend for PlainCommandBackend {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn input(&self) -> Option<AgentInput> {
+        self.input.clone()
     }
 
     fn launch(&self, request: &LaunchRequest, folder: &LaunchFolder) -> Result<Launch> {
@@ -164,6 +188,26 @@ mod tests {
             launch.not_taken,
             vec![HarnessPart::Instructions, HarnessPart::Commands]
         );
+    }
+
+    #[test]
+    fn it_takes_no_turns_until_its_role_names_the_keys() {
+        assert_eq!(backend().input(), None);
+
+        let taking = backend()
+            .with_input_words(Some("enter"), Some("ctrl-c"))
+            .unwrap();
+        let input = taking.input().expect("its role names the keys");
+        assert_eq!(input.submit, b"\r");
+        assert_eq!(input.stop.as_deref(), Some(&b"\x03"[..]));
+
+        let no_submit = backend().with_input_words(None, Some("ctrl-c")).unwrap();
+        assert_eq!(no_submit.input(), None, "no submit word, no turns");
+
+        let refused = backend()
+            .with_input_words(Some("hit it"), None)
+            .expect_err("not a key");
+        assert!(refused.contains("hit it is not a key"), "{refused}");
     }
 
     #[test]

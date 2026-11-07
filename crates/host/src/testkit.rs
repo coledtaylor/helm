@@ -64,8 +64,8 @@ use tempfile::TempDir;
 
 use crate::Result;
 use crate::agent::{
-    AgentBackend, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder, LaunchRequest,
-    LaunchSpec, Registration, ResumeRequest, Resumer,
+    AgentBackend, AgentInput, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder,
+    LaunchRequest, LaunchSpec, Registration, ResumeRequest, Resumer,
 };
 use crate::platform::folders::{Folders, UserEnv};
 use crate::platform::socket::{Endpoint, LocalSocket, Native as NativeSocket};
@@ -966,6 +966,16 @@ impl AgentBackend for FakeAgentBackend {
     fn agent_tools(&self) -> Option<&dyn AgentTools> {
         if self.agent_tools { Some(self) } else { None }
     }
+
+    /// A bracketed paste, submitted by LF after a short pause and stopped by
+    /// Ctrl-C: a line-reading program's keys, not Claude Code's.
+    fn input(&self) -> Option<AgentInput> {
+        Some(AgentInput::bracketed(
+            b"\n",
+            Some(b"\x03"),
+            Duration::from_millis(10),
+        ))
+    }
 }
 
 impl Resumer for FakeAgentBackend {
@@ -999,6 +1009,18 @@ mod tests {
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(self.0);
         }
+    }
+
+    #[test]
+    fn the_in_crate_fake_takes_text_as_a_paste_submitted_by_lf_and_stopped_by_ctrl_c() {
+        let dirs = TestDirs::new();
+        let input = FakeAgent::new("fake", &dirs)
+            .backend(Vec::<OsString>::new())
+            .input()
+            .expect("it takes typed turns");
+        assert_eq!(input.submit, b"\n");
+        assert_eq!(input.stop.as_deref(), Some(&b"\x03"[..]));
+        assert_eq!(input.pause, Duration::from_millis(10));
     }
 
     #[test]

@@ -2721,3 +2721,18 @@ fn the_fake_fails_as_the_cli_does_on_a_missing_file_and_reads_variadic_lists_as_
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("error:"));
 }
+
+#[test]
+fn claude_code_takes_text_as_a_paste_submitted_by_enter_and_stopped_by_escape_after_its_recorded_pause()
+ {
+    let input = World::new().backend.input().expect("it takes typed turns");
+    assert_eq!(input.submit, b"\r");
+    assert_eq!(input.stop.as_deref(), Some(&b"\x1b"[..]));
+    assert_eq!(input.pause, INPUT_PAUSE);
+    assert_eq!(INPUT_PAUSE, Duration::from_millis(250));
+    assert_eq!(INPUT_PAUSE_RECORDED_ON, "2.1.319");
+    assert_eq!(
+        input.paste("one\ntwo"),
+        b"\x1b[200~one\ntwo\x1b[201~".to_vec()
+    );
+}

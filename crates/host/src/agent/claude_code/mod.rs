@@ -27,6 +27,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::time::Duration;
 
 use floti_protocol::channels::common::PermissionMode;
 use floti_protocol::channels::sessions::{SessionActivity, UsageSnapshot};
@@ -34,7 +35,7 @@ use floti_protocol::channels::workspace::ConfigFile;
 use floti_protocol::{BackendId, HarnessPart, HarnessSupport, Knowable};
 
 use super::{
-    AgentBackend, AgentToolServer, AgentTools, Composition, ConfigSource, Conversation,
+    AgentBackend, AgentInput, AgentToolServer, AgentTools, Composition, ConfigSource, Conversation,
     ExecutableSetup, HistorySource, Launch, LaunchFolder, LaunchRequest, LaunchSpec, Permissions,
     PromptRecord, PromptTail, Registration, ResumeRequest, Resumer, SessionRef, SignIn,
     SignInCheck, StatusSource, TestedVersions, ToolRule, ToolSupport, Transcript, UsageSource,
@@ -60,6 +61,18 @@ pub const TESTED_VERSIONS: TestedVersions = TestedVersions {
 
 /// The first Claude Code version that supports MCP tasks.
 pub const MCP_TASKS_FROM: Version = Version(2, 1, 304);
+
+/// How long to wait between the end of a paste and the submit key.
+///
+/// A chosen default, not a measurement: it is recorded against Claude Code
+/// [`INPUT_PAUSE_RECORDED_ON`] and has not been measured on the installed
+/// CLI. Claude Code reads a paste and a key right after it as one input, so
+/// the pause has to be long enough for the paste to be read first; it is
+/// replaced by the measured value once the owner has run that measurement.
+pub const INPUT_PAUSE: Duration = Duration::from_millis(250);
+
+/// The Claude Code version [`INPUT_PAUSE`] was recorded against.
+pub const INPUT_PAUSE_RECORDED_ON: &str = "2.1.319";
 
 /// The settings every launch passes with `--settings`, so a harness and a
 /// repository written in different shapes both reach the session: Claude Code
@@ -447,6 +460,12 @@ impl AgentBackend for ClaudeCodeBackend {
                 .is_some_and(|version| version >= MCP_TASKS_FROM),
             mcp_tools: self.agent_tools().is_some(),
         }
+    }
+
+    /// A bracketed paste, submitted by Enter (CR) after [`INPUT_PAUSE`], and
+    /// stopped by Escape.
+    fn input(&self) -> Option<AgentInput> {
+        Some(AgentInput::bracketed(b"\r", Some(b"\x1b"), INPUT_PAUSE))
     }
 
     /// Instructions from `CLAUDE.md` and `AGENTS.md`; skills, commands,
