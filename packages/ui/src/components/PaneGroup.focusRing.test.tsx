@@ -22,4 +22,14 @@ describe('PaneGroup focus ring room', () => {
       expect(clipping.className).toContain(FOCUS_RING_ROOM)
     }
   })
+
+  it('keeps the island’s bottom corners round past the room the ring has, with a clip of the body’s own', () => {
+    const { container } = render(
+      <PaneGroup index={0} id={1} focused attention={false} onFocus={() => undefined}>
+        <ReportNote label="Reported done" text="Tests pass." />
+      </PaneGroup>
+    )
+    const body = container.querySelector<HTMLElement>('[data-family-note]')!.parentElement!
+    expect(body.className).toContain('pane-body')
+  })
 })

@@ -42,6 +42,9 @@ export interface PaneGroupProps {
  * fills the pane's width or sits at its top (a report note) is drawn whole in
  * the gutter instead of cut off at the island's edge. `overflow-clip` rather
  * than `overflow-hidden`, because `overflow-clip-margin` applies to it alone.
+ * The margin widens the clip's rounded corners too, which leaves a terminal's
+ * square ground showing at the island's bottom corners, so the body also takes
+ * `pane-body` (theme.css), a clip of its own that keeps those corners round.
  */
 export const FOCUS_RING_ROOM = '[overflow-clip-margin:4px]'
 
@@ -82,7 +85,7 @@ export function PaneGroup({
     >
       {strip}
       {crumb}
-      <div ref={bodyRef} className={cn('relative min-h-0 flex-1 overflow-clip', FOCUS_RING_ROOM)}>
+      <div ref={bodyRef} className={cn('pane-body relative min-h-0 flex-1 overflow-clip', FOCUS_RING_ROOM)}>
         {children}
       </div>
       {drop}

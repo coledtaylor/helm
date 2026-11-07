@@ -380,6 +380,27 @@ select option:disabled {
   );
 }
 
+/* A pane's body: the page's focus ring (2px at 2px offset) is drawn whole past
+ * its top, left and right edges, and its bottom corners follow the island's
+ * own inner corner, so a terminal's ground never shows square inside a rounded
+ * island. `overflow-clip-margin` cannot do both: it widens the clip's rounded
+ * corners with the margin, a curve outside the island's. The notch where the
+ * extra room ends sits one corner radius above the bottom. */
+.pane-body {
+  --pane-body-corner: max(0px, calc(var(--helm-radius) - 1px));
+  clip-path: shape(
+    from -4px -4px,
+    line to calc(100% + 4px) -4px,
+    line to calc(100% + 4px) calc(100% - var(--pane-body-corner)),
+    line to 100% calc(100% - var(--pane-body-corner)),
+    arc to calc(100% - var(--pane-body-corner)) 100% of var(--pane-body-corner) cw,
+    line to var(--pane-body-corner) 100%,
+    arc to 0px calc(100% - var(--pane-body-corner)) of var(--pane-body-corner) cw,
+    line to -4px calc(100% - var(--pane-body-corner)),
+    close
+  );
+}
+
 /* Chromium's default scrollbar is a light grey slab that ignores the theme. */
 * {
   scrollbar-width: thin;
