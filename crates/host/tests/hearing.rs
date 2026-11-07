@@ -2414,6 +2414,14 @@ async fn s4_a_host_restart_before_the_result_is_fetched_leaves_the_news_for_the_
     );
 
     let second = world.host().await;
+    // The session's address is served again by the next host once it has taken
+    // the session back from the keeper.
+    let (url, _) = parent.route();
+    let (address, _) = split_url(&url);
+    eventually("the restored address to accept a connection", async || {
+        TcpStream::connect(address).await.ok().map(drop)
+    })
+    .await;
     let gone = parent.task(&id).await;
     assert_eq!(
         gone["error"]["code"], -32602,
