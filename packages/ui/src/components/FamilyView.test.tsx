@@ -144,7 +144,9 @@ describe('ReportNote', () => {
       const note = container.querySelector<HTMLElement>('[data-family-note]')!
       // The note is the one button, as the frame's `.b-rep` is.
       expect(note.tagName).toBe('BUTTON')
-      expect(note.className).toContain('bg-accent-soft')
+      expect(note.className).toContain('linear-gradient(var(--color-accent-soft),var(--color-accent-soft))')
+      // Laid over surface, so accent-text keeps its contrast on the terminal's dark ground in a light theme.
+      expect(note.className).toContain('bg-surface')
       expect(note.className).toContain('text-accent-text')
       expect(container.querySelector('[data-family-note-label]')?.textContent).toBe(label)
       const text = container.querySelector('[data-family-note-text]')!
@@ -178,7 +180,7 @@ describe('ReportNote', () => {
     const { container } = render(<ReportNote label="Reported stuck" text={'Which table?\nA or B.\nI suggest A.'} />)
     const note = container.querySelector<HTMLElement>('[data-family-note]')!
     expect(note.className).toContain('border-b border-border')
-    expect(note.className).toContain('hover:bg-accent-soft-hover')
+    expect(note.className).toContain('hover:bg-[image:linear-gradient(var(--color-accent-soft-hover),var(--color-accent-soft-hover))]')
     expect(note.className).toContain('shadow-[inset_2px_0_0_var(--color-accent)]')
     expect(note.className).not.toContain('transition')
     // Nothing else draws the edge, and nothing wraps the button.

@@ -930,8 +930,9 @@ overrides the gate; keep it.
   **A child's report is a note under its card's header**, from the child's
   `agents_report` until its next turn starts: "Reported done", "Reported
   stuck" or "Note" in weight 500 and the start of the report on one line, in
-  11.5px `accent-text` on `accent-soft` (`accent-soft-hover` under the pointer)
-  with a 2px accent edge and a 1px `border` below, at least 30px high. It is
+  11.5px `accent-text` on `accent-soft` (`accent-soft-hover` under the pointer),
+  laid over `surface` because a card's ground is the terminal's fixed dark one
+  and `accent-text` is checked against `surface`, with a 2px accent edge and a 1px `border` below, at least 30px high. It is
   one button: the edge is an inset line on the button itself
   (`shadow-[inset_2px_0_0_var(--color-accent)]`, no blur and no offset, so it is
   an edge and not an elevation shadow), and it has no transition. Pressing it

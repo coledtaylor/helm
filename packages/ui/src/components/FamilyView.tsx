@@ -156,7 +156,7 @@ export interface ReportNoteProps {
 /**
  * A child's report as a note under its card's header (or above its terminal,
  * in a child's own tab): what it is and the start of what it says on one line,
- * in `accent-text` on `accent-soft`, with the 2px accent edge a selected row
+ * in `accent-text` on `accent-soft` laid over `surface`, with the 2px accent edge a selected row
  * wears, drawn inside the note as a zero-blur inset line. Keyboard focus takes
  * the page's ring (2px accent, 2px outside), so the note is positioned above
  * the terminal that follows it, which would paint over the ring's lower edge,
@@ -167,6 +167,11 @@ export interface ReportNoteProps {
  * keeps its sessions (`reportNote`); a card with no report is drawn without
  * this. A new report is a new note, so the card keys it by the report and it
  * starts folded.
+ *
+ * `accent-soft` is translucent and `accent-text` is contrast-checked against
+ * `surface`, but the card behind the note is the terminal's fixed dark ground,
+ * which in a light theme would turn the note's text unreadable. So the note
+ * lays `accent-soft` over `surface` itself and looks the same on any ground.
  */
 export function ReportNote({ label, text }: ReportNoteProps): JSX.Element {
   const [open, setOpen] = useState(false)
@@ -176,7 +181,7 @@ export function ReportNote({ label, text }: ReportNoteProps): JSX.Element {
       data-family-note
       onClick={() => setOpen((was) => !was)}
       aria-expanded={open}
-      className="relative z-[1] flex min-h-[30px] w-full shrink-0 cursor-pointer items-baseline gap-2 border-b border-border bg-accent-soft pt-[7px] pr-2.5 pb-1.5 pl-3 text-left text-[11.5px] leading-[1.45] text-accent-text shadow-[inset_2px_0_0_var(--color-accent)] hover:bg-accent-soft-hover"
+      className="relative z-[1] flex min-h-[30px] w-full shrink-0 cursor-pointer items-baseline gap-2 border-b border-border bg-surface bg-[image:linear-gradient(var(--color-accent-soft),var(--color-accent-soft))] pt-[7px] pr-2.5 pb-1.5 pl-3 text-left text-[11.5px] leading-[1.45] text-accent-text shadow-[inset_2px_0_0_var(--color-accent)] hover:bg-[image:linear-gradient(var(--color-accent-soft-hover),var(--color-accent-soft-hover))]"
     >
       <span data-family-note-label className="shrink-0 font-medium">
         {label}
