@@ -189,6 +189,41 @@ describe('ProfileEditor', () => {
     })
   })
 
+  describe('Remote Control', () => {
+    it('is off for a new profile, and a profile saved with it off has no choice stored', () => {
+      const props = renderEditor({ initial: { ...BLANK, name: 'Hub', root: HUB } })
+      expect(checked('Remote Control')).toBe(false)
+      fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
+      expect(vi.mocked(props.onSave).mock.calls[0]?.[0]).not.toHaveProperty('remoteControl')
+    })
+
+    it('S20: saves the choice to turn it on, and no other field changes with it', () => {
+      const props = renderEditor({ initial: { ...BLANK, name: 'Hub', root: HUB } })
+      tick('Remote Control')
+      expect(checked('Remote Control')).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
+      expect(props.onSave).toHaveBeenCalledWith({ ...BLANK, name: 'Hub', root: HUB, remoteControl: true })
+    })
+
+    it('S20: shows a profile that turned it on as on, keeps the choice when saved again, and drops it when turned off', () => {
+      const props = renderEditor({ initial: { ...BLANK, name: 'Remote', root: HUB, remoteControl: true } })
+      expect(checked('Remote Control')).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
+      expect(props.onSave).toHaveBeenLastCalledWith(expect.objectContaining({ remoteControl: true }))
+
+      tick('Remote Control')
+      expect(checked('Remote Control')).toBe(false)
+      fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
+      expect(vi.mocked(props.onSave).mock.calls.at(-1)?.[0]).not.toHaveProperty('remoteControl')
+    })
+
+    it('does not change Sessions can start agents', () => {
+      renderEditor()
+      tick('Remote Control')
+      expect(checked('Sessions can start agents')).toBe(true)
+    })
+  })
+
   it('ticks Access when Compose is ticked, and Access can be unticked after', () => {
     renderEditor()
     expect(checked('Grant access to tools')).toBe(false)

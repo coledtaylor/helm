@@ -145,14 +145,20 @@ export function foldedState<T extends FamilyMember, S extends UrgentState>(
  * - `parent-tab`: it has none, so the tab of the nearest running parent that
  *   has one comes forward - the family view in it is where the child is on
  *   screen here.
- * - `open`: neither has a tab here, so the child is opened as any running
- *   session not open here is. This is the one way a child gets a tab, and it is
- *   the user's press.
+ * - `open`: neither has a tab here and the session is not a running child of a
+ *   running parent, so it is opened as any running session not open here is.
+ *   This is the one way a session gets a tab from a press, and it is the user's
+ *   press.
+ * - `peek`: a running child with nowhere on screen here - its parent's tab is
+ *   not open here, its pane has no room for the family view, or this device
+ *   does not show children in their parent's tab. Nothing opens or moves; the
+ *   window shows the child in a peek, a read-only look at its screen.
  *
- * `id` is the session whose tab comes forward, or the one to open.
+ * `id` is the session whose tab comes forward, the one to open, or the one to
+ * peek at.
  */
 export interface FamilyPress {
-  to: 'own-tab' | 'parent-tab' | 'open'
+  to: 'own-tab' | 'parent-tab' | 'open' | 'peek'
   id: number
 }
 
@@ -168,6 +174,18 @@ export function resolveFamilyPress<T extends FamilyMember>(
   if (tabbed.has(id)) return { to: 'own-tab', id }
   const holder = tabHolder(new Map(sessions.map((session) => [session.id, session])), id, tabbed)
   return holder === null ? { to: 'open', id } : { to: 'parent-tab', id: holder }
+}
+
+/**
+ * Whether session `id` is a child of a session that is running and listed: the
+ * Sessions tree nests it under that parent, and it is a child of a family
+ * whether or not any tab here holds it.
+ */
+export function hasRunningParent<T extends FamilyMember>(byId: ReadonlyMap<number, T>, id: number): boolean {
+  const session = byId.get(id)
+  if (session === undefined || !isChild(session)) return false
+  const parent = byId.get(session.parentId as number)
+  return parent !== undefined && parent.id !== id && parent.status === 'running'
 }
 
 /**

@@ -388,13 +388,48 @@ describe('pressing a child’s row in the Sessions tree', () => {
     expect(pressed).toEqual({ layout: own, press: { to: 'own-tab', id: 3 } })
   })
 
-  it('is a press that opens a tab only for a child whose parent has none here', () => {
+  it('S1: peeks at a running child whose parent is running but has no tab here, and changes nothing', () => {
     const pressed = pressSessionRow(behind, [running(7), running(8, 7)], 8, LOCAL_HOST_KEY, scope(2))
-    expect(pressed).toEqual({ layout: behind, press: { to: 'open', id: 8 } })
+    expect(pressed).toEqual({ layout: behind, press: { to: 'peek', id: 8 } })
   })
 
-  it('still brings the parent forward with the setting off, and leaves how it is arranged alone', () => {
+  it('opens a tab only for a session that is not a running child: a top-level one, or one whose parent ended', () => {
+    const gone: FamilyMember[] = [{ ...running(7), status: 'exited' }, running(8, 7)]
+    expect(pressSessionRow(behind, gone, 8, LOCAL_HOST_KEY, scope(2))).toEqual({
+      layout: behind,
+      press: { to: 'open', id: 8 }
+    })
+    expect(pressSessionRow(behind, [running(7)], 7, LOCAL_HOST_KEY, scope(2)).press).toEqual({ to: 'open', id: 7 })
+  })
+
+  it('S1: peeks, and changes nothing, with the setting off', () => {
     const pressed = pressSessionRow(behind, FAMILY, 4, LOCAL_HOST_KEY, scope(2, false))
+    expect(pressed).toEqual({ layout: behind, press: { to: 'peek', id: 4 } })
+  })
+
+  it('S1: peeks at a running child whose parent’s pane has no room for the family view, and only that pane’s children', () => {
+    const noRoom = { ...scope(null), roomOf: NO_ROOM }
+    expect(pressSessionRow(behind, FAMILY, 4, LOCAL_HOST_KEY, noRoom)).toEqual({
+      layout: behind,
+      press: { to: 'peek', id: 4 }
+    })
+    const roomFor = { ...scope(2), roomOf: (tab: string) => tab === paneId(session(1)) }
+    expect(pressSessionRow(behind, FAMILY, 4, LOCAL_HOST_KEY, roomFor).press).toEqual({ to: 'parent-tab', id: 1 })
+  })
+
+  it('S3: a child its family view shows is no peek, and a child with a tab of its own is not either', () => {
+    const roomy = { ...scope(2), roomOf: ROOM }
+    expect(pressSessionRow(behind, FAMILY, 4, LOCAL_HOST_KEY, roomy).press).toEqual({ to: 'parent-tab', id: 1 })
+    const own = openTab(behind, session(3))
+    expect(pressSessionRow(own, FAMILY, 3, LOCAL_HOST_KEY, { ...scope(2, false), roomOf: NO_ROOM }).press).toEqual({
+      to: 'own-tab',
+      id: 3
+    })
+  })
+
+  it('still brings the parent forward for an ended child with the setting off', () => {
+    const done = [...FAMILY.slice(0, 3), ended(4, 1)]
+    const pressed = pressSessionRow(behind, done, 4, LOCAL_HOST_KEY, scope(2, false))
     expect(pressed.press).toEqual({ to: 'parent-tab', id: 1 })
     expect(pressed.layout.families).toEqual({})
     expect(activeRef(pressed.layout.groups[0]!)).toEqual(session(1))

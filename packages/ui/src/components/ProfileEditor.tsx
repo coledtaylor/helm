@@ -129,6 +129,8 @@ export function ProfileEditor({
   const [openingPrompt, setOpeningPrompt] = useState(initial.openingPrompt ?? '')
   // On unless the profile turns it off; only the off choice is ever stored.
   const [sessionAgents, setSessionAgents] = useState(initial.sessionAgents !== false)
+  // Off unless the profile turns it on; only the on choice is ever stored.
+  const [remoteControl, setRemoteControl] = useState(initial.remoteControl === true)
   const [filter, setFilter] = useState('')
 
   const nameRef = useRef<HTMLInputElement>(null)
@@ -277,7 +279,9 @@ export function ProfileEditor({
       pinnedOrder: 'pinnedOrder' in initial ? initial.pinnedOrder : null,
       // Only the off choice is a value: a profile that leaves it on follows the
       // setting, so it is saved as having no choice at all.
-      ...(sessionAgents ? {} : { sessionAgents: false })
+      ...(sessionAgents ? {} : { sessionAgents: false }),
+      // Only the on choice is a value: a profile that leaves it off has no choice.
+      ...(remoteControl ? { remoteControl: true } : {})
     })
   }
 
@@ -521,6 +525,23 @@ export function ProfileEditor({
               Sessions from this profile get the tools to start, list and stop agents of their
               own. Off, they get none. On follows Settings &gt; Agents, which can turn them off
               for every session.
+            </span>
+          </span>
+        </label>
+
+        <label className="mt-3 flex items-start gap-[9px]">
+          <span className="mt-px">
+            <Checkbox
+              checked={remoteControl}
+              onChange={() => setRemoteControl((on) => !on)}
+              label="Remote Control"
+            />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-[12px] text-fg">Remote Control</span>
+            <span className="mt-[3px] block text-[10px] text-fg-subtle">
+              Sessions from this profile start with Remote Control, for agents that have it. The
+              agents they start get it too, named after the session that started them.
             </span>
           </span>
         </label>

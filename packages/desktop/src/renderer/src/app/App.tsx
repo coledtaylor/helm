@@ -3249,7 +3249,7 @@ export function App(): JSX.Element {
    * shrinking in its place, and no tab is added.
    */
   const pressRow = useCallback(
-    (host: string, there: readonly SessionRecord[], id: number): number =>
+    (host: string, there: readonly SessionRecord[], id: number) =>
       pressTreeSession(host, there, id, {
         layout: open,
         enabled: showChildren,
@@ -3265,7 +3265,7 @@ export function App(): JSX.Element {
         // A child's tab comes forward if it has one here, else its parent's
         // does; only a child with neither opens a tab, on this press. Any other
         // session not open here opens in a tab here.
-        openSession(pressRow(LOCAL_HOST_KEY, sessions, sessionIdOf(id)));
+        openSession(pressRow(LOCAL_HOST_KEY, sessions, sessionIdOf(id)).id);
         return;
       }
       // Somebody else's session has no tab; its row in the sessions pane is
@@ -3294,7 +3294,7 @@ export function App(): JSX.Element {
       );
       if (session === undefined) return;
       // The same press as on this PC: the child's tab, else its parent's.
-      openRemoteSession(host, pressRow(host, there, session.id));
+      openRemoteSession(host, pressRow(host, there, session.id).id);
     },
     onTogglePin: (host: string, path: string) =>
       host === LOCAL_HOST_KEY

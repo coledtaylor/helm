@@ -169,20 +169,21 @@ describe('pressing a child’s row when its parent’s tab is here', () => {
   }
   const press = (
     id: number,
-    options: { enabled?: boolean; capacity?: number | null; layout?: PaneLayout } = {}
-  ): { to: number; layout: PaneLayout; start: PaneLayout } => {
+    options: { enabled?: boolean; capacity?: number | null; layout?: PaneLayout; roomOf?: () => boolean } = {}
+  ): { to: number; how: string; layout: PaneLayout; start: PaneLayout } => {
     const world = panes()
     const start = options.layout ?? world.layout
     let layout = start
-    const to = pressTreeSession(LOCAL_HOST_KEY, family, id, {
+    const pressed = pressTreeSession(LOCAL_HOST_KEY, family, id, {
       layout: start,
       enabled: options.enabled ?? true,
       capacityOf: () => (options.capacity === undefined ? 2 : options.capacity),
+      ...(options.roomOf === undefined ? {} : { roomOf: options.roomOf }),
       commit: (op) => {
         layout = op(layout)
       }
     })
-    return { to, layout, start }
+    return { to: pressed.id, how: pressed.to, layout, start }
   }
 
   it('brings the parent’s tab forward and shows the child as a card, the last card shrinking in its place, with no tab added', () => {
@@ -225,11 +226,21 @@ describe('pressing a child’s row when its parent’s tab is here', () => {
     expect(familyOf(layout, paneId(parentTab)).order[0]).toBe(6)
   })
 
-  it('brings the parent’s tab forward and leaves how it is arranged alone while the setting is off', () => {
-    const { to, layout } = press(5, { enabled: false })
-    expect(to).toBe(1)
-    expect(layout.families).toEqual({})
-    expect(activeRef(layout.groups[0]!)).toEqual(parentTab)
+  it('S3: brings the parent’s tab forward, not a peek, for a child its family view shows', () => {
+    const { to, how } = press(5)
+    expect([how, to]).toEqual(['parent-tab', 1])
+  })
+
+  it('S1: peeks at a running child, and changes nothing in the panes, while the setting is off', () => {
+    const { to, how, layout, start } = press(5, { enabled: false })
+    expect([how, to]).toEqual(['peek', 5])
+    expect(layout).toBe(start)
+  })
+
+  it('S1: peeks at a running child whose parent’s pane has no room for the family view', () => {
+    const { to, how, layout, start } = press(5, { roomOf: () => false })
+    expect([how, to]).toEqual(['peek', 5])
+    expect(layout).toBe(start)
   })
 
   it('asks nothing of the panes for a child with a tab of its own, or for one whose parent has none here', () => {
@@ -251,6 +262,23 @@ describe('pressing a child’s row when its parent’s tab is here', () => {
         }
       }
     )
-    expect(parentless).toBe(8)
+    expect(parentless).toEqual({ to: 'open', id: 8 })
+  })
+
+  it('S1: peeks at a running child whose parent is running but has no tab in this window', () => {
+    const peeked = pressTreeSession(
+      LOCAL_HOST_KEY,
+      [session(7, 'lead', 'C:\\work'), session(8, 'x', 'C:\\work', { parentId: 7, parentName: 'lead' })],
+      8,
+      {
+        layout: panes().layout,
+        enabled: true,
+        capacityOf: () => 2,
+        commit: () => {
+          throw new Error('the panes are not changed for a press that peeks')
+        }
+      }
+    )
+    expect(peeked).toEqual({ to: 'peek', id: 8 })
   })
 })

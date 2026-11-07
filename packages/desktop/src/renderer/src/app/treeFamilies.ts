@@ -2,7 +2,9 @@ import {
   pressSessionRow,
   sessionFamilies,
   type FamilyMember,
+  type FamilyPress,
   type FamilyRow,
+  type FamilyRoomOf,
   type PaneLayout
 } from '@helm/core/types'
 import type { TreeSession } from '@helm/ui'
@@ -47,29 +49,37 @@ export interface TreePressDeps {
   enabled: boolean
   /** How many cards the parent tab `tab` holds, or null when its pane has not been measured. */
   capacityOf: (tab: string) => number | null
+  /** Whether the pane of parent tab `tab` has room for its family view; every pane has when left out. */
+  roomOf?: FamilyRoomOf
   /** The one way the panes change; a functional update, composed with any other in the same event. */
   commit: (op: (layout: PaneLayout) => PaneLayout) => void
 }
 
 /**
  * A press on session `id`'s row in the tree, on `host`, whose sessions are
- * `there`: the id of the session whose tab comes forward or opens.
+ * `there`: where it goes (`FamilyPress`), and `id` on it is the session whose
+ * tab comes forward or opens, or the one to peek at.
  *
  * A child with no tab whose parent's tab is here is shown in that tab's family
  * view first, the last card shrinking in its place when it was a header, and
  * the parent's tab is what comes forward; no tab is added. Only a child with
- * neither opens a tab, on this press (`pressSessionRow`).
+ * neither opens a tab, on this press (`pressSessionRow`). A running child with
+ * nowhere on screen here is a `peek`, and nothing changes in the panes.
  */
 export function pressTreeSession(
   host: string,
   there: readonly FamilyMember[],
   id: number,
   deps: TreePressDeps
-): number {
-  const scope = { enabled: deps.enabled, capacityOf: deps.capacityOf }
+): FamilyPress {
+  const scope = {
+    enabled: deps.enabled,
+    capacityOf: deps.capacityOf,
+    ...(deps.roomOf === undefined ? {} : { roomOf: deps.roomOf })
+  }
   const { press } = pressSessionRow(deps.layout, there, id, host, scope)
   if (press.to === 'parent-tab') {
     deps.commit((current) => pressSessionRow(current, there, id, host, scope).layout)
   }
-  return press.id
+  return press
 }

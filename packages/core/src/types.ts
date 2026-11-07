@@ -69,6 +69,7 @@ export * from './layout/familyRoom'
 export * from './layout/familyState'
 export * from './layout/familyReport'
 export * from './layout/familyView'
+export * from './layout/childPlace'
 
 /**
  * A plugin's tab and rail id, re-exported for the same reason: the renderer

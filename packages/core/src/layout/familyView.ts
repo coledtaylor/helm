@@ -1,5 +1,5 @@
 import { LOCAL_HOST_KEY } from '../hosts'
-import { tabHolder, type FamilyMember, type FamilyPress } from './family'
+import { hasRunningParent, tabHolder, type FamilyMember, type FamilyPress } from './family'
 import {
   PLAIN_FAMILY,
   closeChild,
@@ -19,6 +19,7 @@ import {
   paneId,
   sessionRef,
   sessionTabIds,
+  type FamilyRoomOf,
   type PaneLayout
 } from './panes'
 
@@ -119,6 +120,11 @@ export interface FamilyPressScope {
   enabled: boolean
   /** How many cards the parent tab `tab` has room for, or null when it has not been measured. */
   capacityOf: (tab: string) => number | null
+  /**
+   * Whether the pane of parent tab `tab` has room for its family view; true
+   * for a pane that has not been measured. Left out, every pane has room.
+   */
+  roomOf?: FamilyRoomOf
 }
 
 /**
@@ -127,13 +133,17 @@ export interface FamilyPressScope {
  *
  * A session with a tab here is brought forward, the layout unchanged. A child
  * with no tab whose parent's tab is here comes with that tab to the front,
- * and while the family view is on it shows as a card in it, the last card
- * shrinking in its place when it was a header; no tab is added. Anything else
- * is `open`, which is the one press that gives a session a tab, and the
- * caller opens it as any running session not open here is.
+ * and while the family view is on and its pane has room for it, it shows as a
+ * card in it, the last card shrinking in its place when it was a header; no
+ * tab is added.
  *
- * With the family view off, the parent's tab still comes forward and its
- * arrangement is left as it was.
+ * A running child that is on screen nowhere here is `peek`, the layout
+ * unchanged: its parent's tab is not open here, or that tab's pane has no room
+ * for the family view, or this device does not show children in their parent's
+ * tab. An ended child in such a place keeps what it had: its parent's tab
+ * comes forward when there is one here, and otherwise it is `open`. Anything
+ * else is `open`, which is the one press that gives a session a tab, and the
+ * caller opens it as any running session not open here is.
  */
 export function pressSessionRow<T extends FamilyMember>(
   layout: PaneLayout,
@@ -144,12 +154,18 @@ export function pressSessionRow<T extends FamilyMember>(
 ): { layout: PaneLayout; press: FamilyPress } {
   const tabbed = sessionTabIds(layout, host)
   if (tabbed.has(id)) return { layout, press: { to: 'own-tab', id } }
-  const holder = tabHolder(new Map(sessions.map((session) => [session.id, session])), id, tabbed)
-  if (holder === null) return { layout, press: { to: 'open', id } }
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  const holder = tabHolder(byId, id, tabbed)
+  const running = byId.get(id)?.status === 'running'
+  if (holder === null) {
+    return { layout, press: { to: running && hasRunningParent(byId, id) ? 'peek' : 'open', id } }
+  }
 
   const tab = paneId(sessionRef(holder, host))
   const press: FamilyPress = { to: 'parent-tab', id: holder }
-  if (!scope.enabled) return { layout: activateTab(layout, tab), press }
+  if (!scope.enabled || !(scope.roomOf?.(tab) ?? true)) {
+    return running ? { layout, press: { to: 'peek', id } } : { layout: activateTab(layout, tab), press }
+  }
   const family = familiesHere(layout, sessions, host).get(holder) ?? []
   const shown = showFamilyChild(layout, tab, family, scope.capacityOf(tab), id)
   return { layout: activateTab(shown, tab), press }
