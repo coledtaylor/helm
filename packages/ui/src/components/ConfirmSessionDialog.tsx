@@ -12,6 +12,11 @@ export interface ConfirmSessionDialogProps {
   kind: 'close-session' | 'quit' | 'stop-host' | 'restart-host'
   message: string
   detail: string
+  /**
+   * The folder `detail` names, as it appears there. Set in mono, as machine
+   * data is; `detail` reads as written when it does not hold it.
+   */
+  folder?: string | undefined
   /** What the agreeing button says; main decides, because it counts them. */
   confirmLabel: string
   /**
@@ -30,6 +35,25 @@ export interface ConfirmSessionDialogProps {
   onConfirm: () => void
   onKeep?: (() => void) | undefined
   onCancel: () => void
+}
+
+/**
+ * The detail sentence with the folder it names set as machine data: mono, in
+ * the body colour, and free to break anywhere, since a path has no spaces to
+ * wrap at. Only the first mention is set; a sentence names its folder once.
+ */
+function DetailText({ detail, folder }: { detail: string; folder: string | undefined }): JSX.Element {
+  const at = folder === undefined || folder === '' ? -1 : detail.indexOf(folder)
+  if (folder === undefined || at < 0) return <>{detail}</>
+  return (
+    <>
+      {detail.slice(0, at)}
+      <span data-confirm-folder className="font-mono text-[11.5px] text-fg [overflow-wrap:anywhere]">
+        {folder}
+      </span>
+      {detail.slice(at + folder.length)}
+    </>
+  )
 }
 
 /** Above this many, the list is summarised rather than printed - a quit that
@@ -53,6 +77,7 @@ export function ConfirmSessionDialog({
   kind,
   message,
   detail,
+  folder,
   confirmLabel,
   confirmTone = 'danger',
   keepLabel,
@@ -94,7 +119,9 @@ export function ConfirmSessionDialog({
           </h2>
         </header>
 
-        <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">{detail}</p>
+        <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">
+          <DetailText detail={detail} folder={folder} />
+        </p>
 
         {list && (
           <ul className="mt-3 space-y-0.5 rounded-raised border border-border bg-surface-raised px-3 py-2">

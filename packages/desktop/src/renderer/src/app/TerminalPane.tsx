@@ -155,9 +155,18 @@ export function TerminalPane({
         className={cn('min-h-0 flex-1', card ? 'px-2.5 py-2' : 'p-2.5', dimmed && 'opacity-60')}
         // Pressing a card's terminal gives it the keyboard. xterm would on its
         // own, but it is the one promise a card makes about keys, so it is said
-        // here and not left to the renderer.
-        onPointerDown={
-          card && !ended && !waiting ? () => getTerminal(session.id, on)?.term.focus() : undefined
+        // here and not left to the renderer. A press on the gutter, which xterm
+        // does not cover, would otherwise move the focus to the page after this
+        // has run, leaving the parent without the caret and the card without
+        // the keys.
+        onMouseDown={
+          card && !ended && !waiting
+            ? (event) => {
+                if (event.button !== 0) return
+                if (event.target === event.currentTarget) event.preventDefault()
+                getTerminal(session.id, on)?.term.focus()
+              }
+            : undefined
         }
       >
         <div ref={boxRef} className="h-full w-full" />

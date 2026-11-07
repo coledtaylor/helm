@@ -113,14 +113,16 @@ describe('createTerminal preferences', () => {
     expect(focus).toHaveBeenCalledTimes(1)
   })
 
-  it('shows the outline cursor of a card that never had the keyboard, ahead of its first output', () => {
-    createTerminal(container(), { cols: 80, rows: 24, fit: false }, hooks())
-    expect(latest().written).toEqual([])
-
+  it('draws the outline cursor on a card that was never given the keyboard, without giving it the keyboard', () => {
+    const focus = vi.spyOn(Terminal.prototype, 'focus')
     createTerminal(container(), { cols: 80, rows: 24, fit: false, focus: false }, hooks())
-    // xterm draws no cursor until its terminal has had the keyboard or switched
-    // screens: this is the switch, there and back, and writes nothing to the screen.
-    expect(latest().written).toEqual(['\x1b[?47h\x1b[?47l'])
+
+    const card = latest()
+    expect(focus).not.toHaveBeenCalled()
+    expect(card.hasFocus).toBe(false)
+    // xterm draws no cursor until its terminal has had the keyboard once.
+    expect(card._core.coreService.isCursorInitialized).toBe(true)
+    expect(card.refreshed.at(-1)).toEqual([0, 23])
   })
 
   it('uses the built-in defaults when it is handed none, whatever the settings say', () => {

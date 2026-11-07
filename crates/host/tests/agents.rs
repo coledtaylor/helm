@@ -1805,7 +1805,8 @@ impl Ends {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_child_its_parent_stops_is_recorded_stopped_and_one_that_exits_by_itself_is_not() {
+async fn a_child_its_parent_or_the_user_stops_is_recorded_stopped_and_one_that_exits_by_itself_is_not()
+ {
     let world = World::new();
     let host = world.host().await;
     let mut ends = Ends::listen(&world).await;
@@ -1814,21 +1815,28 @@ async fn a_child_its_parent_stops_is_recorded_stopped_and_one_that_exits_by_itse
         let parent = world
             .session(CLAUDE, &folder, &format!("parent of {backend}"))
             .await;
-        for name in ["stopper", "finisher", "running"] {
+        for name in ["stopper", "ended", "finisher", "running"] {
             parent
                 .start(json!({ "task": "work", "name": name, "backend": backend }))
                 .await
                 .done();
         }
         let stopper = world.child_of(&parent, "stopper").await;
+        let ended = world.child_of(&parent, "ended").await;
         let finisher = world.child_of(&parent, "finisher").await;
         let running = world.child_of(&parent, "running").await;
 
         parent.stop("stopper").await.done();
+        // Stop on the child's own card is a close the user forces.
+        world.close(&ended).await;
         world.type_line(&finisher, "/exit").await;
 
         let stopped = ends.of("the stopped child to end", stopper.id()).await;
         assert!(stopped.stopped, "{backend}: stopped by its parent");
+        let closed = ends
+            .of("the child the user stopped to end", ended.id())
+            .await;
+        assert!(closed.stopped, "{backend}: stopped by the user");
         let finished = ends.of("the finished child to end", finisher.id()).await;
         assert!(
             !finished.stopped,

@@ -513,6 +513,11 @@ export interface SessionConfirmRequest {
   kind: 'close-session' | 'quit'
   message: string
   detail: string
+  /**
+   * The folder `detail` names, as it appears there, so the dialog can set it
+   * as machine data. Absent where the question names none.
+   */
+  folder?: string
   /** What the agreeing button says. Plural when quitting ends several. */
   confirmLabel: string
   /**

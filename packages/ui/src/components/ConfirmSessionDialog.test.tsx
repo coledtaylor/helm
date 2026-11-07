@@ -41,6 +41,31 @@ describe('ConfirmSessionDialog', () => {
     expect(props.onConfirm).toHaveBeenCalledTimes(1)
   })
 
+  it('sets the folder the detail names in mono, in the body colour, inside the same sentence', () => {
+    renderDialog({
+      detail: 'Ending it stops the Claude Code session in C:\\work\\shop. lead, which started it, is told.',
+      folder: 'C:\\work\\shop'
+    })
+    const dialog = screen.getByRole('alertdialog', { name: '“review” is still running.' })
+    const folder = dialog.querySelector('[data-confirm-folder]')
+    expect(folder?.textContent).toBe('C:\\work\\shop')
+    expect(folder?.className).toContain('font-mono')
+    expect(folder?.className).toContain('text-[11.5px]')
+    expect(folder?.className).toContain('[overflow-wrap:anywhere]')
+    expect(folder?.className).toContain('text-fg')
+    expect(folder?.className).not.toContain('text-fg-muted')
+    expect(folder?.parentElement?.textContent).toBe(
+      'Ending it stops the Claude Code session in C:\\work\\shop. lead, which started it, is told.'
+    )
+  })
+
+  it('reads the detail as written when it names no folder, or not the one given', () => {
+    renderDialog({ detail: 'Quitting Helm ends them.', folder: 'C:\\elsewhere' })
+    const dialog = screen.getByRole('alertdialog', { name: '“review” is still running.' })
+    expect(dialog.querySelector('[data-confirm-folder]')).toBeNull()
+    expect(dialog.textContent).toContain('Quitting Helm ends them.')
+  })
+
   it('lists the sessions a quit would end, and summarises past six', () => {
     renderDialog({
       kind: 'quit',

@@ -202,17 +202,6 @@ export interface TerminalHost {
   dispose: () => void
 }
 
-/**
- * Switches to the alternate screen and back, which changes nothing on screen.
- *
- * xterm draws no cursor, not even the outline of a terminal without the
- * keyboard, until the terminal has first taken the keyboard or switched screens.
- * A card in a family view does neither at first, so it is made to count as in
- * use this way instead of taking the keyboard from its parent. Written ahead of
- * the card's first output, so it is the first thing parsed.
- */
-const CURSOR_IN_USE = '\x1b[?47h\x1b[?47l'
-
 export interface TerminalHooks {
   /** Host -> pty. Everything the user types funnels through here. */
   onInput: (data: string) => void
@@ -224,6 +213,25 @@ export interface TerminalHooks {
   openLink: (url: string) => void
   /** Fired on every keydown that xterm will translate, for latency timing. */
   onKeyDown?: (at: number) => void
+}
+
+/**
+ * xterm draws no cursor, the outline of a terminal without the keyboard
+ * included, until its terminal has had the keyboard once: `isCursorInitialized`
+ * is set by the first focus or key and by switching to the alternate screen,
+ * and a card made beside a parent that keeps the caret has had none of them.
+ * Claude Code draws on the normal screen, so its card would show no cursor at
+ * all until pressed. Setting the flag and drawing again gives the card the
+ * hollow cursor without taking the keyboard or sending the program a focus
+ * report. The flag is xterm's own state with no public setter; an xterm that
+ * keeps it elsewhere is left as it is.
+ */
+function drawCursorWithoutFocus(term: Terminal): void {
+  const service = (term as unknown as { _core?: { coreService?: { isCursorInitialized?: unknown } } })._core
+    ?.coreService
+  if (service === undefined || typeof service.isCursorInitialized !== 'boolean') return
+  service.isCursorInitialized = true
+  term.refresh(0, term.rows - 1)
 }
 
 export function createTerminal(
@@ -365,7 +373,7 @@ export function createTerminal(
   // A card in a family view is made beside a parent that has the keyboard, and
   // leaves it there: the cursor it draws is the outline of a terminal without it.
   if (opts.focus !== false) term.focus()
-  else term.write(CURSOR_IN_USE)
+  else drawCursorWithoutFocus(term)
   return {
     term,
     serialize,

@@ -68,8 +68,13 @@ export function useHostWorkspaces(
     bridgesRef.current = bridges
   }, [bridges])
 
+  // What each host has said so far, held here as well as in state: a push is
+  // judged against it when it arrives, never inside a state updater, which
+  // React runs when it gets to it.
+  const held = useRef<ReadonlyMap<string, HostWorkspace>>(new Map())
   const patch = useCallback((host: string, change: (current: HostWorkspace) => HostWorkspace) => {
-    setByHost((current) => new Map(current).set(host, change(current.get(host) ?? EMPTY)))
+    held.current = new Map(held.current).set(host, change(held.current.get(host) ?? EMPTY))
+    setByHost(held.current)
   }, [])
 
   const relist = useCallback(
@@ -148,12 +153,9 @@ export function useHostWorkspaces(
           }))
         ),
         bridge.on('session:activity', (states) => {
-          let unknown = false
-          patch(host, (current) => {
-            const known = new Set(current.sessions.map((session) => session.id))
-            unknown = states.some((state) => !known.has(state.id))
-            return { ...current, activity: new Map(states.map((state) => [state.id, state])) }
-          })
+          const known = new Set((held.current.get(host)?.sessions ?? []).map((session) => session.id))
+          const unknown = states.some((state) => !known.has(state.id))
+          patch(host, (current) => ({ ...current, activity: new Map(states.map((state) => [state.id, state])) }))
           // A session started elsewhere, such as from another device: listed again.
           if (unknown) relist(host)
           else if (heldRef.current.get(host)?.sessions.some((session) => session.status === 'running' && isChild(session))) {

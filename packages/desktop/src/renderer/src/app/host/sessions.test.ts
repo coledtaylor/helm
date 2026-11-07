@@ -164,6 +164,8 @@ describe('sessions over the window’s own connection', () => {
       expect.objectContaining({
         kind: 'close-session',
         message: '“app” is still running on this PC’s host.',
+        detail: 'Ending it stops the Claude Code session in /work dir/app.',
+        folder: '/work dir/app',
         sessionNames: ['app']
       })
     ])
@@ -190,6 +192,52 @@ describe('sessions over the window’s own connection', () => {
     expect(exits).toEqual([expect.objectContaining({ id: 8, status: 'exited', stopped: true })])
     await expect(ask(adapters, 'session:list')).resolves.toEqual([
       expect.objectContaining({ id: 8, status: 'exited', stopped: true })
+    ])
+  })
+
+  it('asks before Stop on a child’s card ends it, says its parent is told, and keeps the session where it ended once agreed', async () => {
+    const { adapters, connection } = world({
+      listed: [row({ id: 7, name: 'lead' }), row({ id: 8, name: 'reviewer', parentId: 7 })]
+    })
+    const questions = hear(adapters, 'session:confirm')
+    await ask(adapters, 'session:list')
+    adapters.show([7, 8])
+    const stopping = ask(adapters, 'session:close', { id: 8, keep: true })
+    await settle()
+    expect(questions).toEqual([
+      expect.objectContaining({
+        kind: 'close-session',
+        message: '“reviewer” is still running on this PC’s host.',
+        detail: 'Ending it stops the Claude Code session in /work dir/app. lead, which started it, is told.',
+        folder: '/work dir/app'
+      })
+    ])
+    expect(connection.payloads('session:close')).toEqual([])
+    send(adapters, 'session:confirmed', { id: (questions[0] as SessionConfirmRequest).id, agreed: true })
+    await expect(stopping).resolves.toEqual({ closed: true })
+    expect(connection.payloads('session:close')).toEqual([{ id: 8, force: true }])
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([
+      expect.objectContaining({ id: 7 }),
+      expect.objectContaining({ id: 8, status: 'running' })
+    ])
+  })
+
+  it('keeps a child running when the user declines the Stop question, leaves its row as it was, and tells the host nothing', async () => {
+    const { adapters, connection } = world({
+      listed: [row({ id: 7, name: 'lead' }), row({ id: 8, name: 'reviewer', parentId: 7 })]
+    })
+    const questions = hear(adapters, 'session:confirm')
+    await ask(adapters, 'session:list')
+    adapters.show([7, 8])
+    const stopping = ask(adapters, 'session:close', { id: 8, keep: true })
+    await settle()
+    send(adapters, 'session:confirmed', { id: (questions[0] as SessionConfirmRequest).id, agreed: false })
+    await expect(stopping).resolves.toEqual({ closed: false })
+    expect(connection.payloads('session:close')).toEqual([])
+    expect(connection.streamsFor('session:data', 8)[0]?.closed).toBeFalsy()
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([
+      expect.objectContaining({ id: 7, status: 'running' }),
+      expect.objectContaining({ id: 8, status: 'running' })
     ])
   })
 
@@ -279,21 +327,18 @@ describe('sessions over the window’s own connection', () => {
     expect(bridge.sent).toEqual([])
   })
 
-  it('answers the window’s list with the session the host’s activity just named, however soon the window asks', async () => {
+  it('adopts what the host lists before the window hears the activity that names a new session, so the window’s own list finds it', async () => {
     const connection = new FakeConnection()
     const { adapters } = world({ connection })
     await ask(adapters, 'session:list')
-    connection.answer('session:list', () => [row({ id: 12, name: 'mapper', parentId: 7, parentName: 'app' })])
     const heard = hear(adapters, 'session:activity')
-    // The window asks as the push reaches it, before any pass of the event loop.
-    const answered = new Promise<unknown>((resolve) => {
-      routeOf<(listener: () => void) => () => void>(adapters, 'events', 'session:activity')(() => {
-        resolve(ask(adapters, 'session:list'))
-      })
-    })
+    connection.answer('session:list', () => [row({ id: 12, name: 'reviewer' })])
     connection.push('session:activity', [])
-    await expect(answered).resolves.toEqual([expect.objectContaining({ id: 12, parentId: 7 })])
+    // The word is not out while the list is still being asked for.
+    expect(heard).toEqual([])
+    await settle()
     expect(heard).toHaveLength(1)
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([expect.objectContaining({ id: 12 })])
   })
 
   it('takes a child’s report from the host’s listing as it comes and goes, and leaves the rest of its row as the window has it', async () => {

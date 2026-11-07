@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { DiscoveryResult, SessionRecord } from '@helm/core'
+import type { DiscoveryResult, SessionActivityState, SessionRecord } from '@helm/core'
 import { DEFAULT_SETTINGS, EMPTY_INVENTORY } from '@helm/core/types'
 import { bridge, remoteBridge } from './bridge.testkit'
 import { useHostWorkspaces } from './useHostWorkspaces'
@@ -66,6 +66,32 @@ describe('useHostWorkspaces', () => {
 
     // Nothing was asked of this PC's host.
     expect(bridge.invocations).toEqual([])
+  })
+
+  it('lists build-box’s sessions again when its activity names one the window does not know, however its pushes arrive together', async () => {
+    const box = remoteBridge(BOX)
+    const { result } = renderHook(() => useHostWorkspaces([BOX], [BOX]))
+    await waitFor(() => expect(result.current.byHost.get(BOX)?.sessions).toEqual([deploy]))
+    const state = (id: number): SessionActivityState => ({
+      id,
+      activity: 'busy',
+      waitingFor: null,
+      message: null,
+      claudeSessionId: null
+    })
+    const child = { ...deploy, id: 4, name: 'reviewer' } as SessionRecord
+    box.answer('session:list', () => [deploy, child])
+    box.clearRecords()
+
+    // Pushes that land in one batch: the second names a session started by
+    // the first's parent, which the window has not listed.
+    act(() => {
+      box.emit('session:activity', [state(3)])
+      box.emit('session:activity', [state(3), state(4)])
+    })
+
+    await waitFor(() => expect(result.current.byHost.get(BOX)?.sessions).toEqual([deploy, child]))
+    expect(box.invoked('session:list')).toHaveLength(1)
   })
 
   it('takes a child’s report from build-box’s listing when its activity moves, and drops it when the host clears it', async () => {

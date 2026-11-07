@@ -49,6 +49,8 @@ export interface ConfirmRequest {
   kind: 'close-session' | 'quit'
   message: string
   detail: string
+  /** The folder `detail` names, as it appears there; absent where it names none. */
+  folder?: string
   /**
    * What the agreeing button says. Carried on the request rather than derived
    * by each implementation, so the Helm dialog and the native fallback cannot

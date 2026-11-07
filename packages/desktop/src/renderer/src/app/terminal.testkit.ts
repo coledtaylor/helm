@@ -216,8 +216,34 @@ export class Terminal {
     this.written.push(data)
   }
 
-  focus(): void {}
-  blur(): void {}
+  /** The one terminal holding the keyboard, as a page has one focused element. */
+  static focused: Terminal | null = null
+
+  /** Whether this terminal holds the keyboard, which is when its cursor is solid and any other's is hollow. */
+  get hasFocus(): boolean {
+    return Terminal.focused === this
+  }
+
+  /**
+   * Where xterm keeps whether the cursor is drawn at all: not until the
+   * terminal has had the keyboard once, outline included.
+   */
+  readonly _core = { coreService: { isCursorInitialized: false } }
+  /** The row ranges the screen was asked to draw again. */
+  readonly refreshed: [number, number][] = []
+
+  refresh(start: number, end: number): void {
+    this.refreshed.push([start, end])
+  }
+
+  focus(): void {
+    Terminal.focused = this
+    this._core.coreService.isCursorInitialized = true
+  }
+
+  blur(): void {
+    if (Terminal.focused === this) Terminal.focused = null
+  }
   hasSelection(): boolean {
     return this.selection !== ''
   }
@@ -233,6 +259,7 @@ export class Terminal {
 
   dispose(): void {
     this.disposed = true
+    this.blur()
   }
 }
 

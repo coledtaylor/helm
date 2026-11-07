@@ -88,6 +88,15 @@ function inFamily(child: FamilyMember, state: FamilyState): boolean {
   return !(hasEnded(child) && state.closed.includes(child.id))
 }
 
+/**
+ * Whether the user's arrangement wants a child as a card: a running child that
+ * is not shrunk, or an ended one opened to its last screen. Any other child is
+ * a header whatever room the pane has.
+ */
+export function wantsCard(child: FamilyMember, state: FamilyState): boolean {
+  return hasEnded(child) ? state.screens.includes(child.id) : !state.shrunk.includes(child.id)
+}
+
 /** The children the family view holds, in the order it runs them in. */
 export function familyChildren<T extends FamilyMember>(children: readonly T[], state: FamilyState): T[] {
   return ordered(children, state).filter((child) => inFamily(child, state))
@@ -115,8 +124,7 @@ export function familyEntries<T extends FamilyMember>(
   let room = Math.max(0, Math.floor(capacity))
   for (const child of familyChildren(children, state)) {
     const ended = hasEnded(child)
-    const wanted = ended ? state.screens.includes(child.id) : !state.shrunk.includes(child.id)
-    if (wanted && room > 0) {
+    if (wantsCard(child, state) && room > 0) {
       room -= 1
       cards.push({ child, shape: ended ? 'screen' : 'card' })
     } else {
@@ -241,16 +249,21 @@ export function pruneFamilyState(
 /**
  * An ended child's header: how it ended and when, "Stopped · 14:52" when its
  * parent, the user or the host ended it and "Done · 14:52" when its agent
- * exited by itself, in the time of day where this window is. A session whose
- * host lost it says "Lost". With no time (it never saw one end) the time is
- * left off rather than guessed.
+ * exited by itself, in the time of day where this window is. A child this
+ * window's user stopped with Stop (`byYou`) says "Stopped by you". A session
+ * whose host lost it says "Lost". With no time (it never saw one end) the time
+ * is left off rather than guessed.
  */
-export function endedHeaderText(child: {
-  status: string
-  stopped?: boolean
-  endedAt?: string | null
-}): string {
-  const how = child.status === 'lost' ? 'Lost' : child.stopped === true ? 'Stopped' : 'Done'
+export function endedHeaderText(
+  child: {
+    status: string
+    stopped?: boolean
+    endedAt?: string | null
+  },
+  byYou = false
+): string {
+  const stopped = byYou && child.stopped === true ? 'Stopped by you' : 'Stopped'
+  const how = child.status === 'lost' ? 'Lost' : child.stopped === true ? stopped : 'Done'
   if (child.endedAt === undefined || child.endedAt === null) return how
   const at = new Date(child.endedAt)
   if (Number.isNaN(at.getTime())) return how

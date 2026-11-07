@@ -191,6 +191,13 @@ describe('endedHeaderText', () => {
     expect(endedHeaderText({ status: 'exited', stopped: true, endedAt: at(14, 52) })).toBe('Stopped · 14:52')
   })
 
+  it('says Stopped by you for a child the user stopped from this window, and only when the host stopped it', () => {
+    expect(endedHeaderText({ status: 'exited', stopped: true, endedAt: at(14, 52) }, true)).toBe(
+      'Stopped by you · 14:52'
+    )
+    expect(endedHeaderText({ status: 'exited', stopped: false, endedAt: at(14, 52) }, true)).toBe('Done · 14:52')
+  })
+
   it('says Done and the time of day for a child whose agent exited by itself, a record that never said stopped included', () => {
     expect(endedHeaderText({ status: 'exited', stopped: false, endedAt: at(9, 5) })).toBe('Done · 09:05')
     expect(endedHeaderText({ status: 'exited', endedAt: at(9, 5) })).toBe('Done · 09:05')

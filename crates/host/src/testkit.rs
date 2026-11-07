@@ -563,6 +563,13 @@ impl GitRepo {
         let repo = Self { path: path.into() };
         std::fs::create_dir_all(&repo.path).expect("create the repository's folder");
         repo.git(&["init", "-q", "-b", "main"]);
+        // Kept in the repository's own config as well, so that every git that
+        // opens it reads them, the host's under test included, whatever the
+        // machine's global config says: a CI runner's `core.autocrlf=true`
+        // otherwise checks a worktree's files out with CRLF.
+        for (key, value) in [("core.autocrlf", "false"), ("core.fsmonitor", "false")] {
+            repo.git(&["config", key, value]);
+        }
         repo
     }
 

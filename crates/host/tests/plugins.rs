@@ -668,12 +668,23 @@ async fn what_a_service_run_on_the_node_it_was_handed_prints_reaches_its_plugins
             })
             .await
             .unwrap();
-        if log.iter().any(|line| line.text.starts_with("my token is")) {
+        // The two streams are read apart, so a line of one can land in the log
+        // after a line of the other: wait for every line asserted below.
+        let said = |stream: PluginLogStream, text: &str| {
+            log.iter()
+                .any(|line| line.stream == stream && line.text == text)
+        };
+        if said(PluginLogStream::Out, "the service is up")
+            && said(PluginLogStream::Err, "my token is [service token]")
+            && log.iter().any(|line| {
+                line.stream == PluginLogStream::Host && line.text.starts_with("started")
+            })
+        {
             break log;
         }
         assert!(
             Instant::now() < deadline,
-            "the service said nothing: {log:#?}"
+            "the service did not say all it says: {log:#?}"
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     };
