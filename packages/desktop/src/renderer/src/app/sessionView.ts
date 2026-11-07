@@ -6,7 +6,7 @@ import {
   type SessionActivityState,
   type SessionRecord
 } from '@helm/core/types'
-import type { CrumbTone, TabIndicator } from '@helm/ui'
+import type { CrumbParent, CrumbTag, CrumbTone, TabIndicator } from '@helm/ui'
 
 /**
  * What a session's dot says.
@@ -22,10 +22,7 @@ import type { CrumbTone, TabIndicator } from '@helm/ui'
  * which is the point: a CLI that renames a status degrades to the old
  * behaviour rather than to a guess.
  */
-export function indicatorOf(
-  session: SessionRecord,
-  activity: SessionActivityState | undefined
-): TabIndicator {
+export function indicatorOf(session: SessionRecord, activity: SessionActivityState | undefined): TabIndicator {
   if (session.status !== 'running') return session.exitCode ? 'failed' : 'ended'
   return activity?.activity ?? 'running'
 }
@@ -143,12 +140,7 @@ export function runAge(ms: number): string {
  * error is the one word because its program's message does not fit a header
  * (the crumb, the tab and the tooltip of its dot have it).
  */
-export function childStatus(
-  session: SessionRecord,
-  state: TabIndicator,
-  since: number | null,
-  now: number
-): string {
+export function childStatus(session: SessionRecord, state: TabIndicator, since: number | null, now: number): string {
   if (state === 'idle' || state === 'shell') return since === null ? 'Idle' : `Idle · ${shortAge(now - since)}`
   if (state === 'error') return 'Error'
   return crumbStatus(session, state, since, now).text
@@ -238,4 +230,28 @@ export function useSecondsClock(now: number, active: boolean): number {
     }
   }, [active])
   return active ? Math.max(sampled, now) : now
+}
+
+/**
+ * What the crumb of a child's own tab begins with: its tag (`command` for a
+ * command child, the role an agent child was started in, none for a child
+ * with no role) and the session that started it. `openParent` is given only
+ * where the window lists that session, so the link is plain text otherwise.
+ */
+export function childCrumb(
+  session: Pick<SessionRecord, 'command' | 'role' | 'parentId' | 'parentName'>,
+  openParent: (parentId: number) => void,
+  listsParent: (parentId: number) => boolean
+): { tag: CrumbTag | undefined; parent: CrumbParent | undefined } {
+  const tag: CrumbTag | undefined = isCommandChild(session)
+    ? { kind: 'command', text: 'command' }
+    : typeof session.role === 'string' && session.role !== ''
+      ? { kind: 'role', text: session.role }
+      : undefined
+  const { parentId, parentName } = session
+  const parent: CrumbParent | undefined =
+    parentId === null || parentId === undefined || typeof parentName !== 'string' || parentName === ''
+      ? undefined
+      : { name: parentName, onOpen: listsParent(parentId) ? () => openParent(parentId) : undefined }
+  return { tag, parent }
 }

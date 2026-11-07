@@ -251,6 +251,7 @@ import { TerminalTabPane } from "./TerminalTabPane";
 import { terminalFontStack } from "../terminal";
 import { SessionCrumb } from "./SessionCrumb";
 import {
+  childCrumb,
   indicatorOf,
   sessionNote,
   statusCounts as countSessionStates,
@@ -3621,8 +3622,16 @@ export function App(): JSX.Element {
     if (hostOf(ref) !== LOCAL_HOST_KEY) {
       const there = sessionAt(ref);
       if (there === null) return null;
+      const host = hostOf(ref);
+      const child = childCrumb(
+        there.record,
+        (parentId) => openRemoteSession(host, parentId),
+        (parentId) => remoteSessionOf(host, parentId) !== undefined,
+      );
       return (
         <PaneCrumb
+          tag={child.tag}
+          parent={child.parent}
           place={folderName(there.record.cwd)}
           hint={`${hostName(hostOf(ref))} · ${there.record.cwd}`}
           branch={there.record.branch}
@@ -3635,8 +3644,13 @@ export function App(): JSX.Element {
       session.projectPath === null
         ? undefined
         : projectsByPath.get(session.projectPath);
+    const child = childCrumb(session, openSession, (parentId) =>
+      sessionsById.has(parentId),
+    );
     return (
       <SessionCrumb
+        tag={child.tag}
+        parent={child.parent}
         place={project?.name ?? folderName(session.cwd)}
         hint={session.cwd}
         branch={session.branch}

@@ -487,7 +487,15 @@ overrides the gate; keep it.
   `accent-text`, "Needs you · 2m" in `warn`). It is the branch's home now that
   tabs are one line: two sessions on one project are told apart here, with the
   room to say the branch in full. A page's tab has no crumb - the page's own
-  header names what it is about.
+  header names what it is about. A child's own tab (started by another
+  session with the host's agent tools) begins its crumb, before the place, with
+  its tag and a `for <parent>` link: the tag of a command child reads
+  "command" in `fg-muted` on a 1px `border-strong` ring with no fill (as the
+  family header's), an agent child's names its role in `accent-text` on
+  `accent-soft`, and a child with no role has no tag. The link is Inter 11px
+  `fg-muted`, `fg` and underlined on hover, with the page's focus ring;
+  pressing it brings the parent's tab forward or opens one. Where the window
+  does not list the parent, "for <parent>" is plain text, not a button.
 - **The session tab's state dot.** A session tab carries a 6px dot in place of
   a kind icon, and it says two different kinds of thing: what Helm knows about
   the process, and what the session says about itself. Claude Code publishes its

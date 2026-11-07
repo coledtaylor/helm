@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionActivity, SessionActivityState, SessionRecord } from '@helm/core/types'
-import { childStatus, crumbStatus, indicatorOf, sessionNote, statusCounts, statusHint } from './sessionView'
+import { childCrumb, childStatus, crumbStatus, indicatorOf, sessionNote, statusCounts, statusHint } from './sessionView'
 
 function session(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -84,7 +84,7 @@ describe('what the tree row and the crumb say', () => {
     expect(crumbStatus(session(), 'running', now, now).text).toBe('Running · 1s')
   })
 
-  it('says a reported error, with the program\'s message in the crumb, in the danger tone', () => {
+  it("says a reported error, with the program's message in the crumb, in the danger tone", () => {
     expect(sessionNote('error', now - 4 * MINUTE, now)).toBe('error')
     expect(crumbStatus(session(), 'error', now - 4 * MINUTE, now, 'build failed')).toEqual({
       text: 'Error · build failed',
@@ -176,7 +176,9 @@ describe('what the tree row and the crumb say', () => {
 
     it('leaves an agent’s and a plain session’s crumb as it was', () => {
       expect(crumbStatus(session(), 'running', now - 4 * MINUTE, now)).toEqual({ text: 'Running · 4m', tone: 'subtle' })
-      expect(crumbStatus(session({ status: 'exited', exitCode: 0, durationMs: 3 * 60 * MINUTE }), 'ended', null, now)).toEqual({
+      expect(
+        crumbStatus(session({ status: 'exited', exitCode: 0, durationMs: 3 * 60 * MINUTE }), 'ended', null, now)
+      ).toEqual({
         text: 'Ended after 3h',
         tone: 'subtle'
       })
@@ -223,5 +225,43 @@ describe('statusCounts', () => {
       running: 2,
       idle: 1
     })
+  })
+})
+
+describe('childCrumb', () => {
+  const open = (): void => {}
+  const lists = (): boolean => true
+  const parentOf = { parentId: 7, parentName: 'api-refactor' }
+
+  it('S32: a command child is tagged command', () => {
+    const { tag, parent } = childCrumb(session({ ...parentOf, command: 'pnpm test' }), open, lists)
+    expect(tag).toEqual({ kind: 'command', text: 'command' })
+    expect(parent?.name).toBe('api-refactor')
+  })
+
+  it('S32: an agent child is tagged with its role, and one with no role has no tag', () => {
+    expect(childCrumb(session({ ...parentOf, role: 'reviewer' }), open, lists).tag).toEqual({
+      kind: 'role',
+      text: 'reviewer'
+    })
+    expect(childCrumb(session({ ...parentOf, role: null }), open, lists).tag).toBeUndefined()
+    expect(childCrumb(session({ ...parentOf, role: '' }), open, lists).tag).toBeUndefined()
+  })
+
+  it('S32: the link opens the parent by its id where the window lists it, and is plain text where not', () => {
+    const opened: number[] = []
+    const listed = childCrumb(session(parentOf), (id) => opened.push(id), lists)
+    listed.parent?.onOpen?.()
+    expect(opened).toEqual([7])
+    const unlisted = childCrumb(
+      session(parentOf),
+      (id) => opened.push(id),
+      () => false
+    )
+    expect(unlisted.parent).toEqual({ name: 'api-refactor', onOpen: undefined })
+  })
+
+  it('a session nobody started has neither tag nor link', () => {
+    expect(childCrumb(session(), open, lists)).toEqual({ tag: undefined, parent: undefined })
   })
 })
