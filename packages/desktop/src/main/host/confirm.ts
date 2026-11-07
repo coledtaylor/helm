@@ -1,6 +1,6 @@
 import { type BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { sessionLabel, type SessionRecord } from '@helm/core'
-import type { QuitAnswer } from '../../shared/ipc'
+import type { NeedsYouNotification, QuitAnswer } from '../../shared/ipc'
 import { emit } from '../ipc'
 import type { Confirm, ConfirmRequest, QuitConfirm } from './session-host'
 
@@ -142,12 +142,38 @@ export function showExitNotification(window: () => BrowserWindow | null, record:
     body: record.cwd
   })
   notification.on('click', () => {
-    const target = window()
-    if (!target || target.isDestroyed()) return
-    if (target.isMinimized()) target.restore()
-    target.show()
-    target.focus()
-    emit(target, 'windowSessions:activate', { id: record.id })
+    const target = windowToFront(window)
+    if (target) emit(target, 'windowSessions:activate', { id: record.id })
+  })
+  notification.show()
+  return true
+}
+
+/** Brings the window forward, or null when there is none to bring. */
+function windowToFront(window: () => BrowserWindow | null): BrowserWindow | null {
+  const target = window()
+  if (!target || target.isDestroyed()) return null
+  if (target.isMinimized()) target.restore()
+  target.show()
+  target.focus()
+  return target
+}
+
+/**
+ * The OS notification for a child that began to need a person while the window
+ * is not in front. The window decided that and worded it; clicking it brings
+ * the window forward and tells it which child to show, which it shows where it
+ * is on screen, or in its peek. False when this OS shows none.
+ */
+export function showNeedsYouNotification(
+  window: () => BrowserWindow | null,
+  { host, id, title, body }: NeedsYouNotification
+): boolean {
+  if (!Notification.isSupported()) return false
+  const notification = new Notification({ title, body })
+  notification.on('click', () => {
+    const target = windowToFront(window)
+    if (target) emit(target, 'windowSessions:showChild', { host, id })
   })
   notification.show()
   return true

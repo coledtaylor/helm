@@ -183,10 +183,16 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   opened as tabs is this device's `paneLayout` (`families`) and never reaches
   the host. Every other running session is in the sessions pane
   as not open here, with Open (a tab whose screen comes through the host's
-  attach, never a second restore path) and End. Closing a running session's
-  tab asks first, naming its host, which the window names; Close tab, keep
-  running in the tab's menu ends nothing, and puts a child back in its
-  parent's family view.
+  attach, never a second restore path) and End. A running child with nowhere
+  on screen here has a peek instead (from its row, or its chip in the parent's
+  crumb): its screen comes through the host's watch-only attach
+  (`session:data` opened with `watch`), which takes no keys and no size, so a
+  peek never types into the child or resizes it; its Open is the attach above
+  and closes the peek. Closing a running session's tab asks first, naming its
+  host, which the window names, and the children that end with it and any
+  started to outlive it; its button counts what it ends (End 4 sessions).
+  Close tab, keep running in the tab's menu ends nothing, and puts a child
+  back in its parent's family view.
 - Do not use `@anthropic-ai/claude-agent-sdk`.
 - Helm renders nothing for a live session and answers no permission
   prompt. The host reads one thing in a session's output, OSC 7501 status

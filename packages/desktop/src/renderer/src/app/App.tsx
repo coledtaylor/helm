@@ -14,6 +14,7 @@ import {
   activeRef,
   besideOf,
   browserSearchName,
+  childPlace,
   closeGroup,
   closeTab,
   cycleTab,
@@ -215,6 +216,11 @@ import {
 } from "@helm/ui";
 import { sidebarFor, type SidebarView } from "./sidebarFor";
 import { pressTreeSession, treeEntries } from "./treeFamilies";
+import { openChildTab, usePeek } from "./peek";
+import { useNeedsYou, type HostAttention } from "./needsYou";
+import { hostNoticesSource } from "./noticesSource";
+import { useHostNotices } from "./useNotices";
+import type { NoticesView } from "./host/notices";
 import type { PanelActionIcon } from "@coledtaylor/helm-plugin-sdk";
 import type {
   AppMode,
@@ -232,6 +238,7 @@ import {
   devices,
   eachHostBridge,
   helm,
+  hostSessionPeek,
   hostSessionTabs,
   hostState,
   seenHostVersion,
@@ -536,6 +543,9 @@ const sessionIdOf = (id: string): number => Number(id.slice("session:".length));
 const KEEP_RUNNING = "keep-running";
 /** Every host's bridge, for the question a host asks before a running session's tab closes. */
 const HOST_BRIDGES = { each: eachHostBridge, bridgeFor };
+
+/** What a host with nothing heard from it yet has standing. */
+const NO_NOTICES: NoticesView = { notices: [], away: [], atConnect: new Set() };
 
 /** The last segment of a path, for a session in no project the scan found. */
 const folderName = (path: string): string =>
@@ -3254,9 +3264,105 @@ export function App(): JSX.Element {
         layout: open,
         enabled: showChildren,
         capacityOf: familyCapacity,
+        roomOf,
         commit,
       }),
-    [open, commit, showChildren],
+    [open, commit, showChildren, roomOf],
+  );
+
+  /** The sessions each host lists, which this window's places, peeks and notices are read against. */
+  const sessionsByHost = useMemo(
+    () =>
+      new Map<string, readonly SessionRecord[]>([
+        [LOCAL_HOST_KEY, sessions],
+        ...listedHostIds.map((host): [string, readonly SessionRecord[]] => [
+          host,
+          hostWork.byHost.get(host)?.sessions ?? [],
+        ]),
+      ]),
+    [sessions, listedHostIds, hostWork.byHost],
+  );
+  const placeScope = useMemo(
+    () => ({ enabled: showChildren, roomOf, capacityOf: familyCapacity }),
+    [showChildren, roomOf],
+  );
+
+  /**
+   * A running child that needs nowhere but the peek: its stream is a
+   * watch-only attach (`peek` in `host/sessions.ts`), so it never types into
+   * the child or sizes it. Open gives the child a tab in its parent's pane
+   * strip, or in the focused pane, and Stop asks as stopping any session does.
+   */
+  const peek = usePeek({
+    watch: hostSessionPeek,
+    stop: stopChild,
+    openTab: (host, id) => {
+      const child = sessionsByHost.get(host)?.find((each) => each.id === id);
+      if (child !== undefined)
+        commit((current) => openChildTab(current, host, child));
+    },
+    stateOf: (host, id) => {
+      const there = sessionsByHost.get(host) ?? [];
+      const child = there.find((each) => each.id === id);
+      return child === undefined
+        ? null
+        : {
+            place: childPlace(open, there, host, id, placeScope),
+            running: child.status === "running",
+          };
+    },
+  });
+
+  /** What each host's notices and listed sessions say of the children that need a person. */
+  const noticeViews = useHostNotices(hostNoticesSource);
+  const attentionHosts = useMemo<HostAttention<SessionRecord>[]>(
+    () =>
+      [...sessionsByHost].map(([host, there]) => ({
+        host,
+        notices: noticeViews.get(host) ?? NO_NOTICES,
+        sessions: there,
+      })),
+    [sessionsByHost, noticeViews],
+  );
+  useNeedsYou({
+    hosts: attentionHosts,
+    layout: open,
+    scope: placeScope,
+    inFront: () => document.hasFocus(),
+    notify: ({ host, id, title, body }) =>
+      helm.send("windowSessions:needsYou", { host, id, title, body }),
+  });
+
+  /**
+   * Shows a child where it is on screen here, as a press on its row does: its
+   * tab comes forward, or its parent's with it swapped in as a card, or a
+   * child with nowhere on screen opens its peek. The status bar's needs you,
+   * a notification's click and the window's lists all go through here.
+   */
+  const showChild = useCallback(
+    (host: string, id: number) => {
+      const there = sessionsByHost.get(host) ?? [];
+      const press = pressRow(host, there, id);
+      if (press.to === "peek") {
+        peek.store.open(host, press.id, { kind: "row" });
+        return;
+      }
+      if (host === LOCAL_HOST_KEY) openSession(press.id);
+      else openRemoteSession(host, press.id);
+    },
+    [sessionsByHost, pressRow, peek.store, openSession, openRemoteSession],
+  );
+  const showChildRef = useRef(showChild);
+  useEffect(() => {
+    showChildRef.current = showChild;
+  }, [showChild]);
+  // A click on the notification of a child that needs a person.
+  useEffect(
+    () =>
+      helm.on("windowSessions:showChild", ({ host, id }) =>
+        showChildRef.current(host, id),
+      ),
+    [],
   );
 
   const openTreeSession = useCallback(
@@ -3265,7 +3371,7 @@ export function App(): JSX.Element {
         // A child's tab comes forward if it has one here, else its parent's
         // does; only a child with neither opens a tab, on this press. Any other
         // session not open here opens in a tab here.
-        openSession(pressRow(LOCAL_HOST_KEY, sessions, sessionIdOf(id)).id);
+        showChild(LOCAL_HOST_KEY, sessionIdOf(id));
         return;
       }
       // Somebody else's session has no tab; its row in the sessions pane is
@@ -3273,7 +3379,7 @@ export function App(): JSX.Element {
       setSelectedLivePid(Number(id.slice("pid:".length)));
       openSessions();
     },
-    [openSession, openSessions, sessions, pressRow],
+    [showChild, openSessions],
   );
 
   /** What each host's group in the tree asks for, through that host. */
@@ -3294,7 +3400,7 @@ export function App(): JSX.Element {
       );
       if (session === undefined) return;
       // The same press as on this PC: the child's tab, else its parent's.
-      openRemoteSession(host, pressRow(host, there, session.id).id);
+      showChild(host, session.id);
     },
     onTogglePin: (host: string, path: string) =>
       host === LOCAL_HOST_KEY
@@ -3318,7 +3424,7 @@ export function App(): JSX.Element {
     if (ids.length === 0) return;
     const at = frontId === null ? -1 : ids.indexOf(frontId);
     const next = ids[(at + 1) % ids.length];
-    if (next !== undefined) openSession(sessionIdOf(next));
+    if (next !== undefined) showChild(LOCAL_HOST_KEY, sessionIdOf(next));
   };
 
   /**

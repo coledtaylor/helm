@@ -1,9 +1,12 @@
 import {
+  closeParentButton,
+  closeParentPlan,
   sessionLabel,
   withReportOf,
   type SessionActivityState,
   type SessionRecord,
-  type SessionsOverview
+  type SessionsOverview,
+  type UrgentState
 } from '@helm/core/types'
 import { CLAUDE_CODE_BACKEND } from '../../../../shared/host/backend'
 import type { HostConnection, HostSubscription } from '../../../../shared/host/client'
@@ -96,6 +99,21 @@ export type SessionsAdapters = HostAdapter[] & {
   show(ids: readonly number[]): void
   /** A tab closed with its session kept running: its terminal is no longer carried. */
   release(id: number): void
+  /**
+   * Watches session `id` on a stream of its own that opens `watch`-only: the
+   * host sends its screen as it is and then its live output, and takes no keys
+   * and no size from it, so the child is neither typed into nor resized. For a
+   * running session this window carries no terminal of, which a peek shows.
+   * `closed` is called once when the host or the connection ends the stream;
+   * the returned function closes it from here and then says nothing.
+   */
+  peek(id: number, handlers: PeekHandlers): () => void
+}
+
+/** What a watch-only stream tells the window. */
+export interface PeekHandlers {
+  data(text: string): void
+  closed(reason: string | null): void
 }
 
 const isRunning = (record: SessionRecord): boolean => record.status === 'running'
@@ -196,6 +214,12 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
     for (const record of [...records.values()]) {
       if (isRunning(record) && !listed.has(record.id)) ended({ ...record, status: 'lost', exitCode: null })
     }
+  }
+
+  /** A session's state as the close question dots it: what the host last said it was doing. */
+  const stateOf = (session: SessionRecord): UrgentState => {
+    if (!isRunning(session)) return session.exitCode ? 'failed' : 'ended'
+    return states.find((state) => state.id === session.id)?.activity ?? 'running'
   }
 
   const sendFocus = (): void => {
@@ -428,15 +452,29 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
           // The host is named by the window: a client names its hosts.
           // A child's parent is told, and the question says so.
           const parent = entry.parentId == null ? undefined : records.get(entry.parentId)
+          // A parent's children end with it unless they were started to outlive it.
+          const plan = closeParentPlan([...records.values()], entry.id, stateOf)
           const agreed = await asking({
             kind: 'close-session',
             message: `“${sessionLabel(entry)}” is still running on ${hostName()}.`,
             detail:
               `Ending it stops the Claude Code session in ${entry.cwd}.` +
-              (parent === undefined ? '' : ` ${sessionLabel(parent)}, which started it, is told.`),
+              (parent === undefined ? '' : ` ${sessionLabel(parent)}, which started it, is told.`) +
+              (plan.ends.length === 0
+                ? ''
+                : ` ${plan.ends.length === 1 ? 'The session it started ends' : `The ${plan.ends.length} sessions it started end`} with it.`) +
+              (plan.outlives.length === 0
+                ? ''
+                : ` ${plan.outlives.length === 1 ? 'One was' : `${plan.outlives.length} were`} started to keep running and will.`),
             folder: entry.cwd,
-            confirmLabel: 'End session',
-            sessionNames: [sessionLabel(entry)]
+            confirmLabel: closeParentButton(plan.ends.length),
+            sessionNames: [sessionLabel(entry), ...plan.ends.map(({ child }) => sessionLabel(child))],
+            ...(plan.ends.length === 0 && plan.outlives.length === 0
+              ? {}
+              : {
+                  endingIds: plan.ends.map(({ child }) => child.id),
+                  outlivingIds: plan.outlives.map(({ child }) => child.id)
+                })
           })
           if (!agreed) return { closed: false }
         }
@@ -571,6 +609,38 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         if (record !== undefined) carry(record)
       }
     },
-    release
+    release,
+    peek: (id: number, handlers: PeekHandlers) => {
+      const connection = current
+      if (connection === null) {
+        queueMicrotask(() => handlers.closed(`${hostName()} is not connected.`))
+        return () => undefined
+      }
+      const decoder = new TextDecoder('utf-8')
+      let open = true
+      const stream = connection.openStream(
+        'session:data',
+        { id, watch: true },
+        {
+          data: (bytes) => {
+            if (!open) return
+            const text = decoder.decode(bytes, { stream: true })
+            if (text !== '') handlers.data(text)
+          },
+          close: (reason) => {
+            if (!open) return
+            open = false
+            const rest = decoder.decode()
+            if (rest !== '') handlers.data(rest)
+            handlers.closed(reason)
+          }
+        }
+      )
+      return () => {
+        if (!open) return
+        open = false
+        stream.close()
+      }
+    }
   })
 }

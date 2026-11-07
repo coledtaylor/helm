@@ -9,7 +9,7 @@ import { createPluginsAdapter } from './plugins'
 import { createProfilesAdapter } from './profiles'
 import type { RemoteHostsStore } from './remoteHosts'
 import { createRouter, type HostAdapter } from './router'
-import { createNoticesAdapter } from './notices'
+import { createNoticesAdapter, type NoticesStore } from './notices'
 import { createWorktreesAdapter } from './worktrees'
 import { createSessionsAdapters, type SessionsAdapters, type WindowFront } from './sessions'
 import { createWorkspaceAdapter, type WorkspaceAdapter } from './workspace'
@@ -48,7 +48,9 @@ export interface HostBridge {
   /** The window's own connection to this host. */
   readonly link: PageLink
   /** Which of this host's sessions have a tab in this window, for its connection to carry. */
-  readonly sessions: Pick<SessionsAdapters, 'show' | 'release' | 'adopt'>
+  readonly sessions: Pick<SessionsAdapters, 'show' | 'release' | 'adopt' | 'peek'>
+  /** The notices standing on this host, and what stood when the window's connection opened. */
+  readonly notices: NoticesStore
   readonly workspace: WorkspaceAdapter
   /** Every adapter behind the router. */
   readonly adapters: readonly HostAdapter[]
@@ -146,6 +148,7 @@ export function createHostBridge(
     ...(local ? {} : { hostName: deps.name }),
     log: deps.log
   })
+  const notices = createNoticesAdapter(link, deps.log)
   const adapters: HostAdapter[] = [
     createHistoryAdapter(link, deps.log),
     workspace,
@@ -153,7 +156,7 @@ export function createHostBridge(
     createConfigAdapter({ link, scanned: () => workspace.scannedProjects(), log: deps.log }),
     createFilesAdapter(link, deps.log),
     createWorktreesAdapter(link),
-    createNoticesAdapter(link, deps.log),
+    notices,
     ...sessions,
     // A session a plugin asked for, started after the user's yes, opens as one of the window's tabs.
     createPluginsAdapter({ link, host, own, adopt: (row) => sessions.adopt(row), log: deps.log })
@@ -165,7 +168,7 @@ export function createHostBridge(
     hostInternal: isHostInternal,
     log: deps.log
   })
-  return { host, helm, link, sessions, workspace, adapters }
+  return { host, helm, link, sessions, notices: notices.store, workspace, adapters }
 }
 
 export interface HostBridges {

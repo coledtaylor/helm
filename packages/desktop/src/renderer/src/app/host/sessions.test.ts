@@ -241,6 +241,130 @@ describe('sessions over the window’s own connection', () => {
     ])
   })
 
+  describe('closing a parent', () => {
+    /** Parent 7 with children 8 and 9 (which outlives it), 8's child 10, and 11, which already ended. */
+    const family = [
+      row({ id: 7, name: 'lead' }),
+      row({ id: 8, name: 'worker', parentId: 7 }),
+      row({ id: 9, name: 'watcher', parentId: 7, outlive: true }),
+      row({ id: 10, name: 'tester', parentId: 8 }),
+      row({ id: 11, name: 'old', parentId: 7, status: 'exited', exitCode: 0 })
+    ]
+
+    it('S18: names the children that end with it and the one that outlives it, counts what it ends on its button, and asks once', async () => {
+      const { adapters, connection } = world({ listed: family })
+      const questions = hear(adapters, 'session:confirm')
+      await ask(adapters, 'session:list')
+      adapters.show([7])
+      const closing = ask(adapters, 'session:close', { id: 7 })
+      await settle()
+      expect(questions).toEqual([
+        expect.objectContaining({
+          kind: 'close-session',
+          message: '“lead” is still running on this PC’s host.',
+          confirmLabel: 'End 3 sessions',
+          sessionNames: ['lead', 'worker', 'tester'],
+          endingIds: [8, 10],
+          outlivingIds: [9]
+        })
+      ])
+      expect((questions[0] as SessionConfirmRequest).detail).toContain('The 2 sessions it started end with it.')
+      expect((questions[0] as SessionConfirmRequest).detail).toContain('One was started to keep running and will.')
+      expect(connection.payloads('session:close')).toEqual([])
+
+      // S19: the host is told to end the parent, which ends what the question named and leaves the rest.
+      send(adapters, 'session:confirmed', { id: (questions[0] as SessionConfirmRequest).id, agreed: true })
+      await expect(closing).resolves.toEqual({ closed: true })
+      expect(connection.payloads('session:close')).toEqual([{ id: 7, force: true }])
+    })
+
+    it('S18: counts only the parent when it started no one, and names no ids', async () => {
+      const { adapters } = world({ listed: [family[0]!, family[4]!] })
+      const questions = hear(adapters, 'session:confirm')
+      await ask(adapters, 'session:list')
+      const closing = ask(adapters, 'session:close', { id: 7 })
+      await settle()
+      expect(questions[0]).toEqual(expect.objectContaining({ confirmLabel: 'End session', sessionNames: ['lead'] }))
+      expect(questions[0]).not.toHaveProperty('endingIds')
+      send(adapters, 'session:confirmed', { id: (questions[0] as SessionConfirmRequest).id, agreed: false })
+      await expect(closing).resolves.toEqual({ closed: false })
+    })
+
+    it('S19: reads the host’s own question for a parent another client closed with its ids, and answers it', async () => {
+      const { adapters, connection } = world({ listed: family })
+      const questions = hear(adapters, 'session:confirm')
+      await ask(adapters, 'session:list')
+      connection.push('session:confirm', {
+        id: 40,
+        kind: 'close-session',
+        message: '“lead” is still running on this PC’s host.',
+        detail: 'Ending it stops the Claude Code session in /work dir/app.',
+        confirmLabel: 'End 3 sessions',
+        sessionNames: ['lead', 'worker', 'tester'],
+        endingIds: [8, 10],
+        outlivingIds: [9]
+      })
+      expect(questions).toEqual([
+        expect.objectContaining({ confirmLabel: 'End 3 sessions', endingIds: [8, 10], outlivingIds: [9] })
+      ])
+      send(adapters, 'session:confirmed', { id: (questions[0] as SessionConfirmRequest).id, agreed: true })
+      await settle()
+      expect(connection.payloads('session:confirmed')).toEqual([{ id: 40, agreed: true }])
+    })
+  })
+
+  describe('a peek at a child', () => {
+    it('S4: watches the child on a stream of its own that opens watch-only, and draws its screen and live output', async () => {
+      const { adapters, connection } = world({ listed: [row({ id: 8, name: 'worker', parentId: 7 })] })
+      await ask(adapters, 'session:list')
+      const heard: string[] = []
+      const ended: Array<string | null> = []
+      adapters.peek(8, { data: (text) => heard.push(text), closed: (reason) => ended.push(reason) })
+      const [stream] = connection.streamsFor('session:data', 8)
+      expect(stream?.params).toEqual({ id: 8, watch: true })
+      stream?.send('\x1b[H\x1b[2Jscreen as it is')
+      stream?.send(new Uint8Array([0xe2, 0x9c]))
+      stream?.send(new Uint8Array([0x93]))
+      expect(heard).toEqual(['\x1b[H\x1b[2Jscreen as it is', '✓'])
+      expect(ended).toEqual([])
+    })
+
+    it('S4: sends the child no keys and no size, and carries no terminal of the window’s for it', async () => {
+      const { adapters, connection } = world({ listed: [row({ id: 8, name: 'worker', parentId: 7 })] })
+      await ask(adapters, 'session:list')
+      const stop = adapters.peek(8, { data: () => undefined, closed: () => undefined })
+      expect(connection.streamsFor('session:data', 8)).toHaveLength(1)
+      expect(connection.streamsFor('session:data', 8)[0]?.written).toEqual([])
+      expect(connection.payloads('session:resize')).toEqual([])
+      stop()
+      expect(connection.streamsFor('session:data', 8)[0]?.written).toEqual([])
+      expect(connection.payloads('session:resize')).toEqual([])
+    })
+
+    it('closes its stream from here without telling the peek, and tells it once when the host ends the stream', async () => {
+      const { adapters, connection } = world({ listed: [row({ id: 8, name: 'worker', parentId: 7 })] })
+      await ask(adapters, 'session:list')
+      const ended: Array<string | null> = []
+      const stop = adapters.peek(8, { data: () => undefined, closed: (reason) => ended.push(reason) })
+      stop()
+      expect(connection.streamsFor('session:data', 8)[0]?.closed).toBe(true)
+      expect(ended).toEqual([])
+
+      adapters.peek(8, { data: () => undefined, closed: (reason) => ended.push(reason) })
+      connection.streamsFor('session:data', 8)[1]?.end(null)
+      connection.streamsFor('session:data', 8)[1]?.end(null)
+      expect(ended).toEqual([null])
+    })
+
+    it('says so when there is no connection to watch on, and opens no stream', async () => {
+      const { adapters } = world({ connection: null })
+      const ended: Array<string | null> = []
+      adapters.peek(8, { data: () => undefined, closed: (reason) => ended.push(reason) })
+      await settle()
+      expect(ended).toEqual(['this PC’s host is not connected.'])
+    })
+  })
+
   it('keeps a session running when the user declines in the window, and tells the host nothing', async () => {
     const { adapters, connection } = world({ listed: [row()] })
     const questions = hear(adapters, 'session:confirm')

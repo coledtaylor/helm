@@ -537,6 +537,18 @@ export interface SessionConfirmRequest {
   outlivingIds?: number[]
 }
 
+/** What the OS notification for a child that needs a person says, and which child a click on it shows. */
+export interface NeedsYouNotification {
+  /** The host the child runs on: `LOCAL_HOST_KEY` for this PC's, otherwise a host's id. */
+  host: string
+  /** The child's row id on that host. */
+  id: number
+  /** Names the child and says it needs the user. */
+  title: string
+  /** What it waits on, and the session that started it. */
+  body: string
+}
+
 /** The answer to the quit question: end the sessions and quit, keep them running and quit, or stay. */
 export type QuitAnswer = 'end' | 'keep' | 'cancel'
 
@@ -1964,6 +1976,11 @@ export interface IpcSends {
    * notification, which only main can.
    */
   'windowSessions:notify': SessionRecord
+  /**
+   * A child began to need a person while the window is not in front: the window says what the notification names, and
+   * main shows it. A click on it brings the window forward and comes back as `windowSessions:showChild`.
+   */
+  'windowSessions:needsYou': NeedsYouNotification
   /** The window's answer to main's `windowSessions:quitConfirm`. */
   'windowSessions:quitConfirmed': { id: number; answer: QuitAnswer }
 
@@ -2025,6 +2042,11 @@ export interface IpcEvents {
   'windowSessions:quitConfirm': SessionConfirmRequest
   /** A click on a session's notification: bring its tab forward. */
   'windowSessions:activate': { id: number }
+  /**
+   * A click on the notification for a child that needs a person: the window shows the child where it is on screen
+   * here, or in its peek, as a press on its row in the Sessions tree does.
+   */
+  'windowSessions:showChild': { host: string; id: number }
   /** What the hidden plugin host window reports of the background pages it runs. */
   'pluginBackground:changed': PluginBackgroundReport[]
   /** Where the copy of Helm's own database into the local host stands, after each change. */
@@ -2460,6 +2482,7 @@ export const SEND_CHANNELS = Object.keys({
   'pterm:resize': true,
   'session:confirmed': true,
   'windowSessions:notify': true,
+  'windowSessions:needsYou': true,
   'windowSessions:quitConfirmed': true,
   'pluginWindow:ask': true,
   'pluginWindow:answer': true,
@@ -2481,6 +2504,7 @@ export const EVENT_CHANNELS = Object.keys({
   'ownSettings:changed': true,
   'windowSessions:quitConfirm': true,
   'windowSessions:activate': true,
+  'windowSessions:showChild': true,
   'pluginBackground:changed': true,
   'ownData:changed': true,
   'remoteHosts:changed': true,

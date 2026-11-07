@@ -123,6 +123,23 @@ export const hostSessionTabs = {
   release: (id: number, host: string = LOCAL_HOST_KEY): void => hostBridges.hostBridge(host).sessions.release(id)
 }
 
+/**
+ * Watches one of a host's sessions on a stream of its own that is watch-only
+ * (`peek` in `host/sessions.ts`); returns the way to close it.
+ */
+export const hostSessionPeek = (
+  host: string,
+  id: number,
+  handlers: Parameters<HostBridge['sessions']['peek']>[1]
+): (() => void) => hostBridges.hostBridge(host).sessions.peek(id, handlers)
+
+/** The notices standing on a host and the list While you were away holds (`host/notices.ts`). */
+export const hostNotices = (host: string): HostBridge['notices'] => hostBridges.hostBridge(host).notices
+
+/** Calls `listener` with every host's notices, this PC's first, and each made from now on. Returns the stop. */
+export const eachHostNotices = (listener: (host: string, notices: HostBridge['notices']) => void): (() => void) =>
+  hostBridges.each((bridge: HostBridge) => listener(bridge.host, bridge.notices))
+
 /** The window's areas that reach this PC's host over its own connection. */
 export const hostAdapters: readonly HostAdapter[] = local.adapters
 

@@ -31,20 +31,66 @@ export function noticeFromHost(notice: P.StandingNotice): StandingNotice {
   }
 }
 
-export function createNoticesAdapter(link: HostReach, log: (line: string) => void = () => undefined): HostAdapter {
+/** One notice as this window tells it apart from the same host's next one with its id: a child that waits again begins a new notice. */
+export const noticeKey = (notice: Pick<StandingNotice, 'id' | 'since'>): string => `${notice.id}\n${notice.since}`
+
+/**
+ * What a window holds of one host's notices: those standing now, and those
+ * that stood when its connection to the host opened and still do (While you
+ * were away), which are none once the window closed that list.
+ */
+export interface NoticesView {
+  /** Every notice standing now. */
+  notices: readonly StandingNotice[]
+  /** The ones standing when the connection opened that still stand; empty once closed in this window. */
+  away: readonly StandingNotice[]
+  /** The `noticeKey` of each notice that stood when the connection opened, kept after it resolves. */
+  atConnect: ReadonlySet<string>
+}
+
+export interface NoticesStore {
+  get(): NoticesView
+  /** Called on every change; also asks for the host's list. Returns the stop. */
+  subscribe(listener: () => void): () => void
+  /** Closes the While you were away list in this window, until the next connect. */
+  closeAway(): void
+}
+
+export type NoticesAdapter = HostAdapter & { store: NoticesStore }
+
+export function createNoticesAdapter(link: HostReach, log: (line: string) => void = () => undefined): NoticesAdapter {
   const listeners = new Set<(notices: StandingNotice[]) => void>()
+  const watchers = new Set<() => void>()
   let subscription: HostSubscription | null = null
   let latest: StandingNotice[] | null = null
+  let atConnect: ReadonlySet<string> = new Set()
+  let awayClosed = false
+  let view: NoticesView = { notices: [], away: [], atConnect }
 
   const host = (): Promise<HostConnection> => link.connection()
+  const refresh = (): void => {
+    const notices = latest ?? []
+    view = {
+      notices,
+      away: awayClosed ? [] : notices.filter((notice) => atConnect.has(noticeKey(notice))),
+      atConnect
+    }
+    for (const watcher of [...watchers]) watcher()
+  }
   const take = (listed: readonly P.StandingNotice[]): void => {
+    const first = latest === null
     latest = listed.map(noticeFromHost)
+    if (first) atConnect = new Set(latest.map(noticeKey))
     for (const listener of listeners) listener(latest)
+    refresh()
   }
 
   link.onConnected((connection) => {
     subscription?.unsubscribe()
     latest = null
+    atConnect = new Set()
+    awayClosed = false
+    refresh()
     subscription = connection.subscribe('notices:changed', {
       snapshot: take,
       event: take,
@@ -52,7 +98,24 @@ export function createNoticesAdapter(link: HostReach, log: (line: string) => voi
     })
   })
 
+  const store: NoticesStore = {
+    get: () => view,
+    subscribe: (listener) => {
+      watchers.add(listener)
+      void host().catch(() => undefined)
+      return () => {
+        watchers.delete(listener)
+      }
+    },
+    closeAway: () => {
+      if (awayClosed) return
+      awayClosed = true
+      refresh()
+    }
+  }
+
   return {
+    store,
     requests: {
       'notices:dismiss': async ({ id }): Promise<void> => {
         await (await host()).request('notices:dismiss', { id })

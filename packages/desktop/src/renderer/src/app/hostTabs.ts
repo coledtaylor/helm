@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   LOCAL_HOST_KEY,
+  childMark,
   closeTab,
   hostOf,
   paneId,
   sessionRef,
   shownSessionIds,
+  type ChildMember,
+  type CloseParentPlan,
   type FamilyMember,
   type FamilyRoomOf,
   type PaneLayout,
-  type PaneRef
+  type PaneRef,
+  type UrgentState
 } from '@helm/core/types'
 import type { HelmBridge, SessionConfirmRequest } from '../../../shared/ipc'
 import type { HostWorkspace } from './useHostWorkspaces'
@@ -184,6 +188,27 @@ export function useSessionConfirm(reach: HostBridgeReach): SessionConfirm {
     [ask]
   )
   return { ask, answer }
+}
+
+/**
+ * The children a close question names: those that end with the session whose
+ * tab closes (`endingIds`), and those started to outlive it (`outlivingIds`),
+ * each with the dot or glyph it wears. The ids are the host's, from its own
+ * question for a close another client made and from the window's for its own,
+ * so the dialog draws the same list for both. A child this window does not list
+ * is left out: it has no name to show.
+ */
+export function confirmChildren<T extends ChildMember>(
+  request: Pick<SessionConfirmRequest, 'endingIds' | 'outlivingIds'>,
+  sessions: readonly T[],
+  stateOf: (session: T) => UrgentState | null
+): CloseParentPlan<T> {
+  const named = (ids: readonly number[] | undefined): CloseParentPlan<T>['ends'] =>
+    (ids ?? []).flatMap((id) => {
+      const child = sessions.find((session) => session.id === id)
+      return child === undefined ? [] : [{ child, mark: childMark(child, stateOf(child)) }]
+    })
+  return { ends: named(request.endingIds), outlives: named(request.outlivingIds) }
 }
 
 /** What Close tab, keep running lets go of (the host's stream, the terminal drawn from it) and the panes it changes. */

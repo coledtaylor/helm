@@ -26,7 +26,7 @@ import { createClipboardText } from './clipboard'
 import { nativeProfileDialogs } from './profiles'
 import { updateSettings, type Services } from './services'
 import type { WorkspaceService } from './host/workspace'
-import { registerConfirmAnswers, showExitNotification } from './host/confirm'
+import { registerConfirmAnswers, showExitNotification, showNeedsYouNotification } from './host/confirm'
 import { isClientOnly, isHostInternal } from '../shared/host/protocol'
 import type {
   EventChannel,
@@ -560,6 +560,10 @@ export function registerIpc(ctx: IpcContext): void {
     // screen; only main can show the OS notification.
     'windowSessions:notify': (record) => {
       showExitNotification(ctx.window, record)
+    },
+    // A child began to need a person while the window is not in front.
+    'windowSessions:needsYou': (notification) => {
+      showNeedsYouNotification(ctx.window, notification)
     }
   }
 
