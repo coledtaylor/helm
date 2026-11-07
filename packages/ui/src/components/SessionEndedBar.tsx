@@ -60,10 +60,13 @@ export function SessionEndedBar({
       data-session-ended={lost === undefined ? 'ended' : 'lost'}
       className={cn(
         'flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-[11px]',
+        // The tint is a gradient over an opaque `surface`: the pane behind the
+        // bar is the terminal's own dark ground in every theme, and a plain
+        // translucent fill would read as near-black red in a light theme.
         failed
-          ? 'border-danger/30 bg-danger/10 text-danger'
+          ? 'border-danger/30 bg-surface bg-linear-to-r from-danger/10 to-danger/10 text-danger'
           : lost !== undefined
-            ? 'border-warn/30 bg-warn/10 text-warn'
+            ? 'border-warn/30 bg-surface bg-linear-to-r from-warn/10 to-warn/10 text-warn'
             : 'border-border bg-surface-sunken text-fg-muted'
       )}
     >

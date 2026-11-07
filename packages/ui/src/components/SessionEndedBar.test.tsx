@@ -29,6 +29,25 @@ describe('SessionEndedBar', () => {
     expect(bar.className).toContain('text-danger')
   })
 
+  it('lays a failed or lost bar\'s tint over an opaque surface, so a light theme does not show the terminal\'s dark ground through it', () => {
+    const { rerender } = render(<SessionEndedBar exitCode={5} durationMs={null} onClose={vi.fn()} />)
+    const failed = screen.getByRole('status').className
+    expect(failed).toContain('bg-surface ')
+    expect(failed).toContain('from-danger/10')
+    expect(failed).not.toMatch(/(^| )bg-danger\/10/)
+    rerender(
+      <SessionEndedBar
+        exitCode={null}
+        durationMs={null}
+        onClose={vi.fn()}
+        lost={{ hostName: 'this PC’s host', restoreReady: false, onRestore: vi.fn() }}
+      />
+    )
+    const lost = screen.getByRole('status').className
+    expect(lost).toContain('bg-surface ')
+    expect(lost).toContain('from-warn/10')
+  })
+
   it('says a session the host ended was stopped, in the ended tone, whatever number the system gave its termination', () => {
     render(<SessionEndedBar exitCode={2147483647} durationMs={4_000} onClose={vi.fn()} stopped />)
     const bar = screen.getByRole('status')
