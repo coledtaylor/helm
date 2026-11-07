@@ -1,10 +1,11 @@
 import type { JSX, MouseEvent, ReactNode } from 'react'
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
 import { isProjectPinned, mostPressingState } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import type { SessionState } from '../lib/sessionstate'
 import { EmptyState as EmptyWell } from './EmptyState'
+import { LimitNotice } from './LimitNotice'
 import { Menu, type MenuAnchor, type MenuEntry } from './Menu'
 import {
   baseName,
@@ -38,6 +39,8 @@ export interface TreeSession {
   parentName?: string | undefined
   /** A command the session that started it ran as a child, drawn with a terminal glyph in place of a dot. */
   command?: boolean | undefined
+  /** A refused start of this session, drawn as one line under its children. */
+  notice?: TreeNotice | undefined
 }
 
 /**
@@ -128,7 +131,34 @@ export interface SessionTreeProps {
    * once there are others, the Add a host line at the end of the list does it.
    */
   onAddHostMenu?: (() => void) | undefined
+  /** What the limit notice under a parent's children does. Absent, a notice's buttons do nothing. */
+  noticeActions?: TreeNoticeActions | undefined
 }
+
+/**
+ * What a parent's refused start left under its children: the host's sentence
+ * naming the limit and what holds it, and for the starts limit how many more
+ * starts Allow adds. `key` names the notice to the window's actions.
+ */
+export interface TreeNotice {
+  key: string
+  text: string
+  allowMore: number | null
+}
+
+export interface TreeNoticeActions {
+  onAllowMore: (key: string) => void
+  onSettings: () => void
+  onDismiss: (key: string) => void
+}
+
+const NO_NOTICE_ACTIONS: TreeNoticeActions = {
+  onAllowMore: () => undefined,
+  onSettings: () => undefined,
+  onDismiss: () => undefined
+}
+
+const TreeNoticeContext = createContext<TreeNoticeActions>(NO_NOTICE_ACTIONS)
 
 /** A session's row, by its id, or a project's, by its path (on `host`, this PC's when absent). */
 export type TreeReveal =
@@ -281,7 +311,8 @@ export function SessionTree({
   hostActions,
   localName = 'This PC',
   localKey = 'local',
-  onAddHostMenu
+  onAddHostMenu,
+  noticeActions
 }: SessionTreeProps): JSX.Element {
   const [query, setQuery] = useState('')
   const [listMenu, setListMenu] = useState<MenuAnchor | null>(null)
@@ -322,7 +353,7 @@ export function SessionTree({
   )
 
   return (
-    <>
+    <TreeNoticeContext.Provider value={noticeActions ?? NO_NOTICE_ACTIONS}>
       <div className="shrink-0 px-2 pb-1.5">
         <input
           value={query}
@@ -418,7 +449,7 @@ export function SessionTree({
           onDismiss={() => setListMenu(null)}
         />
       )}
-    </>
+    </TreeNoticeContext.Provider>
   )
 }
 
@@ -640,6 +671,7 @@ function HostTree({
   // for the same reason is absent-means-open: a child that starts after this
   // render should show, not hide behind a key nothing has written yet.
   const [foldedFamilies, setFoldedFamilies] = useState<ReadonlySet<string>>(new Set())
+  const noticeActions = useContext(TreeNoticeContext)
   const [pinsFolded, setPinsFolded] = useState(false)
   const groups = useMemo(() => groupProjects(discovery, pinnedPaths), [discovery, pinnedPaths])
   const pins = useMemo(() => resolvePins(discovery, pinnedPaths), [discovery, pinnedPaths])
@@ -767,6 +799,16 @@ function HostTree({
           started.map((child, at) =>
             renderSession(child, indent + FAMILY_STEP_PX, { last: at === started.length - 1, through })
           )}
+        {session.notice !== undefined && expanded !== false && (
+          <LimitNotice
+            text={session.notice.text}
+            allowMore={session.notice.allowMore}
+            indent={indent + FAMILY_STEP_PX}
+            onAllowMore={() => noticeActions.onAllowMore(session.notice!.key)}
+            onSettings={noticeActions.onSettings}
+            onDismiss={() => noticeActions.onDismiss(session.notice!.key)}
+          />
+        )}
       </Fragment>
     )
   }

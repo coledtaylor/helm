@@ -104,7 +104,10 @@ import {
   BROWSER_ZOOM,
   BrowserPages,
   BrowserPane,
+  AwayList,
   ChildPeek,
+  type TreeNoticeActions,
+  NeedsYouToast,
   cn,
   CodeIcon,
   CommandPalette,
@@ -160,6 +163,7 @@ import {
   hasPrimaryModifier,
   hostOs,
   isMac,
+  overlayMounted,
   overlayOpen,
   PaneActions,
   PaneCrumb,
@@ -225,6 +229,11 @@ import { PeekTerminal } from "./PeekTerminal";
 import { chipKey, markLabel, peekFacts, peekPlace } from "./peekView";
 import { useNeedsYou, type HostAttention } from "./needsYou";
 import { hostNoticesSource } from "./noticesSource";
+import {
+  awayRows,
+  limitNoticesByParent,
+  toastDetail,
+} from "./attentionView";
 import { useHostNotices } from "./useNotices";
 import type { NoticesView } from "./host/notices";
 import type { PanelActionIcon } from "@coledtaylor/helm-plugin-sdk";
@@ -3110,6 +3119,20 @@ export function App(): JSX.Element {
    * uses, so the tree and the warning cannot disagree about whether two paths
    * are one folder.
    */
+  /** What each host's notices say of the children that need a person and the starts it refused. */
+  const noticeViews = useHostNotices(hostNoticesSource);
+  /** Each host's parents that a limit refused, with the line they show under their children. */
+  const limitNotices = useMemo(
+    () =>
+      new Map(
+        [...noticeViews].map(([host, view]) => [
+          host,
+          limitNoticesByParent(view.notices, (notice) => `${host}\n${notice.id}`),
+        ]),
+      ),
+    [noticeViews],
+  );
+
   const visibleIds = new Set(visible.map(paneId));
   const tree = ((): {
     byPath: Map<string, TreeSession[]>;
@@ -3144,6 +3167,7 @@ export function App(): JSX.Element {
         outside: false,
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
+        notice: limitNotices.get(LOCAL_HOST_KEY)?.get(session.id),
       };
     };
 
@@ -3226,6 +3250,7 @@ export function App(): JSX.Element {
         outside: false,
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
+        notice: limitNotices.get(host.id)?.get(session.id),
       };
     };
     for (const { session, row } of treeEntries(listed, rowOf)) {
@@ -3338,7 +3363,6 @@ export function App(): JSX.Element {
   );
 
   /** What each host's notices and listed sessions say of the children that need a person. */
-  const noticeViews = useHostNotices(hostNoticesSource);
   const attentionHosts = useMemo<HostAttention<SessionRecord>[]>(
     () =>
       [...sessionsByHost].map(([host, there]) => ({
@@ -3348,7 +3372,7 @@ export function App(): JSX.Element {
       })),
     [sessionsByHost, noticeViews],
   );
-  useNeedsYou({
+  const needsYou = useNeedsYou({
     hosts: attentionHosts,
     layout: open,
     scope: placeScope,
@@ -3388,6 +3412,107 @@ export function App(): JSX.Element {
       ),
     [],
   );
+
+  /** Open as tab: the child gets a tab in its parent's pane strip, or in the focused pane. */
+  const openChildAsTab = useCallback(
+    (host: string, id: number) => {
+      const child = sessionsByHost.get(host)?.find((each) => each.id === id);
+      if (child !== undefined)
+        commit((current) => openChildTab(current, host, child));
+    },
+    [sessionsByHost, commit],
+  );
+
+  /** The limit notice under a parent's children: Allow more, Settings › Agents and Dismiss. */
+  const noticeActions: TreeNoticeActions = (() => {
+    const find = (key: string) => {
+      const at = key.indexOf("\n");
+      const host = key.slice(0, at);
+      const notice = noticeViews
+        .get(host)
+        ?.notices.find((each) => each.id === key.slice(at + 1));
+      return notice === undefined ? null : { host, notice };
+    };
+    return {
+      onAllowMore: (key) => {
+        const found = find(key);
+        if (found !== null)
+          void hostNoticesSource
+            .allowMore(found.host, found.notice.parentId)
+            .catch(() => undefined);
+      },
+      onSettings: () => openSettings("agents"),
+      onDismiss: (key) => {
+        const found = find(key);
+        if (found !== null)
+          void hostNoticesSource
+            .dismiss(found.host, found.notice.id)
+            .catch(() => undefined);
+      },
+    };
+  })();
+
+  /**
+   * The needs-you toasts and While you were away, in one stack at the window's
+   * left edge over the rail and the sidebar, where no browser view reaches. With
+   * the sidebar hidden the stack is over the panes, so it stands the page down.
+   */
+  const awayLists = [...noticeViews]
+    .filter(([, view]) => view.away.length > 0)
+    .map(([host, view]) => ({
+      host,
+      name:
+        host === LOCAL_HOST_KEY
+          ? LOCAL_HOST_NAME
+          : (listedHosts.find((each) => each.id === host)?.name ?? host),
+      rows: awayRows(view.away, {
+        show: (id) => showChild(host, id),
+        open: (id) => openChildAsTab(host, id),
+        dismiss: (id) => {
+          void hostNoticesSource.dismiss(host, id).catch(() => undefined);
+        },
+      }),
+    }));
+  const attentionShowing = needsYou.toasts.length > 0 || awayLists.length > 0;
+  useEffect(
+    () => (attentionShowing && !sidebarShown ? overlayMounted() : undefined),
+    [attentionShowing, sidebarShown],
+  );
+  const attentionStack = attentionShowing ? (
+    <div
+      data-attention-stack
+      className="pointer-events-none fixed bottom-8 left-2 z-40 flex flex-col gap-2"
+    >
+      {awayLists.map((list) => (
+        <AwayList
+          key={list.host}
+          host={list.name}
+          rows={list.rows}
+          onClose={() => hostNoticesSource.closeAway(list.host)}
+        />
+      ))}
+      {needsYou.toasts.map((toast) => (
+        <NeedsYouToast
+          key={toast.key}
+          name={toast.childName}
+          detail={toastDetail(toast)}
+          action={{
+            label: toast.action === "show" ? "Show" : "Peek",
+            onPress: () => {
+              if (toast.action === "show") showChild(toast.host, toast.childId);
+              else peek.store.open(toast.host, toast.childId, { kind: "row" });
+              needsYou.closeToast(toast.key);
+            },
+          }}
+          onOpen={() => {
+            openChildAsTab(toast.host, toast.childId);
+            needsYou.closeToast(toast.key);
+          }}
+          onClose={() => needsYou.closeToast(toast.key)}
+        />
+      ))}
+    </div>
+  ) : null;
 
   const openTreeSession = useCallback(
     (id: string) => {
@@ -5595,6 +5720,7 @@ export function App(): JSX.Element {
             hostActions={treeHostActions}
             localName={LOCAL_HOST_LABEL}
             localKey={LOCAL_HOST_KEY}
+            noticeActions={noticeActions}
             {...sessionTreeHostProps({
               hosts: treeHosts,
               onAddHost: () => setAddingHost(true),
@@ -5991,6 +6117,7 @@ export function App(): JSX.Element {
         )}
 
         {childPeek}
+        {attentionStack}
         {harnessDialog}
         {templateDialogs}
         {confirmDialog}

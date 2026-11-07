@@ -974,6 +974,34 @@ overrides the gate; keep it.
   and the foot: "Watching only. Open it to type." in `fg-subtle`, Stop in
   `danger` (it asks first, as stopping any session does, and the peek stays up
   for the question) and Open in the accent outline.
+
+  **A child that needs a person has a toast, and a window that connects to a
+  host with notices standing has While you were away.** Both are cards on
+  `surface-raised` with a `border-strong` hairline, `rounded-well` and no
+  shadow, 296px wide, drawn in one stack at the window's left edge, 8px in and
+  just above the status bar, over the rail and the sidebar. That is where no
+  browser view reaches, so they are not overlays and do not stand the page down;
+  with the sidebar hidden the stack is over the panes and does stand it down.
+  The toast has a 6px `warn` dot, "worker-2 needs you" in 12.5px Inter 500, a
+  close button at the end, a `fg-muted` 12px sentence (what it waits on and
+  who started it), and Show (a child in a shrunk header) or Peek (a child with
+  nowhere on screen) beside Open as tab in the accent outline. A child shown as
+  a card gets no toast: its warn edge says it. While you were away on the
+  host's name has its close button in the header and a hairline-topped row for
+  each notice: a `warn` dot (`danger` for an error), what it is about in 12.5px
+  `fg`, the sentence in 11.5px `fg-muted`, and Peek and Open for a child that
+  needs you or Dismiss for a refused start or an error. Its close button closes
+  it in this window only. The frames draw the stack at the right edge and the
+  list 372px wide; here both are 296px at the left so that neither can sit
+  under a browser view.
+
+  **A refused start leaves a one-line notice under the parent's children in the
+  Sessions tree.** It sits at the children's indent on `surface-sunken` with a
+  `border` hairline and `rounded-well`, 11.5px `fg-muted` with "Limit reached."
+  in `fg`, then the host's sentence naming the limit and what holds it, and
+  below it the buttons: Allow 16 more (the starts limit only, in the accent
+  outline, for that parent alone), Settings › Agents and a quiet Dismiss.
+  Pressing Allow removes the notice and lets the parent start again.
 - **Agent worktrees**: a project page for a folder on this PC lists the
   checkouts Floti made for its agents in a section of its own, under the
   sections above it and shown only when the repository has any. One row each:

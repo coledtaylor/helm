@@ -166,6 +166,9 @@ export {
   type PaneGroupProps
 } from './components/PaneGroup'
 export { ChildMarkIcon, type ChildMarkView } from './components/ChildMark'
+export { AwayList, type AwayListProps, type AwayRowView, type AwayTone } from './components/AwayList'
+export { LimitNotice, type LimitNoticeProps } from './components/LimitNotice'
+export { NeedsYouToast, type NeedsYouToastProps } from './components/NeedsYouToast'
 export { ChildPeek, type ChildPeekProps, type PeekTone } from './components/ChildPeek'
 export {
   ChildHeader,
@@ -196,6 +199,8 @@ export {
   type SessionTreeProps,
   type TreeHost,
   type TreeHostActions,
+  type TreeNotice,
+  type TreeNoticeActions,
   type TreeReveal,
   type TreeSession
 } from './components/SessionTree'
@@ -246,7 +251,7 @@ export {
 } from './lib/copyFeedback'
 // Whether a dialog is up, for anything that has to get out of its way - the
 // browser pane's `WebContentsView` first. `Overlay` is the only writer.
-export { overlayOpen, subscribeOverlay, useOverlayOpen } from './lib/overlay'
+export { overlayMounted, overlayOpen, subscribeOverlay, useOverlayOpen } from './lib/overlay'
 export {
   hasPrimaryModifier,
   hostOs,
