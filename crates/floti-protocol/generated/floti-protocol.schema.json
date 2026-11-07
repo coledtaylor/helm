@@ -8937,7 +8937,7 @@
       "description": "One hosted agent process, from spawn to exit.",
       "properties": {
         "argv": {
-          "description": "Arguments after the executable, as spawned.",
+          "description": "Arguments after the executable, as spawned. A command child's holds the\nshell program it ran through first, then its arguments.",
           "items": {
             "type": "string"
           },

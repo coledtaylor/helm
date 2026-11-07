@@ -518,13 +518,24 @@ fn new_row(
     backend: BackendId,
     origin: SessionOrigin,
 ) -> NewSessionRow {
+    // A command child's row names the shell its line ran through ahead of the
+    // arguments, so a client can say which one the user's shell was; every
+    // other session's argv is its arguments alone.
+    let program = origin
+        .parent
+        .as_ref()
+        .is_some_and(|parent| parent.command.is_some())
+        .then(|| spec.program.to_string_lossy().into_owned());
     NewSessionRow {
         name,
         cwd: spec.cwd.clone(),
-        argv: spec
-            .args
-            .iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
+        argv: program
+            .into_iter()
+            .chain(
+                spec.args
+                    .iter()
+                    .map(|arg| arg.to_string_lossy().into_owned()),
+            )
             .collect(),
         conversation_id,
         backend,

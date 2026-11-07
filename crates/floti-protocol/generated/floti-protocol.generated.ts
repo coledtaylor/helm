@@ -3012,7 +3012,8 @@ projectPath: string | null,
  */
 profileId: number | null, 
 /**
- * Arguments after the executable, as spawned.
+ * Arguments after the executable, as spawned. A command child's holds the
+ * shell program it ran through first, then its arguments.
  */
 argv: Array<string>, 
 /**

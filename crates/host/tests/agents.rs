@@ -4404,9 +4404,11 @@ async fn a_command_child_runs_in_the_callers_folder_through_the_users_shell_with
             line.contains("emit lines.mjs") && line.contains("--count 3"),
             "{line}"
         );
-        // The user's shell was given the line, with its own flags first.
-        assert!(child.argv.len() >= 2, "{child:?}");
-        assert!(child.argv[0].starts_with('-'), "{child:?}");
+        // The user's shell was given the line, with its own flags first, and
+        // the row names that shell's program ahead of them.
+        assert!(child.argv.len() >= 3, "{child:?}");
+        assert!(!child.argv[0].starts_with('-'), "{child:?}");
+        assert!(child.argv[1].starts_with('-'), "{child:?}");
         assert!(
             child
                 .argv

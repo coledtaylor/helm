@@ -51,7 +51,8 @@ pub struct SessionRecord {
     /// a deleted profile.
     #[ts(type = "number | null")]
     pub profile_id: Option<u64>,
-    /// Arguments after the executable, as spawned.
+    /// Arguments after the executable, as spawned. A command child's holds the
+    /// shell program it ran through first, then its arguments.
     pub argv: Vec<String>,
     /// The agent's own id for the conversation this session is having, or
     /// null. Assigned at launch where the backend lets Floti pick it (Claude
