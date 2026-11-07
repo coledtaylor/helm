@@ -69,6 +69,61 @@ describe('the peek', () => {
     expect(within(dialog).queryByText('Mode')).toBeNull()
   })
 
+  it('S24: a command child shows its command in fg, its facts in mono, no mode and no report, with Stop and Open', () => {
+    render(
+      <ChildPeek
+        {...peek({
+          name: 'tests',
+          mark: { glyph: 'command', state: 'running' },
+          state: { label: 'running', tone: 'idle' },
+          command: 'pnpm test',
+          runsIn: 'your shell, pwsh',
+          report: { state: 'done', text: 'never shown' }
+        })}
+      />
+    )
+    const dialog = screen.getByRole('dialog', { name: 'tests' })
+    expect(within(dialog).getByText('pnpm test').className).toContain('text-fg')
+    expect(within(dialog).getByText('pnpm test').className).toContain('font-mono')
+    expect(within(dialog).getByText('your shell, pwsh').className).toContain('font-mono')
+    expect(within(dialog).getByText('running').getAttribute('data-peek-state')).toBe('idle')
+    expect(dialog.querySelector('[data-peek-report]')).toBeNull()
+    expect(within(dialog).getByRole('button', { name: 'Stop' })).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: 'Open' })).toBeTruthy()
+  })
+
+  it('S24: a command whose shell the window cannot name has no Runs in row', () => {
+    render(<ChildPeek {...peek({ command: 'pnpm test', mark: { glyph: 'command', state: 'running' } })} />)
+    expect(screen.queryByText('Runs in')).toBeNull()
+  })
+
+  it('S25: an ended command says how it ended in its glyph tone and chip, keeps Open and has no Stop', () => {
+    for (const [state, tone, label, text] of [
+      ['ended', 'text-fg-subtle', 'exited 0', 'neutral'],
+      ['failed', 'text-danger', 'exited 2', 'danger']
+    ] as const) {
+      const { unmount } = render(
+        <ChildPeek
+          {...peek({
+            name: 'tests',
+            mark: { glyph: 'command', state },
+            state: { label, tone: text },
+            command: 'pnpm test',
+            runsIn: 'your shell, pwsh',
+            ended: true
+          })}
+        />
+      )
+      const dialog = screen.getByRole('dialog', { name: 'tests' })
+      expect(dialog.querySelector(`[data-child-command="${state}"]`)?.className).toContain(tone)
+      expect(within(dialog).getByText(label).getAttribute('data-peek-state')).toBe(text)
+      expect(within(dialog).getByText('Ended. Open shows its last screen.')).toBeTruthy()
+      expect(within(dialog).queryByRole('button', { name: 'Stop' })).toBeNull()
+      expect(within(dialog).getByRole('button', { name: 'Open' })).toBeTruthy()
+      unmount()
+    }
+  })
+
   it('S1: is 470px wide with a 150px screen, and its last report label is semibold', () => {
     render(<ChildPeek {...peek({ report: { state: 'done', text: 'Reviewed.' } })} />)
     const dialog = screen.getByRole('dialog')

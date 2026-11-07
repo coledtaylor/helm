@@ -165,7 +165,7 @@ describe('ConfirmSessionDialog closing a parent', () => {
   const ends = [
     { id: 2, name: 'reviewer', mark: { glyph: 'dot' as const, state: 'waiting' as const }, meta: 'reviewer · main' },
     { id: 3, name: 'worker', mark: { glyph: 'dot' as const, state: 'busy' as const }, meta: 'worker · agent/worker' },
-    { id: 4, name: 'tests', mark: { glyph: 'command' as const, state: 'running' as const }, meta: 'command' }
+    { id: 4, name: 'tests', mark: { glyph: 'command' as const, state: 'running' as const }, meta: 'command · pnpm test' }
   ]
   const outlives = [{ id: 5, name: 'watcher', mark: { glyph: 'dot' as const, state: 'idle' as const }, meta: 'worker · main' }]
 
@@ -182,7 +182,7 @@ describe('ConfirmSessionDialog closing a parent', () => {
     expect([...ending.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
       'reviewerreviewer · main',
       'workerworker · agent/worker',
-      'testscommand'
+      'testscommand · pnpm test'
     ])
     // The dot of a child that needs you is warn; a command wears the terminal glyph.
     expect(ending.querySelector('[data-confirm-child="2"] [data-child-dot="waiting"]')?.className).toContain('bg-warn')
@@ -199,6 +199,27 @@ describe('ConfirmSessionDialog closing a parent', () => {
     expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
     // The sessions are listed once, as children, not again as names.
     expect(dialog.querySelectorAll('li')).toHaveLength(3)
+  })
+
+  it('S27: a command child is listed with its terminal glyph and, at the right in mono, command · its command line, cut with an ellipsis and whole in its title', () => {
+    const meta = 'command · pnpm test --filter @helm/ui -- --reporter verbose --coverage --run packages/ui/src/components'
+    renderDialog({
+      sessionNames: ['api-refactor', 'tests'],
+      confirmLabel: 'End 2 sessions',
+      ends: [{ id: 4, name: 'tests', mark: { glyph: 'command', state: 'running' }, meta }]
+    })
+    const row = document.querySelector('[data-confirm-child="4"]')!
+    expect(row.querySelector('[data-child-command="running"]')?.className).toContain('text-success')
+    const cell = row.querySelector<HTMLElement>('[data-confirm-child-meta]')!
+    expect(cell.textContent).toBe(meta)
+    expect(cell.title).toBe(meta)
+    // Mono, at the right, and free to shrink so the ellipsis can take the overflow.
+    expect(cell.className).toContain('font-mono')
+    expect(cell.className).toContain('ml-auto')
+    expect(cell.className).toContain('truncate')
+    expect(cell.className).toContain('min-w-0')
+    expect(cell.className).not.toContain('shrink-0')
+    expect(screen.getByRole('button', { name: 'End 2 sessions' })).toBeTruthy()
   })
 
   it('names only the children that outlive it, in a sentence, when none ends', () => {

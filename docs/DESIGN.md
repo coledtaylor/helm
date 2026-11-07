@@ -989,7 +989,9 @@ overrides the gate; keep it.
   session**, and lists the children that end with it: a 26px row each on
   `surface-raised`, `rounded-raised`, 12.5px `fg`, with the child's dot or
   terminal glyph, its name, and at the end in 11px mono `fg-subtle` its role
-  and branch (`command` for a command). The sentence above the list reads
+  and branch ("reviewer · main"; "command · pnpm test" for a command, with the
+  command line cut by an ellipsis where it is longer than the room and the
+  whole line in the row's title). The sentence above the list reads
   "Ending it stops the Claude Code session in <folder>, and the 3 sessions it
   started, which end with it:". A child started to outlive its parent is not
   listed: one 12px `fg-muted` sentence under the list says it keeps running.
@@ -1019,7 +1021,9 @@ overrides the gate; keep it.
   focus goes back to the row or chip. Top to bottom: the child's mark, name and
   a state chip in the dot's tone, with the close button at the end; the facts as
   mono `fg-muted` 11px rows (an agent's Role, Folder, Branch and Mode; a
-  command's Command in `fg`, Folder, Branch and Runs in); its screen, live and
+  command's Command in `fg`, Folder, Branch and Runs in, "your shell, pwsh",
+  with no Mode and no report; its glyph and chip tone success while it runs,
+  `fg-subtle` and neutral once it exited 0, `danger` for any other code); its screen, live and
   read-only through the host's watch-only attach, 150px high on the terminal's
   ground, set in 11px mono at a line height of 1.5 and drawn at the child's own
   grid (the host says it with `session:size`; 120 by 32 when it cannot), cut at

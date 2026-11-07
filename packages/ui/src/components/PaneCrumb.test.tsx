@@ -79,6 +79,33 @@ describe('PaneCrumb chips', () => {
     expect(chips[0]?.className).not.toContain('text-warn')
   })
 
+  it('S26: an agent keeps its dot and each command’s glyph is toned success while it runs, fg-subtle once it exited 0 and danger for any other code', () => {
+    const { container } = render(
+      <PaneCrumb
+        place="helm"
+        chips={[
+          chip(),
+          chip({ chipKey: 'local:4', name: 'tests', mark: { glyph: 'command', state: 'running' }, stateLabel: 'running' }),
+          chip({ chipKey: 'local:5', name: 'lint', mark: { glyph: 'command', state: 'ended' }, stateLabel: 'exited 0' }),
+          chip({ chipKey: 'local:6', name: 'build', mark: { glyph: 'command', state: 'failed' }, stateLabel: 'exited 2' })
+        ]}
+      />
+    )
+    const chips = [...container.querySelectorAll<HTMLElement>('[data-crumb-chip]')]
+    expect(chips[0]?.querySelector('[data-child-dot]')).not.toBeNull()
+    expect(chips[1]?.querySelector('[data-child-command="running"]')?.className).toContain('text-success')
+    expect(chips[2]?.querySelector('[data-child-command="ended"]')?.className).toContain('text-fg-subtle')
+    expect(chips[3]?.querySelector('[data-child-command="failed"]')?.className).toContain('text-danger')
+    expect(chips.map((each) => each.getAttribute('aria-label'))).toEqual([
+      'reviewer, working, peek',
+      'tests, running, peek',
+      'lint, exited 0, peek',
+      'build, exited 2, peek'
+    ])
+    // The glyph is the chip’s lead, ahead of the name.
+    expect(chips[1]?.firstElementChild?.hasAttribute('data-child-command')).toBe(true)
+  })
+
   it('S7: pressing a chip opens its child’s peek, and says it has one open while it does', async () => {
     const onPress = vi.fn()
     const { rerender } = render(<PaneCrumb place="helm" chips={[chip({ onPress })]} />)

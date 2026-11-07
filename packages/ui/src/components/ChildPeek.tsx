@@ -35,7 +35,7 @@ export interface ChildPeekProps {
   mode: string | null
   /** Where a command child runs, when the window knows ("your shell, pwsh"). */
   runsIn?: string | undefined
-  /** What it last told its parent: its state ("done") and its words; null when it has told nothing. */
+  /** What it last told its parent: its state ("done") and its words; null when it has told nothing. A command child has no report. */
   report: { state: string; text: string } | null
   /** It has ended: the peek says so, and has no Stop. Its screen is the last one the window kept. */
   ended?: boolean | undefined
@@ -195,7 +195,7 @@ export function ChildPeek({
         {screen}
       </div>
 
-      {report !== null && (
+      {report !== null && command === undefined && (
         <div
           data-peek-report
           className="mx-3 mt-2 rounded-r-raised bg-accent-soft px-2.5 py-2 text-[11.5px] leading-[1.45] text-fg shadow-[inset_2px_0_0_var(--color-accent)]"

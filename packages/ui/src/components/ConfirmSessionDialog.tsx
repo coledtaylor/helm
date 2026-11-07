@@ -11,7 +11,7 @@ export interface ConfirmChild {
   name: string
   /** Its dot, or a terminal glyph for a command. */
   mark: ChildMarkView
-  /** At the right, in mono: its role and branch, or `command` for one that runs a command. */
+  /** At the right, in mono: its role and branch, or `command · ` and its command line for a command. */
   meta: string
 }
 
@@ -100,10 +100,19 @@ function ChildList({ kind, items }: { kind: 'ends'; items: readonly ConfirmChild
           className="flex h-[26px] items-center gap-2 rounded-raised bg-surface-raised px-2 text-[12.5px] text-fg"
         >
           <ChildMarkIcon mark={mark} />
-          <span className="min-w-0 truncate" title={name}>
+          <span className="max-w-[45%] shrink-0 truncate" title={name}>
             {name}
           </span>
-          <span className="ml-auto shrink-0 truncate font-mono text-[11px] text-fg-subtle">{meta}</span>
+          {/* The name keeps its room and what it is takes the rest, right-aligned: a
+              command line can be any length, so it ends in an ellipsis and its
+              title has it whole. */}
+          <span
+            data-confirm-child-meta
+            title={meta}
+            className="ml-auto min-w-0 truncate text-right font-mono text-[11px] text-fg-subtle"
+          >
+            {meta}
+          </span>
         </li>
       ))}
       {rest > 0 && (
