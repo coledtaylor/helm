@@ -214,7 +214,7 @@ import {
   type AddHostActions,
 } from "@helm/ui";
 import { sidebarFor, type SidebarView } from "./sidebarFor";
-import { pressTreeSession, treeEntries } from "./treeFamilies";
+import { commandRow, pressTreeSession, treeEntries } from "./treeFamilies";
 import type { PanelActionIcon } from "@coledtaylor/helm-plugin-sdk";
 import type {
   AppMode,
@@ -3128,6 +3128,7 @@ export function App(): JSX.Element {
         outside: false,
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
+        ...commandRow(session),
       };
     };
 
@@ -3210,6 +3211,7 @@ export function App(): JSX.Element {
         outside: false,
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
+        ...commandRow(session),
       };
     };
     for (const { session, row } of treeEntries(listed, rowOf)) {
@@ -4240,6 +4242,9 @@ export function App(): JSX.Element {
         agentChildrenPerParent:
           settings?.agentChildrenPerParent ??
           DEFAULT_SETTINGS.agentChildrenPerParent,
+        agentCommandsPerParent:
+          settings?.agentCommandsPerParent ??
+          DEFAULT_SETTINGS.agentCommandsPerParent,
         agentSessionsPerHost:
           settings?.agentSessionsPerHost ??
           DEFAULT_SETTINGS.agentSessionsPerHost,

@@ -1,4 +1,6 @@
 import {
+  commandState,
+  isCommandChild,
   pressSessionRow,
   sessionFamilies,
   type FamilyMember,
@@ -6,6 +8,20 @@ import {
   type PaneLayout
 } from '@helm/core/types'
 import type { TreeSession } from '@helm/ui'
+
+/**
+ * What a command child's row says of itself, or null for a session that is not
+ * one. A command has no conversation to be busy or waiting in, so its state is
+ * only whether it runs and, once it ended, its exit code: whatever an agent's
+ * records say of the process is not read for it.
+ */
+export function commandRow(session: {
+  status: string
+  exitCode?: number | null
+  command?: string | null
+}): Pick<TreeSession, 'state' | 'command'> | null {
+  return isCommandChild(session) ? { state: commandState(session), command: true } : null
+}
 
 /** A session the Sessions tree lists in a folder's own list, and the row it draws. */
 export interface TreeEntry<T> {

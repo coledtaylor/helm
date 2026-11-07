@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  commandState,
   foldedState,
+  isCommandChild,
   mostPressingState,
   resolveFamilyPress,
   SESSION_URGENCY,
@@ -94,6 +96,34 @@ describe('sessionFamilies', () => {
   it('keeps an ended child under a parent that still runs', () => {
     const rows = sessionFamilies([running(1, 'a'), child(2, 'a', 1, 'lead', { status: 'exited' })])
     expect(drawn(rows)).toEqual(['1', '  2'])
+  })
+})
+
+describe('isCommandChild', () => {
+  it('is a session that carries a command line, and no other', () => {
+    expect(isCommandChild({ command: 'pnpm test' })).toBe(true)
+    expect(isCommandChild({ command: null })).toBe(false)
+    expect(isCommandChild({ command: '' })).toBe(false)
+    expect(isCommandChild({})).toBe(false)
+  })
+})
+
+describe('commandState', () => {
+  it('runs while the command runs, whatever the exit code field holds', () => {
+    expect(commandState({ status: 'running', exitCode: null })).toBe('running')
+    expect(commandState({ status: 'running' })).toBe('running')
+  })
+
+  it('has ended after exit 0, and when its code was never observed as an agent would', () => {
+    expect(commandState({ status: 'exited', exitCode: 0 })).toBe('ended')
+    expect(commandState({ status: 'exited', exitCode: null })).toBe('ended')
+    expect(commandState({ status: 'lost' })).toBe('ended')
+  })
+
+  it('has failed after any other exit code', () => {
+    expect(commandState({ status: 'exited', exitCode: 1 })).toBe('failed')
+    expect(commandState({ status: 'exited', exitCode: 137 })).toBe('failed')
+    expect(commandState({ status: 'exited', exitCode: -1 })).toBe('failed')
   })
 })
 

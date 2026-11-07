@@ -88,6 +88,7 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     onSessionAgentsChange: vi.fn(),
     agentLimits: {
       agentChildrenPerParent: s.agentChildrenPerParent,
+      agentCommandsPerParent: s.agentCommandsPerParent,
       agentSessionsPerHost: s.agentSessionsPerHost,
       agentHeavyPerHost: s.agentHeavyPerHost,
       agentDepth: s.agentDepth,
@@ -221,6 +222,7 @@ describe('SettingsPane - Agents', () => {
     )
 
     expect(limit('Children per parent').value).toBe('4')
+    expect(limit('Command children per parent').value).toBe('4')
     expect(limit('Agent sessions per host').value).toBe('8')
     expect(limit('Heavy agents on this host').value).toBe('1')
     expect(limit('Depth').value).toBe('2')
@@ -232,6 +234,7 @@ describe('SettingsPane - Agents', () => {
       sessionAgents: false,
       agentLimits: {
         agentChildrenPerParent: 6,
+        agentCommandsPerParent: 9,
         agentSessionsPerHost: 12,
         agentHeavyPerHost: 3,
         agentDepth: 3,
@@ -241,6 +244,7 @@ describe('SettingsPane - Agents', () => {
     const tick = within(group()).getByRole('checkbox', { name: 'Sessions can start agents' }) as HTMLInputElement
     expect(tick.checked).toBe(false)
     expect(limit('Children per parent').value).toBe('6')
+    expect(limit('Command children per parent').value).toBe('9')
     expect(limit('Agent sessions per host').value).toBe('12')
     expect(limit('Heavy agents on this host').value).toBe('3')
     expect(limit('Depth').value).toBe('3')
@@ -266,6 +270,7 @@ describe('SettingsPane - Agents', () => {
       await userEvent.type(field, `${value}{Enter}`)
     }
     await enter('Children per parent', '6')
+    await enter('Command children per parent', '3')
     await enter('Agent sessions per host', '20')
     await enter('Heavy agents on this host', '2')
     await enter('Depth', '3')
@@ -273,6 +278,7 @@ describe('SettingsPane - Agents', () => {
 
     expect(vi.mocked(props.onAgentLimitsChange).mock.calls).toEqual([
       [{ agentChildrenPerParent: 6 }],
+      [{ agentCommandsPerParent: 3 }],
       [{ agentSessionsPerHost: 20 }],
       [{ agentHeavyPerHost: 2 }],
       [{ agentDepth: 3 }],
@@ -302,11 +308,13 @@ describe('SettingsPane - Agents', () => {
       await userEvent.type(field, `${value}{Enter}`)
     }
     await enter('Children per parent', '0')
+    await enter('Command children per parent', '500')
     await enter('Heavy agents on this host', '40')
     await enter('Depth', '99')
     await enter('Starts per parent', '5000')
     expect(vi.mocked(props.onAgentLimitsChange).mock.calls).toEqual([
       [{ agentChildrenPerParent: 1 }],
+      [{ agentCommandsPerParent: 32 }],
       [{ agentHeavyPerHost: 8 }],
       [{ agentDepth: 8 }],
       [{ agentStartsPerParent: 1000 }]
@@ -316,7 +324,7 @@ describe('SettingsPane - Agents', () => {
 
     await enter('Agent sessions per host', 'many')
     expect(limit('Agent sessions per host').value).toBe('8')
-    expect(props.onAgentLimitsChange).toHaveBeenCalledTimes(4)
+    expect(props.onAgentLimitsChange).toHaveBeenCalledTimes(5)
   })
 
   it('shows the heavy limit at 1 and keeps a new value, counted in the limits with the others', async () => {
@@ -328,6 +336,7 @@ describe('SettingsPane - Agents', () => {
         .map((field) => field.getAttribute('aria-label'))
     ).toEqual([
       'Children per parent',
+      'Command children per parent',
       'Agent sessions per host',
       'Heavy agents on this host',
       'Depth',
@@ -339,6 +348,20 @@ describe('SettingsPane - Agents', () => {
     await userEvent.type(field, '3{Enter}')
     expect(props.onAgentLimitsChange).toHaveBeenCalledWith({ agentHeavyPerHost: 3 })
     expect(limit('Heavy agents on this host').value).toBe('3')
+  })
+
+  it('S20: shows Command children per parent at 4, says it is counted apart from the agent limits, and keeps a new number', async () => {
+    const props = renderPane()
+    expect(limit('Command children per parent').value).toBe('4')
+    expect(within(limits()).getByText(/Counted apart from the agent limits/)).toBeTruthy()
+
+    const field = limit('Command children per parent')
+    await userEvent.clear(field)
+    await userEvent.type(field, '2{Enter}')
+    expect(props.onAgentLimitsChange).toHaveBeenCalledWith({ agentCommandsPerParent: 2 })
+    expect(limit('Command children per parent').value).toBe('2')
+    // Only the number the person changed is written.
+    expect(props.onAgentLimitsChange).toHaveBeenCalledTimes(1)
   })
 
   it('does not show the sessions group’s rows', () => {

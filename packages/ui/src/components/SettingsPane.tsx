@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react'
 import {
   ACCENT_SWATCHES,
   AGENT_CHILDREN_PER_PARENT,
+  AGENT_COMMANDS_PER_PARENT,
   AGENT_DEPTH,
   AGENT_HEAVY_PER_HOST,
   AGENT_SESSIONS_PER_HOST,
@@ -332,6 +333,7 @@ export type TerminalSettings = Pick<
 export type AgentLimitSettings = Pick<
   AppSettings,
   | 'agentChildrenPerParent'
+  | 'agentCommandsPerParent'
   | 'agentSessionsPerHost'
   | 'agentHeavyPerHost'
   | 'agentDepth'
@@ -1794,6 +1796,22 @@ function AgentLimitsGroup({
           label="Children per parent"
           data-settings-agent-children-per-parent={String(limits.agentChildrenPerParent)}
           onCommit={(agentChildrenPerParent) => onLimitsChange({ agentChildrenPerParent })}
+        />
+      </Row>
+
+      <Divider />
+
+      <Row
+        label="Command children per parent"
+        hint="Commands one session may have running at once that it started with floti agent run. Counted apart from the agent limits: a command takes none of their places, and an agent takes none of this one. A run past it is refused."
+      >
+        <NumberField
+          value={limits.agentCommandsPerParent}
+          min={AGENT_COMMANDS_PER_PARENT.min}
+          max={AGENT_COMMANDS_PER_PARENT.max}
+          label="Command children per parent"
+          data-settings-agent-commands-per-parent={String(limits.agentCommandsPerParent)}
+          onCommit={(agentCommandsPerParent) => onLimitsChange({ agentCommandsPerParent })}
         />
       </Row>
 

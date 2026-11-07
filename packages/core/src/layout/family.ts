@@ -19,6 +19,10 @@ export interface FamilyMember {
   parentId?: number | null
   /** What the parent is called on screen. It outlasts the parent's row being open anywhere. */
   parentName?: string | null
+  /** The command line a command child runs; absent for every session that is not one. */
+  command?: string | null
+  /** The exit code of a session that ended, or absent / null where none was observed. */
+  exitCode?: number | null
 }
 
 /** One row of the tree: a session, the children nested under it, and the mark a child shown on its own carries. */
@@ -37,6 +41,25 @@ export interface FamilyRow<T extends FamilyMember> {
 /** Whether a session is one an agent started: it names a parent. */
 export function isChild(session: { parentId?: number | null }): boolean {
   return session.parentId !== undefined && session.parentId !== null
+}
+
+/** Whether a session is a command a session ran as a child, not an agent: it carries its command line. */
+export function isCommandChild(session: { command?: string | null }): boolean {
+  return typeof session.command === 'string' && session.command !== ''
+}
+
+/** What a command child's glyph says: it runs, it exited 0 (or its code was never observed), or it exited with another code. */
+export type CommandState = 'running' | 'ended' | 'failed'
+
+/**
+ * The state a command child's glyph is drawn in. A command has no conversation
+ * to be busy or waiting in, so whatever the host's records say of an agent's
+ * activity is not read for it: it runs until it ends, and then its exit code is
+ * all there is. A code never observed reads as an agent's would, as ended.
+ */
+export function commandState(session: { status: string; exitCode?: number | null }): CommandState {
+  if (session.status === 'running') return 'running'
+  return session.exitCode !== undefined && session.exitCode !== null && session.exitCode !== 0 ? 'failed' : 'ended'
 }
 
 /**
