@@ -37,6 +37,15 @@ export interface PaneGroupProps {
 }
 
 /**
+ * The pane and its body clip what overflows them, but only this far past their
+ * edge: the page's focus ring is 2px wide at 2px offset, so a control that
+ * fills the pane's width or sits at its top (a report note) is drawn whole in
+ * the gutter instead of cut off at the island's edge. `overflow-clip` rather
+ * than `overflow-hidden`, because `overflow-clip-margin` applies to it alone.
+ */
+export const FOCUS_RING_ROOM = '[overflow-clip-margin:4px]'
+
+/**
  * One pane: an island holding a tab strip, a crumb row and whatever the front
  * tab shows.
  *
@@ -66,13 +75,14 @@ export function PaneGroup({
       aria-label={paneName(index)}
       onPointerDownCapture={focused ? undefined : onFocus}
       className={cn(
-        'relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-island border bg-surface transition-colors',
+        'relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip rounded-island border bg-surface transition-colors',
+        FOCUS_RING_ROOM,
         attention ? 'border-warn/45' : 'border-border'
       )}
     >
       {strip}
       {crumb}
-      <div ref={bodyRef} className="relative min-h-0 flex-1 overflow-hidden">
+      <div ref={bodyRef} className={cn('relative min-h-0 flex-1 overflow-clip', FOCUS_RING_ROOM)}>
         {children}
       </div>
       {drop}

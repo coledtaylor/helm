@@ -931,8 +931,7 @@ overrides the gate; keep it.
   `agents_report` until its next turn starts: "Reported done", "Reported
   stuck" or "Note" in weight 500 and the start of the report on one line, in
   11.5px `accent-text` on `accent-soft` (`accent-soft-hover` under the pointer),
-  laid over `surface` because a card's ground is the terminal's fixed dark one
-  and `accent-text` is checked against `surface`, with a 2px accent edge and a 1px `border` below, at least 30px high. It is
+  laid directly on the card's ground, with a 2px accent edge and a 1px `border` below, at least 30px high. It is
   one button: the edge is an inset line on the button itself
   (`shadow-[inset_2px_0_0_var(--color-accent)]`, no blur and no offset, so it is
   an edge and not an elevation shadow), and it has no transition. Pressing it
@@ -943,6 +942,9 @@ overrides the gate; keep it.
   header and an ended child's last screen never do. Keyboard focus on the note
   takes the page's ring, 2px accent at 2px outside the note, drawn whole over
   the header and the terminal beside it and not inset like the card header's.
+  The note is as wide as the pane, so a pane clips with `overflow-clip` and
+  `overflow-clip-margin: 4px` (`FOCUS_RING_ROOM`) and the ring is whole at the
+  island's edge, over its border and the gutter.
 - **Agent worktrees**: a project page for a folder on this PC lists the
   checkouts Floti made for its agents in a section of its own, under the
   sections above it and shown only when the repository has any. One row each:
