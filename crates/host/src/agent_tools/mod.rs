@@ -138,6 +138,16 @@ pub trait ToolFamily: Send + Sync + 'static {
         self.tools()
     }
 
+    /// Tools only a command the session runs in its shell may call
+    /// (`floti agent`, which marks its requests with [`SHELL_HEADER`]). They
+    /// are in no `tools/list`, a session's own tool call to one is answered
+    /// as for a tool the family does not have, and none is ever allowed at
+    /// launch: the command is the session's Bash, so its own Bash rules
+    /// decide.
+    fn shell_tools(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// The tools of [`Self::tools`] a launch calls without asking, by name.
     /// The default is the ones marked `readOnlyHint`; a family whose every
     /// tool is its caller's own to use says them all.
@@ -268,8 +278,11 @@ pub struct Caller {
     pub session: Option<SessionId>,
     /// The request came from a command the session ran in its shell
     /// (`floti agent`), not from the agent's own tool call. Said by the
-    /// request itself, so it is the caller's account of itself and never
-    /// more than a choice between two ways of waiting.
+    /// request itself: it chooses between two ways of waiting, and is what
+    /// lets a call reach a family's shell-only tools
+    /// ([`ToolFamily::shell_tools`]), which a session's own tool call, made by
+    /// its agent's MCP client with the headers its configuration has, never
+    /// carries.
     pub shell: bool,
 }
 

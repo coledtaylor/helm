@@ -9,7 +9,9 @@
 //! **Nothing of the conversation.** An item is an event, the child's name as
 //! its parent knows it, and the words the event carries: a report's text, a
 //! program's own message (cut to 200 characters), an exit code, who stopped
-//! it. There is no column for anything the child said or did otherwise.
+//! it. There is no column for anything an agent said or did otherwise. A
+//! command child is no agent: when its command exits, its item also carries
+//! the last 40 lines the command printed, for its parent to read.
 //!
 //! **Seen means handed over.** An item is marked seen only when the answer
 //! that carried it has reached its caller ([`mark_seen`]), so a wait that is
@@ -143,7 +145,7 @@ pub(super) fn record(store: &Store, item: &Item<'_>) -> Result<i64> {
         .facts
         .detail
         .as_deref()
-        .map(|text| cut(text, item.event));
+        .map(|text| cut(text, item.event, item.facts.state.as_deref()));
     store
         .connection()
         .query_row(
@@ -166,13 +168,18 @@ pub(super) fn record(store: &Store, item: &Item<'_>) -> Result<i64> {
 }
 
 /// A program's message is cut to the length OSC 7501 allows; a report's text
-/// is the child's own, at the length `agents_report` took it.
-fn cut(text: &str, event: EventKind) -> String {
-    match event {
-        EventKind::Report => text.to_owned(),
+/// is the child's own, at the length `agents_report` took it; the last lines
+/// of a command that exited are kept as they were taken (their number and
+/// length were bounded where they were).
+fn cut(text: &str, event: EventKind, state: Option<&str>) -> String {
+    match (event, state) {
+        (EventKind::Report, _) | (EventKind::Ended, Some(EXITED)) => text.to_owned(),
         _ => text.chars().take(MAX_MESSAGE_CHARS).collect(),
     }
 }
+
+/// The state of an ended child whose program exited on its own.
+pub(super) const EXITED: &str = "exited";
 
 /// What `parent` has not yet heard, oldest first: the items that name its row
 /// or, when it is known, its conversation.
@@ -259,10 +266,17 @@ impl News {
                         .map_or("someone", StoppedBy::said);
                     format!("{child} was stopped by {by}.")
                 }
-                _ => match facts.exit_code {
-                    Some(code) => format!("{child} ended with exit code {code}."),
-                    None => format!("{child} ended."),
-                },
+                _ => {
+                    let mut line = match facts.exit_code {
+                        Some(code) => format!("{child} ended with exit code {code}."),
+                        None => format!("{child} ended."),
+                    };
+                    // A command child's last lines of output.
+                    if !detail.is_empty() {
+                        line.push_str(&format!(" Its last lines:\n{detail}"));
+                    }
+                    line
+                }
             },
             EventKind::Error => match facts.state.as_deref() {
                 Some("launch") => format!("{child} could not be started: {detail}"),
@@ -284,13 +298,22 @@ impl News {
             object.insert("state".into(), json!(state));
         }
         if let Some(detail) = &facts.detail {
-            // An ended child's detail is who stopped it; any other's is text.
-            let key = if self.event == EventKind::Ended {
-                "stoppedBy"
-            } else {
-                "text"
-            };
-            object.insert(key.into(), json!(detail));
+            // An ended child's detail is who stopped it, or a command's last
+            // lines when it exited; any other's is text.
+            match (self.event, facts.state.as_deref()) {
+                (EventKind::Ended, Some(EXITED)) => {
+                    object.insert(
+                        "lastLines".into(),
+                        json!(detail.split('\n').collect::<Vec<_>>()),
+                    );
+                }
+                (EventKind::Ended, _) => {
+                    object.insert("stoppedBy".into(), json!(detail));
+                }
+                _ => {
+                    object.insert("text".into(), json!(detail));
+                }
+            }
         }
         if let Some(code) = facts.exit_code {
             object.insert("exitCode".into(), json!(code));
@@ -391,9 +414,21 @@ mod tests {
         };
         record(&store, &error).unwrap();
         record(&store, &item(1, None, &done(&long))).unwrap();
+        // A command's last lines are its parent's to read whole.
+        let exit = Facts {
+            state: Some("exited".into()),
+            detail: Some(long.clone()),
+            exit_code: Some(1),
+        };
+        let exited = Item {
+            event: EventKind::Ended,
+            ..item(1, None, &exit)
+        };
+        record(&store, &exited).unwrap();
         let news = unseen(&store, SessionId(1), None).unwrap();
         assert_eq!(news[0].facts.detail.as_deref().unwrap().len(), 200);
         assert_eq!(news[1].facts.detail.as_deref().unwrap().len(), 500);
+        assert_eq!(news[2].facts.detail.as_deref().unwrap().len(), 500);
     }
 
     #[test]
@@ -429,6 +464,21 @@ mod tests {
             news(EventKind::Ended, Some("exited"), None, Some(3)).line(),
             "reviewer ended with exit code 3."
         );
+        // A command that exited also gives what it last printed, in full.
+        let lines = (1..=40)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let exited = news(EventKind::Ended, Some("exited"), Some(&lines), Some(3));
+        assert_eq!(
+            exited.line(),
+            format!("reviewer ended with exit code 3. Its last lines:\n{lines}")
+        );
+        let json = exited.json();
+        assert_eq!(json["exitCode"], 3);
+        assert_eq!(json["lastLines"].as_array().map(Vec::len), Some(40));
+        assert_eq!(json["lastLines"][39], "line 40");
+        assert!(json.get("text").is_none() && json.get("stoppedBy").is_none());
         let stopped = news(EventKind::Ended, Some("stopped"), Some("parent"), None);
         assert_eq!(stopped.line(), "reviewer was stopped by its parent.");
         assert_eq!(stopped.json()["stoppedBy"], "parent");

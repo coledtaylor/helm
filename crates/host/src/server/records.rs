@@ -6,6 +6,7 @@
 //! All of it is today's `sessions` table, whose `backend` column names the
 //! agent backend each session ran on ([`recorded_backend`]).
 
+use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -72,6 +73,9 @@ pub(crate) struct HostLedger {
     frozen: AtomicBool,
     next_seq: AtomicU64,
     exits: broadcast::Sender<ExitNotice>,
+    /// What each command child last printed, from its screen as it went, until
+    /// its parent has been told its exit ([`HostLedger::take_last_lines`]).
+    last_lines: Mutex<HashMap<SessionId, Vec<String>>>,
 }
 
 impl HostLedger {
@@ -83,7 +87,34 @@ impl HostLedger {
             frozen: AtomicBool::new(false),
             next_seq: AtomicU64::new(1),
             exits,
+            last_lines: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The last lines session `id` printed, kept when it ended as a command
+    /// child, and forgotten now they are taken. Empty for any other session.
+    pub fn take_last_lines(&self, id: SessionId) -> Vec<String> {
+        self.last_lines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&id)
+            .unwrap_or_default()
+    }
+
+    /// Whether session `id`'s row says it runs a command for the session that
+    /// started it.
+    fn runs_command(&self, id: SessionId) -> bool {
+        self.store()
+            .connection()
+            .query_row(
+                "SELECT command IS NOT NULL FROM sessions WHERE id = ?1",
+                [id.0],
+                |row| row.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .unwrap_or(false)
     }
 
     pub fn store(&self) -> MutexGuard<'_, Store> {
@@ -142,6 +173,18 @@ impl SessionLedger for HostLedger {
         };
         self.notify(id);
         written
+    }
+
+    /// Only a command child's last lines are kept: no other session's screen
+    /// is read by anything.
+    fn screen_ended(&self, id: SessionId, last_lines: Vec<String>) {
+        if last_lines.is_empty() || !self.runs_command(id) {
+            return;
+        }
+        self.last_lines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, last_lines);
     }
 
     /// The host is ending the session: its row says so before its program

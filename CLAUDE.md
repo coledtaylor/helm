@@ -489,6 +489,21 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   through the backend's adapter the way read-only tools are (for Claude Code
   `mcp__floti-agents__agents_start` and `Bash(floti agent start:*)`); never a
   `floti agent:*` wildcard, never `run`, and a user's deny rule still wins.
+- `floti agent run [--name <name>] [--wait] -- <command...>` is no tool: the
+  family lists no `agents_run`, and only a call marked as from a shell reaches
+  it. It starts a command child of the caller on the plain backend, in the
+  caller's folder, through the user's shell (PowerShell on Windows, `$SHELL`
+  with `-l -c` on macOS and Linux; `platform/command_shell`). Several words are
+  one program and its arguments, quoted for that shell; one word is the whole
+  command line. The child is named `--name`, else its program's file name made
+  unique among the caller's children. Its row has the parent's links and the
+  command and no role; it has no agent token, no family entry and no tab, and
+  counts toward no agent limit. It ends when its command exits, or with its
+  parent, or at `floti agent stop`. Its parent is told the exit code and the
+  last 40 lines of its screen with the exit (`Screen::last_lines`, kept before
+  the screen is dropped), in `floti agent wait` and `run --wait`, which exits
+  with the command's code. A send to it is refused: a command child takes no
+  turns.
 - A session's row keeps what its launch was granted (`agent_tools`: the
   port, the token's SHA-256 and the families), never the token. A host that
   takes back sessions from the keeper binds that port again and accepts each

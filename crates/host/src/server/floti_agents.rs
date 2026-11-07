@@ -42,8 +42,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::hosted::{
-    ChildEntry, ChildStopped, ChildrenListed, Hosted, RoleEntry, RolesListed, SendChild,
-    StartChild, WaitEnd, WaitFor, WaitRequest, Waited,
+    ChildEntry, ChildStopped, ChildrenListed, Hosted, RoleEntry, RolesListed, RunCommand,
+    SendChild, StartChild, WaitEnd, WaitFor, WaitRequest, Waited,
 };
 use crate::agent_tools::{
     CallToolResult, Caller, ContentBlock, Delivery, GrantScope, JsonObject, Tool, ToolFamily,
@@ -84,6 +84,15 @@ const AGENTS_STOP: &str = "agents_stop";
 const AGENTS_ROLES: &str = "agents_roles";
 const AGENTS_WAIT: &str = "agents_wait";
 const AGENTS_REPORT: &str = "agents_report";
+
+/// What `floti agent run` calls. It is in no table and no `tools/list`, and
+/// only a command run in a session's shell reaches it ([`SHELL_TOOLS`]).
+pub(crate) const AGENTS_RUN: &str = "agents_run";
+
+/// The calls only a command in a session's shell may make: `floti agent run`
+/// is a command the agent runs with its Bash tool, so its own Bash rules
+/// decide whether it runs, and no tool of its MCP client does.
+const SHELL_TOOLS: &[&str] = &[AGENTS_RUN];
 
 /// The most characters of a report's text. A longer answer is written to a
 /// file, and the report gives its path.
@@ -206,6 +215,11 @@ impl ToolFamily for FlotiAgents {
     /// A wait, or a start that waits, holds where the caller's agent can wait
     /// in the background (`Hosted::waits_hold`).
     fn holds(&self, caller: Caller, name: &str, arguments: &JsonObject) -> bool {
+        // A run that waits holds whatever the caller's agent can do: the
+        // command it runs in its shell is what holds, and it ends on its own.
+        if name == AGENTS_RUN {
+            return matches!(arguments.get("wait"), Some(Value::Bool(true)));
+        }
         let waits = match name {
             AGENTS_WAIT => true,
             AGENTS_START | AGENTS_SEND => {
@@ -218,6 +232,10 @@ impl ToolFamily for FlotiAgents {
                 .session
                 .zip(self.hosted())
                 .is_some_and(|(session, hosted)| hosted.waits_hold(session, caller.shell))
+    }
+
+    fn shell_tools(&self) -> Vec<String> {
+        SHELL_TOOLS.iter().map(|name| (*name).to_owned()).collect()
     }
 
     fn allowed_commands(&self) -> Vec<String> {
@@ -254,6 +272,7 @@ impl ToolFamily for FlotiAgents {
             match name {
                 AGENTS_START => start(&from, &arguments).await,
                 AGENTS_SEND => send(&from, &arguments).await,
+                AGENTS_RUN if caller.shell => run(&from, &arguments).await,
                 AGENTS_WAIT => wait(&from, &arguments).await,
                 AGENTS_REPORT => report(Arc::clone(&hosted), me, &arguments).await,
                 AGENTS_LIST => list(hosted, me).await,
@@ -280,6 +299,16 @@ impl Waiter<'_> {
     /// says the news returned is heard once the answer has been delivered.
     async fn wait(&self, wait_for: WaitFor, children: Vec<String>) -> Result<Waited, String> {
         let hold = self.hosted.waits_hold(self.me, self.shell);
+        self.wait_holding(hold, wait_for, children).await
+    }
+
+    /// [`Self::wait`], holding or not as `hold` says.
+    async fn wait_holding(
+        &self,
+        hold: bool,
+        wait_for: WaitFor,
+        children: Vec<String>,
+    ) -> Result<Waited, String> {
         let waited = self
             .hosted
             .wait_for_news(
@@ -410,6 +439,59 @@ async fn send(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
     }
 }
 
+/// `floti agent run`: a command the caller runs for its user to watch, as a
+/// command child; with `wait`, then its exit code and last lines once it
+/// exits.
+async fn run(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
+    let asked = run_request(arguments).and_then(|request| {
+        let wait = flag(arguments, "wait")?.unwrap_or(false);
+        Ok((request, wait))
+    });
+    let (request, wait) = match asked {
+        Ok(asked) => asked,
+        Err(refusal) => return problem(&refusal),
+    };
+    let (hosted, me) = (Arc::clone(from.hosted), from.me);
+    let started = match blocking(move || hosted.run_command_child(me, request)).await {
+        Ok(started) => started,
+        Err(refusal) => return problem(&refusal),
+    };
+    let mut text = format!(
+        "Started {name}.\nname: {name}\ncommand: {command}\nfolder: {folder}",
+        name = started.name,
+        command = started.command,
+        folder = started.folder,
+    );
+    let mut body = json!({
+        "name": started.name,
+        "command": started.command,
+        "folder": started.folder,
+    });
+    if wait {
+        // Only that command's news: the rest stays in the inbox for a wait.
+        match from
+            .wait_holding(true, WaitFor::Any, vec![started.name.clone()])
+            .await
+        {
+            Ok(waited) => {
+                text.push_str("\n\n");
+                text.push_str(&waited_text(&waited));
+                if let (Some(body), Value::Object(news)) =
+                    (body.as_object_mut(), waited_json(&waited))
+                {
+                    body.extend(news);
+                }
+            }
+            Err(refusal) => {
+                text.push_str(&format!(
+                    "\n\nIt is running, but waiting on it failed: {refusal}"
+                ));
+            }
+        }
+    }
+    answer(text, body)
+}
+
 /// `agents_report`: the caller, a child, tells its parent where it is.
 async fn report(hosted: Arc<Hosted>, me: SessionId, arguments: &JsonObject) -> CallToolResult {
     let (state, text) = match report_request(arguments) {
@@ -523,6 +605,28 @@ fn send_request(arguments: &JsonObject) -> Result<SendChild, String> {
         child,
         text,
         interrupt: flag(arguments, "interrupt")?.unwrap_or(false),
+    })
+}
+
+/// What `floti agent run` was asked: the command's words, and a name.
+fn run_request(arguments: &JsonObject) -> Result<RunCommand, String> {
+    let words = match arguments.get("command") {
+        Some(Value::Array(words)) => words
+            .iter()
+            .map(|word| word.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| "command is a list of words, each text.".to_owned())?,
+        _ => return Err("Give the command to run: command is a list of words.".to_owned()),
+    };
+    if !matches!(
+        arguments.get("name"),
+        None | Some(Value::Null | Value::String(_))
+    ) {
+        return Err("name is text.".to_owned());
+    }
+    Ok(RunCommand {
+        words,
+        name: text_argument(arguments, "name"),
     })
 }
 

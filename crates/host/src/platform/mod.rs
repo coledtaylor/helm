@@ -13,6 +13,7 @@
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 compile_error!("the Floti host runs on Windows, macOS and Linux");
 
+pub mod command_shell;
 pub mod folders;
 pub mod launcher;
 pub mod links;

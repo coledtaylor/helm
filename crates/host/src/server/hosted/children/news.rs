@@ -481,6 +481,8 @@ impl Hosted {
     pub(crate) fn child_ended(&self, child: SessionId) {
         let ended = rows::ended_of(&self.ledger.store(), child);
         let desk = &self.children.news;
+        // Taken whether or not it is told, so none is left behind.
+        let last_lines = self.ledger.take_last_lines(child);
         match ended {
             Ok(Some(ended)) => {
                 let by = desk.take_stopped(child);
@@ -494,8 +496,10 @@ impl Hosted {
                     }
                 } else {
                     Facts {
-                        state: Some("exited".to_owned()),
-                        detail: None,
+                        state: Some(inbox::EXITED.to_owned()),
+                        // A command child's parent is told what it last
+                        // printed with its exit.
+                        detail: (!last_lines.is_empty()).then(|| told_lines(&last_lines)),
                         exit_code: ended.exit_code,
                     }
                 };
@@ -542,6 +546,19 @@ impl Hosted {
                 false
             })
     }
+}
+
+/// The most characters of one line of a command's output a parent is told.
+const TOLD_LINE_CHARS: usize = 400;
+
+/// A command child's last lines as one text, each cut to a length a parent
+/// can read.
+fn told_lines(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|line| line.chars().take(TOLD_LINE_CHARS).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The store's own "now", in the text it writes times in.

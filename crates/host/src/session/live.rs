@@ -60,6 +60,10 @@ pub(super) fn end_after_grace(exited_within: impl FnOnce(Duration) -> bool, forc
 /// the terminal open would otherwise hold the session open.
 const DRAIN: Duration = Duration::from_secs(2);
 
+/// How many of the last lines of text on a screen are handed on when its
+/// session ends: what a command child's parent is told with its exit.
+pub const LAST_LINES: usize = 40;
+
 const READ_CHUNK: usize = 64 * 1024;
 
 /// A request for the cursor's position (DSR 6), and the answer for an empty
@@ -973,6 +977,18 @@ impl Session {
         drop(lock(&self.pty).take());
         if let Some(drained) = drained {
             let _ = drained.recv_timeout(DRAIN);
+        }
+
+        // The screen goes with the program; what a command child last printed
+        // is handed on first, for its parent to be told.
+        if let Some(shared) = self.host.upgrade() {
+            let last_lines = lock(&self.state)
+                .screen
+                .as_ref()
+                .map(|screen| screen.last_lines(LAST_LINES));
+            if let Some(last_lines) = last_lines {
+                shared.ledger.screen_ended(self.id, last_lines);
+            }
         }
 
         // Unlisted first: recording the end tells the clients, and one that

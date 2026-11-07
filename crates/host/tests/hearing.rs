@@ -2347,7 +2347,11 @@ async fn s21_each_session_with_the_family_is_given_the_guide_with_its_backends_l
             "{told}"
         );
         assert!(told.contains(line), "{backend}: {told}");
-        assert!(told.contains("start, wait and stop"), "{told}");
+        assert!(told.contains("start, send, wait, read and stop"), "{told}");
+        assert!(
+            told.contains("floti agent run --name <name> -- <command>"),
+            "{told}"
+        );
         assert!(
             told.contains("fails") || told.contains("whenever it fails"),
             "{told}"

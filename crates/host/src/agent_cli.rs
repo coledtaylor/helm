@@ -12,8 +12,14 @@
 //! it gave the agents family. Nothing here names a session: the token is the
 //! whole of who is asking.
 //!
+//! `floti agent run [--name <name>] [--wait] -- <command...>` is the one
+//! subcommand with no tool in the family's list: it runs a command for the
+//! user to watch, in the session's folder, as a command child, and only a
+//! call from a shell reaches it. With `--wait` it returns once the command
+//! exits and ends with the command's own exit status.
+//!
 //! **A wait is a command that stays.** `floti agent wait` and
-//! `floti agent start --wait` hold until there is news where the session's
+//! `floti agent start --wait` and `floti agent run --wait` hold until there is news where the session's
 //! agent is woken by a finished background command (the host decides: a
 //! request says only that it comes from a shell, by the `x-floti-shell`
 //! header), and the host keeps the connection alive with an event each minute.
@@ -42,7 +48,7 @@ pub const URL_VAR: &str = "FLOTI_AGENT_URL";
 pub const TOKEN_VAR: &str = "FLOTI_AGENT_TOKEN";
 
 /// What `floti agent` accepts.
-pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent start --resume <name> --task <text> [--wait] [--json]\n       floti agent send [--interrupt] [--wait] [--json] <name> [--] <text>\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
+pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent start --resume <name> --task <text> [--wait] [--json]\n       floti agent send [--interrupt] [--wait] [--json] <name> [--] <text>\n       floti agent run [--name <name>] [--wait] [--json] -- <command...>\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
 
 /// How long a connection waits to be made.
 const CONNECT_WAIT: Duration = Duration::from_secs(10);
@@ -57,8 +63,24 @@ const ANSWER_WAIT: Duration = Duration::from_secs(120);
 pub enum Command {
     Start(Start),
     Send(SendText),
+    Run(Run),
     Stop(Stop),
     Wait(Wait),
+}
+
+/// `floti agent run`: a command the user watches run, as a child of the
+/// session.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Run {
+    /// The command: a program and its arguments, or one word that is the
+    /// whole command line.
+    pub command: Vec<String>,
+    /// What the child is called; the program's file name when none.
+    pub name: Option<String>,
+    /// Whether `--wait` was given: the command then returns once the command
+    /// exits, with its exit code and last lines, and exits with that code.
+    pub wait: bool,
+    pub json: bool,
 }
 
 /// `floti agent send`.
@@ -153,11 +175,12 @@ impl Outcome {
 /// A sentence naming what is missing or not understood.
 pub fn parse(args: &[String]) -> Result<Command, String> {
     let Some((subcommand, rest)) = args.split_first() else {
-        return Err("Say what to do: start, send, wait or stop.".to_owned());
+        return Err("Say what to do: start, send, run, wait or stop.".to_owned());
     };
     match subcommand.as_str() {
         "start" => parse_start(rest).map(Command::Start),
         "send" => parse_send(rest).map(Command::Send),
+        "run" => parse_run(rest).map(Command::Run),
         "stop" => parse_stop(rest).map(Command::Stop),
         "wait" => parse_wait(rest).map(Command::Wait),
         other => Err(format!("`{other}` is not a floti agent command.")),
@@ -237,6 +260,42 @@ fn parse_send(args: &[String]) -> Result<SendText, String> {
     Ok(send)
 }
 
+/// Options, then `--`, then the command: everything after `--` is the
+/// command, whatever it begins with.
+fn parse_run(args: &[String]) -> Result<Run, String> {
+    let mut run = Run::default();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_owned())),
+            _ => (arg.as_str(), None),
+        };
+        match flag {
+            "--" if inline.is_none() => {
+                run.command = args.by_ref().cloned().collect();
+            }
+            "--name" => {
+                run.name = Some(
+                    inline
+                        .or_else(|| args.next().cloned())
+                        .ok_or_else(|| "--name needs a value.".to_owned())?,
+                );
+            }
+            "--wait" if inline.is_none() => run.wait = true,
+            "--json" if inline.is_none() => run.json = true,
+            other => return Err(format!("`{other}` is not a floti agent run option.")),
+        }
+    }
+    if run.command.iter().all(|word| word.trim().is_empty()) {
+        return Err(RUN_SHAPE.to_owned());
+    }
+    Ok(run)
+}
+
+/// What a run is: options, then `--`, then the command.
+const RUN_SHAPE: &str =
+    "Give the command after --, such as floti agent run --name tests -- pnpm test.";
+
 /// What a send is: a name and one text.
 const SEND_SHAPE: &str =
     "Give the agent's name and then the text to send as one argument, in quotes.";
@@ -304,6 +363,7 @@ pub fn execute(command: &Command, url: &str, token: &str) -> Outcome {
     let (tool, arguments, json) = match command {
         Command::Start(start) => ("agents_start", start_arguments(start), start.json),
         Command::Send(send) => ("agents_send", send_arguments(send), send.json),
+        Command::Run(run) => ("agents_run", run_arguments(run), run.json),
         Command::Stop(stop) => ("agents_stop", json!({ "child": stop.child }), stop.json),
         Command::Wait(wait) => ("agents_wait", wait_arguments(wait), wait.json),
     };
@@ -352,6 +412,39 @@ fn send_arguments(send: &SendText) -> Value {
     arguments
 }
 
+fn run_arguments(run: &Run) -> Value {
+    let mut arguments = json!({ "command": run.command });
+    if let Some(name) = &run.name {
+        arguments["name"] = json!(name);
+    }
+    if run.wait {
+        arguments["wait"] = json!(true);
+    }
+    arguments
+}
+
+/// The exit status `run --wait` ends with: the command's own when it exited,
+/// and 1 when it was stopped or has not ended.
+fn exit_of_run(structured: Option<&str>) -> u8 {
+    let code = structured
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|value| {
+            value["news"].as_array().and_then(|news| {
+                news.iter()
+                    .find(|item| item["event"] == "ended")
+                    .and_then(|item| item["exitCode"].as_i64())
+            })
+        });
+    match code {
+        Some(0) => 0,
+        Some(code) => u8::try_from(code)
+            .ok()
+            .filter(|code| *code != 0)
+            .unwrap_or(1),
+        None => 1,
+    }
+}
+
 fn wait_arguments(wait: &Wait) -> Value {
     let mut arguments = json!({ "for": if wait.all { "all" } else { "any" } });
     if !wait.children.is_empty() {
@@ -374,10 +467,38 @@ fn present(command: &Command, answer: &Answer, json: bool) -> Outcome {
         return Outcome::refused(first);
     }
     let structured = answer.blocks.get(1);
+    // A command that was waited on ends this one as it ended.
+    let code = match command {
+        Command::Run(run) if run.wait => exit_of_run(structured.map(String::as_str)),
+        _ => 0,
+    };
     if json {
-        return Outcome::done(structured.cloned().unwrap_or(first));
+        return Outcome {
+            out: Some(structured.cloned().unwrap_or(first)),
+            err: None,
+            code,
+        };
     }
     match command {
+        // The command's name, then, with --wait, what the command left: the
+        // news the host gave.
+        Command::Run(run) => {
+            let name = structured
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                .and_then(|value| value["name"].as_str().map(str::to_owned));
+            let out = match (run.wait, name) {
+                (true, Some(name)) => match first.split_once("\n\n") {
+                    Some((_, news)) => format!("{name}\n{news}"),
+                    None => name,
+                },
+                (_, name) => name.unwrap_or(first),
+            };
+            Outcome {
+                out: Some(out),
+                err: None,
+                code,
+            }
+        }
         // The child's name alone, so a script can keep it; with --wait, the
         // name and then the news the host gave.
         Command::Start(start) => {
@@ -1049,6 +1170,170 @@ mod tests {
             Outcome::done("reviewer\nreviewer reported done: ok".to_owned())
         );
         assert!(host.seen.lock().unwrap()[1].contains("\"wait\":true"));
+    }
+
+    #[test]
+    fn run_takes_its_options_then_everything_after_the_double_dash_as_the_command() {
+        assert_eq!(
+            parse(&args(&[
+                "run", "--name", "tests", "--wait", "--json", "--", "pnpm", "test", "--name", "x",
+            ])),
+            Ok(Command::Run(Run {
+                command: args(&["pnpm", "test", "--name", "x"]),
+                name: Some("tests".to_owned()),
+                wait: true,
+                json: true,
+            }))
+        );
+        assert_eq!(
+            parse(&args(&[
+                "run",
+                "--name=a b",
+                "--",
+                "pnpm test && echo done"
+            ])),
+            Ok(Command::Run(Run {
+                command: args(&["pnpm test && echo done"]),
+                name: Some("a b".to_owned()),
+                ..Run::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn run_without_a_command_or_with_an_option_it_does_not_have_is_refused() {
+        for bad in [
+            vec!["run"],
+            vec!["run", "--name", "x"],
+            vec!["run", "--"],
+            vec!["run", "--", "  "],
+            vec!["run", "--name"],
+            vec!["run", "--wait=yes", "--", "ls"],
+            vec!["run", "--folder", "x", "--", "ls"],
+            vec!["run", "pnpm", "test"],
+        ] {
+            let refused = parse(&args(&bad)).unwrap_err();
+            assert!(!refused.is_empty(), "{bad:?}");
+        }
+        assert!(
+            parse(&args(&["run", "--name", "x"]))
+                .unwrap_err()
+                .contains("Give the command after --")
+        );
+    }
+
+    #[test]
+    fn run_calls_agents_run_with_its_words_name_and_wait() {
+        let host = host(vec![
+            rpc_result(json!({})),
+            tool_answer(false, &["Started tests.", r#"{"name":"tests"}"#]),
+        ]);
+        let command = Command::Run(Run {
+            command: args(&["pnpm", "test"]),
+            name: Some("tests".to_owned()),
+            wait: false,
+            json: false,
+        });
+        assert_eq!(
+            execute(&command, &host.url, "t"),
+            Outcome::done("tests".to_owned())
+        );
+        let seen = host.seen.lock().unwrap().clone();
+        assert!(seen[1].contains("\"agents_run\""), "{seen:?}");
+        assert!(seen[1].contains(r#""command":["pnpm","test"]"#), "{seen:?}");
+        assert!(seen[1].contains(r#""name":"tests""#), "{seen:?}");
+        assert!(!seen[1].contains("\"wait\""), "{seen:?}");
+        assert!(seen[1].contains("x-floti-shell: 1"), "{seen:?}");
+    }
+
+    #[test]
+    fn run_with_wait_prints_the_name_and_the_news_and_exits_with_the_commands_code() {
+        let text =
+            "Started tests.\nname: tests\n\ntests ended with exit code 3. Its last lines:\nline 1";
+        let structured = |code: Value| {
+            json!({
+                "name": "tests",
+                "news": [{ "child": "tests", "event": "ended", "exitCode": code, "lastLines": ["line 1"] }],
+                "working": [],
+                "ended": "news",
+            })
+            .to_string()
+        };
+        for (code, wanted) in [
+            (json!(0), 0),
+            (json!(3), 3),
+            (json!(255), 255),
+            (json!(256), 1),
+            (json!(-1), 1),
+        ] {
+            let host = host(vec![
+                rpc_result(json!({})),
+                tool_answer(false, &[text, &structured(code.clone())]),
+            ]);
+            let command = Command::Run(Run {
+                command: args(&["pnpm", "test"]),
+                wait: true,
+                ..Run::default()
+            });
+            let outcome = execute(&command, &host.url, "t");
+            assert_eq!(outcome.code, wanted, "{code}");
+            assert_eq!(
+                outcome.out.as_deref(),
+                Some("tests\ntests ended with exit code 3. Its last lines:\nline 1")
+            );
+            assert!(host.seen.lock().unwrap()[1].contains("\"wait\":true"));
+        }
+
+        // With --json the answer is the tool's, and the status is the same.
+        let as_json = host(vec![
+            rpc_result(json!({})),
+            tool_answer(false, &[text, &structured(json!(5))]),
+        ]);
+        let command = Command::Run(Run {
+            command: args(&["pnpm"]),
+            wait: true,
+            json: true,
+            ..Run::default()
+        });
+        let outcome = execute(&command, &as_json.url, "t");
+        assert_eq!(outcome.code, 5);
+        assert_eq!(outcome.out, Some(structured(json!(5))));
+
+        // A command that was stopped, or not waited out, has no code to give.
+        for news in [
+            json!([{ "child": "tests", "event": "ended", "state": "stopped" }]),
+            json!([]),
+        ] {
+            let host = host(vec![
+                rpc_result(json!({})),
+                tool_answer(
+                    false,
+                    &[
+                        "Started tests.\n\nNothing new yet.",
+                        &json!({ "name": "tests", "news": news }).to_string(),
+                    ],
+                ),
+            ]);
+            let command = Command::Run(Run {
+                command: args(&["pnpm"]),
+                wait: true,
+                ..Run::default()
+            });
+            assert_eq!(execute(&command, &host.url, "t").code, 1);
+        }
+    }
+
+    #[test]
+    fn run_without_wait_exits_zero_whatever_the_answer_says_of_a_code() {
+        let host = host(vec![
+            rpc_result(json!({})),
+            tool_answer(false, &["Started tests.", r#"{"name":"tests"}"#]),
+        ]);
+        let command = Command::Run(Run {
+            command: args(&["pnpm"]),
+            ..Run::default()
+        });
+        assert_eq!(execute(&command, &host.url, "t").code, 0);
     }
 
     #[test]

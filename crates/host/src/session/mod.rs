@@ -43,11 +43,12 @@ pub use activity::{ActivityPass, ActivityTracker, HostedView};
 pub use env::{STRIPPED_ENV, TERMINAL_ENV, session_env};
 pub use ledger::{NewSessionRow, ParentLink, SessionId, SessionLedger, SessionOrigin};
 pub use live::{
-    Attachment, ClientId, GRACE, Session, SessionExit, SessionHost, SessionOutput, StartSession,
+    Attachment, ClientId, GRACE, LAST_LINES, Session, SessionExit, SessionHost, SessionOutput,
+    StartSession,
 };
 pub use report::{
     BlockedKind, MAX_MESSAGE_CHARS, ProgramStatus, ReportState, ReportedStatus, StatusReport,
 };
 pub use screen::{SCROLLBACK_LINES, Screen, TermSize};
-pub use shells::{check_shell, detect_shells, shell_args};
+pub use shells::{check_shell, detect_shells, find_shell, shell_args};
 pub use terminals::{TerminalExit, Terminals};

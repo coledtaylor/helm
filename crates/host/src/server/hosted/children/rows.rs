@@ -139,11 +139,21 @@ pub(super) struct ChildRow {
     pub permission_mode: Option<PermissionMode>,
     /// The profile it ran under.
     pub profile_id: Option<i64>,
+    /// The command line it runs, for a command child; none for an agent.
+    pub command: Option<String>,
+}
+
+impl ChildRow {
+    /// Whether it is a command child: a plain command its parent watches, not
+    /// an agent. It counts toward none of the agent limits.
+    pub fn is_command(&self) -> bool {
+        self.command.is_some()
+    }
 }
 
 const CHILD_COLUMNS: &str = "id, child_name, role, backend, cwd, branch, started_at, outlive, \
      can_start, status, child_class, child_worktree, \
-     coalesce(last_claude_session_id, claude_session_id), permission_mode, profile_id";
+     coalesce(last_claude_session_id, claude_session_id), permission_mode, profile_id, command";
 
 fn child_row(row: &Row<'_>) -> rusqlite::Result<ChildRow> {
     let status: String = row.get(9)?;
@@ -173,6 +183,7 @@ fn child_row(row: &Row<'_>) -> rusqlite::Result<ChildRow> {
             .as_deref()
             .and_then(records::permission_mode_from_name),
         profile_id: row.get(14)?,
+        command: row.get(15)?,
     })
 }
 
@@ -199,11 +210,15 @@ pub(super) fn children_of(
         .map_err(sql("read an agent's children"))
 }
 
-/// Every agent-started session the rows say is running.
+/// Every agent-started session the rows say is running. A command child is
+/// not an agent: it is left out, so it fills no agent limit.
 pub(super) fn agent_sessions_running(store: &Store) -> Result<Vec<SessionId>> {
     let mut select = store
         .connection()
-        .prepare("SELECT id FROM sessions WHERE child_name IS NOT NULL AND status = 'running'")
+        .prepare(
+            "SELECT id FROM sessions WHERE child_name IS NOT NULL AND command IS NULL \
+             AND status = 'running'",
+        )
         .map_err(sql("read the agent sessions running"))?;
     select
         .query_map([], |row| row.get(0).map(SessionId))

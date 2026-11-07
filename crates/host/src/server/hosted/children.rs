@@ -15,6 +15,11 @@
 //! nothing. Starts are taken one at a time, so two calls cannot both pass a
 //! limit that only one fits under, or choose the same worktree name.
 //!
+//! **A command child is a child that is no agent** ([`commands`]): a plain
+//! command the caller runs on the user's shell with `floti agent run`. It is
+//! named, waited on, stopped and ended with its parent as an agent child is,
+//! and counts toward none of the agent limits.
+//!
 //! **A resume is a start of an ended child.** It names one of the caller's
 //! children, resolved among the caller's own rows (ended ones included), and
 //! reopens it in its recorded folder through its backend's resume with the
@@ -34,6 +39,7 @@
 //! ([`end_children_at_exit`]); a host that starts after parents ended while
 //! it was away ends the children they left ([`Hosted::end_orphans`]).
 
+mod commands;
 mod compose;
 mod folders;
 mod inbox;
@@ -42,6 +48,7 @@ mod rows;
 mod send;
 mod wait;
 
+pub(crate) use commands::RunCommand;
 use inbox::StoppedBy;
 #[cfg(test)]
 pub(crate) use inbox::{EventKind, Facts, News};
@@ -399,16 +406,22 @@ impl Hosted {
             let existing = rows::children_of(&store, parent, facts.conversation_id.as_deref())
                 .map_err(|err| err.to_string())?;
             let load = self.host_load(&store)?;
-            let running: Vec<&rows::ChildRow> = existing
+            // Command children are no agents: they fill no agent limit.
+            let agents: Vec<&rows::ChildRow> = existing
                 .iter()
+                .filter(|child| !child.is_command())
+                .collect();
+            let running: Vec<&rows::ChildRow> = agents
+                .iter()
+                .copied()
                 .filter(|child| child.running && self.sessions.get(child.id).is_some())
                 .collect();
             let limits_error = judge(
                 &settings,
                 &facts,
                 &running,
-                existing.len(),
-                &existing,
+                agents.len(),
+                &agents,
                 &load,
                 role.class == RoleClass::Heavy,
             )
@@ -562,8 +575,13 @@ impl Hosted {
                 self.host_load(&store)?,
             )
         };
-        let running: Vec<&rows::ChildRow> = existing
+        let agents: Vec<&rows::ChildRow> = existing
             .iter()
+            .filter(|child| !child.is_command())
+            .collect();
+        let running: Vec<&rows::ChildRow> = agents
+            .iter()
+            .copied()
             .filter(|child| child.running && self.sessions.get(child.id).is_some())
             .collect();
         // The newest row of that name is the child: a resume adds a row under
@@ -576,6 +594,11 @@ impl Hosted {
             return Err(not_found(wanted, &running));
         };
         let name = &child.name;
+        if child.is_command() {
+            return Err(format!(
+                "{name} is a command child, and a command is not resumed. Run it again with floti agent run. No agent was started."
+            ));
+        }
         if running.iter().any(|runs| runs.id == child.id) {
             return Err(format!(
                 "{name} is still running, so it cannot be resumed. Wait for news from it, or stop it first. No agent was started."
@@ -650,8 +673,8 @@ impl Hosted {
             &settings,
             facts,
             &running,
-            existing.len(),
-            &existing,
+            agents.len(),
+            &agents,
             &load,
             child.class == RoleClass::Heavy,
         )?;
@@ -755,8 +778,13 @@ impl Hosted {
         let existing = rows::children_of(&store, parent, facts.conversation_id.as_deref())
             .map_err(|err| err.to_string())?;
         let load = self.host_load(&store)?;
+        // Command children are no agents and fill no agent limit.
+        let existing: Vec<&rows::ChildRow> = existing
+            .iter()
+            .filter(|child| !child.is_command())
+            .collect();
         let mut children = Vec::new();
-        for child in &existing {
+        for child in existing.iter().copied() {
             let Some(session) = self.sessions.get(child.id).filter(|_| child.running) else {
                 continue;
             };
@@ -1294,7 +1322,7 @@ fn judge(
     facts: &rows::ParentFacts,
     running: &[&rows::ChildRow],
     starts_made: usize,
-    made: &[rows::ChildRow],
+    made: &[&rows::ChildRow],
     load: &HostLoad,
     heavy: bool,
 ) -> Result<(), String> {

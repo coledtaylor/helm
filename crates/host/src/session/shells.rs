@@ -99,6 +99,15 @@ pub fn detect_shells(env: &[(OsString, OsString)]) -> Vec<DetectedShell> {
     detect_shells_in(env, &shell_folders::Native)
 }
 
+/// Where the shell whose file is called `file` (such as `pwsh.exe`) is
+/// installed, looked for as [`detect_shells`] looks.
+pub fn find_shell(env: &[(OsString, OsString)], file: &str) -> Option<PathBuf> {
+    detect_shells(env)
+        .into_iter()
+        .find(|shell| shell.name.eq_ignore_ascii_case(file))
+        .map(|shell| PathBuf::from(shell.path))
+}
+
 /// [`detect_shells`], with each shell `PATH` lacks looked for in the folders
 /// `folders` names for `env`.
 fn detect_shells_in(

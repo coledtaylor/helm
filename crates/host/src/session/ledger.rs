@@ -98,6 +98,12 @@ pub trait SessionLedger: Send + Sync {
     /// then.
     fn finished(&self, id: SessionId, exit: &SessionExit) -> Result<()>;
 
+    /// Hands the ledger the last lines of text on session `id`'s screen, just
+    /// before its end is recorded and the screen goes: a command child's
+    /// parent is told them with its exit. A ledger that keeps none does
+    /// nothing.
+    fn screen_ended(&self, _id: SessionId, _last_lines: Vec<String>) {}
+
     /// Records that the host is about to end session `id` itself - a close, a
     /// stop, its parent ending, a quit - before its program exits, so the
     /// exit that follows reads as stopped and not as the program finishing

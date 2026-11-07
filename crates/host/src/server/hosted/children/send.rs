@@ -198,6 +198,13 @@ impl Hosted {
                     .collect();
                 return Err(not_found(name, &running));
             };
+            if found.is_command() {
+                return Err(format!(
+                    "{} is a command child, and a command child takes no turns, so nothing was typed. \
+                     Wait on it for its exit code and last lines, or stop it.",
+                    found.name
+                ));
+            }
             let session = self.sessions.get(found.id).filter(|_| found.running);
             (
                 (found.name.clone(), found.backend.clone()),
