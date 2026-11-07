@@ -40,17 +40,29 @@ describe('PaneCrumb status', () => {
 })
 
 describe('PaneCrumb child tag and parent link', () => {
+  it('spaces the row 8px apart, with the for <parent> link 3px nearer its tag', () => {
+    const { container } = render(
+      <PaneCrumb tag={{ kind: 'role', text: 'reviewer' }} parent={{ name: 'api-refactor', onOpen: () => {} }} place='helm' />
+    )
+    expect(container.querySelector('[data-pane-crumb]')?.className).toContain(' gap-2 ')
+    expect(container.querySelector('[data-crumb="parent"]')?.className).toContain('-ml-[3px]')
+  })
+
   const tagOf = (container: HTMLElement) => container.querySelector<HTMLElement>('[data-crumb="tag"]')
   const parentOf = (container: HTMLElement) => container.querySelector<HTMLElement>('[data-crumb="parent"]')
 
-  it('S32: a command child begins with a command tag, fg-muted on a border-strong ring with no fill', () => {
+  it('S32: a command child begins with a command tag, fg-muted on an inset border-strong ring with no fill and no layout', () => {
     const { container } = render(
       <PaneCrumb tag={{ kind: 'command', text: 'command' }} parent={{ name: 'api-refactor' }} place="helm" />
     )
     const tag = tagOf(container)
     expect(tag?.textContent).toBe('command')
     expect(tag?.className).toContain('text-fg-muted')
-    expect(tag?.className).toContain('border-border-strong')
+    // The ring is an inset shadow, so the pill is its 16px line tall and takes no border.
+    expect(tag?.className).toContain('ring-border-strong')
+    expect(tag?.className).toContain('ring-inset')
+    expect(tag?.className).toContain('leading-4')
+    expect(tag?.className).not.toMatch(/(^| )border( |$)/)
     expect(tag?.className).not.toContain('bg-')
     // It comes before the parent link and the place.
     const order = [...container.querySelectorAll('[data-crumb]')].map((el) => el.getAttribute('data-crumb'))

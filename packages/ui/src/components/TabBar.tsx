@@ -5,9 +5,10 @@ import { hasPrimaryModifier } from '../lib/platform'
 import {
   SESSION_STATE_DOT,
   SESSION_STATE_LABEL,
+  commandTone,
   type SessionState
 } from '../lib/sessionstate'
-import { CloseIcon, PlusIcon } from './icons'
+import { CloseIcon, CommandChildIcon, PlusIcon } from './icons'
 import { Menu, type MenuAnchor, type MenuEntry } from './Menu'
 
 /**
@@ -39,6 +40,14 @@ export interface Tab {
   host?: string | undefined
   closable?: boolean | undefined
   indicator?: TabIndicator | undefined
+  /**
+   * The tab is a command child's (`floti agent run`): its indicator is drawn as
+   * the terminal glyph, where an agent has its state dot, in the glyph's tones
+   * (`commandTone`).
+   */
+  command?: boolean | undefined
+  /** What the tab's accessible name says of its state in place of the indicator's label ("running", "exited 0"). */
+  stateWord?: string | undefined
   /**
    * The link to the host the tab's session runs on dropped: its dot is a
    * warning ring, whatever the session was last doing, until the link is back.
@@ -429,7 +438,7 @@ export function TabBar({
                         ? undefined
                         : tab.away === true
                           ? `${tab.title}, connection lost`
-                          : `${tab.title}, ${SESSION_STATE_LABEL[tab.indicator]}`
+                          : `${tab.title}, ${tab.stateWord ?? SESSION_STATE_LABEL[tab.indicator]}`
                     }
                     title={tab.hint}
                     onClick={() => onActivate(tab.id)}
@@ -550,6 +559,17 @@ export function TabBar({
 
 /** The dot, or the kind icon where there is no dot. */
 function Mark({ tab, active }: { tab: Tab; active: boolean }): JSX.Element | null {
+  if (tab.indicator !== undefined && tab.command === true && tab.away !== true) {
+    return (
+      <span
+        aria-hidden
+        data-tab-command="true"
+        className={cn('grid size-3 shrink-0 place-items-center', commandTone(tab.indicator))}
+      >
+        <CommandChildIcon />
+      </span>
+    )
+  }
   if (tab.indicator !== undefined) {
     return (
       <span

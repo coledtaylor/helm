@@ -252,6 +252,7 @@ import { terminalFontStack } from "../terminal";
 import { SessionCrumb } from "./SessionCrumb";
 import {
   childCrumb,
+  childTab,
   indicatorOf,
   sessionNote,
   statusCounts as countSessionStates,
@@ -3366,7 +3367,7 @@ export function App(): JSX.Element {
                 status === null
                   ? `${label} · ${on} · ${there.record.cwd}`
                   : `${label} · ${on} · ${there.record.cwd}\n${status}`,
-              indicator: there.indicator,
+              ...childTab(there.record, there.indicator),
               // Its host's link is down: a warning ring until it is back.
               away:
                 there.record.status === "running" &&
@@ -3394,7 +3395,7 @@ export function App(): JSX.Element {
               status === null
                 ? `${label} · ${session.cwd}`
                 : `${label} · ${session.cwd}\n${status}`,
-            indicator: stateOf(session),
+            ...childTab(session, stateOf(session)),
             renamable: true,
           },
         ];

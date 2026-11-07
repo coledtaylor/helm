@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionActivity, SessionActivityState, SessionRecord } from '@helm/core/types'
-import { childCrumb, childStatus, crumbStatus, indicatorOf, sessionNote, statusCounts, statusHint } from './sessionView'
+import { childCrumb, childStatus, childTab, crumbStatus, indicatorOf, sessionNote, statusCounts, statusHint } from './sessionView'
 
 function session(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -31,6 +31,54 @@ function said(
 }
 
 const MINUTE = 60_000
+
+describe('the crumb of a session that handed control back', () => {
+  const now = Date.parse('2026-10-02T12:00:00.000Z')
+
+  it('says Idle with how long, as the card’s header does, for ready and for background task still running', () => {
+    expect(crumbStatus(session(), 'idle', now - MINUTE, now)).toEqual({ text: 'Idle · 1m', tone: 'success' })
+    expect(crumbStatus(session(), 'shell', now - MINUTE, now)).toEqual({ text: 'Idle · 1m', tone: 'success' })
+    expect(crumbStatus(session(), 'idle', now - 20 * MINUTE, now).text).toBe(childStatus(session(), 'idle', now - 20 * MINUTE, now))
+  })
+
+  it('says Idle alone where no time is known', () => {
+    expect(crumbStatus(session(), 'idle', null, now)).toEqual({ text: 'Idle', tone: 'success' })
+    expect(crumbStatus(session(), 'shell', null, now).text).toBe('Idle')
+  })
+})
+
+describe('childTab', () => {
+  const command = { command: 'pnpm test', parentName: 'api-refactor' }
+
+  it('draws a command child as the terminal glyph in the glyph’s state, saying running or exited <code>', () => {
+    expect(childTab(session({ ...command }), 'busy')).toEqual({
+      indicator: 'running',
+      command: true,
+      stateWord: 'running',
+      badge: 'api-refactor'
+    })
+    expect(childTab(session({ ...command, status: 'exited', exitCode: 0 }), 'ended')).toMatchObject({
+      indicator: 'ended',
+      stateWord: 'exited 0'
+    })
+    expect(childTab(session({ ...command, status: 'exited', exitCode: 2 }), 'failed')).toMatchObject({
+      indicator: 'failed',
+      stateWord: 'exited 2'
+    })
+  })
+
+  it('keeps an agent child’s own dot and gives it the parent’s name as its badge', () => {
+    expect(childTab(session({ role: 'reviewer', parentName: 'api-refactor' }), 'busy')).toEqual({
+      indicator: 'busy',
+      badge: 'api-refactor'
+    })
+  })
+
+  it('gives a session nobody started no badge', () => {
+    expect(childTab(session(), 'idle')).toEqual({ indicator: 'idle' })
+    expect(childTab(session({ parentName: '' }), 'idle')).toEqual({ indicator: 'idle' })
+  })
+})
 
 describe('indicatorOf', () => {
   it('paints a running session with what its record says it is doing', () => {

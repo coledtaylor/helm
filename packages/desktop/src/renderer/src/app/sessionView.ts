@@ -6,7 +6,8 @@ import {
   type SessionActivityState,
   type SessionRecord
 } from '@helm/core/types'
-import type { CrumbParent, CrumbTag, CrumbTone, TabIndicator } from '@helm/ui'
+import type { CrumbParent, CrumbTag, CrumbTone, Tab, TabIndicator } from '@helm/ui'
+import { commandWord } from './treeFamilies'
 
 /**
  * What a session's dot says.
@@ -89,10 +90,12 @@ export function crumbStatus(
       return { text: message === null ? 'Error' : `Error · ${message}`, tone: 'danger' }
     case 'busy':
       return { text: `Working${age}`, tone: 'accent' }
+    // A session handing control back says how long it has been idle, as its
+    // card's header does; a background task still running is the dot's
+    // hover text, not the crumb's.
     case 'idle':
-      return { text: 'Idle', tone: 'success' }
     case 'shell':
-      return { text: 'Idle · background task running', tone: 'success' }
+      return { text: `Idle${age}`, tone: 'success' }
     case 'failed':
       return { text: `Exited ${String(session.exitCode ?? '')}`.trim(), tone: 'danger' }
     case 'ended':
@@ -254,4 +257,23 @@ export function childCrumb(
       ? undefined
       : { name: parentName, onOpen: listsParent(parentId) ? () => openParent(parentId) : undefined }
   return { tag, parent }
+}
+
+/**
+ * What a child's own tab adds to a session tab. A command child's indicator is
+ * the terminal glyph in the glyph's tones (success while it runs, fg-subtle
+ * after exit 0, danger otherwise), read from its command and never from the
+ * registry, and its accessible name says `running` or `exited <code>`. Any
+ * child, command or agent, carries the name of the session that started it as
+ * the muted badge after its title.
+ */
+export function childTab(
+  session: Pick<SessionRecord, 'status' | 'exitCode' | 'command' | 'parentName'>,
+  indicator: TabIndicator
+): Pick<Tab, 'indicator' | 'command' | 'stateWord' | 'badge'> {
+  const badge = typeof session.parentName === 'string' && session.parentName !== '' ? session.parentName : undefined
+  const marks = isCommandChild(session)
+    ? { indicator: commandState(session), command: true, stateWord: commandWord(session) }
+    : { indicator }
+  return badge === undefined ? marks : { ...marks, badge }
 }

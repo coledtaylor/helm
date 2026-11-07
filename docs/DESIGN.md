@@ -480,21 +480,28 @@ overrides the gate; keep it.
   identical in the strip - or "shared", for a page of yours a session may
   drive. The page itself says which session can drive it in a 30px
   `accent-soft` note above it, `accent-text`, with a secondary "Stop sharing"
-  when the user shared it. A strip with no tabs and no actions is **not drawn**.
+  when the user shared it. A child session's tab (started by another session)
+  carries the same word: the name of the session that started it. A command
+  child's tab has the 12px terminal glyph in place of the dot, in the family
+  header's tones (`commandTone`), and says "running" or "exited <code>" to a
+  screen reader. A strip with no tabs and no actions is **not drawn**.
 - **The crumb row**: under a session's tab, 26px of mono `fg-subtle` naming
   where it is - project `›` branch `·` profile - and, at the right in Inter,
   what it is doing and for how long, in its state's tone ("Working · 4m" in
-  `accent-text`, "Needs you · 2m" in `warn`). It is the branch's home now that
+  `accent-text`, "Needs you · 2m" in `warn`, "Idle · 1m" in `success`, as the
+  family header says it). It is the branch's home now that
   tabs are one line: two sessions on one project are told apart here, with the
   room to say the branch in full. A page's tab has no crumb - the page's own
   header names what it is about. A child's own tab (started by another
   session with the host's agent tools) begins its crumb, before the place, with
   its tag and a `for <parent>` link: the tag of a command child reads
   "command" in `fg-muted` on a 1px `border-strong` ring with no fill (as the
-  family header's), an agent child's names its role in `accent-text` on
+  family header's; the ring is an inset shadow, so the pill is 16px tall with
+  7px of padding), an agent child's names its role in `accent-text` on
   `accent-soft`, and a child with no role has no tag. The link is Inter 11px
   `fg-muted`, `fg` and underlined on hover, with the page's focus ring;
-  pressing it brings the parent's tab forward or opens one. Where the window
+  pressing it brings the parent's tab forward or opens one. The row's gap is
+  8px and the link sits 3px nearer the tag. Where the window
   does not list the parent, "for <parent>" is plain text, not a button.
 - **The session tab's state dot.** A session tab carries a 6px dot in place of
   a kind icon, and it says two different kinds of thing: what Helm knows about

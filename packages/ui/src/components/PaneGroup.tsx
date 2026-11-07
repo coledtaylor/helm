@@ -146,7 +146,7 @@ export function PaneCrumb({ tag, parent, place, branch, profile, status, hint }:
   return (
     <div
       data-pane-crumb
-      className="flex h-[26px] shrink-0 items-center gap-1.5 border-b border-border px-3 font-mono text-[11px] text-fg-subtle"
+      className="flex h-[26px] shrink-0 items-center gap-2 border-b border-border px-3 font-mono text-[11px] text-fg-subtle"
     >
       {tag !== undefined && (
         <span
@@ -154,7 +154,11 @@ export function PaneCrumb({ tag, parent, place, branch, profile, status, hint }:
           data-crumb-tag={tag.kind}
           className={cn(
             'shrink-0 rounded-full px-[7px] font-sans text-[10px] leading-4 font-medium',
-            tag.kind === 'command' ? 'border border-border-strong text-fg-muted' : 'bg-accent-soft text-accent-text'
+            // The command tag's ring is drawn inside the 16px pill and takes no
+            // room, as the frame's inset shadow does.
+            tag.kind === 'command'
+              ? 'text-fg-muted ring-1 ring-border-strong ring-inset'
+              : 'bg-accent-soft text-accent-text'
           )}
         >
           {tag.text}
@@ -166,12 +170,12 @@ export function PaneCrumb({ tag, parent, place, branch, profile, status, hint }:
             type="button"
             data-crumb="parent"
             onClick={parent.onOpen}
-            className="shrink-0 rounded-sm font-sans text-[11px] text-fg-muted hover:text-fg hover:underline"
+            className="-ml-[3px] shrink-0 rounded-sm font-sans text-[11px] text-fg-muted hover:text-fg hover:underline"
           >
             for {parent.name}
           </button>
         ) : (
-          <span data-crumb="parent" className="shrink-0 font-sans text-[11px] text-fg-muted">
+          <span data-crumb="parent" className="-ml-[3px] shrink-0 font-sans text-[11px] text-fg-muted">
             for {parent.name}
           </span>
         ))}
