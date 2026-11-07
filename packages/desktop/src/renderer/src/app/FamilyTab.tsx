@@ -2,10 +2,12 @@ import type { JSX, ReactNode } from 'react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   closeFamilyChild,
+  commandState,
   endedHeaderText,
   familyChildren,
   familyEntries,
   familyRoom,
+  isCommandChild,
   openFamilyChildAsTab,
   reportNote,
   sessionLabel,
@@ -82,7 +84,8 @@ export interface FamilyTabProps {
 }
 
 /** The dot of a header: what a running child is doing, and for an ended one only that it ended, unless it failed by itself. */
-function dotOf(child: SessionRecord, state: TabIndicator): TabIndicator {
+function dotOf(child: SessionRecord, state: TabIndicator, command: boolean): TabIndicator {
+  if (command) return commandState(child)
   if (child.status === 'running') return state
   return state === 'failed' && child.stopped !== true ? 'failed' : 'ended'
 }
@@ -164,11 +167,15 @@ export function FamilyTab({
   const headers = entries.filter((entry) => entry.shape === 'header' || entry.shape === 'ended')
   const kidOf = new Map(kids.map((kid) => [kid.session.id, kid]))
 
+  // A command child is known by its record's command; a kid the window marked is one too.
+  const isCommand = (child: SessionRecord): boolean => isCommandChild(child) || kidOf.get(child.id)?.command === true
+
   const header = ({ child, shape }: FamilyEntry<SessionRecord>): JSX.Element => {
     const kid = kidOf.get(child.id)
     const name = sessionLabel(child)
     const running = shape === 'card' || shape === 'header'
-    const state = dotOf(child, kid?.state ?? 'running')
+    const command = isCommand(child)
+    const state = dotOf(child, kid?.state ?? 'running', command)
     return (
       <ChildHeader
         key={child.id}
@@ -176,6 +183,7 @@ export function FamilyTab({
         name={name}
         state={state}
         role={child.role}
+        command={command}
         status={
           running
             ? childStatus(child, state, kid?.since ?? null, now)
@@ -224,7 +232,7 @@ export function FamilyTab({
             axis={drawn.axis}
             cardCount={cards.length}
             cards={cards.map((entry) => {
-              const note = reportNote(entry.child, { command: kidOf.get(entry.child.id)?.command === true })
+              const note = reportNote(entry.child, { command: isCommand(entry.child) })
               return (
                 <FamilyCard
                   key={entry.child.id}

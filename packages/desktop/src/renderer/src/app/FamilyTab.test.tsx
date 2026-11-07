@@ -401,6 +401,65 @@ describe('a parent’s tab with children', () => {
     expect(view.container.querySelector('[data-family-cards]')!.contains(getTerminal(2)!.element)).toBe(false)
   })
 
+  describe('a command child', () => {
+    const exited = (id: number, name: string, code: number): SessionRecord =>
+      child(id, name, {
+        command: 'pnpm test',
+        status: 'exited',
+        exitCode: code,
+        endedAt: new Date(2026, 9, 29, 14, 52).toISOString()
+      })
+
+    it('S25 S26: has the terminal glyph in success where an agent has its dot and the command tag on its card while it runs', () => {
+      const view = mount(WIDE, [LEAD, child(2, 'reviewer', { role: 'reviewer' }), child(3, 'tests', { command: 'pnpm test', role: null })])
+
+      const tests = card(view.container, 'tests')
+      expect(tests.querySelector('[data-family-command="running"]')!.className).toContain('text-success')
+      expect(tests.querySelector('[data-family-dot]')).toBeNull()
+      expect(tests.querySelector('[data-family-role]')!.textContent).toBe('command')
+      const reviewer = card(view.container, 'reviewer')
+      expect(reviewer.querySelector('[data-family-command]')).toBeNull()
+      expect(reviewer.querySelector('[data-family-role]')!.textContent).toBe('reviewer')
+    })
+
+    it('S25 S27: shrinks to an ended header with the glyph in fg-subtle reading exited 0 and the time, with Close', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
+      view.list([LEAD, exited(3, 'tests', 0)])
+
+      const header = view.container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+      expect(header.querySelector('[data-family-status]')!.textContent).toBe('exited 0 · 14:52')
+      expect(header.querySelector('[data-family-command="ended"]')!.className).toContain('text-fg-subtle')
+      expect(header.querySelector('[data-family-dot]')).toBeNull()
+      expect(within(header).getByRole('button', { name: 'Close tests' })).toBeTruthy()
+      expect(within(header).queryByRole('button', { name: /Stop tests/ })).toBeNull()
+    })
+
+    it('S25 S27: a command that failed has the glyph in danger and reads exited with its code', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
+      view.list([LEAD, exited(3, 'tests', 137)])
+
+      const header = view.container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+      expect(header.querySelector('[data-family-status]')!.textContent).toBe('exited 137 · 14:52')
+      expect(header.querySelector('[data-family-command="failed"]')!.className).toContain('text-danger')
+    })
+
+    it('S25: a command child shrunk to a header keeps its glyph in the dot’s place and has no tag', () => {
+      const { container } = mount(SHORT, [
+        LEAD,
+        child(2, 'alpha'),
+        child(3, 'beta'),
+        child(4, 'gamma'),
+        child(5, 'tests', { command: 'pnpm test' })
+      ])
+
+      expect(headerNames(container)).toEqual(['gamma', 'tests'])
+      const headers = container.querySelector<HTMLElement>('[data-family-headers]')!
+      expect(headers.querySelectorAll('[data-family-dot]')).toHaveLength(1)
+      expect(headers.querySelectorAll('[data-family-command="running"]')).toHaveLength(1)
+      expect(headers.querySelector('[data-family-role]')).toBeNull()
+    })
+  })
+
   it('S17: leaves every ended child’s header its row, though the pane had room for a card for each child', () => {
     const view = mount(WIDE, [LEAD, child(2, 'reviewer'), child(3, 'worker'), child(4, 'tester'), child(5, 'docs')])
     view.list([LEAD, stopped(2, 'reviewer'), stopped(3, 'worker'), child(4, 'tester'), child(5, 'docs')])

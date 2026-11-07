@@ -1,7 +1,8 @@
 import { useState, type JSX, type ReactNode } from 'react'
 import { FAMILY_PARENT_SHARE, type FamilyAxis } from '@helm/core/types'
 import { cn } from '../lib/cn'
-import { SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
+import { SESSION_STATE_DOT, SESSION_STATE_LABEL, commandTone, type SessionState } from '../lib/sessionstate'
+import { CommandChildIcon } from './icons'
 
 /**
  * The family view: one session tab holding the parent's terminal and its
@@ -209,6 +210,11 @@ export interface ChildHeaderProps {
   state: SessionState
   /** Its role, drawn as a tag on a card; null for a child started with none. */
   role?: string | null | undefined
+  /**
+   * It is a command and not an agent: the terminal glyph takes the dot's place,
+   * in the tone `state` gives it, and the card's tag reads "command".
+   */
+  command?: boolean | undefined
   /** The state and for how long ("Working · 4m"), or how and when it ended ("Stopped · 14:52"). */
   status: string
   /** The header pressed: a card or last screen shrinks, a header shows as a card, an ended header opens its last screen. */
@@ -229,7 +235,8 @@ const SMALL_BUTTON =
  * A child's one-line header.
  *
  * On a card it carries the state dot, the name, the role as a tag, the state
- * and for how long, then Open as tab and Stop. Shrunk it is the dot, the name
+ * and for how long, then Open as tab and Stop. A command child has the terminal
+ * glyph where the dot would be and "command" where the role would be. Shrunk it is the dot, the name
  * and the state; ended it says how and when with Close. Pressing the words
  * is the header's one action, and the buttons are beside it, never inside it.
  */
@@ -238,6 +245,7 @@ export function ChildHeader({
   name,
   state,
   role,
+  command = false,
   status,
   onPress,
   onOpenAsTab,
@@ -261,20 +269,43 @@ export function ChildHeader({
         aria-label={`${open ? 'Shrink' : 'Show'} ${name}, ${status}`}
         className="flex h-full min-w-0 flex-1 items-center gap-1 whitespace-nowrap pr-1 pl-[7px] text-left text-[11.5px] text-fg transition-colors hover:bg-hover focus-visible:outline-offset-[-2px]"
       >
-        <span
-          aria-hidden
-          title={SESSION_STATE_LABEL[state]}
-          data-family-dot={state}
-          className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[state])}
-        />
+        {command ? (
+          <span
+            aria-hidden
+            title={SESSION_STATE_LABEL[state]}
+            data-family-command={state}
+            className={cn('grid size-3 shrink-0 place-items-center', commandTone(state))}
+          >
+            <CommandChildIcon />
+          </span>
+        ) : (
+          <span
+            aria-hidden
+            title={SESSION_STATE_LABEL[state]}
+            data-family-dot={state}
+            className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATE_DOT[state])}
+          />
+        )}
         <span className="shrink-0 font-medium">{name}</span>
-        {open && role !== undefined && role !== null && role !== '' && (
+        {open && command ? (
           <span
             data-family-role
-            className="shrink-0 rounded-full bg-accent-soft px-[5px] text-[10px] leading-4 font-medium text-accent-text"
+            className="shrink-0 rounded-full border border-border-strong px-1 text-[10px] leading-[14px] font-medium text-fg-muted"
           >
-            {role}
+            command
           </span>
+        ) : (
+          open &&
+          role !== undefined &&
+          role !== null &&
+          role !== '' && (
+            <span
+              data-family-role
+              className="shrink-0 rounded-full bg-accent-soft px-[5px] text-[10px] leading-4 font-medium text-accent-text"
+            >
+              {role}
+            </span>
+          )
         )}
         <span data-family-status className="ml-auto min-w-0 truncate pl-0.5 text-[10.5px] text-fg-muted">
           {status}

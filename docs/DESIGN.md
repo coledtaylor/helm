@@ -910,7 +910,13 @@ overrides the gate; keep it.
   as a 10px tag in `accent-text` on `accent-soft`, the state and for how long
   at the right in 10.5px `fg-muted` ("Working · 4m"), then **Open as tab** and
   **Stop** as 10.5px buttons in `border-strong`, Stop in `danger` with a
-  `danger` edge at 45%. Pressing the words shrinks the card; Stop asks first, in the
+  `danger` edge at 45%. A command child (`floti agent run`) has `CommandChildIcon`, 12px, where the dot
+  would be, in `success` while it runs, `fg-subtle` once it exited 0 and `danger`
+  for any other code (the dot's tones, `commandTone`), on a card, a shrunk
+  header and an ended header alike; its tag reads "command" in `fg-muted` on a
+  1px `border-strong` ring with no fill, where an agent's names its role, and
+  its ended header reads "exited 0 · 14:52" ("exited <code> · <time>") with
+  **Close**. Pressing the words shrinks the card; Stop asks first, in the
   window's one question for ending a running session ("*name* is still running
   on *host*. Ending it stops the Claude Code session in *folder*. *Parent*,
   which started it, is told.", End session / Cancel, Cancel focused; the
