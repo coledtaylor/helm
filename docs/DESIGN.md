@@ -481,7 +481,9 @@ overrides the gate; keep it.
   drive. The page itself says which session can drive it in a 30px
   `accent-soft` note above it, `accent-text`, with a secondary "Stop sharing"
   when the user shared it. A child session's tab (started by another session)
-  carries the same word: the name of the session that started it. A command
+  carries the same word: the name of the session that started it, which also
+  ends the tab's accessible name ("reviewer, working, started by
+  api-refactor"), because the badge is drawn and not read. A command
   child's tab has the 12px terminal glyph in place of the dot, in the family
   header's tones (`commandTone`), and says "running" or "exited <code>" to a
   screen reader. A strip with no tabs and no actions is **not drawn**.

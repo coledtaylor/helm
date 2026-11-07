@@ -265,15 +265,16 @@ export function childCrumb(
  * after exit 0, danger otherwise), read from its command and never from the
  * registry, and its accessible name says `running` or `exited <code>`. Any
  * child, command or agent, carries the name of the session that started it as
- * the muted badge after its title.
+ * the muted badge after its title, and the tab's accessible name ends with
+ * `started by <parent>`.
  */
 export function childTab(
   session: Pick<SessionRecord, 'status' | 'exitCode' | 'command' | 'parentName'>,
   indicator: TabIndicator
-): Pick<Tab, 'indicator' | 'command' | 'stateWord' | 'badge'> {
-  const badge = typeof session.parentName === 'string' && session.parentName !== '' ? session.parentName : undefined
+): Pick<Tab, 'indicator' | 'command' | 'stateWord' | 'badge' | 'startedBy'> {
+  const parent = typeof session.parentName === 'string' && session.parentName !== '' ? session.parentName : undefined
   const marks = isCommandChild(session)
     ? { indicator: commandState(session), command: true, stateWord: commandWord(session) }
     : { indicator }
-  return badge === undefined ? marks : { ...marks, badge }
+  return parent === undefined ? marks : { ...marks, badge: parent, startedBy: parent }
 }

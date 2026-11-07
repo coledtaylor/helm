@@ -55,7 +55,8 @@ describe('childTab', () => {
       indicator: 'running',
       command: true,
       stateWord: 'running',
-      badge: 'api-refactor'
+      badge: 'api-refactor',
+      startedBy: 'api-refactor'
     })
     expect(childTab(session({ ...command, status: 'exited', exitCode: 0 }), 'ended')).toMatchObject({
       indicator: 'ended',
@@ -70,7 +71,8 @@ describe('childTab', () => {
   it('keeps an agent child’s own dot and gives it the parent’s name as its badge', () => {
     expect(childTab(session({ role: 'reviewer', parentName: 'api-refactor' }), 'busy')).toEqual({
       indicator: 'busy',
-      badge: 'api-refactor'
+      badge: 'api-refactor',
+      startedBy: 'api-refactor'
     })
   })
 

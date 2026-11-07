@@ -34,6 +34,12 @@ export interface Tab {
    */
   badge?: string | undefined
   /**
+   * The session that started this tab's session. Its name ends the tab's
+   * accessible name ("reviewer, working, started by api-refactor"), because the
+   * badge is drawn and a screen reader would otherwise not hear it.
+   */
+  startedBy?: string | undefined
+  /**
    * The host the tab's session or page is on, named after the title in mono
    * when it is not this PC. A tab of this PC's names no host.
    */
@@ -437,8 +443,8 @@ export function TabBar({
                       tab.indicator === undefined
                         ? undefined
                         : tab.away === true
-                          ? `${tab.title}, connection lost`
-                          : `${tab.title}, ${tab.stateWord ?? SESSION_STATE_LABEL[tab.indicator]}`
+                          ? `${tab.title}, connection lost${startedBySuffix(tab)}`
+                          : `${tab.title}, ${tab.stateWord ?? SESSION_STATE_LABEL[tab.indicator]}${startedBySuffix(tab)}`
                     }
                     title={tab.hint}
                     onClick={() => onActivate(tab.id)}
@@ -558,6 +564,10 @@ export function TabBar({
 }
 
 /** The dot, or the kind icon where there is no dot. */
+function startedBySuffix(tab: Tab): string {
+  return tab.startedBy === undefined ? '' : `, started by ${tab.startedBy}`
+}
+
 function Mark({ tab, active }: { tab: Tab; active: boolean }): JSX.Element | null {
   if (tab.indicator !== undefined && tab.command === true && tab.away !== true) {
     return (

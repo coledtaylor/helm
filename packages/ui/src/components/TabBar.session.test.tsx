@@ -51,6 +51,18 @@ describe('TabBar session tabs', () => {
     expect(screen.getByRole('tab', { name: 'tests, running' }).querySelector('[data-tab-badge]')?.textContent).toBe('api-refactor')
   })
 
+  it('names the session that started a child tab in the tab’s accessible name, as the badge shows it', () => {
+    renderBar([
+      { id: 'session:1', title: 'tests', indicator: 'running', command: true, stateWord: 'running', badge: 'api-refactor', startedBy: 'api-refactor' },
+      { id: 'session:2', title: 'reviewer', indicator: 'busy', badge: 'api-refactor', startedBy: 'api-refactor' },
+      { id: 'session:3', title: 'api-refactor', indicator: 'idle' }
+    ])
+    expect(screen.getByRole('tab', { name: 'tests, running, started by api-refactor' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'reviewer, working, started by api-refactor' })).toBeTruthy()
+    // A session nobody started keeps its name and state alone.
+    expect(screen.getByRole('tab', { name: 'api-refactor, ready' })).toBeTruthy()
+  })
+
   it('draws the warning ring, not the glyph, while a command child’s host is away', () => {
     renderBar([{ id: 'session:1', title: 'tests', indicator: 'running', command: true, away: true }])
     const tab = screen.getByRole('tab', { name: 'tests, connection lost' })
