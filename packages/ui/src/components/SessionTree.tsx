@@ -791,6 +791,9 @@ function HostTree({
     // The rules of the ancestors further out run on through this row's
     // children while the ancestors have more children below this branch.
     const through = guide === undefined ? [] : [...guide.through, !guide.last]
+    // A limit notice stands under the last child, so that child's rule runs on
+    // down to it instead of ending at its elbow.
+    const noticeBelow = session.notice !== undefined && expanded !== false
     return (
       <Fragment key={session.id}>
         <SessionRow
@@ -815,9 +818,12 @@ function HostTree({
         />
         {expanded === true &&
           started.map((child, at) =>
-            renderSession(child, indent + FAMILY_STEP_PX, { last: at === started.length - 1, through })
+            renderSession(child, indent + FAMILY_STEP_PX, {
+              last: at === started.length - 1 && !noticeBelow,
+              through
+            })
           )}
-        {session.notice !== undefined && expanded !== false && (
+        {session.notice !== undefined && noticeBelow && (
           <LimitNotice
             text={session.notice.text}
             detail={session.notice.detail}

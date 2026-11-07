@@ -62,6 +62,12 @@ function renderTree(parent: TreeSession, actions?: TreeNoticeActions): void {
   )
 }
 
+/** The kinds of guide a session's row draws, in document order. */
+const guidesOf = (id: number): string[] =>
+  [
+    ...document.querySelector(`[data-session-row="session:${String(id)}"]`)!.querySelectorAll('[data-session-guide]')
+  ].map((each) => each.getAttribute('data-session-guide') ?? '')
+
 const SENTENCE =
   'The limit of 4 running agents per parent holds: you have 4 running (reviewer, worker). Wait for news from them and start again.'
 
@@ -124,6 +130,21 @@ describe('the limit notice under a parent children', () => {
     const notice = document.querySelector<HTMLElement>('[data-limit-notice]')!
     expect(notice.textContent).toContain('api-refactor asked for a fifth agent at 14:41; a session may run 4 at once.')
     expect(notice.getAttribute('title')).toBe(SENTENCE)
+  })
+
+  it('S16: the last child’s guide runs on down to the notice instead of ending at its elbow', () => {
+    renderTree(
+      row(1, 'api-refactor', {
+        nested: [row(2, 'reviewer'), row(3, 'worker')],
+        notice: { key: 'n1', text: SENTENCE, allowMore: null }
+      })
+    )
+    expect(guidesOf(3)).toEqual(['more', 'elbow'])
+  })
+
+  it('S16: with no notice the last child’s guide ends at its elbow', () => {
+    renderTree(row(1, 'api-refactor', { nested: [row(2, 'reviewer'), row(3, 'worker')] }))
+    expect(guidesOf(3)).toEqual(['last', 'elbow'])
   })
 
   it('S16: a parent with no refused start shows no notice', () => {
