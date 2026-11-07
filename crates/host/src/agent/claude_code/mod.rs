@@ -296,6 +296,10 @@ impl ClaudeCodeBackend {
             effort: composition.effort,
             permission_args: &permission_args,
             agent: composition.agent.as_deref(),
+            remote_control: composition
+                .remote_control
+                .as_deref()
+                .filter(|name| !name.trim().is_empty()),
             prompt,
         });
 
@@ -376,6 +380,10 @@ impl AgentBackend for ClaudeCodeBackend {
 
     fn agent_tools(&self) -> Option<&dyn AgentTools> {
         Some(self)
+    }
+
+    fn remote_control(&self) -> bool {
+        true
     }
 
     fn permissions(&self) -> Option<&dyn Permissions> {

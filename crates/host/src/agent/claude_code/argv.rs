@@ -36,6 +36,8 @@ pub(super) struct Argv<'a> {
     /// The permission flag, already composed by the backend's permissions.
     pub permission_args: &'a [OsString],
     pub agent: Option<&'a str>,
+    /// The name the session runs Remote Control under.
+    pub remote_control: Option<&'a str>,
     pub prompt: Option<&'a str>,
 }
 
@@ -56,6 +58,11 @@ pub(super) fn build(argv: &Argv<'_>) -> Vec<OsString> {
     match argv.resume {
         Some(id) => push(&[&"--resume", &id]),
         None => push(&[&"-n", &sanitize_session_name(argv.name)]),
+    }
+
+    // Its name is the one value, so nothing after it is taken for one.
+    if let Some(name) = argv.remote_control {
+        push(&[&"--remote-control", &clean_label(name)]);
     }
 
     for dir in argv.plugin_dirs {
@@ -127,11 +134,7 @@ fn effort_name(effort: EffortLevel) -> &'static str {
 /// space collapse, and it is cut to sixty characters. Nothing left is
 /// `session`.
 pub fn sanitize_session_name(name: &str) -> String {
-    let spaced: String = name
-        .chars()
-        .map(|c| if is_control(c) { ' ' } else { c })
-        .collect();
-    let clean = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
+    let clean = clean_label(name);
     if clean.is_empty() {
         return "session".to_owned();
     }
@@ -144,6 +147,16 @@ pub fn sanitize_session_name(name: &str) -> String {
             .to_owned();
     }
     clean
+}
+
+/// `name` with control characters turned into spaces and runs of space
+/// collapsed, at any length: a Remote Control name is a whole line of parents.
+fn clean_label(name: &str) -> String {
+    let spaced: String = name
+        .chars()
+        .map(|c| if is_control(c) { ' ' } else { c })
+        .collect();
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// `base` made safe, or `base 2`, `base 3`... whichever is free among

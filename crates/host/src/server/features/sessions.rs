@@ -54,7 +54,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 
 use super::{Caller, Feature, FeatureContext, Streams, TerminalAttachment};
 use crate::server::events::Events;
-use crate::server::hosted::{Hosted, label_of, session_id};
+use crate::server::hosted::{Closing, Hosted, label_of, session_id};
 use crate::server::records::ExitNotice;
 use crate::session::{ActivityTracker, ClientId, Session, TermSize, TerminalExit, check_shell};
 
@@ -212,6 +212,9 @@ impl Sessions {
             .describe(request.id)
             .ok_or_else(|| format!("Session {} is not in this database.", request.id))?;
         let label = label_of(&record);
+        // The agents it started end with it unless they were started to
+        // outlive it: the question names both.
+        let closing = self.hosted.closing(request.id);
         let question = {
             let mut confirms = lock(&self.confirms);
             confirms.next += 1;
@@ -221,14 +224,13 @@ impl Sessions {
                 id,
                 kind: SessionConfirmKind::CloseSession,
                 message: format!("\u{201c}{label}\u{201d} is still running."),
-                detail: format!(
-                    "Closing the tab ends the {agent} session in {}.",
-                    record.cwd
-                ),
-                confirm_label: "End session".to_owned(),
-                session_names: vec![label],
-                ending_ids: Vec::new(),
-                outliving_ids: Vec::new(),
+                detail: close_detail(&agent, &record.cwd, &closing),
+                confirm_label: close_button(closing.ending.len()),
+                session_names: std::iter::once(label)
+                    .chain(closing.ending.iter().map(|(_, name)| name.clone()))
+                    .collect(),
+                ending_ids: closing.ending.iter().map(|(id, _)| *id).collect(),
+                outliving_ids: closing.outliving.iter().map(|(id, _)| *id).collect(),
             }
         };
         self.events
@@ -608,12 +610,66 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The close question's button: `End session` when only the session ends,
+/// `End 4 sessions` when it and three others do. `ending` is how many end
+/// beyond the session itself.
+fn close_button(ending: usize) -> String {
+    match ending {
+        0 => "End session".to_owned(),
+        more => format!("End {} sessions", more + 1),
+    }
+}
+
+/// What the close question says of a session: its agent and folder, the
+/// agents that end with it and the ones that keep running.
+fn close_detail(agent: &str, cwd: &str, closing: &Closing) -> String {
+    let mut detail = format!("Closing the tab ends the {agent} session in {cwd}.");
+    let names = |list: &mut dyn Iterator<Item = &str>| list.collect::<Vec<_>>().join(", ");
+    if !closing.ending.is_empty() {
+        let ending = names(&mut closing.ending.iter().map(|(_, name)| name.as_str()));
+        let count = closing.ending.len();
+        let noun = if count == 1 { "agent" } else { "agents" };
+        detail.push_str(&format!(
+            " It ends the {count} {noun} it started: {ending}."
+        ));
+    }
+    if !closing.outliving.is_empty() {
+        let outliving = names(&mut closing.outliving.iter().map(|(_, name)| name.as_str()));
+        detail.push_str(&format!(
+            " Started to outlive it, these keep running: {outliving}."
+        ));
+    }
+    detail
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const A: ClientId = ClientId(1);
     const B: ClientId = ClientId(2);
+
+    #[test]
+    fn a_close_question_counts_the_session_and_what_ends_with_it_and_names_who_keeps_running() {
+        assert_eq!(close_button(0), "End session");
+        assert_eq!(close_button(3), "End 4 sessions");
+
+        let alone = Closing::default();
+        assert_eq!(
+            close_detail("Claude Code", "C:/work", &alone),
+            "Closing the tab ends the Claude Code session in C:/work."
+        );
+        let family = Closing {
+            ending: vec![(2, "worker".into()), (3, "helper".into())],
+            outliving: vec![(4, "watcher".into())],
+        };
+        let detail = close_detail("Claude Code", "C:/work", &family);
+        assert!(
+            detail.contains("2 agents it started: worker, helper."),
+            "{detail}"
+        );
+        assert!(detail.contains("these keep running: watcher."), "{detail}");
+    }
 
     #[test]
     fn an_exit_is_worth_a_notification_only_for_a_client_whose_user_cannot_see_it() {

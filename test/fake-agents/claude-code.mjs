@@ -25,6 +25,9 @@
 // - `--resume <id>` succeeds only in the directory the conversation was
 //   recorded in, as the real CLI does. A prompt given with it is the next turn,
 //   and is logged as `openingPrompt` with `resumed` true.
+// - `--remote-control [name]` is taken as the real CLI takes it, and the name it
+//   was given is logged as `remoteControl` ('' for the flag alone, null when
+//   absent). The other fake agent has no Remote Control.
 // - `mcp add-json`, `mcp remove` and `mcp list` read and write the files the
 //   real CLI does: the working folder's `.mcp.json`, and the global config,
 //   `.claude.json` in `CLAUDE_CONFIG_DIR` when that is set and in the home
@@ -143,6 +146,7 @@ const OPTION_SPEC = (() => {
   add(['--ide'], 'ide', 'flag')
   add(['-r', '--resume'], 'resume', 'optional')
   add(['-d', '--debug'], 'debug', 'optional')
+  add(['--remote-control'], 'remoteControl', 'optional')
   add(['--session-id'], 'sessionId', 'value')
   add(['-n', '--name'], 'name', 'value')
   add(['--model'], 'model', 'value')
@@ -197,6 +201,7 @@ if (opts.help) {
       '  -r, --resume [sessionId]                Resume a conversation',
       '  --session-id <uuid>                     Use a specific session ID for the conversation',
       '  -n, --name <name>                       Name the session',
+      '  --remote-control [name]                 Start an interactive session with Remote Control enabled (optionally named)',
       '  --model <model>                         Model for the current session',
       '  --effort <level>                        Effort level for the current session',
       '  --agent <agent>                         Agent for the current session',
@@ -485,6 +490,10 @@ loadSettings()
 loadMcpServers()
 loadInstructions()
 log.openingPrompt = parsed.positionals[0] ?? null
+// `--remote-control` alone is Remote Control without a name, which is the empty
+// string here; absent is null.
+log.remoteControl =
+  opts.remoteControl === undefined ? null : opts.remoteControl === true ? '' : opts.remoteControl
 log.allowedTools = toolRules(opts.allowedTools ?? [])
 log.disallowedTools = toolRules(opts.disallowedTools ?? [])
 

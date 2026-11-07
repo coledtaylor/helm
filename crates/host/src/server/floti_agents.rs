@@ -314,12 +314,23 @@ async fn start(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
     if let Some(worktree) = &started.worktree {
         text.push_str(&format!("\nworktree: {worktree}"));
     }
+    if let Some(name) = &started.remote_control {
+        text.push_str(&format!("\nremote control: {name}"));
+    }
+    if let Some(backend) = &started.no_remote_control {
+        text.push_str(&format!(
+            "\nremote control: none. Your session runs with Remote Control and {backend} has none, so {name} runs without it.",
+            name = started.name
+        ));
+    }
     let mut body = json!({
         "name": started.name,
         "backend": started.backend,
         "folder": started.folder,
         "branch": started.branch,
         "worktree": started.worktree,
+        "remoteControl": started.remote_control,
+        "remoteControlUnavailable": started.no_remote_control.is_some(),
     });
     if wait {
         // Only that child's news: the rest stays in the inbox for a wait.

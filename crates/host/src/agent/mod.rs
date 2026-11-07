@@ -81,6 +81,13 @@ pub trait AgentBackend: Send + Sync {
         None
     }
 
+    /// Whether the agent has Remote Control: a session it can be reached in
+    /// from another device, under a name. A launch of an agent without it is
+    /// given no name for one and runs as it would otherwise.
+    fn remote_control(&self) -> bool {
+        false
+    }
+
     /// The agent's transcripts, read only.
     fn history(&self) -> Option<&dyn HistorySource> {
         None
@@ -524,6 +531,9 @@ pub struct Composition {
     /// Whether the session is given Floti's agents family, and so the guide to
     /// `floti agent`, composed into its instructions the same way.
     pub agent_guide: bool,
+    /// The name the session runs Remote Control under, for an agent that has
+    /// it ([`AgentBackend::remote_control`]); an adapter without it drops it.
+    pub remote_control: Option<String>,
 }
 
 /// A role's body, and the name of the role it belongs to.

@@ -1601,6 +1601,47 @@ fn a_role_without_a_body_adds_no_instructions() {
 }
 
 #[test]
+fn a_launch_with_a_remote_control_name_passes_it_to_the_cli_and_the_cli_runs_with_it() {
+    let world = World::new();
+    assert!(world.backend.remote_control(), "Claude Code has it");
+    let (launch, _folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "worker".into(),
+        composition: Composition {
+            remote_control: Some("api-refactor \u{203a} worker".into()),
+            ..Composition::default()
+        },
+        prompt: Some("do the work".into()),
+    });
+    let args = world.args(&launch);
+    let at = args
+        .iter()
+        .position(|arg| arg == "--remote-control")
+        .expect("the flag is passed");
+    assert_eq!(args[at + 1], "api-refactor \u{203a} worker");
+    assert!(
+        args.iter().position(|arg| arg == "-n").unwrap() < at,
+        "after the session's name, which ends the folder list: {args:?}"
+    );
+    assert_eq!(args.last().map(String::as_str), Some("do the work"));
+
+    let (output, log) = world.run(&launch, "/exit\n");
+    succeeded(&output);
+    assert_eq!(log["remoteControl"], "api-refactor \u{203a} worker");
+
+    // Without a name the flag is not passed at all, and the run records none.
+    let (plain, _folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "plain".into(),
+        ..LaunchRequest::default()
+    });
+    assert!(!world.args(&plain).contains(&"--remote-control".to_owned()));
+    let (output, log) = world.run(&plain, "/exit\n");
+    succeeded(&output);
+    assert_eq!(log["remoteControl"], Value::Null);
+}
+
+#[test]
 fn an_overlay_that_has_gone_is_skipped_and_said() {
     let world = World::new();
     let gone = world.dirs.root().join("never made");

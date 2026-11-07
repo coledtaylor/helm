@@ -59,8 +59,8 @@ mod children;
 
 use children::Children;
 pub(crate) use children::{
-    ChildEntry, ChildStopped, ChildrenListed, RoleEntry, RolesListed, StartChild, WaitEnd, WaitFor,
-    WaitRequest, Waited, end_children_at_exit,
+    ChildEntry, ChildStopped, ChildrenListed, Closing, RoleEntry, RolesListed, StartChild, WaitEnd,
+    WaitFor, WaitRequest, Waited, end_children_at_exit,
 };
 #[cfg(test)]
 pub(crate) use children::{EventKind, Facts, News};
@@ -753,6 +753,20 @@ impl Hosted {
         origin.branch = read_git_branch(&folder);
         let taken = self.taken_labels(None);
         let name = unique_session_name(&name, taken.iter().map(String::as_str));
+        // A child is given the line its parent's Remote Control name makes; a
+        // session a person launches from a profile with Remote Control on runs
+        // it under its own name. An agent without Remote Control runs without.
+        origin.remote_control_name = if backend.remote_control() {
+            origin.remote_control_name.take().or_else(|| {
+                (origin.parent.is_none() && self.profile_remote_control(origin.profile_id))
+                    .then(|| name.clone())
+            })
+        } else {
+            None
+        };
+        composition
+            .remote_control
+            .clone_from(&origin.remote_control_name);
         // Granted before the backend composes the launch, which writes the
         // token into the launch's own folder.
         let excluded = self.families_off_for(origin.profile_id);
@@ -1359,6 +1373,8 @@ fn composition_of(profile: Option<&Profile>) -> Composition {
         // Set where the launch is made: they depend on who starts it.
         child: None,
         agent_guide: false,
+        // Named in `run`, where the session's name is made unique.
+        remote_control: None,
     }
 }
 

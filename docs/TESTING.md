@@ -136,6 +136,18 @@ expectations. `agent/tests.rs` checks the trait's own rules with backends
 made in the test, among them one that only runs a program. An E2E test of the
 desktop against a backend waits until the desktop talks to the Rust host.
 
+Remote Control is the one thing the two fake agents of `test/fake-agents`
+differ on. The fake `claude` takes `--remote-control [name]` as the real CLI's
+parser does (a name is optional) and records what it was given as
+`remoteControl` in its run log: the name, an empty string for the flag alone,
+`null` for a run without it. The other fake agent has no Remote Control and its
+backend declares none, so a child started on it is the case of a backend
+without. `crates/host/tests/agents.rs` starts a session from a profile with
+Remote Control on and reads each run's log for the name it ran under, down to
+a grandchild's whole line, and for the child on the other fake that runs
+without and is said to; `crates/host/tests/notices.rs` connects one client at
+protocol 2.1 and one at 2.0 (`TestClient::connect_at`) to the same host.
+
 The host process itself is tested in `crates/host/tests/host.rs`, through
 `TestClient` (`testkit/client.rs`): a protocol client that connects on the
 local socket, runs the Noise handshake as the testkit's device, pinned to

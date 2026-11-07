@@ -37,6 +37,9 @@ pub(super) struct ParentFacts {
     pub child_name: Option<String>,
     /// How many starts beyond the starts setting it was allowed.
     pub extra_starts: u32,
+    /// The name it runs Remote Control under, when Floti launched it with
+    /// Remote Control.
+    pub remote_control_name: Option<String>,
 }
 
 pub(super) fn parent_facts(store: &Store, id: SessionId) -> Result<ParentFacts> {
@@ -44,7 +47,7 @@ pub(super) fn parent_facts(store: &Store, id: SessionId) -> Result<ParentFacts> 
         .connection()
         .query_row(
             "SELECT cwd, permission_mode, coalesce(last_claude_session_id, claude_session_id), \
-             child_name, can_start, extra_starts FROM sessions WHERE id = ?1",
+             child_name, can_start, extra_starts, remote_control_name FROM sessions WHERE id = ?1",
             [id.0],
             |row| {
                 Ok((
@@ -54,12 +57,22 @@ pub(super) fn parent_facts(store: &Store, id: SessionId) -> Result<ParentFacts> 
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, bool>(4)?,
                     row.get::<_, i64>(5)?,
+                    row.get::<_, Option<String>>(6)?,
                 ))
             },
         )
         .optional()
         .map_err(sql("read the session that is starting an agent"))?;
-    let Some((cwd, mode, conversation_id, child_name, can_start, extra_starts)) = found else {
+    let Some((
+        cwd,
+        mode,
+        conversation_id,
+        child_name,
+        can_start,
+        extra_starts,
+        remote_control_name,
+    )) = found
+    else {
         return Err(Error::Refused(
             "Your session is not in this host's record.".to_owned(),
         ));
@@ -72,6 +85,7 @@ pub(super) fn parent_facts(store: &Store, id: SessionId) -> Result<ParentFacts> 
         can_start: child_name.is_none() || can_start,
         child_name,
         extra_starts: u32::try_from(extra_starts).unwrap_or(0),
+        remote_control_name: remote_control_name.filter(|name| !name.trim().is_empty()),
     })
 }
 
@@ -310,6 +324,63 @@ pub(super) fn ending_with(store: &Store, parent: SessionId) -> Result<Vec<Sessio
         .query_map([parent.0], |row| row.get(0).map(SessionId))
         .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
         .map_err(sql("read the agents that end with a session"))
+}
+
+/// What closing a running session ends beyond itself and leaves running.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct ClosePlan {
+    /// The running agent-started sessions that end with it, nearest first,
+    /// each with the name its parent calls it: its children not started to
+    /// outlive it, and theirs the same way.
+    pub ending: Vec<(SessionId, String)>,
+    /// The running agent-started sessions below it that were started to
+    /// outlive their parent, reached through the sessions that end. What such
+    /// a session started goes on with it.
+    pub outliving: Vec<(SessionId, String)>,
+}
+
+/// What closing session `root` ends and what keeps running.
+pub(super) fn close_plan(store: &Store, root: SessionId) -> Result<ClosePlan> {
+    let mut select = store
+        .connection()
+        .prepare(
+            "SELECT id, parent_session_id, child_name, outlive FROM sessions \
+             WHERE child_name IS NOT NULL AND status = 'running' ORDER BY id",
+        )
+        .map_err(sql("read the agents running"))?;
+    let running = select
+        .query_map([], |row| {
+            Ok((
+                SessionId(row.get(0)?),
+                row.get::<_, Option<i64>>(1)?.map(SessionId),
+                row.get::<_, String>(2)?,
+                row.get::<_, bool>(3)?,
+            ))
+        })
+        .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+        .map_err(sql("read the agents running"))?;
+    let mut plan = ClosePlan::default();
+    let mut level = vec![root];
+    // A chain is bounded by the depth limit; the cap only guards a loop.
+    for _ in 0..MAX_DEPTH {
+        let mut next = Vec::new();
+        for (id, parent, name, outlive) in &running {
+            if !parent.is_some_and(|parent| level.contains(&parent)) || *id == root {
+                continue;
+            }
+            if *outlive {
+                plan.outliving.push((*id, name.clone()));
+            } else {
+                plan.ending.push((*id, name.clone()));
+                next.push(*id);
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        level = next;
+    }
+    Ok(plan)
 }
 
 /// The running children that were not started to outlive their parent and

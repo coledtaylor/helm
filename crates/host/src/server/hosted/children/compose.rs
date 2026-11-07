@@ -50,6 +50,45 @@ pub(super) fn role_composition(
     Ok(composition)
 }
 
+/// The separator between the names in a Remote Control line.
+const LINE_SEPARATOR: &str = " \u{203a} ";
+
+/// What a child gets of its parent's Remote Control.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct InheritedRemoteControl {
+    /// The name the child runs Remote Control under: its parent's line and
+    /// its own name. `None` when its parent has none, or its backend has no
+    /// Remote Control.
+    pub name: Option<String>,
+    /// The parent has Remote Control and the child's backend has none, so the
+    /// child runs without and the start's answer says so.
+    pub backend_has_none: bool,
+}
+
+/// The Remote Control a child called `child` gets on `backend`, when its
+/// parent runs it under `parent` (`None` when Floti did not launch the parent
+/// with it). A grandchild's line is its whole line of parents.
+pub(super) fn inherited_remote_control(
+    parent: Option<&str>,
+    child: &str,
+    backend: &dyn AgentBackend,
+) -> InheritedRemoteControl {
+    let Some(parent) = parent else {
+        return InheritedRemoteControl::default();
+    };
+    if backend.remote_control() {
+        InheritedRemoteControl {
+            name: Some(format!("{parent}{LINE_SEPARATOR}{child}")),
+            backend_has_none: false,
+        }
+    } else {
+        InheritedRemoteControl {
+            name: None,
+            backend_has_none: true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -205,6 +244,43 @@ mod tests {
             refused.contains("effort") && refused.contains("other-agent"),
             "{refused}"
         );
+    }
+
+    #[test]
+    fn a_child_runs_remote_control_under_its_parents_line_and_its_own_name() {
+        let dirs = TestDirs::new();
+        let claude = claude(&dirs);
+        let top = inherited_remote_control(Some("api-refactor"), "worker", &claude);
+        assert_eq!(top.name.as_deref(), Some("api-refactor \u{203a} worker"));
+        assert!(!top.backend_has_none);
+        // Its own child gets the whole line.
+        let deeper = inherited_remote_control(top.name.as_deref(), "helper", &claude);
+        assert_eq!(
+            deeper.name.as_deref(),
+            Some("api-refactor \u{203a} worker \u{203a} helper")
+        );
+    }
+
+    #[test]
+    fn a_parent_without_remote_control_gives_none_and_says_nothing_of_it() {
+        let dirs = TestDirs::new();
+        let inherited = inherited_remote_control(None, "worker", &claude(&dirs));
+        assert_eq!(inherited, InheritedRemoteControl::default());
+        let other = OtherAgent::new(&dirs).backend();
+        assert_eq!(
+            inherited_remote_control(None, "worker", &other),
+            InheritedRemoteControl::default()
+        );
+    }
+
+    #[test]
+    fn a_backend_without_remote_control_starts_the_child_without_it_and_says_so() {
+        let dirs = TestDirs::new();
+        let other = OtherAgent::new(&dirs).backend();
+        assert!(!other.remote_control());
+        let inherited = inherited_remote_control(Some("api-refactor"), "worker", &other);
+        assert_eq!(inherited.name, None);
+        assert!(inherited.backend_has_none);
     }
 
     #[test]

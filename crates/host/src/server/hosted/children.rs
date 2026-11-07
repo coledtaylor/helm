@@ -180,6 +180,22 @@ pub(crate) struct ChildStarted {
     pub branch: Option<String>,
     /// The name of the worktree made for it, when one was.
     pub worktree: Option<String>,
+    /// The name it runs Remote Control under, when it does.
+    pub remote_control: Option<String>,
+    /// Its parent runs Remote Control and its backend has none: the name of
+    /// that backend, for the answer to say the child runs without.
+    pub no_remote_control: Option<String>,
+}
+
+/// What closing a session ends beyond itself, and what it leaves running.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Closing {
+    /// The rows of the running agent-started sessions that end with it, each
+    /// with the name its parent calls it.
+    pub ending: Vec<(u64, String)>,
+    /// The rows of the running ones started to outlive their parent, named
+    /// the same way.
+    pub outliving: Vec<(u64, String)>,
 }
 
 /// One running child, as `agents_list` shows it.
@@ -431,6 +447,14 @@ impl Hosted {
             .map_or_else(|| folder.clone(), |made| made.folder.clone());
         let outlive = request.outlive;
         let backend_id = backend.id().clone();
+        let remote_control = compose::inherited_remote_control(
+            facts.remote_control_name.as_deref(),
+            &name,
+            backend.as_ref(),
+        );
+        let no_remote_control = remote_control
+            .backend_has_none
+            .then(|| backend.name().to_owned());
         let launched = self.run(
             Plan {
                 backend,
@@ -444,7 +468,7 @@ impl Hosted {
                     profile_id: profile.as_ref().and_then(|p| i64::try_from(p.id).ok()),
                     permission_mode: mode.map(records::permission_mode_name),
                     branch: None,
-                    remote_control_name: None,
+                    remote_control_name: remote_control.name.clone(),
                     parent: Some(ParentLink {
                         session: parent,
                         conversation_id: facts.conversation_id.clone(),
@@ -486,6 +510,8 @@ impl Hosted {
             folder: launched.session.cwd,
             branch: launched.session.branch,
             worktree: made.map(|made| made.name),
+            remote_control: remote_control.name,
+            no_remote_control,
         })
     }
 
@@ -666,6 +692,14 @@ impl Hosted {
         .map_err(|refusal| self.refused(parent, refusal))?;
 
         // Everything is judged: only now does anything run.
+        let remote_control = compose::inherited_remote_control(
+            facts.remote_control_name.as_deref(),
+            name,
+            backend.as_ref(),
+        );
+        let no_remote_control = remote_control
+            .backend_has_none
+            .then(|| backend.name().to_owned());
         let launched = self.run(
             Plan {
                 backend,
@@ -679,7 +713,7 @@ impl Hosted {
                     profile_id: profile.as_ref().and_then(|p| i64::try_from(p.id).ok()),
                     permission_mode: mode.map(records::permission_mode_name),
                     branch: None,
-                    remote_control_name: None,
+                    remote_control_name: remote_control.name.clone(),
                     parent: Some(ParentLink {
                         session: parent,
                         conversation_id: facts.conversation_id.clone(),
@@ -721,6 +755,8 @@ impl Hosted {
                 .worktree
                 .then(|| folder.file_name().map(|n| n.to_string_lossy().into_owned()))
                 .flatten(),
+            remote_control: remote_control.name,
+            no_remote_control,
         })
     }
 
@@ -872,6 +908,32 @@ impl Hosted {
         })
     }
 
+    /// What closing session `id` ends beyond itself and what keeps running,
+    /// for the question that asks before it does. Nothing is ended here.
+    pub(crate) fn closing(&self, id: u64) -> Closing {
+        let plan = super::session_id(id)
+            .map(|id| rows::close_plan(&self.ledger.store(), id))
+            .transpose()
+            .unwrap_or_else(|err| {
+                log_line!("floti host: {err}");
+                None
+            })
+            .unwrap_or_default();
+        let row_id = |id: SessionId| u64::try_from(id.0).ok();
+        Closing {
+            ending: plan
+                .ending
+                .into_iter()
+                .filter_map(|(id, name)| Some((row_id(id)?, name)))
+                .collect(),
+            outliving: plan
+                .outliving
+                .into_iter()
+                .filter_map(|(id, name)| Some((row_id(id)?, name)))
+                .collect(),
+        }
+    }
+
     /// Ends the children of `parent` that were not started to outlive it.
     pub(crate) fn end_children_of(&self, parent: SessionId) {
         let children = match rows::ending_with(&self.ledger.store(), parent) {
@@ -961,6 +1023,19 @@ impl Hosted {
             })
             .is_some_and(|profile| profile.session_agents == Some(false));
         if off { vec![FAMILY] } else { Vec::new() }
+    }
+
+    /// Whether profile `profile_id` turns Remote Control on for the sessions
+    /// launched from it.
+    pub(super) fn profile_remote_control(&self, profile_id: Option<i64>) -> bool {
+        profile_id
+            .and_then(|id| u64::try_from(id).ok())
+            .and_then(|id| {
+                records::read_profile(&self.ledger.store(), id)
+                    .ok()
+                    .flatten()
+            })
+            .is_some_and(|profile| profile.remote_control == Some(true))
     }
 
     fn parent_runs(&self, parent: SessionId) -> bool {

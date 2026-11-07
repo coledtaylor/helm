@@ -34,7 +34,8 @@ use floti_protocol::channels::common::{PermissionMode, SessionRecord};
 use floti_protocol::channels::host::{HostQuit, HostQuitRequest, HostStopReason};
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, HistoryRefresh, HistoryResume, ResumeSessionRequest, SessionClose,
-    SessionExit, SessionList, SessionStart, StartSessionRequest,
+    SessionConfirmAnswer, SessionConfirmRequest, SessionConfirmed, SessionExit, SessionList,
+    SessionStart, StartSessionRequest,
 };
 use floti_protocol::channels::workspace::{HostSettingsPatch, WriteSettings};
 use floti_protocol::{BackendId, Knowable};
@@ -213,6 +214,17 @@ impl World {
              agent, opening_prompt, session_agents) \
              VALUES (?1, ?2, '[]', '[]', NULL, NULL, ?3, NULL, NULL, ?4)",
             rusqlite::params![name, text(root), mode, agents],
+        )
+        .expect("insert a profile");
+        u64::try_from(db.last_insert_rowid()).unwrap()
+    }
+
+    /// A saved profile that turns Remote Control on.
+    fn remote_control_profile(&self, name: &str, root: &Path) -> u64 {
+        let db = self.db();
+        db.execute(
+            "INSERT INTO profiles (name, root, overlays, access, remote_control)              VALUES (?1, ?2, '[]', '[]', 1)",
+            rusqlite::params![name, text(root)],
         )
         .expect("insert a profile");
         u64::try_from(db.last_insert_rowid()).unwrap()
@@ -561,6 +573,8 @@ struct Run {
     opening_prompt: Option<String>,
     /// Whether it reopened a conversation.
     resumed: bool,
+    /// The name it was told to run Remote Control under, when it was.
+    remote_control: Option<String>,
     /// The instructions it was given to add to its own, when it was given any.
     instructions: Option<String>,
     /// The tool servers it loaded, by name: URL and bearer token.
@@ -592,6 +606,7 @@ impl Run {
             argv: strings(&log["argv"]),
             opening_prompt: log["openingPrompt"].as_str().map(str::to_owned),
             resumed: log["resumed"].as_bool().unwrap_or(false),
+            remote_control: log["remoteControl"].as_str().map(str::to_owned),
             instructions: log["composedInstructions"].as_str().map(str::to_owned),
             servers,
             received: strings(&log["received"]),
@@ -605,6 +620,7 @@ impl Run {
             argv: record.argv.clone(),
             opening_prompt: record.opening_prompt.clone(),
             resumed: record.resumed,
+            remote_control: None,
             instructions: record.instructions.clone(),
             servers: record
                 .mcp_servers
@@ -3372,5 +3388,309 @@ async fn the_host_runs_one_heavy_child_until_a_heavy_limit_is_told_to_it_and_age
     assert_eq!(parent.children().await, ["h1", "h2"]);
     let limits = parent.list().await.done()["limits"].clone();
     assert_eq!(limits["heavyLeft"], 0, "{limits}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// Remote Control, inherited
+// ---------------------------------------------------------------------------
+
+/// The line a child runs Remote Control under: its parents' names and its own.
+fn line(names: &[&str]) -> String {
+    names.join(" \u{203a} ")
+}
+
+/// A session of `name` on `backend` launched from `profile`.
+async fn from_profile(world: &World, backend: &str, name: &str, profile: u64) -> Agent {
+    let folder = world.project(name);
+    world
+        .session_as(StartSessionRequest {
+            profile_id: Some(profile),
+            ..request(&folder, name, backend)
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s21_a_session_from_a_profile_with_remote_control_runs_it_and_its_children_run_it_under_the_whole_line()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let profile = world.remote_control_profile("remote", &world.outside("remote profile root"));
+
+    let parent = from_profile(&world, CLAUDE, "api-refactor", profile).await;
+    assert_eq!(parent.run.remote_control.as_deref(), Some("api-refactor"));
+    assert_eq!(
+        value_of(&parent.run.argv, "--remote-control"),
+        Some("api-refactor")
+    );
+    assert_eq!(
+        world
+            .row_text(parent.id(), "remote_control_name")
+            .as_deref(),
+        Some("api-refactor"),
+        "the row keeps the name"
+    );
+
+    let started = parent
+        .start(json!({ "task": "lead", "backend": CLAUDE, "can_start": true, "name": "worker" }))
+        .await;
+    let worker_line = line(&["api-refactor", "worker"]);
+    assert!(
+        started
+            .text()
+            .contains(&format!("remote control: {worker_line}")),
+        "{started:?}"
+    );
+    assert_eq!(started.done()["remoteControl"], worker_line);
+    let child = world.child_of(&parent, "worker").await;
+    assert_eq!(
+        child.run.remote_control.as_deref(),
+        Some(worker_line.as_str())
+    );
+    assert_eq!(
+        value_of(&child.run.argv, "--remote-control"),
+        Some(worker_line.as_str())
+    );
+    assert_eq!(
+        world.row_text(child.id(), "remote_control_name").as_deref(),
+        Some(worker_line.as_str())
+    );
+
+    child
+        .start(json!({ "task": "do the work", "backend": CLAUDE, "name": "helper" }))
+        .await
+        .done();
+    let grandchild = world.child_of(&child, "helper").await;
+    let helper_line = line(&["api-refactor", "worker", "helper"]);
+    assert_eq!(
+        grandchild.run.remote_control.as_deref(),
+        Some(helper_line.as_str()),
+        "the grandchild is named with its whole line"
+    );
+    assert_eq!(
+        world
+            .row_text(grandchild.id(), "remote_control_name")
+            .as_deref(),
+        Some(helper_line.as_str())
+    );
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s22_a_parent_floti_launched_without_remote_control_starts_children_without_it_and_says_nothing_of_it()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    // A profile that has it on, for a session that is not launched from it.
+    world.remote_control_profile("remote", &world.outside("remote profile root"));
+    let parent = world
+        .session(CLAUDE, &world.project("plain"), "plain")
+        .await;
+    assert_eq!(parent.run.remote_control, None);
+    assert!(!parent.run.argv.contains(&"--remote-control".to_owned()));
+
+    let started = parent
+        .start(json!({ "task": "lead", "backend": CLAUDE, "can_start": true, "name": "worker" }))
+        .await;
+    assert!(
+        !started.text().to_lowercase().contains("remote control"),
+        "{started:?}"
+    );
+    let answer = started.done();
+    assert_eq!(answer["remoteControl"], Value::Null);
+    assert_eq!(answer["remoteControlUnavailable"], false);
+    let child = world.child_of(&parent, "worker").await;
+    assert_eq!(child.run.remote_control, None);
+    assert!(!child.run.argv.contains(&"--remote-control".to_owned()));
+    assert_eq!(world.row_text(child.id(), "remote_control_name"), None);
+
+    child
+        .start(json!({ "task": "do the work", "backend": CLAUDE, "name": "helper" }))
+        .await
+        .done();
+    let grandchild = world.child_of(&child, "helper").await;
+    assert_eq!(grandchild.run.remote_control, None);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s22_a_child_whose_backend_has_no_remote_control_starts_without_it_and_the_answer_says_so()
+{
+    let world = World::new();
+    let host = world.host().await;
+    let profile = world.remote_control_profile("remote", &world.outside("remote profile root"));
+    let parent = from_profile(&world, CLAUDE, "api-refactor", profile).await;
+
+    let started = parent
+        .start(
+            json!({ "task": "lead", "backend": OTHER, "can_start": true, "name": "other-child" }),
+        )
+        .await;
+    let sentence = started.text().to_owned();
+    assert!(
+        sentence.contains("remote control: none") && sentence.contains("has none"),
+        "{sentence}"
+    );
+    let answer = started.done();
+    assert_eq!(answer["remoteControl"], Value::Null);
+    assert_eq!(answer["remoteControlUnavailable"], true);
+    let child = world.child_of(&parent, "other-child").await;
+    assert!(!child.run.argv.iter().any(|arg| arg.contains("remote")));
+    assert_eq!(world.row_text(child.id(), "remote_control_name"), None);
+
+    // It has no name to give what it starts: a child on Claude Code under it
+    // starts without.
+    child
+        .start(json!({ "task": "do the work", "backend": CLAUDE, "name": "below" }))
+        .await
+        .done();
+    let below = world.child_of(&child, "below").await;
+    assert_eq!(below.run.remote_control, None);
+
+    // A session launched from the profile on an agent without Remote Control
+    // runs without it too.
+    let other = from_profile(&world, OTHER, "other-top", profile).await;
+    assert_eq!(world.row_text(other.id(), "remote_control_name"), None);
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// The host's own question about closing a parent
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s19_the_hosts_close_question_names_who_ends_and_who_outlives_and_agreeing_ends_exactly_those()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    world
+        .settings(HostSettingsPatch {
+            agent_sessions_per_host: Some(12),
+            ..HostSettingsPatch::default()
+        })
+        .await;
+    let folder = world.project("closing");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "lead", "backend": CLAUDE, "can_start": true, "name": "middle" }))
+        .await
+        .done();
+    parent
+        .start(json!({ "task": "long job", "backend": OTHER, "outlive": true, "name": "keeper" }))
+        .await
+        .done();
+    let middle = world.child_of(&parent, "middle").await;
+    middle
+        .start(json!({ "task": "work", "backend": OTHER, "name": "leaf" }))
+        .await
+        .done();
+    middle
+        .start(json!({ "task": "watch", "backend": OTHER, "outlive": true, "name": "stayer" }))
+        .await
+        .done();
+    let keeper = world.child_of(&parent, "keeper").await;
+    let leaf = world.child_of(&middle, "leaf").await;
+    let kept_leaf = world.child_of(&middle, "stayer").await;
+
+    // Another client closes the parent without asking first, as the window's
+    // own question would not: the host asks.
+    let mut client = world.client().await;
+    client.subscribe_quietly(3, "session:confirm").await;
+    let asked = client
+        .request::<SessionClose>(&CloseSessionRequest {
+            id: parent.id(),
+            force: false,
+        })
+        .await
+        .expect("the close is asked");
+    assert!(!asked.closed);
+    let question: SessionConfirmRequest = client
+        .event_on(3, "the question", |_: &SessionConfirmRequest| true)
+        .await;
+    let mut ending = question.ending_ids.clone();
+    ending.sort_unstable();
+    assert_eq!(ending, [middle.id(), leaf.id()]);
+    let mut outliving = question.outliving_ids.clone();
+    outliving.sort_unstable();
+    assert_eq!(outliving, [keeper.id(), kept_leaf.id()]);
+    assert_eq!(question.confirm_label, "End 3 sessions");
+    assert_eq!(question.session_names, ["parent", "middle", "leaf"]);
+    for name in ["middle", "leaf", "keeper", "stayer"] {
+        assert!(question.detail.contains(name), "{}", question.detail);
+    }
+
+    // No ends nothing. The answer is settled in its request, so the sessions
+    // are all still running once it returns.
+    client
+        .request::<SessionConfirmed>(&SessionConfirmAnswer {
+            id: question.id,
+            agreed: false,
+        })
+        .await
+        .expect("a no is taken");
+    for agent in [&parent, &middle, &leaf, &keeper, &kept_leaf] {
+        assert_eq!(world.status(agent.id()), "running", "{}", agent.name());
+    }
+
+    // Yes ends the parent and every session named as ending with it.
+    client
+        .request::<SessionClose>(&CloseSessionRequest {
+            id: parent.id(),
+            force: false,
+        })
+        .await
+        .expect("the close is asked again");
+    let again: SessionConfirmRequest = client
+        .event_on(3, "the question again", |next: &SessionConfirmRequest| {
+            next.id != question.id
+        })
+        .await;
+    assert_eq!(again.ending_ids.len(), 2);
+    client
+        .request::<SessionConfirmed>(&SessionConfirmAnswer {
+            id: again.id,
+            agreed: true,
+        })
+        .await
+        .expect("a yes is taken");
+    world
+        .ended(
+            "the parent and what ends with it to end",
+            &[parent.id(), middle.id(), leaf.id()],
+        )
+        .await;
+    world
+        .gone("their processes to end", &[&parent, &middle, &leaf])
+        .await;
+    for kept in [&keeper, &kept_leaf] {
+        assert_eq!(world.status(kept.id()), "running", "{}", kept.name());
+        assert!(alive(kept.run.pid), "{} keeps running", kept.name());
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_hosts_close_question_for_a_session_with_no_children_is_the_plain_one() {
+    let world = World::new();
+    let host = world.host().await;
+    let alone = world
+        .session(CLAUDE, &world.project("alone"), "alone")
+        .await;
+    let mut client = world.client().await;
+    client.subscribe_quietly(3, "session:confirm").await;
+    client
+        .request::<SessionClose>(&CloseSessionRequest {
+            id: alone.id(),
+            force: false,
+        })
+        .await
+        .expect("the close is asked");
+    let question: SessionConfirmRequest = client
+        .event_on(3, "the question", |_: &SessionConfirmRequest| true)
+        .await;
+    assert_eq!(question.confirm_label, "End session");
+    assert_eq!(question.session_names, ["alone"]);
+    assert!(question.ending_ids.is_empty() && question.outliving_ids.is_empty());
     host.stop(HostStopReason::Stop).await;
 }

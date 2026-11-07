@@ -36,7 +36,7 @@ use floti_protocol::channels::sessions::{
     StandingNotice, StartSessionRequest,
 };
 use floti_protocol::channels::workspace::{HostSettingsPatch, WriteSettings};
-use floti_protocol::{BackendId, Message};
+use floti_protocol::{BackendId, Message, PROTOCOL_VERSION, ProtocolVersion};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -902,5 +902,120 @@ async fn allowing_a_parent_more_starts_adds_the_starts_setting_to_that_parent_al
         sentence.refused().contains("limit of 4 starts per parent"),
         "{sentence:?}"
     );
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// Protocol versions
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s23_a_2_1_client_follows_dismisses_allows_and_watches_while_a_2_0_client_works_as_before()
+{
+    let world = World::new();
+    let host = world.host().await;
+    world
+        .settings(HostSettingsPatch {
+            agent_starts_per_parent: Some(2),
+            ..HostSettingsPatch::default()
+        })
+        .await;
+    let refused = world.session(&world.project("refused"), "refused").await;
+    let other = world.session(&world.project("other"), "other").await;
+    world.type_line(&refused, "remember this").await;
+    for parent in [&refused, &other] {
+        world.ended_starts(parent, 2);
+        parent
+            .start(json!({ "task": "one too many" }))
+            .await
+            .refused();
+    }
+
+    let mut current = world.client().await;
+    assert_eq!(current.welcome.protocol, PROTOCOL_VERSION);
+    assert_eq!(PROTOCOL_VERSION, ProtocolVersion::new(2, 1));
+    let mut old =
+        TestClient::connect_at(&world.endpoint, ProtocolVersion::new(2, 0), TERMINAL).await;
+    assert_eq!(old.welcome.protocol, ProtocolVersion::new(2, 0));
+
+    // The 2.1 client follows the standing notices: the ones standing when it
+    // connected, then each change.
+    let standing: Vec<StandingNotice> = match current.subscribe_on(1, NOTICES).await {
+        Message::Snapshot(snapshot) => from_payload(&snapshot.state).expect("the notices"),
+        other => panic!("no snapshot of the notices: {other:?}"),
+    };
+    assert_eq!(standing.len(), 2, "{standing:?}");
+    let notice_of = |parent: &Agent| {
+        standing
+            .iter()
+            .find(|notice| notice.parent_id == parent.id())
+            .unwrap_or_else(|| panic!("no notice under {}", parent.record.name))
+            .clone()
+    };
+
+    // It dismisses one, and the other client's list follows.
+    let dismissed = notice_of(&other);
+    current
+        .request::<DismissNotice>(&DismissNoticeRequest {
+            id: dismissed.id.clone(),
+        })
+        .await
+        .expect("the notice is dismissed");
+    let followed = current
+        .event_on::<Vec<StandingNotice>>(1, "the notices without the dismissed one", |list| {
+            list.iter().all(|notice| notice.id != dismissed.id)
+        })
+        .await;
+    assert_eq!(followed.len(), 1, "{followed:?}");
+
+    // It allows the other parent more starts, which removes its notice.
+    let allowed = current
+        .request::<AllowMoreStarts>(&AllowMoreStartsRequest {
+            parent_id: refused.id(),
+        })
+        .await
+        .expect("more starts are allowed");
+    assert_eq!(allowed.added, 2);
+    let followed = current
+        .event_on::<Vec<StandingNotice>>(1, "the notices without the allowed parent's", |list| {
+            list.is_empty()
+        })
+        .await;
+    assert!(followed.is_empty());
+
+    // It opens a watch-only attach and is given the screen.
+    current.watch(2, refused.id()).await;
+    current
+        .read_stream_until(2, |screen| {
+            String::from_utf8_lossy(screen).contains("remember this")
+        })
+        .await;
+
+    // A 2.0 client connects and works as it did: it lists the sessions,
+    // starts one, and types into it.
+    let listed = old
+        .request::<SessionList>(&())
+        .await
+        .expect("a 2.0 client lists the sessions");
+    for parent in [&refused, &other] {
+        assert!(listed.iter().any(|row| row.id == parent.id()), "{listed:?}");
+    }
+    let started = old
+        .request::<SessionStart>(&StartSessionRequest {
+            cwd: text(&world.project("from-2-0")),
+            cols: 80,
+            rows: 24,
+            name: Some("from 2.0".to_owned()),
+            backend: Some(BackendId::new(CLAUDE)),
+            ..StartSessionRequest::default()
+        })
+        .await
+        .expect("a 2.0 client starts a session");
+    old.attach(1, started.id).await;
+    old.type_into(1, b"hello from 2.0\r").await;
+    old.read_stream_until(1, |screen| {
+        String::from_utf8_lossy(screen).contains("hello from 2.0")
+    })
+    .await;
     host.stop(HostStopReason::Stop).await;
 }
