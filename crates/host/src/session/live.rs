@@ -735,6 +735,20 @@ impl Session {
         Ok(())
     }
 
+    /// Sends `bytes` to the program as a parent's turn for it, which no
+    /// client types: the session keeps the size it has, and it does not count
+    /// as a person typing ([`Session::typing`]), so a wait of the child's own
+    /// is not cut short by what its parent sent. Only `agents_send` calls it.
+    pub fn type_for_parent(&self, bytes: &[u8]) -> Result<()> {
+        if lock(&self.state).exit.is_some() {
+            return Err(self.has_ended());
+        }
+        let mut pty = lock(&self.pty);
+        let pty = pty.as_mut().ok_or_else(|| self.has_ended())?;
+        pty.write(bytes)
+            .map_err(|err| Error::io(format!("type into session {}", self.id), err))
+    }
+
     /// Changes each time a client types into the session. What the host
     /// types itself (a prompt at launch) goes in another way and never moves
     /// it.

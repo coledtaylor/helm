@@ -478,7 +478,7 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   no conversation. It is then judged against every limit as a start is, and
   is one more start and one more running child (a resume adds a row under the
   same name; the newest row of a name is the child).
-- `floti agent start`, `floti agent wait` and `floti agent stop` run the same
+- `floti agent start`, `send`, `wait` and `stop` run the same
   tools from a session's own shell: the host puts its `floti` binary's folder
   first on the session's `PATH` and the session's token and the family's
   address in its environment (`FLOTI_AGENT_TOKEN`, `FLOTI_AGENT_URL`; any

@@ -1,9 +1,10 @@
 //! `floti agent`: the agents family from a session's own shell.
 //!
 //! `floti agent start --task <text>` starts an agent of the session's own and
-//! prints its name; `floti agent stop <name>` ends it; `floti agent wait`
-//! prints the news its agents have for the session. Each is the
-//! `agents_start`, `agents_stop` or `agents_wait` tool called over the same
+//! prints its name; `floti agent send <name> <text>` types a turn into it;
+//! `floti agent stop <name>` ends it; `floti agent wait` prints the news its
+//! agents have for the session. Each is the `agents_start`, `agents_send`,
+//! `agents_stop` or `agents_wait` tool called over the same
 //! endpoint a session's agent tools use, so the host answers one way whoever
 //! asks and the same limits, folder rule and own-children rule apply. The session is
 //! known by the bearer token in `FLOTI_AGENT_TOKEN` and the address in
@@ -41,7 +42,7 @@ pub const URL_VAR: &str = "FLOTI_AGENT_URL";
 pub const TOKEN_VAR: &str = "FLOTI_AGENT_TOKEN";
 
 /// What `floti agent` accepts.
-pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent start --resume <name> --task <text> [--wait] [--json]\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
+pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent start --resume <name> --task <text> [--wait] [--json]\n       floti agent send [--interrupt] [--json] <name> [--] <text>\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
 
 /// How long a connection waits to be made.
 const CONNECT_WAIT: Duration = Duration::from_secs(10);
@@ -55,8 +56,20 @@ const ANSWER_WAIT: Duration = Duration::from_secs(120);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Start(Start),
+    Send(SendText),
     Stop(Stop),
     Wait(Wait),
+}
+
+/// `floti agent send`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SendText {
+    pub child: String,
+    pub text: String,
+    /// Whether `--interrupt` was given: the agent's stop key is pressed
+    /// before the text.
+    pub interrupt: bool,
+    pub json: bool,
 }
 
 /// `floti agent start`.
@@ -137,10 +150,11 @@ impl Outcome {
 /// A sentence naming what is missing or not understood.
 pub fn parse(args: &[String]) -> Result<Command, String> {
     let Some((subcommand, rest)) = args.split_first() else {
-        return Err("Say what to do: start, wait or stop.".to_owned());
+        return Err("Say what to do: start, send, wait or stop.".to_owned());
     };
     match subcommand.as_str() {
         "start" => parse_start(rest).map(Command::Start),
+        "send" => parse_send(rest).map(Command::Send),
         "stop" => parse_stop(rest).map(Command::Stop),
         "wait" => parse_wait(rest).map(Command::Wait),
         other => Err(format!("`{other}` is not a floti agent command.")),
@@ -183,6 +197,45 @@ fn parse_start(args: &[String]) -> Result<Start, String> {
         .ok_or_else(|| "--task is what the agent is to do, and is required.".to_owned())?;
     Ok(start)
 }
+
+/// The agent's name, then its text as one argument. Options come before the
+/// text; after `--` everything is the text, so it may begin with dashes.
+fn parse_send(args: &[String]) -> Result<SendText, String> {
+    let mut send = SendText::default();
+    let mut child: Option<String> = None;
+    let mut text: Option<String> = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--interrupt" => send.interrupt = true,
+            "--json" => send.json = true,
+            "--" => {
+                let rest: Vec<&String> = args.by_ref().collect();
+                match (rest.as_slice(), &text) {
+                    ([only], None) => text = Some((*only).clone()),
+                    _ => return Err(SEND_SHAPE.to_owned()),
+                }
+            }
+            flag if flag.starts_with("--") => {
+                return Err(format!("`{flag}` is not a floti agent send option."));
+            }
+            word if child.is_none() => child = Some(word.to_owned()),
+            word if text.is_none() => text = Some(word.to_owned()),
+            _ => return Err(SEND_SHAPE.to_owned()),
+        }
+    }
+    send.child = child
+        .filter(|child| !child.trim().is_empty())
+        .ok_or_else(|| "Name the agent to send to, as floti agent start printed it.".to_owned())?;
+    send.text = text
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| "Give the text to send as one argument, in quotes.".to_owned())?;
+    Ok(send)
+}
+
+/// What a send is: a name and one text.
+const SEND_SHAPE: &str =
+    "Give the agent's name and then the text to send as one argument, in quotes.";
 
 fn parse_wait(args: &[String]) -> Result<Wait, String> {
     let mut wait = Wait::default();
@@ -246,6 +299,7 @@ pub fn run(command: &Command) -> u8 {
 pub fn execute(command: &Command, url: &str, token: &str) -> Outcome {
     let (tool, arguments, json) = match command {
         Command::Start(start) => ("agents_start", start_arguments(start), start.json),
+        Command::Send(send) => ("agents_send", send_arguments(send), send.json),
         Command::Stop(stop) => ("agents_stop", json!({ "child": stop.child }), stop.json),
         Command::Wait(wait) => ("agents_wait", wait_arguments(wait), wait.json),
     };
@@ -279,6 +333,14 @@ fn start_arguments(start: &Start) -> Value {
     }
     if start.wait {
         map.insert("wait".to_owned(), json!(true));
+    }
+    arguments
+}
+
+fn send_arguments(send: &SendText) -> Value {
+    let mut arguments = json!({ "child": send.child, "text": send.text });
+    if send.interrupt {
+        arguments["interrupt"] = json!(true);
     }
     arguments
 }
@@ -323,7 +385,7 @@ fn present(command: &Command, answer: &Answer, json: bool) -> Outcome {
                 (_, name) => Outcome::done(name.unwrap_or(first)),
             }
         }
-        Command::Stop(_) | Command::Wait(_) => Outcome::done(first),
+        Command::Send(_) | Command::Stop(_) | Command::Wait(_) => Outcome::done(first),
     }
 }
 
@@ -642,6 +704,89 @@ mod tests {
         assert!(parse(&args(&["start", "--task", "x", "--outlive=yes"])).is_err());
         assert!(parse(&args(&[])).is_err());
         assert!(parse(&args(&["list"])).is_err());
+    }
+
+    #[test]
+    fn send_takes_a_name_and_one_text_with_interrupt_and_json_before_it() {
+        assert_eq!(
+            parse(&args(&["send", "worker", "do this\nand that"])),
+            Ok(Command::Send(SendText {
+                child: "worker".to_owned(),
+                text: "do this\nand that".to_owned(),
+                interrupt: false,
+                json: false,
+            }))
+        );
+        assert_eq!(
+            parse(&args(&["send", "--interrupt", "--json", "worker", "stop"])),
+            Ok(Command::Send(SendText {
+                child: "worker".to_owned(),
+                text: "stop".to_owned(),
+                interrupt: true,
+                json: true,
+            }))
+        );
+        // After `--` the text is the text, dashes and all.
+        assert_eq!(
+            parse(&args(&["send", "worker", "--", "--interrupt is a flag"])),
+            Ok(Command::Send(SendText {
+                child: "worker".to_owned(),
+                text: "--interrupt is a flag".to_owned(),
+                interrupt: false,
+                json: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn send_without_a_name_or_a_text_or_with_a_second_text_or_an_unknown_option_is_a_usage_error() {
+        for bad in [
+            vec!["send"],
+            vec!["send", "worker"],
+            vec!["send", "worker", "  "],
+            vec!["send", "worker", "one", "two"],
+            vec!["send", "worker", "--", "one", "two"],
+            vec!["send", "worker", "one", "--", "two"],
+            vec!["send", "--wait", "worker", "text"],
+            vec!["send", "--force", "worker", "text"],
+        ] {
+            assert!(parse(&args(&bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn send_calls_the_send_tool_with_the_name_the_text_and_interrupt_only_when_asked() {
+        let sent = SendText {
+            child: "worker".to_owned(),
+            text: "hello".to_owned(),
+            interrupt: false,
+            json: false,
+        };
+        assert_eq!(
+            send_arguments(&sent),
+            json!({ "child": "worker", "text": "hello" })
+        );
+        assert_eq!(
+            send_arguments(&SendText {
+                interrupt: true,
+                ..sent.clone()
+            }),
+            json!({ "child": "worker", "text": "hello", "interrupt": true })
+        );
+        let host = host(vec![
+            rpc_result(json!({})),
+            tool_answer(
+                false,
+                &[
+                    "Sent to worker.",
+                    r#"{"sent":"worker","interrupted":false}"#,
+                ],
+            ),
+        ]);
+        assert_eq!(
+            execute(&Command::Send(sent), &host.url, "t"),
+            Outcome::done("Sent to worker.".to_owned())
+        );
     }
 
     #[test]

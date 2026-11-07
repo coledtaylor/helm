@@ -1345,7 +1345,7 @@ async fn s2_a_session_with_no_parent_has_no_agents_report_and_a_child_has_it_all
             !names.iter().any(|name| name == "agents_report"),
             "{names:?}"
         );
-        assert_eq!(names.len(), 5, "{names:?}");
+        assert_eq!(names.len(), 6, "{names:?}");
         let refused = person
             .call("agents_report", json!({ "state": "done", "text": "x" }))
             .await;
@@ -1376,7 +1376,7 @@ async fn s2_a_session_with_no_parent_has_no_agents_report_and_a_child_has_it_all
         );
         // A child that reports is listed it by the same family, so the
         // person's session is untouched by it.
-        assert_eq!(person.tool_names().await.len(), 5);
+        assert_eq!(person.tool_names().await.len(), 6);
         world.close(&child).await;
         world.close(&person).await;
     }

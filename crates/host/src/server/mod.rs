@@ -49,7 +49,7 @@ mod browser_tools;
 mod connection;
 mod events;
 mod features;
-mod floti_agents;
+pub(crate) mod floti_agents;
 mod hosted;
 pub mod idle;
 mod plugin_tools;

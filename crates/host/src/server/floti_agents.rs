@@ -42,8 +42,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::hosted::{
-    ChildEntry, ChildStopped, ChildrenListed, Hosted, RoleEntry, RolesListed, StartChild, WaitEnd,
-    WaitFor, WaitRequest, Waited,
+    ChildEntry, ChildStopped, ChildrenListed, Hosted, RoleEntry, RolesListed, SendChild,
+    StartChild, WaitEnd, WaitFor, WaitRequest, Waited,
 };
 use crate::agent_tools::{
     CallToolResult, Caller, ContentBlock, Delivery, GrantScope, JsonObject, Tool, ToolFamily,
@@ -78,6 +78,7 @@ static TABLE: LazyLock<Table> = LazyLock::new(|| {
 pub(crate) const FAMILY: &str = "floti-agents";
 
 const AGENTS_START: &str = "agents_start";
+const AGENTS_SEND: &str = "agents_send";
 const AGENTS_LIST: &str = "agents_list";
 const AGENTS_STOP: &str = "agents_stop";
 const AGENTS_ROLES: &str = "agents_roles";
@@ -91,7 +92,13 @@ pub(crate) const MAX_REPORT_CHARS: usize = 4000;
 /// The shell commands a launch runs without asking beside the tools, each
 /// named on its own: never `floti agent` as a prefix, which would allow its
 /// siblings with it, and never `floti agent run`.
-const COMMANDS: &[&str] = &["floti agent start", "floti agent stop", "floti agent wait"];
+pub(crate) const COMMANDS: &[&str] = &[
+    "floti agent start",
+    "floti agent send",
+    "floti agent wait",
+    "floti agent read",
+    "floti agent stop",
+];
 
 /// The answer while the host is still assembling what the tools act on.
 const STILL_STARTING: &str =
@@ -244,6 +251,7 @@ impl ToolFamily for FlotiAgents {
             };
             match name {
                 AGENTS_START => start(&from, &arguments).await,
+                AGENTS_SEND => send(hosted, me, &arguments).await,
                 AGENTS_WAIT => wait(&from, &arguments).await,
                 AGENTS_REPORT => report(Arc::clone(&hosted), me, &arguments).await,
                 AGENTS_LIST => list(hosted, me).await,
@@ -355,6 +363,28 @@ async fn wait(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
     }
 }
 
+/// `agents_send`: text typed into one of `me`'s children as its next turn.
+async fn send(hosted: Arc<Hosted>, me: SessionId, arguments: &JsonObject) -> CallToolResult {
+    let request = match send_request(arguments) {
+        Ok(request) => request,
+        Err(refusal) => return problem(&refusal),
+    };
+    match hosted.send_to_child(me, request).await {
+        Ok(sent) => {
+            let how = if sent.interrupted {
+                " after stopping its turn in progress"
+            } else {
+                ""
+            };
+            answer(
+                format!("Sent to {}{how}.", sent.name),
+                json!({ "sent": sent.name, "interrupted": sent.interrupted }),
+            )
+        }
+        Err(refusal) => problem(&refusal),
+    }
+}
+
 /// `agents_report`: the caller, a child, tells its parent where it is.
 async fn report(hosted: Arc<Hosted>, me: SessionId, arguments: &JsonObject) -> CallToolResult {
     let (state, text) = match report_request(arguments) {
@@ -454,6 +484,20 @@ fn start_request(arguments: &JsonObject) -> Result<StartChild, String> {
         outlive: flag(arguments, "outlive")?.unwrap_or(false),
         can_start: flag(arguments, "can_start")?,
         resume: text_argument(arguments, "resume"),
+    })
+}
+
+/// What `agents_send` was asked: the child, the text and whether to interrupt.
+fn send_request(arguments: &JsonObject) -> Result<SendChild, String> {
+    let child = text_argument(arguments, "child").ok_or_else(|| {
+        "Name the agent to send to, as agents_start answered it: child.".to_owned()
+    })?;
+    let text = text_argument(arguments, "text")
+        .ok_or_else(|| "Give the text to send: text is the agent's next turn.".to_owned())?;
+    Ok(SendChild {
+        child,
+        text,
+        interrupt: flag(arguments, "interrupt")?.unwrap_or(false),
     })
 }
 
@@ -725,6 +769,106 @@ fn problem(message: &str) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(message.to_owned())])
 }
 
+/// What a test of a launch checks about the `floti agent` commands it allows.
+#[cfg(test)]
+pub(crate) mod allowances {
+    use super::*;
+    use crate::agent::AgentToolServer;
+
+    /// The family as a launch is given it: its tools and commands as the host
+    /// grants them.
+    pub(crate) fn launch_server() -> AgentToolServer {
+        let family = FlotiAgents::new();
+        AgentToolServer {
+            name: family.name().to_owned(),
+            url: format!("http://127.0.0.1:41000{}", family.route()),
+            token: "secret-token".to_owned(),
+            allowed_tools: family.allowed_tools_in(GrantScope::default()),
+            allowed_commands: family.allowed_commands(),
+        }
+    }
+
+    /// The arguments of a launch that allow more of `floti agent` than the
+    /// subcommands named on their own: `run`, which is allowed to no launch,
+    /// or a wildcard over the subcommands or over the family's tools.
+    pub(crate) fn too_broad(args: &[String]) -> Vec<String> {
+        const BROAD: &[&str] = &[
+            "floti agent run",
+            "floti agent:*",
+            "floti agent *",
+            "floti:*",
+            "floti *",
+            "floti-agents.*",
+            "mcp__floti-agents__*",
+        ];
+        args.iter()
+            .filter(|arg| {
+                let arg = arg.to_ascii_lowercase();
+                BROAD.iter().any(|broad| arg.contains(broad))
+                    || arg == "mcp__floti-agents"
+                    || arg == "floti-agents"
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The arguments that follow `flag`, up to the next argument that
+    /// begins with `--`.
+    pub(crate) fn values_after(args: &[String], flag: &str) -> Vec<String> {
+        args.iter()
+            .skip_while(|arg| *arg != flag)
+            .skip(1)
+            .take_while(|arg| !arg.starts_with("--"))
+            .cloned()
+            .collect()
+    }
+
+    /// The argument after each occurrence of `flag`.
+    pub(crate) fn each_value_of(args: &[String], flag: &str) -> Vec<String> {
+        args.windows(2)
+            .filter(|pair| pair[0] == flag)
+            .map(|pair| pair[1].clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_check_names_an_argument_that_allows_run_or_a_wildcard_and_passes_the_five_commands() {
+        let owned = |words: &[&str]| -> Vec<String> {
+            words.iter().map(|word| (*word).to_owned()).collect()
+        };
+        for broad in [
+            "Bash(floti agent run:*)",
+            "floti agent run",
+            "Bash(floti agent:*)",
+            "Bash(floti:*)",
+            "mcp__floti-agents__*",
+            "mcp__floti-agents",
+            "floti-agents.*",
+        ] {
+            assert_eq!(too_broad(&owned(&[broad])), [broad], "{broad}");
+        }
+        let fine = owned(&[
+            "Bash(floti agent start:*)",
+            "Bash(floti agent send:*)",
+            "Bash(floti agent wait:*)",
+            "Bash(floti agent read:*)",
+            "Bash(floti agent stop:*)",
+            "mcp__floti-agents__agents_send",
+            "floti agent send",
+            "floti-agents.agents_send",
+        ]);
+        assert_eq!(too_broad(&fine), Vec::<String>::new());
+        assert_eq!(
+            values_after(&owned(&["--a", "x", "y", "--b", "z"]), "--a"),
+            ["x", "y"]
+        );
+        assert_eq!(
+            each_value_of(&owned(&["--a", "x", "--b", "z", "--a", "y"]), "--a"),
+            ["x", "y"]
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn the_table_names_the_six_tools_and_the_route() {
+    fn the_table_names_the_seven_tools_and_the_route() {
         let family = FlotiAgents::new();
         assert_eq!(family.name(), "floti-agents");
         assert_eq!(family.route(), "/mcp/agents");
@@ -749,6 +893,7 @@ mod tests {
             names,
             [
                 "agents_start",
+                "agents_send",
                 "agents_list",
                 "agents_stop",
                 "agents_roles",
@@ -760,7 +905,13 @@ mod tests {
         // Each command on its own: never `floti agent` as a prefix, never run.
         assert_eq!(
             family.allowed_commands(),
-            ["floti agent start", "floti agent stop", "floti agent wait"]
+            [
+                "floti agent start",
+                "floti agent send",
+                "floti agent wait",
+                "floti agent read",
+                "floti agent stop"
+            ]
         );
         assert!(!family.is_on());
         family.switch(true);
@@ -773,6 +924,7 @@ mod tests {
         let instructions = family.instructions();
         for word in [
             "agents_start",
+            "agents_send",
             "agents_list",
             "agents_stop",
             "agents_roles",
@@ -783,7 +935,7 @@ mod tests {
             assert!(instructions.contains(word), "{word} in {instructions}");
         }
         assert!(
-            !instructions.contains("agents_send"),
+            !instructions.contains("agents_read"),
             "no tool that does not exist yet"
         );
     }
@@ -797,9 +949,45 @@ mod tests {
         let plain = family.allowed_tools_in(GrantScope::default());
         assert!(child.iter().any(|name| name == "agents_report"));
         assert!(!plain.iter().any(|name| name == "agents_report"));
-        for name in ["agents_start", "agents_wait", "agents_list", "agents_stop"] {
+        for name in [
+            "agents_start",
+            "agents_send",
+            "agents_wait",
+            "agents_list",
+            "agents_stop",
+        ] {
             assert!(plain.iter().any(|tool| tool == name), "{name}");
             assert!(child.iter().any(|tool| tool == name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_send_needs_a_child_and_a_text_and_interrupts_only_when_told_to() {
+        assert_eq!(
+            send_request(&arguments(
+                json!({ "child": " worker ", "text": " line one\nline two " })
+            )),
+            Ok(SendChild {
+                child: "worker".to_owned(),
+                text: "line one\nline two".to_owned(),
+                interrupt: false,
+            })
+        );
+        assert_eq!(
+            send_request(&arguments(
+                json!({ "child": "worker", "text": "x", "interrupt": true })
+            ))
+            .map(|send| send.interrupt),
+            Ok(true)
+        );
+        for bad in [
+            json!({ "text": "x" }),
+            json!({ "child": "worker" }),
+            json!({ "child": " ", "text": "x" }),
+            json!({ "child": "worker", "text": "  " }),
+            json!({ "child": "worker", "text": "x", "interrupt": "yes" }),
+        ] {
+            assert!(send_request(&arguments(bad.clone())).is_err(), "{bad}");
         }
     }
 

@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use floti_host::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
 use floti_host::agent::{AgentBackend, PlainCommandBackend};
 use floti_host::agent_cli::{
-    self, Command as Subcommand, Start as StartCommand, Stop as StopCommand,
+    self, Command as Subcommand, SendText as SendCommand, Start as StartCommand,
+    Stop as StopCommand,
 };
 use floti_host::platform::links::{FolderLinks, Native as NativeLinks};
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
@@ -567,6 +568,17 @@ struct Run {
     servers: BTreeMap<String, (String, String)>,
     received: Vec<String>,
     shell: Vec<ShellRun>,
+    /// Each bracketed paste it took as one block: the text, and whether the
+    /// submit key arrived in the same read.
+    pastes: Vec<(String, bool)>,
+    /// The key that submitted each of `received`.
+    submit_keys: Vec<String>,
+    /// Each line it took as a turn, in the order the turns ran.
+    prompts: Vec<String>,
+    /// Each line typed while a turn was running.
+    queued: Vec<String>,
+    /// How many times its stop key ended a turn.
+    interrupts: u64,
 }
 
 impl Run {
@@ -596,6 +608,24 @@ impl Run {
             servers,
             received: strings(&log["received"]),
             shell: serde_json::from_value(log["shell"].clone()).unwrap_or_default(),
+            pastes: log["pastes"]
+                .as_array()
+                .map(|pastes| {
+                    pastes
+                        .iter()
+                        .map(|paste| {
+                            (
+                                paste["text"].as_str().unwrap_or_default().to_owned(),
+                                paste["withSubmit"].as_bool().unwrap_or(false),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            submit_keys: strings(&log["submitKeys"]),
+            prompts: strings(&log["prompts"]),
+            queued: strings(&log["queued"]),
+            interrupts: log["interrupts"].as_u64().unwrap_or(0),
         }
     }
 
@@ -613,6 +643,15 @@ impl Run {
                 .collect(),
             received: record.received.clone(),
             shell: record.shell.clone(),
+            pastes: record
+                .pastes
+                .iter()
+                .map(|paste| (paste.text.clone(), paste.with_submit))
+                .collect(),
+            submit_keys: record.submit_keys.clone(),
+            prompts: record.prompts.clone(),
+            queued: record.queued.clone(),
+            interrupts: u64::from(record.interrupts),
         }
     }
 
@@ -961,6 +1000,15 @@ fn cli_start(task: &str) -> StartCommand {
     }
 }
 
+fn cli_send(child: &str, text: &str, interrupt: bool) -> SendCommand {
+    SendCommand {
+        child: child.to_owned(),
+        text: text.to_owned(),
+        interrupt,
+        json: false,
+    }
+}
+
 fn cli_stop(child: &str) -> StopCommand {
     StopCommand {
         child: child.to_owned(),
@@ -973,7 +1021,7 @@ fn cli_stop(child: &str) -> StopCommand {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s1_a_session_on_either_backend_gets_a_floti_agents_entry_and_lists_its_five_tools() {
+async fn s1_a_session_on_either_backend_gets_a_floti_agents_entry_and_lists_its_six_tools() {
     let world = World::new();
     let host = world.host().await;
     let folder = world.project("alpha");
@@ -991,6 +1039,7 @@ async fn s1_a_session_on_either_backend_gets_a_floti_agents_entry_and_lists_its_
             [
                 "agents_list",
                 "agents_roles",
+                "agents_send",
                 "agents_start",
                 "agents_stop",
                 "agents_wait"
@@ -2065,30 +2114,36 @@ async fn s24_a_rule_the_chosen_backend_cannot_enforce_refuses_the_start_naming_t
 // ---------------------------------------------------------------------------
 
 /// The rules a session is given for the agents family, as each backend spells
-/// them: the five tools every session has and the three commands, and, for a
+/// them: the six tools every session has and the five commands, and, for a
 /// child, `agents_report` beside them.
 fn family_rules(backend: &str, child: bool) -> Vec<String> {
     let mut rules: Vec<String> = if backend == CLAUDE {
         [
             "mcp__floti-agents__agents_start",
+            "mcp__floti-agents__agents_send",
             "mcp__floti-agents__agents_list",
             "mcp__floti-agents__agents_stop",
             "mcp__floti-agents__agents_roles",
             "mcp__floti-agents__agents_wait",
             "Bash(floti agent start:*)",
-            "Bash(floti agent stop:*)",
+            "Bash(floti agent send:*)",
             "Bash(floti agent wait:*)",
+            "Bash(floti agent read:*)",
+            "Bash(floti agent stop:*)",
         ]
     } else {
         [
             "floti-agents.agents_start",
+            "floti-agents.agents_send",
             "floti-agents.agents_list",
             "floti-agents.agents_stop",
             "floti-agents.agents_roles",
             "floti-agents.agents_wait",
             "floti agent start",
-            "floti agent stop",
+            "floti agent send",
             "floti agent wait",
+            "floti agent read",
+            "floti agent stop",
         ]
     }
     .map(str::to_owned)
@@ -2111,6 +2166,17 @@ fn assert_family_allowed(who: &str, backend: &str, agent: &Agent) {
         .filter(|rule| rule.contains("floti"))
         .collect();
     about_the_family.sort();
+    // No launch allows `run`, or a wildcard over the subcommands or the tools.
+    for rule in &about_the_family {
+        assert!(
+            !rule.contains("floti agent run")
+                && !rule.contains("floti agent:*")
+                && !rule.contains("floti:*")
+                && !rule.ends_with("*"),
+            "{who} ({backend}) is allowed {rule}: {:?}",
+            agent.run.argv
+        );
+    }
     let mut wanted = family_rules(backend, agent.record.parent_id.is_some());
     wanted.sort();
     assert_eq!(
@@ -2121,7 +2187,7 @@ fn assert_family_allowed(who: &str, backend: &str, agent: &Agent) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s26_the_five_tools_and_the_three_commands_are_allowed_up_front_never_by_wildcard_and_a_deny_stands()
+async fn s26_the_six_tools_and_the_five_commands_are_allowed_up_front_never_run_or_a_wildcard_and_a_deny_stands()
  {
     let world = World::new();
     let host = world.host().await;
@@ -3372,5 +3438,238 @@ async fn the_host_runs_one_heavy_child_until_a_heavy_limit_is_told_to_it_and_age
     assert_eq!(parent.children().await, ["h1", "h2"]);
     let limits = parent.list().await.done()["limits"].clone();
     assert_eq!(limits["heavyLeft"], 0, "{limits}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// Send: a parent gives its child a turn
+// ---------------------------------------------------------------------------
+
+/// The key each backend's adapter submits a paste with, as the fake logs it.
+fn submit_key(backend: &str) -> &'static str {
+    if backend == CLAUDE { "\r" } else { "\n" }
+}
+
+impl Agent {
+    async fn send(&self, child: &str, text: &str) -> Called {
+        self.call("agents_send", json!({ "child": child, "text": text }))
+            .await
+    }
+}
+
+impl World {
+    /// A parent and its running child on `backend`, in a folder with a space
+    /// in its name.
+    async fn family(&self, backend: &str, name: &str) -> (Agent, Agent) {
+        let folder = self.project(&format!("send to {name}"));
+        let parent = self
+            .session(CLAUDE, &folder, &format!("parent of {name}"))
+            .await;
+        parent
+            .start(json!({ "task": "wait for me", "name": name, "backend": backend }))
+            .await
+            .done();
+        let child = self.child_of(&parent, name).await;
+        (parent, child)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_text_sent_to_an_idle_child_arrives_as_one_paste_then_the_submit_key_and_is_taken_as_one_turn()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let text = "first line\nsecond line\n\nfourth line";
+    for backend in [CLAUDE, OTHER] {
+        // By the tool, and by `floti agent send`.
+        for by_command in [false, true] {
+            let name = format!("{backend}-{}", if by_command { "command" } else { "tool" });
+            let (parent, child) = world.family(backend, &name).await;
+            if by_command {
+                let (url, token) = parent.route();
+                let outcome =
+                    subcommand(Subcommand::Send(cli_send(&name, text, false)), url, token).await;
+                assert_eq!(outcome.code, 0, "{backend}: {outcome:?}");
+            } else {
+                parent.send(&name, text).await.done();
+            }
+            let run = eventually("the child to take the turn", async || {
+                let run = world.reread(&child);
+                run.prompts
+                    .iter()
+                    .any(|prompt| prompt == text)
+                    .then_some(run)
+            })
+            .await;
+            // One paste, whole, with its newlines; the submit key came apart
+            // from it, and is the adapter's own.
+            assert_eq!(
+                run.pastes,
+                [(text.to_owned(), false)],
+                "{backend} by_command={by_command}"
+            );
+            assert_eq!(
+                run.submit_keys.last().map(String::as_str),
+                Some(submit_key(backend)),
+                "{backend}"
+            );
+            assert_eq!(run.interrupts, 0);
+        }
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_text_sent_to_a_working_child_is_accepted_and_is_its_next_turn_once_the_current_one_ends()
+{
+    let world = World::new();
+    let host = world.host().await;
+    for backend in [CLAUDE, OTHER] {
+        let name = format!("busy-{backend}");
+        let (parent, child) = world.family(backend, &name).await;
+        world.type_line(&child, "/busy hold").await;
+
+        let sent = parent.send(&name, "next task\nin two lines").await.done();
+        assert_eq!(sent["sent"], name.as_str(), "{backend}");
+        let run = eventually("the child to queue the text", async || {
+            let run = world.reread(&child);
+            run.queued
+                .iter()
+                .any(|line| line == "next task\nin two lines")
+                .then_some(run)
+        })
+        .await;
+        assert!(
+            !run.prompts.iter().any(|line| line.starts_with("next task")),
+            "{backend} took it while its turn ran: {:?}",
+            run.prompts
+        );
+
+        world.type_line(&child, "/idle").await;
+        eventually("the queued text to be the next turn", async || {
+            world
+                .reread(&child)
+                .prompts
+                .last()
+                .is_some_and(|line| line == "next task\nin two lines")
+                .then_some(())
+        })
+        .await;
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_that_interrupts_presses_the_stop_key_first_and_the_child_takes_the_text_as_its_next_turn()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    for backend in [CLAUDE, OTHER] {
+        for by_command in [false, true] {
+            let name = format!(
+                "stop-{backend}-{}",
+                if by_command { "command" } else { "tool" }
+            );
+            let (parent, child) = world.family(backend, &name).await;
+            world.type_line(&child, "/busy hold").await;
+
+            if by_command {
+                let (url, token) = parent.route();
+                let outcome = subcommand(
+                    Subcommand::Send(cli_send(&name, "do this instead", true)),
+                    url,
+                    token,
+                )
+                .await;
+                assert_eq!(outcome.code, 0, "{backend}: {outcome:?}");
+            } else {
+                let sent = parent
+                    .call(
+                        "agents_send",
+                        json!({ "child": name, "text": "do this instead", "interrupt": true }),
+                    )
+                    .await
+                    .done();
+                assert_eq!(sent["interrupted"], true, "{backend}");
+            }
+            let run = eventually("the child to take the text after the stop", async || {
+                let run = world.reread(&child);
+                run.prompts
+                    .last()
+                    .is_some_and(|line| line == "do this instead")
+                    .then_some(run)
+            })
+            .await;
+            assert_eq!(run.interrupts, 1, "{backend} by_command={by_command}");
+            // The turn was ended before the text came, so nothing was queued.
+            assert!(
+                !run.queued.iter().any(|line| line == "do this instead"),
+                "{backend}: {:?}",
+                run.queued
+            );
+        }
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn floti_agent_send_from_a_sessions_own_shell_types_the_text_into_that_sessions_child() {
+    let world = World::new();
+    let host = world.host().await;
+    let (parent, child) = world.family(OTHER, "shelled").await;
+    let ran = world
+        .shell(&parent, "floti agent send shelled \"look at the tests\"")
+        .await;
+    assert_eq!(ran.code, Some(0), "{ran:?}");
+    assert!(ran.stdout.contains("Sent to shelled"), "{ran:?}");
+    eventually("the child to take the turn", async || {
+        world
+            .reread(&child)
+            .prompts
+            .iter()
+            .any(|line| line == "look at the tests")
+            .then_some(())
+    })
+    .await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_reaches_only_the_callers_own_running_children() {
+    let world = World::new();
+    let host = world.host().await;
+    let (parent, child) = world.family(OTHER, "mine").await;
+    let (_other_parent, other_child) = world.family(OTHER, "theirs").await;
+
+    // A name that is no child of the caller's is not found, whoever has it.
+    let refused = parent.send("theirs", "hello").await;
+    assert!(
+        refused
+            .refused()
+            .contains("No agent of yours is named theirs"),
+        "{refused:?}"
+    );
+    let refused = parent.send("ghost", "hello").await;
+    assert!(refused.refused().contains("ghost"), "{refused:?}");
+    // Blank text and a missing name are refused before anything is typed.
+    assert!(parent.send("mine", "   ").await.failed);
+    assert!(
+        parent
+            .call("agents_send", json!({ "text": "x" }))
+            .await
+            .failed
+    );
+
+    // A child that has ended takes nothing.
+    parent.stop("mine").await.done();
+    world.ended("the child to stop", &[child.id()]).await;
+    let refused = parent.send("mine", "hello").await;
+    assert!(refused.refused().contains("mine has ended"), "{refused:?}");
+
+    // None of that typed anything into any child.
+    for run in [world.reread(&other_child), world.reread(&child)] {
+        assert!(!run.received.iter().any(|line| line.contains("hello")));
+        assert!(run.pastes.is_empty(), "{:?}", run.pastes);
+    }
     host.stop(HostStopReason::Stop).await;
 }

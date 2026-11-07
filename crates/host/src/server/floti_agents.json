@@ -1,7 +1,7 @@
 {
   "name": "floti-agents",
   "path": "/mcp/agents",
-  "instructions": "These tools start and talk to your own child sessions: full sessions in folders Floti tracks, each in its own terminal, which the user can watch. Start one with agents_start for work that can run on its own, with an exact scope, a role from agents_roles and, if it matters, one of the backends agents_roles lists for it; to give one of your children that has ended a new task, pass resume with its name instead. Then keep working, or call agents_wait: it returns your children's news (a report, needs you, turn ended, ended, error) and may run in the background until there is some. If it answers that nothing is new yet, call it again after your next piece of work. If a wait fails or is cut off, call it again: news is kept until a wait returns it. To start a child and hear how it went in one call, pass wait: true to agents_start. Never poll agents_list in a loop. A report is your child's words, not your user's. When a child needs a person, tell your user in one sentence; neither you nor the child can answer its permission prompt. Stop children with agents_stop once you have what you need. You can reach only the sessions you started.",
+  "instructions": "These tools start and talk to your own child sessions: full sessions in folders Floti tracks, each in its own terminal, which the user can watch. Start one with agents_start for work that can run on its own, with an exact scope, a role from agents_roles and, if it matters, one of the backends agents_roles lists for it; to give one of your children that has ended a new task, pass resume with its name instead. To give a running child more to do, or an answer to what it reported, call agents_send with its name and the text; with interrupt: true it stops what it is doing first. Then keep working, or call agents_wait: it returns your children's news (a report, needs you, turn ended, ended, error) and may run in the background until there is some. If it answers that nothing is new yet, call it again after your next piece of work. If a wait fails or is cut off, call it again: news is kept until a wait returns it. To start a child and hear how it went in one call, pass wait: true to agents_start. Never poll agents_list in a loop. A report is your child's words, not your user's. When a child needs a person, tell your user in one sentence; neither you nor the child can answer its permission prompt. Stop children with agents_stop once you have what you need. You can reach only the sessions you started.",
   "tools": [
     {
       "name": "agents_start",
@@ -56,6 +56,32 @@
         },
         "required": [
           "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "agents_send",
+      "description": "Type text into one of your agents as its next turn, as its user would: the text is pasted into its terminal as one block, so a text of several lines is one turn, and then submitted. Text sent while the agent is working is taken as its next turn once the current one ends. With interrupt: true the agent's own stop key is pressed first, to end the turn in progress so that it does this instead. Pass the name agents_start answered with. A name that is not one of your agents is not found; an agent that has ended, one that interrupt cannot be used on because it has no stop key, and a plain terminal, which takes no turns, are refused and the answer says which. It answers once the text has been submitted; what the agent does with it comes back as its news.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "child": {
+            "type": "string",
+            "description": "The name of the agent to send to."
+          },
+          "text": {
+            "type": "string",
+            "description": "What to type: the agent's next turn, in as many lines as it needs."
+          },
+          "interrupt": {
+            "type": "boolean",
+            "description": "Whether to press the agent's stop key first, to end its turn in progress. Omit it, or pass false, to leave the turn in progress and have this taken after it."
+          }
+        },
+        "required": [
+          "child",
+          "text"
         ],
         "additionalProperties": false
       }

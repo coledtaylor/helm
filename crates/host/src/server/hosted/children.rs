@@ -39,13 +39,16 @@ mod folders;
 mod inbox;
 mod news;
 mod rows;
+mod send;
 mod wait;
 
 use inbox::StoppedBy;
 #[cfg(test)]
 pub(crate) use inbox::{EventKind, Facts, News};
+pub(crate) use send::SendChild;
 pub(crate) use wait::{WaitEnd, WaitFor, WaitRequest, Waited};
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -92,6 +95,8 @@ pub(super) struct Children {
     /// The PATH the host's sessions inherit.
     inherited_path: Option<OsString>,
     starting: Mutex<()>,
+    /// One lock for each child being typed into, held for a whole turn.
+    typing: Mutex<HashMap<SessionId, Arc<tokio::sync::Mutex<()>>>>,
     /// What the children are doing, as news for their parents, and what a
     /// wait sleeps on.
     news: news::Desk,
@@ -118,7 +123,16 @@ impl Children {
                 .find(|(name, _)| name.eq_ignore_ascii_case("PATH"))
                 .map(|(_, value)| value.clone()),
             starting: Mutex::new(()),
+            typing: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The lock that takes sends to session `id` one turn at a time. A lock
+    /// nobody holds is forgotten the next time one is asked for.
+    fn typing_lock(&self, id: SessionId) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = lock(&self.typing);
+        locks.retain(|held, turn| *held == id || Arc::strong_count(turn) > 1);
+        Arc::clone(locks.entry(id).or_default())
     }
 
     /// `path` (the PATH the session would have) with the folder of the `floti`

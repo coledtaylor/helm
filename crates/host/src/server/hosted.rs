@@ -59,8 +59,8 @@ mod children;
 
 use children::Children;
 pub(crate) use children::{
-    ChildEntry, ChildStopped, ChildrenListed, RoleEntry, RolesListed, StartChild, WaitEnd, WaitFor,
-    WaitRequest, Waited, end_children_at_exit,
+    ChildEntry, ChildStopped, ChildrenListed, RoleEntry, RolesListed, SendChild, StartChild,
+    WaitEnd, WaitFor, WaitRequest, Waited, end_children_at_exit,
 };
 #[cfg(test)]
 pub(crate) use children::{EventKind, Facts, News};

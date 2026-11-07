@@ -77,12 +77,29 @@ impl AgentInput {
     }
 
     /// `text` as one bracketed paste: the open marker, the text and the close
-    /// marker. The text is sent untouched, newlines included.
+    /// marker. Newlines and tabs stay; a line ending is one `\n`; every other
+    /// control character is dropped, because an escape in the text could end
+    /// the paste early and make the rest of it keys.
     pub fn paste(&self, text: &str) -> Vec<u8> {
         let mut bytes =
             Vec::with_capacity(self.paste_open.len() + text.len() + self.paste_close.len());
         bytes.extend_from_slice(&self.paste_open);
-        bytes.extend_from_slice(text.as_bytes());
+        let mut chars = text.chars().peekable();
+        let mut buffer = [0_u8; 4];
+        while let Some(c) = chars.next() {
+            let c = match c {
+                '\r' => {
+                    if chars.peek() == Some(&'\n') {
+                        continue;
+                    }
+                    '\n'
+                }
+                '\n' | '\t' => c,
+                other if other.is_control() => continue,
+                other => other,
+            };
+            bytes.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
+        }
         bytes.extend_from_slice(&self.paste_close);
         bytes
     }
@@ -132,6 +149,21 @@ mod tests {
             b"\x1b[200~one\ntwo\n\x1b[201~".to_vec()
         );
         assert_eq!(input.paste(""), b"\x1b[200~\x1b[201~".to_vec());
+        assert_eq!(
+            input.paste("tab\there é"),
+            "\x1b[200~tab\there é\x1b[201~".as_bytes().to_vec()
+        );
+    }
+
+    #[test]
+    fn a_paste_cannot_end_itself_early_or_carry_a_key() {
+        let input = AgentInput::bracketed(b"\r", Some(b"\x1b"), Duration::from_millis(250));
+        // Line endings become one newline each; an escape, a bell and a
+        // delete are dropped, so the close marker in the text is not one.
+        assert_eq!(
+            input.paste("a\r\nb\rc\x1b[201~d\x07\x7fe"),
+            b"\x1b[200~a\nb\nc[201~de\x1b[201~".to_vec()
+        );
     }
 
     #[test]

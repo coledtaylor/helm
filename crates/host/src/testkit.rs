@@ -43,7 +43,7 @@ mod process;
 pub use client::{PATIENCE, TestClient, names_unserved_channel};
 pub use other_agent::{
     OTHER_AGENT_HOME_VAR, OtherAgent, OtherAgentBackend, OtherAgentRecord, OtherAgentServer,
-    ShellRun,
+    Pasted, ShellRun,
 };
 pub use process::{
     HostCrash, HostProcess, host_key_when_made, raw_connection, read_until_closed, run_floti,
