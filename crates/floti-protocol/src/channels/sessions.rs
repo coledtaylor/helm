@@ -42,6 +42,7 @@ use crate::channel::Catalogue;
 use crate::channels::common::{PermissionMode, SessionRecord};
 
 mod history;
+mod notices;
 mod profiles;
 mod terminal;
 mod usage;
@@ -50,6 +51,7 @@ mod usage;
 mod tests;
 
 pub use history::*;
+pub use notices::*;
 pub use profiles::*;
 pub use terminal::*;
 pub use usage::*;
@@ -84,6 +86,7 @@ pub fn declare(catalogue: &mut Catalogue) {
         .stream::<SessionTerminal>()
         .stream::<SessionPortForward>();
     terminal::declare(catalogue);
+    notices::declare(catalogue);
     profiles::declare(catalogue);
     history::declare(catalogue);
     usage::declare(catalogue);
@@ -469,6 +472,17 @@ pub struct SessionConfirmRequest {
     pub confirm_label: String,
     /// Names of the sessions this ends, for the dialog to list.
     pub session_names: Vec<String>,
+    /// For closing a parent: the rows of the running children that end with
+    /// it, its own children and theirs. Absent from a host before protocol
+    /// 2.1 and from a question about a session with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<f64>>", optional)]
+    pub ending_ids: Vec<u64>,
+    /// For closing a parent: the rows of the running children started to
+    /// outlive it, which keep running.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<f64>>", optional)]
+    pub outliving_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -493,6 +507,13 @@ pub struct SessionActivation {
 pub struct SessionStreamOpen {
     #[ts(type = "number")]
     pub id: u64,
+    /// Watch only: the host takes no keys and no size from this stream, so
+    /// the session receives neither, while the stream still carries its
+    /// current screen and its live output. Absent reads false, as it does
+    /// from a client before protocol 2.1.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub watch: bool,
 }
 
 /// Which session's port a `sessions:port` stream connects to.

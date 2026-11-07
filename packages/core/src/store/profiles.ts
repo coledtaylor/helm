@@ -29,6 +29,7 @@ function toProfile(row: Row): Profile {
     openingPrompt: row.openingPrompt,
     pinnedOrder: row.pinnedOrder,
     sessionAgents: row.sessionAgents,
+    remoteControl: row.remoteControl,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   }
@@ -51,7 +52,8 @@ export function profileDraft(profile: Profile): ProfileDraft {
     mcp: profile.mcp,
     openingPrompt: profile.openingPrompt,
     pinnedOrder: profile.pinnedOrder,
-    ...(profile.sessionAgents === false ? { sessionAgents: false } : {})
+    ...(profile.sessionAgents === false ? { sessionAgents: false } : {}),
+    ...(profile.remoteControl === true ? { remoteControl: true } : {})
   }
 }
 
@@ -69,7 +71,9 @@ function toValues(draft: ProfileDraft): Omit<Row, 'id' | 'createdAt' | 'updatedA
     openingPrompt: draft.openingPrompt,
     pinnedOrder: draft.pinnedOrder,
     // Only the off choice is kept: on is what following the setting already is.
-    sessionAgents: draft.sessionAgents === false ? false : null
+    sessionAgents: draft.sessionAgents === false ? false : null,
+    // Only the on choice is kept: off is what a profile without it already is.
+    remoteControl: draft.remoteControl === true ? true : null
   }
 }
 

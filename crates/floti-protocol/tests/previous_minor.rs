@@ -7,7 +7,10 @@ use std::collections::BTreeSet;
 
 use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::common::{ChildReport, PermissionMode, SessionRecord, SessionStatus};
-use floti_protocol::channels::sessions::{EffortLevel, Profile, ProfileDraft};
+use floti_protocol::channels::sessions::{
+    EffortLevel, Profile, ProfileDraft, SessionConfirmKind, SessionConfirmRequest,
+    SessionStreamOpen,
+};
 use floti_protocol::channels::workspace::{
     DEFAULT_AGENT_CHILDREN_PER_PARENT, DEFAULT_AGENT_DEPTH, DEFAULT_AGENT_HEAVY_PER_HOST,
     DEFAULT_AGENT_SESSIONS_PER_HOST, DEFAULT_AGENT_STARTS_PER_PARENT, DEFAULT_SESSION_AGENTS,
@@ -94,6 +97,25 @@ struct ProfileDraftV20 {
     mcp: Vec<String>,
     opening_prompt: Option<String>,
     pinned_order: Option<u32>,
+}
+
+/// The question a 2.0 host asks before it ends a session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionConfirmRequestV20 {
+    id: u64,
+    kind: SessionConfirmKind,
+    message: String,
+    detail: String,
+    confirm_label: String,
+    session_names: Vec<String>,
+}
+
+/// The stream a 2.0 client opens on a session's terminal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionStreamOpenV20 {
+    id: u64,
 }
 
 fn session_v20() -> SessionRecordV20 {
@@ -320,6 +342,142 @@ fn a_childs_last_report_is_on_its_record_only_while_it_has_one() {
 }
 
 #[test]
+fn a_child_started_to_outlive_its_parent_and_its_mode_are_on_its_record_only_when_there_are_some() {
+    let parent = session_v21();
+    let child = SessionRecord {
+        outlive: true,
+        permission_mode: Some(PermissionMode::Plan),
+        ..child_of(&parent)
+    };
+
+    let read: SessionRecord = from_payload(&to_payload(&child).unwrap()).unwrap();
+    assert!(read.outlive);
+    assert_eq!(read.permission_mode, Some(PermissionMode::Plan));
+    let wire = serde_json::to_value(&child).unwrap();
+    assert_eq!(wire["outlive"], Value::Bool(true));
+    assert_eq!(wire["permissionMode"], "plan");
+
+    // Without them the record is the record of a host before 2.1.
+    let plain = serde_json::to_value(child_of(&parent)).unwrap();
+    assert!(plain.get("outlive").is_none(), "{plain}");
+    assert!(plain.get("permissionMode").is_none(), "{plain}");
+    let old: SessionRecord = from_payload(&to_payload(&session_v20()).unwrap()).unwrap();
+    assert!(!old.outlive);
+    assert_eq!(old.permission_mode, None);
+
+    // A 2.0 client reads everything it knows of a record that carries them.
+    let v20: SessionRecordV20 = from_payload(&to_payload(&child).unwrap())
+        .expect("a 2.0 client reads a record that carries outlive and a mode");
+    assert_eq!(v20.id, child.id);
+}
+
+#[test]
+fn a_close_question_names_the_sessions_that_end_and_that_outlive_and_a_2_0_client_still_reads_it() {
+    let v20 = SessionConfirmRequestV20 {
+        id: 5,
+        kind: SessionConfirmKind::CloseSession,
+        message: "lead is still running.".into(),
+        detail: "Closing it ends it and 2 more.".into(),
+        confirm_label: "End 3 sessions".into(),
+        session_names: vec!["lead".into(), "worker".into()],
+    };
+    // A question from a host before 2.1 names no ids.
+    let read: SessionConfirmRequest = from_payload(&to_payload(&v20).unwrap()).unwrap();
+    assert!(read.ending_ids.is_empty() && read.outliving_ids.is_empty());
+
+    let asked = SessionConfirmRequest {
+        ending_ids: vec![13, 14],
+        outliving_ids: vec![15],
+        ..read
+    };
+    let heard: SessionConfirmRequest = from_payload(&to_payload(&asked).unwrap()).unwrap();
+    assert_eq!(heard, asked);
+    let old: SessionConfirmRequestV20 = from_payload(&to_payload(&asked).unwrap())
+        .expect("a 2.0 client reads a question that names ids");
+    assert_eq!(old, v20);
+
+    // A question that names none says nothing of them.
+    let wire = serde_json::to_value(SessionConfirmRequest {
+        ending_ids: vec![],
+        outliving_ids: vec![],
+        ..asked
+    })
+    .unwrap();
+    assert!(wire.get("endingIds").is_none() && wire.get("outlivingIds").is_none());
+}
+
+#[test]
+fn a_stream_opened_by_a_2_0_client_is_not_a_watch_and_a_watch_is_only_said_when_it_is_one() {
+    let from_v20: SessionStreamOpen =
+        from_payload(&to_payload(&SessionStreamOpenV20 { id: 12 }).unwrap()).unwrap();
+    assert_eq!(
+        from_v20,
+        SessionStreamOpen {
+            id: 12,
+            watch: false
+        }
+    );
+    assert!(
+        serde_json::to_value(&from_v20)
+            .unwrap()
+            .get("watch")
+            .is_none()
+    );
+
+    let watching = SessionStreamOpen {
+        id: 12,
+        watch: true,
+    };
+    assert_eq!(
+        serde_json::to_value(&watching).unwrap()["watch"],
+        Value::Bool(true)
+    );
+    // A host before 2.1 reads it as the open it knows: the id it names.
+    let read: SessionStreamOpenV20 = from_payload(&to_payload(&watching).unwrap()).unwrap();
+    assert_eq!(read, SessionStreamOpenV20 { id: 12 });
+}
+
+#[test]
+fn a_profile_from_before_2_1_runs_without_remote_control_and_a_2_0_client_reads_one_that_has_it() {
+    let profile: Profile = from_payload(&to_payload(&profile_v20()).unwrap()).unwrap();
+    assert_eq!(profile.remote_control, None);
+    let draft: ProfileDraft = from_payload(&to_payload(&draft_v20()).unwrap()).unwrap();
+    assert_eq!(draft.remote_control, None);
+
+    let on = Profile {
+        remote_control: Some(true),
+        ..profile
+    };
+    let read: ProfileV20 = from_payload(&to_payload(&on).unwrap()).unwrap();
+    assert_eq!(read, profile_v20());
+    let kept: Profile = from_payload(&to_payload(&on).unwrap()).unwrap();
+    assert_eq!(kept.remote_control, Some(true));
+}
+
+#[test]
+fn the_standing_notice_channels_are_in_2_1_and_not_in_2_0_and_every_2_0_channel_stays() {
+    let v20 = record_of(V2_0);
+    let v21: Value =
+        serde_json::from_str(&record::record(PROTOCOL_VERSION, &Catalogue::protocol())).unwrap();
+    let channels = |record: &Value| -> BTreeSet<String> {
+        record["channels"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let (before, after) = (channels(&v20), channels(&v21));
+    assert!(before.is_subset(&after), "a channel left 2.1");
+    for added in ["notices:changed", "notices:dismiss", "notices:allowMore"] {
+        assert!(!before.contains(added), "{added} was in 2.0");
+        assert!(after.contains(added), "{added} is not in 2.1");
+    }
+    assert_eq!(v21["channels"]["notices:changed"]["kind"], "event");
+    assert!(!v21["channels"]["notices:changed"]["snapshot"].is_null());
+}
+
+#[test]
 fn s31_a_2_1_host_negotiates_the_version_a_2_0_client_speaks() {
     assert_eq!(PROTOCOL_VERSION, ProtocolVersion::new(2, 1));
     assert_eq!(negotiate(PROTOCOL_VERSION, V2_0), Ok(V2_0));
@@ -491,8 +649,18 @@ fn protocol_2_1_adds_only_optional_fields_and_these_are_all_of_them() {
     let added = [
         (
             "SessionRecord",
-            vec!["lastReport", "parentId", "parentName", "role", "stopped"],
+            vec![
+                "lastReport",
+                "outlive",
+                "parentId",
+                "parentName",
+                "permissionMode",
+                "role",
+                "stopped",
+            ],
         ),
+        ("SessionConfirmRequest", vec!["endingIds", "outlivingIds"]),
+        ("SessionStreamOpen", vec!["watch"]),
         (
             "HostSettings",
             vec![
@@ -515,8 +683,8 @@ fn protocol_2_1_adds_only_optional_fields_and_these_are_all_of_them() {
                 "agentHeavyPerHost",
             ],
         ),
-        ("Profile", vec!["sessionAgents"]),
-        ("ProfileDraft", vec!["sessionAgents"]),
+        ("Profile", vec!["remoteControl", "sessionAgents"]),
+        ("ProfileDraft", vec!["remoteControl", "sessionAgents"]),
     ];
     for (name, new) in added {
         let before = properties_of(&v20, name);

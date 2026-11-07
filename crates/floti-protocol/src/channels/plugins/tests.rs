@@ -184,6 +184,8 @@ fn record() -> SessionRecord {
         role: None,
         stopped: false,
         last_report: None,
+        outlive: false,
+        permission_mode: None,
     }
 }
 

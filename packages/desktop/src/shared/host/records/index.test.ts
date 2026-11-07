@@ -60,6 +60,16 @@ describe('a host session, as the window reads it', () => {
     })
     expect(sessionFromHost(hostSession({ parentId: 4, parentName: 'lead' }))).not.toHaveProperty('lastReport')
   })
+
+  it('carries that a child outlives its parent and the mode it was launched in, and nothing otherwise', () => {
+    expect(
+      sessionFromHost(hostSession({ parentId: 4, parentName: 'lead', outlive: true, permissionMode: 'plan' }))
+    ).toMatchObject({ outlive: true, permissionMode: 'plan' })
+    for (const plain of [hostSession(), hostSession({ outlive: false })]) {
+      expect(sessionFromHost(plain)).not.toHaveProperty('outlive')
+      expect(sessionFromHost(plain)).not.toHaveProperty('permissionMode')
+    }
+  })
 })
 
 const hostProfile = (patch: Partial<P.Profile> = {}): P.Profile => ({
@@ -88,6 +98,12 @@ describe('a host profile, as the window reads it', () => {
   it('has no choice where the host has none or follows the setting', () => {
     expect(profileFromHost(hostProfile())).not.toHaveProperty('sessionAgents')
     expect(profileFromHost(hostProfile({ sessionAgents: null }))).not.toHaveProperty('sessionAgents')
+  })
+
+  it('keeps the choice to run with Remote Control, and has none where the host has it off', () => {
+    expect(profileFromHost(hostProfile({ remoteControl: true })).remoteControl).toBe(true)
+    expect(profileFromHost(hostProfile())).not.toHaveProperty('remoteControl')
+    expect(profileFromHost(hostProfile({ remoteControl: null }))).not.toHaveProperty('remoteControl')
   })
 })
 

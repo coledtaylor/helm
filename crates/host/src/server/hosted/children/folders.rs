@@ -134,6 +134,7 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
             session_agents: None,
+            remote_control: None,
         }
     }
 

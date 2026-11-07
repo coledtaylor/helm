@@ -52,6 +52,12 @@ export const profiles = sqliteTable(
      * holds only the one choice a profile makes.
      */
     sessionAgents: integer('session_agents', { mode: 'boolean' }),
+    /**
+     * Whether this profile's sessions run with Remote Control under their own
+     * names. Null is off; 1 is on, and a session started from it gives its
+     * children Remote Control too.
+     */
+    remoteControl: integer('remote_control', { mode: 'boolean' }),
     createdAt: text('created_at').notNull().default(now),
     updatedAt: text('updated_at').notNull().default(now)
   },
@@ -279,6 +285,18 @@ export const sessions = sqliteTable(
      * "Done" for the other.
      */
     stopped: integer('stopped', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * The name this session runs with Remote Control under, or null when it
+     * runs without. A child of a session with a name is launched with
+     * "<that name> › <child name>".
+     */
+    remoteControlName: text('remote_control_name'),
+    /**
+     * How many starts this session may make beyond the starts setting: what a
+     * client's Allow more added for this parent alone. Only the Floti host
+     * writes it.
+     */
+    extraStarts: integer('extra_starts').notNull().default(0),
     status: text('status', { enum: ['running', 'exited', 'lost'] })
       .notNull()
       .default('running'),
@@ -345,6 +363,41 @@ export const agentInbox = sqliteTable(
     index('agent_inbox_parent_idx').on(t.parentSessionId, t.seenAt),
     index('agent_inbox_conversation_idx').on(t.parentConversationId, t.seenAt)
   ]
+)
+
+/**
+ * What the host keeps standing for a person who is not looking: a start a
+ * limit refused and a child that ended in error, until a client dismisses
+ * them or the parent ends. Only the Floti host writes it. A child that needs
+ * a person is a notice too, but it follows the child's activity and is not
+ * kept here: it goes when the child stops waiting, and a restart reads it
+ * afresh.
+ *
+ * The parent's row is not a foreign key: a notice names it and is removed
+ * with it by the host, and a row deleted from history leaves nothing here to
+ * dangle.
+ */
+export const notices = sqliteTable(
+  'notices',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    kind: text('kind', { enum: ['limit', 'error'] }).notNull(),
+    /** The parent's row. */
+    parentSessionId: integer('parent_session_id').notNull(),
+    /** What the parent was called when the notice began. */
+    parentName: text('parent_name').notNull(),
+    /** The child's row for an error, or null for a refused start. */
+    childSessionId: integer('child_session_id'),
+    childName: text('child_name'),
+    /** The sentence the notice says. */
+    text: text('text').notNull(),
+    /** For a limit, which one refused: children, sessions, depth, starts or heavy. */
+    limitKind: text('limit_kind', { enum: ['children', 'sessions', 'depth', 'starts', 'heavy'] }),
+    /** For the starts limit, how many more starts Allow adds. */
+    allowMore: integer('allow_more'),
+    since: text('since').notNull().default(now)
+  },
+  (t) => [index('notices_parent_idx').on(t.parentSessionId)]
 )
 
 /**

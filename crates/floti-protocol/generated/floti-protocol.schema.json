@@ -356,6 +356,34 @@
       ],
       "type": "object"
     },
+    "AllowMoreStartsRequest": {
+      "properties": {
+        "parentId": {
+          "description": "The parent session's row id.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "parentId"
+      ],
+      "type": "object"
+    },
+    "AllowMoreStartsResult": {
+      "properties": {
+        "added": {
+          "description": "How many more starts the parent may make now.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "added"
+      ],
+      "type": "object"
+    },
     "AppInfo": {
       "description": "The host's identity.",
       "properties": {
@@ -2753,6 +2781,18 @@
         "errors",
         "scannedAt",
         "durationMs"
+      ],
+      "type": "object"
+    },
+    "DismissNoticeRequest": {
+      "properties": {
+        "id": {
+          "description": "The notice's `id`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
       ],
       "type": "object"
     },
@@ -5467,6 +5507,56 @@
       ],
       "type": "object"
     },
+    "NoticeKind": {
+      "description": "What a notice is about.",
+      "oneOf": [
+        {
+          "const": "needs-you",
+          "description": "A child is waiting on a person.",
+          "type": "string"
+        },
+        {
+          "const": "limit",
+          "description": "A parent's start was refused by a limit.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "A child ended in error, or its launch failed.",
+          "type": "string"
+        }
+      ]
+    },
+    "NoticeLimit": {
+      "description": "The limit that refused a start.",
+      "oneOf": [
+        {
+          "const": "children",
+          "description": "Children running at once under one parent.",
+          "type": "string"
+        },
+        {
+          "const": "sessions",
+          "description": "Agent-started sessions running at once on the host.",
+          "type": "string"
+        },
+        {
+          "const": "depth",
+          "description": "How deep a chain of parents may go.",
+          "type": "string"
+        },
+        {
+          "const": "starts",
+          "description": "Starts one parent may make in all.",
+          "type": "string"
+        },
+        {
+          "const": "heavy",
+          "description": "Heavy children running at once on the host.",
+          "type": "string"
+        }
+      ]
+    },
     "PermissionMode": {
       "description": "How a session asks before it acts. The values are the ones the launcher\noffers; each backend maps them to its own flags.",
       "enum": [
@@ -7263,6 +7353,14 @@
             "null"
           ]
         },
+        "remoteControl": {
+          "default": null,
+          "description": "Whether this profile's sessions run with Remote Control, under their\nown names: true turns it on, null is off. A session started from it\ngives its children Remote Control too, named for the whole line. The\nhost keeps false as null.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "root": {
           "description": "The folder the session runs in.",
           "type": "string"
@@ -7388,6 +7486,14 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "remoteControl": {
+          "default": null,
+          "description": "Whether this profile's sessions run with Remote Control, as a saved\nprofile's `remoteControl` says. A client before protocol 2.1 sends\nnone, which is off.",
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -8638,6 +8744,15 @@
         "detail": {
           "type": "string"
         },
+        "endingIds": {
+          "description": "For closing a parent: the rows of the running children that end with\nit, its own children and theirs. Absent from a host before protocol\n2.1 and from a question about a session with none.",
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "id": {
           "description": "Correlates the answer with the question.",
           "format": "uint64",
@@ -8649,6 +8764,15 @@
         },
         "message": {
           "type": "string"
+        },
+        "outlivingIds": {
+          "description": "For closing a parent: the rows of the running children started to\noutlive it, which keep running.",
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
         },
         "sessionNames": {
           "description": "Names of the sessions this ends, for the dialog to list.",
@@ -8875,6 +8999,10 @@
           "description": "The name handed to the agent, so the session can be found in its own\nresume list later. Never rewritten; a rename writes `label`.",
           "type": "string"
         },
+        "outlive": {
+          "description": "Whether this child was started to keep running when its parent ends.\nAbsent reads false, as it does for a session with no parent and from a\nhost before protocol 2.1.",
+          "type": "boolean"
+        },
         "parentId": {
           "default": null,
           "description": "The session that started this one with an agent tool, as its row id,\nor null for a session a person started. A child that outlived its\nparent keeps naming it. Absent from a host before protocol 2.1, which\nreads as null.",
@@ -8892,6 +9020,17 @@
             "string",
             "null"
           ]
+        },
+        "permissionMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The permission mode the session was launched in, or absent for a\nsession launched with none and from a host before this field."
         },
         "profileId": {
           "description": "The profile it was launched from, if it was one. The session outlives\na deleted profile.",
@@ -9042,6 +9181,10 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "watch": {
+          "description": "Watch only: the host takes no keys and no size from this stream, so\nthe session receives neither, while the stream still carries its\ncurrent screen and its live output. Absent reads false, as it does\nfrom a client before protocol 2.1.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -9268,6 +9411,85 @@
       "required": [
         "path",
         "source"
+      ],
+      "type": "object"
+    },
+    "StandingNotice": {
+      "description": "One notice standing on a host.",
+      "properties": {
+        "allowMore": {
+          "default": null,
+          "description": "For a starts limit, how many more starts Allow adds for this parent:\nthe starts setting's value.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "childId": {
+          "default": null,
+          "description": "The child a needs-you or error notice is about, or none for a refused\nstart.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "childName": {
+          "default": null,
+          "description": "What the parent calls the child, or none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Names this notice for `notices:dismiss`; the host makes it, and it\nstays the same while the notice stands.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NoticeKind"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoticeLimit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which limit refused a start. Only a limit notice has one."
+        },
+        "parentId": {
+          "description": "The session the notice is under: the child's parent, or for a start\nrefused the parent that asked.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parentName": {
+          "description": "What the parent is called on screen.",
+          "type": "string"
+        },
+        "since": {
+          "description": "ISO 8601: when the notice began.",
+          "type": "string"
+        },
+        "text": {
+          "description": "For needs you, what the child waits on (a permission prompt, a\nquestion, a sign-in); for a limit or an error, its sentence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "parentId",
+        "parentName",
+        "text",
+        "since"
       ],
       "type": "object"
     },
@@ -11366,6 +11588,45 @@
       "name": "host:stop",
       "request": {
         "$ref": "#/$defs/HostStopRequest"
+      },
+      "response": {
+        "type": "null"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "notices:allowMore",
+      "request": {
+        "$ref": "#/$defs/AllowMoreStartsRequest"
+      },
+      "response": {
+        "$ref": "#/$defs/AllowMoreStartsResult"
+      }
+    },
+    {
+      "capability": null,
+      "event": {
+        "items": {
+          "$ref": "#/$defs/StandingNotice"
+        },
+        "type": "array"
+      },
+      "kind": "event",
+      "name": "notices:changed",
+      "snapshot": {
+        "items": {
+          "$ref": "#/$defs/StandingNotice"
+        },
+        "type": "array"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "notices:dismiss",
+      "request": {
+        "$ref": "#/$defs/DismissNoticeRequest"
       },
       "response": {
         "type": "null"

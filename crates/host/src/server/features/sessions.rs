@@ -227,6 +227,8 @@ impl Sessions {
                 ),
                 confirm_label: "End session".to_owned(),
                 session_names: vec![label],
+                ending_ids: Vec::new(),
+                outliving_ids: Vec::new(),
             }
         };
         self.events
@@ -296,7 +298,7 @@ impl Sessions {
         client: ClientId,
         open: SessionStreamOpen,
     ) -> Result<TerminalAttachment, String> {
-        let SessionStreamOpen { id } = open;
+        let SessionStreamOpen { id, .. } = open;
         let session = session_id(id)
             .and_then(|id| self.hosted.sessions().get(id))
             .ok_or_else(|| format!("Session {id} is not running on this Floti host."))?;

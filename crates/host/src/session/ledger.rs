@@ -59,6 +59,10 @@ pub struct SessionOrigin {
     pub branch: Option<String>,
     /// The session that started it with an agent tool, when one did.
     pub parent: Option<ParentLink>,
+    /// The name it runs with Remote Control under, when it runs with it. Its
+    /// children are launched with Remote Control under "<this name> ›
+    /// <their name>".
+    pub remote_control_name: Option<String>,
 }
 
 /// What a child's row keeps of the session that started it, so the link
@@ -131,9 +135,9 @@ impl SessionLedger for Mutex<Store> {
                 "INSERT INTO sessions (name, cwd, argv, claude_session_id, backend, \
                  project_path, profile_id, permission_mode, branch, parent_session_id, \
                  parent_conversation_id, child_name, role, outlive, can_start, child_class, \
-                 child_worktree, status) \
+                 child_worktree, remote_control_name, status) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                 ?16, ?17, 'running') RETURNING id",
+                 ?16, ?17, ?18, 'running') RETURNING id",
                 params![
                     row.name,
                     row.cwd.to_string_lossy(),
@@ -152,6 +156,7 @@ impl SessionLedger for Mutex<Store> {
                     parent.is_some_and(|link| link.can_start),
                     parent.map(|link| if link.heavy { "heavy" } else { "light" }),
                     parent.is_some_and(|link| link.worktree),
+                    row.origin.remote_control_name,
                 ],
                 |found| found.get(0),
             )
@@ -191,6 +196,56 @@ impl SessionLedger for Mutex<Store> {
     }
 }
 
+/// The name session `id` runs with Remote Control under, or `None` for a
+/// session that runs without it or has no row.
+pub fn remote_control_name(store: &Store, id: SessionId) -> Result<Option<String>> {
+    store
+        .connection()
+        .query_row(
+            "SELECT remote_control_name FROM sessions WHERE id = ?1",
+            [id.0],
+            |found| found.get(0),
+        )
+        .optional()
+        .map(Option::flatten)
+        .map_err(sql("read a session's Remote Control name"))
+}
+
+/// How many starts beyond the starts setting session `id` has been allowed,
+/// or 0 for a session with none or no row.
+pub fn extra_starts(store: &Store, id: SessionId) -> Result<u32> {
+    let extra: Option<i64> = store
+        .connection()
+        .query_row(
+            "SELECT extra_starts FROM sessions WHERE id = ?1",
+            [id.0],
+            |found| found.get(0),
+        )
+        .optional()
+        .map_err(sql("read a session's extra starts"))?;
+    Ok(extra.map_or(0, |extra| u32::try_from(extra).unwrap_or(u32::MAX)))
+}
+
+/// Allows session `id` `more` starts beyond the setting, on top of any it was
+/// allowed before, and answers the allowance now. Another session's allowance
+/// is never touched. `None` when there is no such row.
+pub fn allow_starts(store: &Store, id: SessionId, more: u32) -> Result<Option<u32>> {
+    let now: Option<i64> = store
+        .connection()
+        .query_row(
+            "UPDATE sessions SET extra_starts = extra_starts + ?2 WHERE id = ?1 \
+             RETURNING extra_starts",
+            params![id.0, i64::from(more)],
+            |found| found.get(0),
+        )
+        .optional()
+        .map_err(sql("allow a session more starts"))?;
+    Ok(now.map(|now| u32::try_from(now).unwrap_or(u32::MAX)))
+}
+
 fn sql(action: &'static str) -> impl FnOnce(rusqlite::Error) -> Error {
     move |err| Error::io(action, io::Error::other(err))
 }
+
+#[cfg(test)]
+mod tests;

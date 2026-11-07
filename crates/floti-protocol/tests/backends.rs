@@ -32,6 +32,8 @@ fn session(backend: BackendId) -> SessionRecord {
         role: None,
         stopped: false,
         last_report: None,
+        outlive: false,
+        permission_mode: None,
     }
 }
 

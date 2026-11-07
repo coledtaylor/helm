@@ -38,6 +38,7 @@ struct Document<'a> {
     mcp: &'a [String],
     opening_prompt: Option<&'a str>,
     session_agents: Option<bool>,
+    remote_control: Option<bool>,
 }
 
 /// `profile` as its YAML document. `home` is the user's home folder, which
@@ -57,6 +58,7 @@ pub fn profile_to_yaml(profile: &ProfileDraft, home: Option<&Path>) -> String {
         mcp: &profile.mcp,
         opening_prompt: profile.opening_prompt.as_deref(),
         session_agents: profile.session_agents,
+        remote_control: profile.remote_control,
     };
     // A struct of strings, lists of strings and plain enums always
     // serialises.
@@ -108,6 +110,11 @@ pub fn profile_from_yaml(text: &str, home: Option<&Path>) -> Result<ProfileDraft
             Some(Value::Bool(false)) => Some(false),
             _ => None,
         },
+        // Only `true` is a choice; anything else is off.
+        remote_control: match parsed.get("remote_control") {
+            Some(Value::Bool(true)) => Some(true),
+            _ => None,
+        },
     })
 }
 
@@ -127,6 +134,7 @@ pub fn profile_draft(profile: &Profile) -> ProfileDraft {
         opening_prompt: profile.opening_prompt.clone(),
         pinned_order: profile.pinned_order,
         session_agents: profile.session_agents,
+        remote_control: profile.remote_control,
     }
 }
 

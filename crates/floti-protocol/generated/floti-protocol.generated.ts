@@ -189,6 +189,18 @@ uncommitted: boolean | null, };
  */
 export type AgentWorktrees = { worktrees: Array<AgentWorktree>, };
 
+export type AllowMoreStartsRequest = { 
+/**
+ * The parent session's row id.
+ */
+parentId: number, };
+
+export type AllowMoreStartsResult = { 
+/**
+ * How many more starts the parent may make now.
+ */
+added: number, };
+
 /**
  * The host's identity.
  */
@@ -1018,6 +1030,12 @@ roots: Array<string>, harnesses: Array<Harness>, projects: Array<Project>, error
  * ISO 8601.
  */
 scannedAt: string, durationMs: Millis, };
+
+export type DismissNoticeRequest = { 
+/**
+ * The notice's `id`.
+ */
+id: string, };
 
 export type DoctorReport = { 
 /**
@@ -1867,6 +1885,16 @@ export type Millis = number;
 export type MovedFile = { from: string, to: string, };
 
 /**
+ * What a notice is about.
+ */
+export type NoticeKind = "needs-you" | "limit" | "error";
+
+/**
+ * The limit that refused a start.
+ */
+export type NoticeLimit = "children" | "sessions" | "depth" | "starts" | "heavy";
+
+/**
  * How a session asks before it acts. The values are the ones the launcher
  * offers; each backend maps them to its own flags.
  */
@@ -2395,6 +2423,13 @@ pinnedOrder: number | null,
  */
 sessionAgents?: boolean | null, 
 /**
+ * Whether this profile's sessions run with Remote Control, under their
+ * own names: true turns it on, null is off. A session started from it
+ * gives its children Remote Control too, named for the whole line. The
+ * host keeps false as null.
+ */
+remoteControl?: boolean | null, 
+/**
  * ISO 8601.
  */
 createdAt: string, 
@@ -2429,7 +2464,13 @@ export type ProfileDraft = { name: string, root: string, overlays: Array<string>
  * profile's `sessionAgents` says. A client before protocol 2.1 sends
  * none, which follows the host's setting.
  */
-sessionAgents?: boolean | null, };
+sessionAgents?: boolean | null, 
+/**
+ * Whether this profile's sessions run with Remote Control, as a saved
+ * profile's `remoteControl` says. A client before protocol 2.1 sends
+ * none, which is off.
+ */
+remoteControl?: boolean | null, };
 
 /**
  * Names one profile.
@@ -2871,7 +2912,18 @@ confirmLabel: string,
 /**
  * Names of the sessions this ends, for the dialog to list.
  */
-sessionNames: Array<string>, };
+sessionNames: Array<string>, 
+/**
+ * For closing a parent: the rows of the running children that end with
+ * it, its own children and theirs. Absent from a host before protocol
+ * 2.1 and from a question about a session with none.
+ */
+endingIds?: Array<number>, 
+/**
+ * For closing a parent: the rows of the running children started to
+ * outlive it, which keep running.
+ */
+outlivingIds?: Array<number>, };
 
 export type SessionFocusRequest = { 
 /**
@@ -3012,7 +3064,18 @@ stopped?: boolean,
  * nothing since, for a session with no parent, and from a host before
  * this field, which reads as none.
  */
-lastReport?: ChildReport, };
+lastReport?: ChildReport, 
+/**
+ * Whether this child was started to keep running when its parent ends.
+ * Absent reads false, as it does for a session with no parent and from a
+ * host before protocol 2.1.
+ */
+outlive?: boolean, 
+/**
+ * The permission mode the session was launched in, or absent for a
+ * session launched with none and from a host before this field.
+ */
+permissionMode?: PermissionMode, };
 
 export type SessionResizeRequest = { id: number, cols: number, rows: number, };
 
@@ -3054,7 +3117,14 @@ export type SessionStatus = "running" | "exited" | "lost";
 /**
  * Which session's terminal a `session:data` stream carries.
  */
-export type SessionStreamOpen = { id: number, };
+export type SessionStreamOpen = { id: number, 
+/**
+ * Watch only: the host takes no keys and no size from this stream, so
+ * the session receives neither, while the stream still carries its
+ * current screen and its live output. Absent reads false, as it does
+ * from a client before protocol 2.1.
+ */
+watch?: boolean, };
 
 /**
  * One lost session to reopen, at the grid of the pane it goes back to.
@@ -3131,6 +3201,52 @@ export type SnapshotRef = { id: number, };
  * what is in the editor, which may not be on disk.
  */
 export type SourceToRender = { path: string, source: string, };
+
+/**
+ * One notice standing on a host.
+ */
+export type StandingNotice = { 
+/**
+ * Names this notice for `notices:dismiss`; the host makes it, and it
+ * stays the same while the notice stands.
+ */
+id: string, kind: NoticeKind, 
+/**
+ * The session the notice is under: the child's parent, or for a start
+ * refused the parent that asked.
+ */
+parentId: number, 
+/**
+ * What the parent is called on screen.
+ */
+parentName: string, 
+/**
+ * The child a needs-you or error notice is about, or none for a refused
+ * start.
+ */
+childId?: number | null, 
+/**
+ * What the parent calls the child, or none.
+ */
+childName?: string | null, 
+/**
+ * For needs you, what the child waits on (a permission prompt, a
+ * question, a sign-in); for a limit or an error, its sentence.
+ */
+text: string, 
+/**
+ * ISO 8601: when the notice began.
+ */
+since: string, 
+/**
+ * Which limit refused a start. Only a limit notice has one.
+ */
+limit?: NoticeLimit | null, 
+/**
+ * For a starts limit, how many more starts Allow adds for this parent:
+ * the starts setting's value.
+ */
+allowMore?: number | null, };
 
 /**
  * A new session with everything it is launched with, short of Floti's
@@ -3686,6 +3802,8 @@ export interface RequestChannels {
   "host:ping": { request: null; response: null; capability: null };
   "host:quit": { request: HostQuitRequest; response: null; capability: null };
   "host:stop": { request: HostStopRequest; response: null; capability: null };
+  "notices:allowMore": { request: AllowMoreStartsRequest; response: AllowMoreStartsResult; capability: null };
+  "notices:dismiss": { request: DismissNoticeRequest; response: null; capability: null };
   "plugins:add": { request: PluginAddRequest; response: PluginAddResult; capability: null };
   "plugins:answer": { request: PluginAnswerRequest; response: null; capability: "pluginPages" };
   "plugins:call": { request: PluginCallRequest; response: PluginCallOutcome; capability: "pluginPages" };
@@ -3765,6 +3883,7 @@ export interface EventChannels {
   "files:changed": { event: FilesChange; snapshot: null; capability: "files" };
   "git:updated": { event: { [key in string]?: GitState | null }; snapshot: { [key in string]?: GitState | null }; capability: null };
   "history:changed": { event: HistorySummary; snapshot: HistorySummary; capability: null };
+  "notices:changed": { event: Array<StandingNotice>; snapshot: Array<StandingNotice>; capability: null };
   "plugins:changed": { event: Array<PluginInfo>; snapshot: Array<PluginInfo>; capability: null };
   "plugins:deliver": { event: PluginDelivery; snapshot: null; capability: "pluginPages" };
   "plugins:ui": { event: PluginUiRequest; snapshot: null; capability: "pluginPages" };
@@ -3866,6 +3985,9 @@ export const CHANNELS = [
   { name: "host:ping", kind: "request", capability: null },
   { name: "host:quit", kind: "request", capability: null },
   { name: "host:stop", kind: "request", capability: null },
+  { name: "notices:allowMore", kind: "request", capability: null },
+  { name: "notices:changed", kind: "event", capability: null },
+  { name: "notices:dismiss", kind: "request", capability: null },
   { name: "plugins:add", kind: "request", capability: null },
   { name: "plugins:answer", kind: "request", capability: "pluginPages" },
   { name: "plugins:call", kind: "request", capability: "pluginPages" },

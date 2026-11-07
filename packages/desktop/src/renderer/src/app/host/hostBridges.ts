@@ -9,6 +9,7 @@ import { createPluginsAdapter } from './plugins'
 import { createProfilesAdapter } from './profiles'
 import type { RemoteHostsStore } from './remoteHosts'
 import { createRouter, type HostAdapter } from './router'
+import { createNoticesAdapter } from './notices'
 import { createWorktreesAdapter } from './worktrees'
 import { createSessionsAdapters, type SessionsAdapters, type WindowFront } from './sessions'
 import { createWorkspaceAdapter, type WorkspaceAdapter } from './workspace'
@@ -152,6 +153,7 @@ export function createHostBridge(
     createConfigAdapter({ link, scanned: () => workspace.scannedProjects(), log: deps.log }),
     createFilesAdapter(link, deps.log),
     createWorktreesAdapter(link),
+    createNoticesAdapter(link, deps.log),
     ...sessions,
     // A session a plugin asked for, started after the user's yes, opens as one of the window's tabs.
     createPluginsAdapter({ link, host, own, adopt: (row) => sessions.adopt(row), log: deps.log })

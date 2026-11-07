@@ -812,6 +812,42 @@
         "type": "null"
       }
     },
+    "notices:allowMore": {
+      "capability": null,
+      "kind": "request",
+      "request": {
+        "$ref": "#/$defs/AllowMoreStartsRequest"
+      },
+      "response": {
+        "$ref": "#/$defs/AllowMoreStartsResult"
+      }
+    },
+    "notices:changed": {
+      "capability": null,
+      "event": {
+        "items": {
+          "$ref": "#/$defs/StandingNotice"
+        },
+        "type": "array"
+      },
+      "kind": "event",
+      "snapshot": {
+        "items": {
+          "$ref": "#/$defs/StandingNotice"
+        },
+        "type": "array"
+      }
+    },
+    "notices:dismiss": {
+      "capability": null,
+      "kind": "request",
+      "request": {
+        "$ref": "#/$defs/DismissNoticeRequest"
+      },
+      "response": {
+        "type": "null"
+      }
+    },
     "plugins:add": {
       "capability": null,
       "kind": "request",
@@ -2035,6 +2071,32 @@
       },
       "required": [
         "worktrees"
+      ],
+      "type": "object"
+    },
+    "AllowMoreStartsRequest": {
+      "properties": {
+        "parentId": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "parentId"
+      ],
+      "type": "object"
+    },
+    "AllowMoreStartsResult": {
+      "properties": {
+        "added": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "added"
       ],
       "type": "object"
     },
@@ -4252,6 +4314,17 @@
         "errors",
         "scannedAt",
         "durationMs"
+      ],
+      "type": "object"
+    },
+    "DismissNoticeRequest": {
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
       ],
       "type": "object"
     },
@@ -6766,6 +6839,46 @@
       ],
       "type": "object"
     },
+    "NoticeKind": {
+      "oneOf": [
+        {
+          "const": "needs-you",
+          "type": "string"
+        },
+        {
+          "const": "limit",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "type": "string"
+        }
+      ]
+    },
+    "NoticeLimit": {
+      "oneOf": [
+        {
+          "const": "children",
+          "type": "string"
+        },
+        {
+          "const": "sessions",
+          "type": "string"
+        },
+        {
+          "const": "depth",
+          "type": "string"
+        },
+        {
+          "const": "starts",
+          "type": "string"
+        },
+        {
+          "const": "heavy",
+          "type": "string"
+        }
+      ]
+    },
     "PermissionMode": {
       "enum": [
         "acceptEdits",
@@ -8441,6 +8554,13 @@
             "null"
           ]
         },
+        "remoteControl": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "root": {
           "type": "string"
         },
@@ -8559,6 +8679,13 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "remoteControl": {
+          "default": null,
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -9723,6 +9850,14 @@
         "detail": {
           "type": "string"
         },
+        "endingIds": {
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "id": {
           "format": "uint64",
           "minimum": 0,
@@ -9733,6 +9868,14 @@
         },
         "message": {
           "type": "string"
+        },
+        "outlivingIds": {
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
         },
         "sessionNames": {
           "items": {
@@ -9936,6 +10079,9 @@
         "name": {
           "type": "string"
         },
+        "outlive": {
+          "type": "boolean"
+        },
         "parentId": {
           "default": null,
           "format": "uint64",
@@ -9950,6 +10096,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "permissionMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "profileId": {
@@ -10088,6 +10244,9 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "watch": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -10300,6 +10459,75 @@
       "required": [
         "path",
         "source"
+      ],
+      "type": "object"
+    },
+    "StandingNotice": {
+      "properties": {
+        "allowMore": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "childId": {
+          "default": null,
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "childName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NoticeKind"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoticeLimit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parentId": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parentName": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "parentId",
+        "parentName",
+        "text",
+        "since"
       ],
       "type": "object"
     },

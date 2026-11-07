@@ -178,5 +178,15 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "CREATE INDEX `agent_inbox_parent_idx` ON `agent_inbox` (`parent_session_id`,`seen_at`);",
       "CREATE INDEX `agent_inbox_conversation_idx` ON `agent_inbox` (`parent_conversation_id`,`seen_at`);"
     ]
+  },
+  {
+    "tag": "0022_abnormal_miss_america",
+    "statements": [
+      "CREATE TABLE `notices` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`kind` text NOT NULL,\n\t`parent_session_id` integer NOT NULL,\n\t`parent_name` text NOT NULL,\n\t`child_session_id` integer,\n\t`child_name` text,\n\t`text` text NOT NULL,\n\t`limit_kind` text,\n\t`allow_more` integer,\n\t`since` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);",
+      "CREATE INDEX `notices_parent_idx` ON `notices` (`parent_session_id`);",
+      "ALTER TABLE `profiles` ADD `remote_control` integer;",
+      "ALTER TABLE `sessions` ADD `remote_control_name` text;",
+      "ALTER TABLE `sessions` ADD `extra_starts` integer DEFAULT 0 NOT NULL;"
+    ]
   }
 ]

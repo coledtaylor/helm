@@ -66,6 +66,65 @@ fn link(parent: SessionId, name: &str) -> ParentLink {
 }
 
 #[test]
+fn a_childs_record_says_whether_it_outlives_its_parent_and_the_mode_it_was_launched_in() {
+    let world = World::new();
+    let parent = world.start("lead", None);
+    let keeps_going = ParentLink {
+        outlive: true,
+        ..link(parent, "builder")
+    };
+    let child = world.start("lead-builder", Some(keeps_going));
+    let ends_with_it = world.start("lead-reviewer", Some(link(parent, "reviewer")));
+    world.execute(
+        &format!(
+            "UPDATE sessions SET permission_mode = '{}' WHERE id = ?1",
+            permission_mode_name(PermissionMode::Plan)
+        ),
+        child,
+    );
+
+    let child = world.record(child);
+    assert!(child.outlive);
+    assert_eq!(child.permission_mode, Some(PermissionMode::Plan));
+
+    // A child that ends with its parent, and a session launched with no mode,
+    // say neither.
+    let ends_with_it = world.record(ends_with_it);
+    assert!(!ends_with_it.outlive);
+    assert_eq!(ends_with_it.permission_mode, None);
+    assert_eq!(world.record(parent).permission_mode, None);
+}
+
+#[test]
+fn a_profile_row_keeps_remote_control_only_when_it_is_on() {
+    let world = World::new();
+    let store = world.store.lock().unwrap();
+    let insert = |name: &str, remote_control: Option<bool>| {
+        store
+            .connection()
+            .execute(
+                "INSERT INTO profiles (name, root, remote_control) VALUES (?1, 'C:\\work', ?2)",
+                params![name, remote_control],
+            )
+            .unwrap();
+        store.connection().last_insert_rowid()
+    };
+    let on = insert("on", Some(true));
+    let off = insert("off", Some(false));
+    let unset = insert("unset", None);
+
+    let read = |id: i64| {
+        read_profile(&store, u64::try_from(id).unwrap())
+            .unwrap()
+            .unwrap()
+            .remote_control
+    };
+    assert_eq!(read(on), Some(true));
+    assert_eq!(read(off), None);
+    assert_eq!(read(unset), None);
+}
+
+#[test]
 fn a_childs_record_names_its_parent_by_row_and_name_and_carries_its_role() {
     let world = World::new();
     let parent = world.start("lead", None);

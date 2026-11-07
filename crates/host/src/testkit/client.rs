@@ -408,7 +408,8 @@ impl TestClient {
         self.send(&Message::StreamOpen(StreamOpen {
             stream,
             channel: SessionTerminal::NAME.to_owned(),
-            params: to_payload(&SessionStreamOpen { id }).expect("encode stream params"),
+            params: to_payload(&SessionStreamOpen { id, watch: false })
+                .expect("encode stream params"),
         }))
         .await;
     }

@@ -97,6 +97,7 @@ mod tests {
             opening_prompt: None,
             pinned_order: None,
             session_agents: None,
+            remote_control: None,
             created_at: String::new(),
             updated_at: String::new(),
         }

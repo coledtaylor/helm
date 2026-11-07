@@ -435,6 +435,7 @@ impl Hosted {
                     profile_id: profile.as_ref().and_then(|p| i64::try_from(p.id).ok()),
                     permission_mode: mode.map(records::permission_mode_name),
                     branch: None,
+                    remote_control_name: None,
                     parent: Some(ParentLink {
                         session: parent,
                         conversation_id: facts.conversation_id.clone(),
@@ -655,6 +656,7 @@ impl Hosted {
                     profile_id: profile.as_ref().and_then(|p| i64::try_from(p.id).ok()),
                     permission_mode: mode.map(records::permission_mode_name),
                     branch: None,
+                    remote_control_name: None,
                     parent: Some(ParentLink {
                         session: parent,
                         conversation_id: facts.conversation_id.clone(),

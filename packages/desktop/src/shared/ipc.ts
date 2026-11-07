@@ -1,6 +1,7 @@
 import type {
   AgentWorktree,
   AgentWorktreeRemoval,
+  StandingNotice,
   AppSettings,
   LocalHostRestartOffer,
   ArchiveStats,
@@ -527,6 +528,13 @@ export interface SessionConfirmRequest {
   keepLabel?: string
   /** Names of the sessions this ends, for the dialog to list. */
   sessionNames: string[]
+  /**
+   * For closing a parent: the rows of the running children that end with it.
+   * Absent where the question is about a session with none.
+   */
+  endingIds?: number[]
+  /** For closing a parent: the rows of the running children started to outlive it. */
+  outlivingIds?: number[]
 }
 
 /** The answer to the quit question: end the sessions and quit, keep them running and quit, or stay. */
@@ -1535,6 +1543,18 @@ export interface IpcRequests {
    * refused in a sentence and left as they are.
    */
   'worktrees:remove': { request: { project: string; folder: string }; response: AgentWorktreeRemoval }
+  /**
+   * Dismisses a limit or error notice standing on the host, for every window.
+   * A needs-you notice goes by itself when its child stops waiting, and one
+   * already gone is left as it is.
+   */
+  'notices:dismiss': { request: { id: string }; response: void }
+  /**
+   * Lets one parent start more children after its starts limit refused it: as
+   * many more as the starts setting says (`added`), for that parent alone. Its
+   * starts notice goes.
+   */
+  'notices:allowMore': { request: { parentId: number }; response: { added: number } }
   /** VS Code's name here, or null where nothing on this machine opens `vscode://`. */
   'files:editor': { request: void; response: { name: string | null } }
   /**
@@ -2086,6 +2106,13 @@ export interface IpcEvents {
    * than an ugly dialog.
    */
   'session:confirm': SessionConfirmRequest
+  /**
+   * The notices standing on a host, the whole list on every change: a child
+   * that needs a person, a start a limit refused, a child that ended in error.
+   * The host keeps them, so a window that connects is sent whatever still
+   * stands, as a state channel's first snapshot.
+   */
+  'notices:changed': StandingNotice[]
 
   /**
    * A line an HTML artifact wrote to its console. Pushed from main because the
@@ -2378,6 +2405,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'files:watch': true,
   'worktrees:list': true,
   'worktrees:remove': true,
+  'notices:dismiss': true,
+  'notices:allowMore': true,
   'files:editor': true,
   'files:openInEditor': true,
   'clipboard:read': true,
@@ -2477,6 +2506,7 @@ export const EVENT_CHANNELS = Object.keys({
   'sessions:resources': true,
   'session:activate': true,
   'session:confirm': true,
+  'notices:changed': true,
   'pterm:data': true,
   'pterm:exit': true,
   'probe:req': true,

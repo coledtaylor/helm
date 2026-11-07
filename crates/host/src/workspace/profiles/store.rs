@@ -87,8 +87,9 @@ pub fn create(conn: &Connection, draft: &ProfileDraft) -> Result<Profile> {
     conn.query_row(
         &format!(
             "INSERT INTO profiles (name, root, overlays, access, model, effort, \
-             permission_mode, agent, mcp, opening_prompt, pinned_order, session_agents) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+             permission_mode, agent, mcp, opening_prompt, pinned_order, session_agents, \
+             remote_control) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
              RETURNING {PROFILE_COLUMNS}"
         ),
         params![
@@ -104,6 +105,7 @@ pub fn create(conn: &Connection, draft: &ProfileDraft) -> Result<Profile> {
             draft.opening_prompt,
             draft.pinned_order,
             values.session_agents,
+            values.remote_control,
         ],
         profile_row,
     )
@@ -122,8 +124,8 @@ pub fn update(conn: &Connection, id: u64, draft: &ProfileDraft) -> Result<Option
             "UPDATE profiles SET name = ?1, root = ?2, overlays = ?3, access = ?4, \
              model = ?5, effort = ?6, permission_mode = ?7, agent = ?8, mcp = ?9, \
              opening_prompt = ?10, pinned_order = ?11, session_agents = ?12, \
-             updated_at = ({NOW}) \
-             WHERE id = ?13 RETURNING {PROFILE_COLUMNS}"
+             remote_control = ?13, updated_at = ({NOW}) \
+             WHERE id = ?14 RETURNING {PROFILE_COLUMNS}"
         ),
         params![
             values.name,
@@ -138,6 +140,7 @@ pub fn update(conn: &Connection, id: u64, draft: &ProfileDraft) -> Result<Option
             draft.opening_prompt,
             draft.pinned_order,
             values.session_agents,
+            values.remote_control,
             id,
         ],
         profile_row,
@@ -189,6 +192,10 @@ struct Values {
     /// The one choice a profile makes is to turn them off, so a draft that
     /// says on is stored as following the setting.
     session_agents: Option<bool>,
+    /// Null is off; true runs the profile's sessions with Remote Control. The
+    /// one choice a profile makes is to turn it on, so a draft that says off
+    /// is stored as off.
+    remote_control: Option<bool>,
 }
 
 impl Values {
@@ -202,6 +209,7 @@ impl Values {
             effort: draft.effort.map(protocol_name),
             permission_mode: draft.permission_mode.map(protocol_name),
             session_agents: draft.session_agents.filter(|on| !on),
+            remote_control: draft.remote_control.filter(|on| *on),
         }
     }
 }

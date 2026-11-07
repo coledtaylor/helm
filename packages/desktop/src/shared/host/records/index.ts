@@ -76,7 +76,11 @@ export function sessionFromHost(record: P.SessionRecord): SessionRecord {
     // Set only when the host ended it; a protocol before 2.1 never says.
     ...(record.stopped === true ? { stopped: true } : {}),
     // Set only while the child has a report its next turn has not cleared.
-    ...(record.lastReport == null ? {} : { lastReport: record.lastReport })
+    ...(record.lastReport == null ? {} : { lastReport: record.lastReport }),
+    // Set only for a child started to keep running when its parent ends.
+    ...(record.outlive === true ? { outlive: true } : {}),
+    // Absent for a session launched with no mode.
+    ...(record.permissionMode == null ? {} : { permissionMode: record.permissionMode })
   }
 }
 
@@ -106,6 +110,8 @@ export function profileFromHost(profile: P.Profile): Profile {
     pinnedOrder: profile.pinnedOrder,
     // Only the off choice is a value; null and absent both follow the setting.
     ...(profile.sessionAgents === false ? { sessionAgents: false } : {}),
+    // Only the on choice is a value; null and absent are off.
+    ...(profile.remoteControl === true ? { remoteControl: true } : {}),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt
   }

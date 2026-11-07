@@ -45,6 +45,9 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("session:notify", EVENT, None),
     ("session:activate", EVENT, None),
     ("session:confirm", EVENT, None),
+    ("notices:changed", STATE, None),
+    ("notices:dismiss", REQUEST, None),
+    ("notices:allowMore", REQUEST, None),
     ("session:data", STREAM, Some(Capability::Terminal)),
     ("sessions:port", STREAM, None),
     ("pterm:open", REQUEST, Some(Capability::Terminal)),
@@ -212,6 +215,8 @@ fn record(id: u64) -> SessionRecord {
         role: Some("reviewer".into()),
         stopped: false,
         last_report: None,
+        outlive: true,
+        permission_mode: Some(PermissionMode::AcceptEdits),
     }
 }
 
@@ -240,6 +245,7 @@ fn profile() -> Profile {
         opening_prompt: Some("Read the plan.".into()),
         pinned_order: Some(0),
         session_agents: Some(false),
+        remote_control: Some(true),
         created_at: "2026-10-01T09:00:00Z".into(),
         updated_at: "2026-10-02T09:00:00Z".into(),
     }
@@ -360,7 +366,14 @@ fn every_session_terminal_profile_history_archive_and_usage_channel_from_ipc_ts_
 
 #[test]
 fn a_sessions_and_a_plain_terminals_input_and_output_travel_as_byte_streams() {
-    stream::<SessionTerminal>(SessionStreamOpen { id: 12 });
+    stream::<SessionTerminal>(SessionStreamOpen {
+        id: 12,
+        watch: false,
+    });
+    stream::<SessionTerminal>(SessionStreamOpen {
+        id: 12,
+        watch: true,
+    });
     stream::<PtermTerminal>(PtermStreamOpen { id: 3 });
     stream::<SessionPortForward>(SessionPortOpen { id: 12, port: 5173 });
 
@@ -608,7 +621,68 @@ fn session_events_and_state_round_trip_over_cbor() {
         detail: "Closing it ends the conversation.".into(),
         confirm_label: "End session".into(),
         session_names: vec!["PR review".into()],
+        ending_ids: vec![13, 14],
+        outliving_ids: vec![15],
     });
+}
+
+fn notice(kind: NoticeKind) -> StandingNotice {
+    StandingNotice {
+        id: "n-1".into(),
+        kind,
+        parent_id: 12,
+        parent_name: "lead".into(),
+        child_id: Some(13),
+        child_name: Some("reviewer".into()),
+        text: "a permission prompt".into(),
+        since: "2026-11-06T10:00:00Z".into(),
+        limit: None,
+        allow_more: None,
+    }
+}
+
+#[test]
+fn standing_notices_and_their_two_requests_round_trip_over_cbor() {
+    state::<NoticesChanged>(vec![
+        notice(NoticeKind::NeedsYou),
+        StandingNotice {
+            kind: NoticeKind::Limit,
+            child_id: None,
+            child_name: None,
+            text: "lead has made 16 starts, the most it may.".into(),
+            limit: Some(NoticeLimit::Starts),
+            allow_more: Some(16),
+            ..notice(NoticeKind::Limit)
+        },
+        notice(NoticeKind::Error),
+    ]);
+    state::<NoticesChanged>(vec![]);
+    exchange::<DismissNotice>(DismissNoticeRequest { id: "n-1".into() }, ());
+    exchange::<AllowMoreStarts>(
+        AllowMoreStartsRequest { parent_id: 12 },
+        AllowMoreStartsResult { added: 16 },
+    );
+}
+
+#[test]
+fn a_notice_names_its_kind_and_limit_the_way_the_clients_read_them() {
+    let wire = serde_json::to_value(StandingNotice {
+        limit: Some(NoticeLimit::Heavy),
+        ..notice(NoticeKind::NeedsYou)
+    })
+    .unwrap();
+    assert_eq!(wire["kind"], "needs-you");
+    assert_eq!(wire["limit"], "heavy");
+    for (limit, said) in [
+        (NoticeLimit::Children, "children"),
+        (NoticeLimit::Sessions, "sessions"),
+        (NoticeLimit::Depth, "depth"),
+        (NoticeLimit::Starts, "starts"),
+    ] {
+        assert_eq!(serde_json::to_value(limit).unwrap(), said);
+    }
+    assert_eq!(serde_json::to_value(NoticeKind::Limit).unwrap(), "limit");
+    assert_eq!(serde_json::to_value(NoticeKind::Error).unwrap(), "error");
 }
 
 #[test]
@@ -693,6 +767,7 @@ fn profile_channels_round_trip_over_cbor_and_the_dialogs_stay_in_the_client() {
                 opening_prompt: None,
                 pinned_order: None,
                 session_agents: Some(false),
+                remote_control: Some(true),
             },
         },
         SaveProfileResult {

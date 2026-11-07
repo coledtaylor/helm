@@ -104,6 +104,13 @@ pub struct Profile {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub session_agents: Option<bool>,
+    /// Whether this profile's sessions run with Remote Control, under their
+    /// own names: true turns it on, null is off. A session started from it
+    /// gives its children Remote Control too, named for the whole line. The
+    /// host keeps false as null.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub remote_control: Option<bool>,
     /// ISO 8601.
     pub created_at: String,
     /// ISO 8601.
@@ -131,6 +138,12 @@ pub struct ProfileDraft {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub session_agents: Option<bool>,
+    /// Whether this profile's sessions run with Remote Control, as a saved
+    /// profile's `remoteControl` says. A client before protocol 2.1 sends
+    /// none, which is off.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub remote_control: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

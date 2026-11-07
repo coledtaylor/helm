@@ -101,6 +101,17 @@ pub struct SessionRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_report: Option<ChildReport>,
+    /// Whether this child was started to keep running when its parent ends.
+    /// Absent reads false, as it does for a session with no parent and from a
+    /// host before protocol 2.1.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub outlive: bool,
+    /// The permission mode the session was launched in, or absent for a
+    /// session launched with none and from a host before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission_mode: Option<PermissionMode>,
 }
 
 /// A child's report to its parent: the words it was sent with, as its card

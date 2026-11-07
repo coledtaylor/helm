@@ -84,6 +84,7 @@ fn sample(world: &World) -> ProfileDraft {
         opening_prompt: Some("/recap".into()),
         pinned_order: None,
         session_agents: None,
+        remote_control: None,
     }
 }
 
@@ -187,6 +188,7 @@ fn a_profile_with_everything_unset_round_trips_too() {
         opening_prompt: None,
         pinned_order: None,
         session_agents: None,
+        remote_control: None,
     };
     assert_eq!(
         profile_from_yaml(&profile_to_yaml(&bare, home), home).unwrap(),
@@ -363,6 +365,81 @@ fn a_profile_cannot_turn_the_agents_tools_on_against_the_setting_so_on_is_kept_a
     )
     .unwrap();
     assert_eq!(created.session_agents, None);
+}
+
+#[test]
+fn a_profile_that_turns_remote_control_on_keeps_the_choice_and_another_profile_does_not_inherit_it()
+{
+    let world = World::new();
+    let on = store::create(
+        world.conn(),
+        &ProfileDraft {
+            remote_control: Some(true),
+            ..draft(&world)
+        },
+    )
+    .unwrap();
+    let other = store::create(world.conn(), &named(&world, "Other")).unwrap();
+    assert_eq!(on.remote_control, Some(true));
+    assert_eq!(
+        store::read(world.conn(), on.id)
+            .unwrap()
+            .unwrap()
+            .remote_control,
+        Some(true)
+    );
+    assert_eq!(other.remote_control, None, "a profile starts without it");
+
+    // Saving it again with the choice taken back turns it off.
+    let back = store::update(world.conn(), on.id, &draft(&world))
+        .unwrap()
+        .unwrap();
+    assert_eq!(back.remote_control, None);
+
+    // Turning it on later is a save in place, and false is kept as off.
+    let again = store::update(
+        world.conn(),
+        on.id,
+        &ProfileDraft {
+            remote_control: Some(true),
+            ..draft(&world)
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(again.remote_control, Some(true));
+    let off = store::create(
+        world.conn(),
+        &ProfileDraft {
+            remote_control: Some(false),
+            ..named(&world, "Explicit off")
+        },
+    )
+    .unwrap();
+    assert_eq!(off.remote_control, None);
+}
+
+#[test]
+fn a_profile_document_says_whether_remote_control_is_on() {
+    let world = World::new();
+    let home = Some(world.home.as_path());
+    let on = ProfileDraft {
+        remote_control: Some(true),
+        ..sample(&world)
+    };
+    let yaml = profile_to_yaml(&on, home);
+    assert!(yaml.contains("remote_control: true"), "{yaml}");
+    assert_eq!(profile_from_yaml(&yaml, home).unwrap(), on);
+
+    // One without it lists the key unset, like the others, and reads as off.
+    let plain = profile_to_yaml(&sample(&world), home);
+    assert!(plain.contains("remote_control: null"), "{plain}");
+    assert_eq!(
+        profile_from_yaml(&plain, home).unwrap().remote_control,
+        None
+    );
+    let off = yaml.replace("remote_control: true", "remote_control: false");
+    assert_eq!(profile_from_yaml(&off, home).unwrap().remote_control, None);
 }
 
 #[test]
@@ -685,6 +762,7 @@ impl HostWorld {
             opening_prompt: Some("/recap".into()),
             pinned_order: None,
             session_agents: None,
+            remote_control: None,
         }
     }
 

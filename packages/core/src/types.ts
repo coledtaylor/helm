@@ -388,6 +388,10 @@ export interface SessionRecord {
    * told nothing since.
    */
   lastReport?: ChildReport
+  /** Whether it was started to keep running when its parent ends. Absent reads as false. */
+  outlive?: boolean
+  /** The permission mode it was launched in. Absent for one launched with none. */
+  permissionMode?: PermissionMode
 }
 
 /** A child's report to its parent: its state, its words and when it was made. */
@@ -1085,6 +1089,11 @@ export interface Profile {
    * where the setting has them off.
    */
   sessionAgents?: boolean | null
+  /**
+   * `true` runs the profile's sessions with Remote Control under their own
+   * names, and gives their children Remote Control too. Null or absent is off.
+   */
+  remoteControl?: boolean | null
   createdAt: string
   updatedAt: string
 }
@@ -2638,6 +2647,38 @@ export interface AgentWorktree {
 export interface AgentWorktreeRemoval {
   removed: boolean
   refusal: string | null
+}
+
+/** What a standing notice is about. */
+export type NoticeKind = 'needs-you' | 'limit' | 'error'
+
+/** The limit that refused a parent's start. */
+export type NoticeLimit = 'children' | 'sessions' | 'depth' | 'starts' | 'heavy'
+
+/**
+ * Something the host keeps for a person who is not looking: a child waiting on
+ * them (until it stops), a start a limit refused or a child that ended in
+ * error (until dismissed or the parent ends). Every window connected to the
+ * host is given the same list.
+ */
+export interface StandingNotice {
+  /** Names the notice for `notices:dismiss`; stable while it stands. */
+  id: string
+  kind: NoticeKind
+  /** The session the notice is under, as its row id. */
+  parentId: number
+  parentName: string
+  /** The child it is about; null for a refused start. */
+  childId: number | null
+  childName: string | null
+  /** For needs you, what the child waits on; for a limit or an error, its sentence. */
+  text: string
+  /** ISO 8601: when the notice began. */
+  since: string
+  /** Which limit refused the start; only a limit notice has one. */
+  limit: NoticeLimit | null
+  /** For the starts limit, how many more starts Allow adds for this parent. */
+  allowMore: number | null
 }
 
 /**

@@ -402,7 +402,11 @@ async fn s1_a_bridge_with_nothing_pinned_learns_the_hosts_key_pins_it_once_prove
     bridge.send(&Message::StreamOpen(StreamOpen {
         stream: 1,
         channel: SessionTerminal::NAME.to_owned(),
-        params: to_payload(&SessionStreamOpen { id: session.id }).unwrap(),
+        params: to_payload(&SessionStreamOpen {
+            id: session.id,
+            watch: false,
+        })
+        .unwrap(),
     }));
     // Three frames in one write, each a line typed into the agent.
     let typed: Vec<u8> = ["one\r", "two\r", "three\r"]
@@ -591,7 +595,11 @@ async fn s15_closing_the_bridges_stdin_exits_0_and_the_host_ends_none_of_its_ses
     bridge.send(&Message::StreamOpen(StreamOpen {
         stream: 1,
         channel: SessionTerminal::NAME.to_owned(),
-        params: to_payload(&SessionStreamOpen { id: session.id }).unwrap(),
+        params: to_payload(&SessionStreamOpen {
+            id: session.id,
+            watch: false,
+        })
+        .unwrap(),
     }));
     bridge.write(
         &encode_frame(&Message::StreamData(StreamData {

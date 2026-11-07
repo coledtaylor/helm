@@ -445,7 +445,11 @@ async fn list_attach_and_type(bridge: &mut Bridge, project: &Path) -> SessionRec
     bridge.send(&Message::StreamOpen(StreamOpen {
         stream: 1,
         channel: SessionTerminal::NAME.to_owned(),
-        params: to_payload(&SessionStreamOpen { id: session.id }).unwrap(),
+        params: to_payload(&SessionStreamOpen {
+            id: session.id,
+            watch: false,
+        })
+        .unwrap(),
     }));
     bridge.send(&Message::StreamData(StreamData {
         stream: 1,
@@ -1592,7 +1596,7 @@ impl Bridge {
         self.send(&Message::StreamOpen(StreamOpen {
             stream,
             channel: SessionTerminal::NAME.to_owned(),
-            params: to_payload(&SessionStreamOpen { id }).unwrap(),
+            params: to_payload(&SessionStreamOpen { id, watch: false }).unwrap(),
         }));
         self.read_stream_until(stream, shows).await
     }

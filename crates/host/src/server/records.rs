@@ -34,7 +34,7 @@ const RECORD_COLUMNS: &str = "id, name, label, cwd, branch, project_path, profil
      parent_session_id, \
      (SELECT coalesce(nullif(parent.label, ''), parent.name) FROM sessions AS parent \
       WHERE parent.id = sessions.parent_session_id), \
-     role, stopped";
+     role, stopped, outlive, permission_mode";
 
 /// The backend a row ran on, from its `backend` column.
 ///
@@ -296,7 +296,7 @@ pub(crate) fn record_stopped(store: &Store, ids: &[SessionId]) -> Result<()> {
 /// The columns [`profile_row`] reads, in its order.
 pub(crate) const PROFILE_COLUMNS: &str = "id, name, root, overlays, access, model, effort, \
      permission_mode, agent, mcp, opening_prompt, pinned_order, created_at, updated_at, \
-     session_agents";
+     session_agents, remote_control";
 
 /// Profile `id` as its row in `profiles` holds it, or `None` when it has
 /// been deleted.
@@ -343,6 +343,8 @@ pub(crate) fn profile_row(row: &Row<'_>) -> rusqlite::Result<Profile> {
         // Only the choice to turn the agents tools off is kept; anything else
         // follows the host's setting.
         session_agents: row.get::<_, Option<bool>>(14)?.filter(|on| !on),
+        // Only the choice to turn Remote Control on is kept.
+        remote_control: row.get::<_, Option<bool>>(15)?.filter(|on| *on),
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
     })
@@ -564,6 +566,11 @@ fn record_from(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         }),
         stopped: row.get(18)?,
         last_report: None,
+        outlive: row.get(19)?,
+        permission_mode: row
+            .get::<_, Option<String>>(20)?
+            .as_deref()
+            .and_then(permission_mode_from_name),
     })
 }
 

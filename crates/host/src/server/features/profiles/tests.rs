@@ -98,6 +98,7 @@ impl World {
             opening_prompt: Some("/recap".into()),
             pinned_order: None,
             session_agents: None,
+            remote_control: None,
         }
     }
 

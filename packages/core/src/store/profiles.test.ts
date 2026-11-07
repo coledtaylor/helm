@@ -66,6 +66,24 @@ describe('profile CRUD', () => {
     expect(readProfile(store, on.id)?.sessionAgents).toBeNull()
   })
 
+  it('keeps a profile that turns Remote Control on, and a draft that leaves it out has it off', () => {
+    const on = createProfile(store, draft({ name: 'Remote', remoteControl: true }))
+    expect(readProfile(store, on.id)?.remoteControl).toBe(true)
+    expect(profileDraft(readProfile(store, on.id)!).remoteControl).toBe(true)
+
+    const silent = createProfile(store, draft({ name: 'Plain' }))
+    expect(readProfile(store, silent.id)?.remoteControl).toBeNull()
+    expect(profileDraft(silent)).not.toHaveProperty('remoteControl')
+
+    // Off is what a profile without the choice already is, so it is stored as that.
+    const off = createProfile(store, draft({ name: 'Off', remoteControl: false }))
+    expect(readProfile(store, off.id)?.remoteControl).toBeNull()
+
+    // Turning it on later is an update in place.
+    updateProfile(store, silent.id, draft({ name: 'Plain', remoteControl: true }))
+    expect(readProfile(store, silent.id)?.remoteControl).toBe(true)
+  })
+
   it('updates in place and stamps updated_at', () => {
     const created = createProfile(store, draft())
     const updated = updateProfile(store, created.id, draft({ model: 'sonnet', mcp: [] }))
