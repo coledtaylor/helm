@@ -30,7 +30,7 @@ import {
   type TabIndicator
 } from '@helm/ui'
 import { forgetFamilyRoom, reportFamilyRoom } from './familyRooms'
-import { childStatus, useSecondsFrom } from './sessionView'
+import { childStatus, useSecondsClock } from './sessionView'
 import { TerminalPane, type HostLost } from './TerminalPane'
 import { terminalCell } from './terminals'
 import { useBodySize, useDevicePixelRatio } from './useBodySize'
@@ -179,7 +179,7 @@ export function FamilyTab({
   // A command's header counts its seconds while it runs, which the window's
   // own clock, moving every half minute, does not: this tab ticks each second
   // only while it holds a command that is running.
-  const clock = useSecondsFrom(
+  const clock = useSecondsClock(
     now,
     kids.some((kid) => kid.session.status === 'running' && isCommand(kid.session))
   )

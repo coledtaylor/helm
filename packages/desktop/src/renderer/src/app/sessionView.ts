@@ -190,18 +190,24 @@ export function useNow(intervalMs: number): number {
 }
 
 /**
- * `now`, kept to the second while `active`: the window's clock moves every
- * half minute, and a command that runs counts its seconds. Each tick adds the
- * time passed since `now` was given, so a new `now` from the window's clock is
- * the one this follows, and with `active` off (or no tick yet) it is `now`.
+ * The time to the second while `active`: the window's clock (`now`, which
+ * moves every half minute and can be that old) is too coarse for a command
+ * that counts its seconds. While `active` this is the real time, re-read each
+ * second; with `active` off it is `now`.
  */
-export function useSecondsFrom(now: number, active: boolean): number {
-  const [ticked, setTicked] = useState({ now, passed: 0 })
+export function useSecondsClock(now: number, active: boolean): number {
+  const [sampled, setSampled] = useState(() => Date.now())
   useEffect(() => {
     if (!active) return undefined
-    const origin = Date.now()
-    const timer = setInterval(() => setTicked({ now, passed: Date.now() - origin }), 1000)
-    return () => clearInterval(timer)
-  }, [active, now])
-  return active && ticked.now === now ? now + ticked.passed : now
+    const sample = (): void => setSampled(Date.now())
+    // The first sample is at once, because the one held may be from before
+    // this became active.
+    const first = setTimeout(sample, 0)
+    const timer = setInterval(sample, 1000)
+    return () => {
+      clearTimeout(first)
+      clearInterval(timer)
+    }
+  }, [active])
+  return active ? Math.max(sampled, now) : now
 }

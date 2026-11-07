@@ -111,6 +111,8 @@ interface HarnessProps {
   enabled?: boolean
   /** The children that run a command and not an agent. */
   commands?: number[]
+  /** The window's clock, which can be older than the real time. */
+  now?: number
   onStop?: (id: number) => Promise<boolean> | void
 }
 
@@ -120,6 +122,7 @@ function Harness({
   front = true,
   enabled = true,
   commands = [],
+  now = NOW,
   onStop = vi.fn()
 }: HarnessProps): JSX.Element {
   const [panes, setPanes] = useState(START)
@@ -145,7 +148,7 @@ function Harness({
         own={parent}
         kids={kids}
         family={familyOf(panes, TAB)}
-        now={NOW}
+        now={now}
         windowsBuild={null}
         arrange={setPanes}
         onStop={onStop}
@@ -423,13 +426,39 @@ describe('a parent’s tab with children', () => {
     })
 
     it('S25: says how long a command has run on its card, from when it started', () => {
-      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test', startedAt: new Date(NOW - 4 * MINUTE).toISOString() })])
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      try {
+        const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test', startedAt: new Date(NOW - 4 * MINUTE).toISOString() })])
 
-      expect(card(view.container, 'tests').querySelector('[data-family-status]')!.textContent).toBe('Running · 4m')
+        expect(card(view.container, 'tests').querySelector('[data-family-status]')!.textContent).toBe('Running · 4m')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('S25: counts a command’s seconds from the real time, not from the window’s clock, which can be 30 seconds old', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      try {
+        const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test', startedAt: new Date(NOW - 25_000).toISOString() })], {
+          now: NOW - 25_000
+        })
+        const status = (): string | null => card(view.container, 'tests').querySelector('[data-family-status]')!.textContent
+
+        expect(status()).toBe('Running · 25s')
+        act(() => {
+          vi.advanceTimersByTime(4_000)
+        })
+        expect(status()).toBe('Running · 29s')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('S25: counts a command’s seconds on its card until it has run a minute, and keeps counting while it runs', () => {
       vi.useFakeTimers()
+      vi.setSystemTime(NOW)
       try {
         const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test', startedAt: new Date(NOW - 5_000).toISOString() })])
         const status = (): string | null => card(view.container, 'tests').querySelector('[data-family-status]')!.textContent
