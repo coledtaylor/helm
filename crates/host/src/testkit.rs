@@ -427,22 +427,7 @@ impl RunningHost {
                 };
                 let looked = look(&host);
                 let _ = started_tx.send(Ok((host.stopper(), looked)));
-                let ended = runtime.block_on(async move {
-                    // Only a crash sent ends it this way: one let go of is
-                    // no crash.
-                    let crashed = async move {
-                        if crashed.await.is_err() {
-                            std::future::pending::<()>().await;
-                        }
-                    };
-                    tokio::select! {
-                        ended = host.run_until_stopped() => Some(ended),
-                        () = crashed => None,
-                    }
-                });
-                // A crash drops the host and every task it ran here, with
-                // nothing stopped or recorded.
-                runtime.shutdown_timeout(PATIENCE);
+                let ended = run_until_crash(runtime, host.run_until_stopped(), crashed);
                 let _ = done_tx.send(ended);
             })
             .expect("start the host's thread");
@@ -497,6 +482,36 @@ impl RunningHost {
             .expect("wait for the host")
             .unwrap_or_else(|problem| panic!("{problem}"))
     }
+}
+
+/// Drives `run` on `runtime` until it ends or `crashed` is sent.
+///
+/// A crash is the process going: its runtime stops polling and nothing it ran
+/// answers or reacts to anything again, and what it held is let go only after
+/// that. So `run`, and the host's parts in it, are dropped once the runtime
+/// has been shut down and never before, when tasks still running on the
+/// runtime's workers could see a part go and answer a held call. One let go
+/// of without a send is no crash.
+fn run_until_crash<F: std::future::Future>(
+    runtime: tokio::runtime::Runtime,
+    run: F,
+    crashed: tokio::sync::oneshot::Receiver<()>,
+) -> Option<F::Output> {
+    let mut run = Box::pin(run);
+    let ended = runtime.block_on(async {
+        let crashed = async move {
+            if crashed.await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::select! {
+            ended = &mut run => Some(ended),
+            () = crashed => None,
+        }
+    });
+    runtime.shutdown_timeout(PATIENCE);
+    drop(run);
+    ended
 }
 
 impl Drop for RunningHost {
@@ -970,8 +985,68 @@ impl Resumer for FakeAgentBackend {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::Arc;
 
     use super::*;
+
+    /// Notes its own drop, in order, in a list shared with the test.
+    struct Noted(&'static str, Arc<Mutex<Vec<&'static str>>>);
+
+    impl Drop for Noted {
+        fn drop(&mut self) {
+            self.1
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(self.0);
+        }
+    }
+
+    #[test]
+    fn a_crash_stops_the_runtime_before_the_host_is_let_go_of() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // A task the host ran, which a part going could wake: it is dropped
+        // when its runtime is, and not before.
+        let ran = Noted("its tasks", Arc::clone(&order));
+        runtime.spawn(async move {
+            let _ran = ran;
+            std::future::pending::<()>().await;
+        });
+        let held = Noted("the host", Arc::clone(&order));
+        let (crash, crashed) = tokio::sync::oneshot::channel();
+        crash.send(()).unwrap();
+
+        let ended = run_until_crash(
+            runtime,
+            async move {
+                let _held = held;
+                std::future::pending::<()>().await;
+            },
+            crashed,
+        );
+
+        assert_eq!(ended, None, "a crash ends nothing in a result");
+        assert_eq!(
+            *order.lock().unwrap_or_else(PoisonError::into_inner),
+            ["its tasks", "the host"],
+            "the host's parts went while tasks could still see them go"
+        );
+    }
+
+    #[test]
+    fn a_run_let_go_of_without_a_crash_sent_is_no_crash() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (crash, crashed) = tokio::sync::oneshot::channel::<()>();
+        drop(crash);
+        let ended = run_until_crash(runtime, async { 7 }, crashed);
+        assert_eq!(ended, Some(7));
+    }
 
     #[test]
     fn test_folders_are_temporary_have_spaces_and_are_removed() {
