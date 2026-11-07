@@ -2859,8 +2859,10 @@ async fn s24_a_host_restart_cuts_a_held_wait_off_and_the_next_wait_returns_its_n
         .await;
     assert!(held.streamed);
     first.crash().await;
+    // Cut off means no answer reached the caller. Whether its connection is
+    // reset or closed without a result depends on which of the dying runtime's
+    // tasks is dropped first, so how it ends is not asserted.
     assert!(held.answer().await.is_none(), "the wait is cut off");
-    assert!(!held.complete, "its stream did not end");
     assert_eq!(world.unseen(), 1, "{}", world.inbox_text());
 
     let second = world.host().await;

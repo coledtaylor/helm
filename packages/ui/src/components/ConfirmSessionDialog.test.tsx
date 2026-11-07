@@ -265,9 +265,16 @@ describe('ConfirmSessionDialog: the design’s layout', () => {
     const title = dialog.querySelector('h2')!
     expect(title.className).toContain('text-[14px]')
     expect(title.className).toContain('leading-[1.4]')
+    // The title is text only: no icon before it.
+    expect(title.parentElement).toBe(column)
+    expect(title.querySelector('svg')).toBeNull()
     const sentence = dialog.querySelector('p')!
     expect(sentence.className).toContain('text-[12.5px]')
     expect(sentence.className).toContain('leading-[1.5]')
+    // The sentence about the children that outlive it is 12px, fg-muted.
+    const outlivesLine = dialog.querySelector('[data-confirm-outlives]')!
+    expect(outlivesLine.className).toContain('text-[12px]')
+    expect(outlivesLine.className).toContain('text-fg-muted')
     // No margin of its own above the sentence, the list or the outlives line: the column's gap is the only space.
     for (const el of [sentence, dialog.querySelector('[data-confirm-children]')!, dialog.querySelector('[data-confirm-outlives]')!]) {
       expect(el.className).not.toMatch(/(^|\s)m[tb]-/)
@@ -275,5 +282,19 @@ describe('ConfirmSessionDialog: the design’s layout', () => {
     const footer = dialog.querySelector('footer')!
     expect(footer.className).toContain('mt-1')
     expect(footer.className).not.toContain('border-t')
+  })
+
+  it('sets every button at 12px weight 500, and Cancel takes a 2px accent outline offset 2px on plain focus', () => {
+    renderDialog({ keepLabel: 'Close tab, keep running', onKeep: vi.fn() })
+    for (const name of ['Cancel', 'Close tab, keep running', 'End session']) {
+      const button = screen.getByRole('button', { name })
+      expect(button.className).toContain('text-[12px]')
+      expect(button.className).toContain('font-medium')
+    }
+    const cancel = screen.getByRole('button', { name: 'Cancel' }).className.split(/\s+/)
+    for (const cls of ['focus:outline-2', 'focus:outline-offset-2', 'focus:outline-accent']) {
+      expect(cancel).toContain(cls)
+    }
+    expect(cancel).not.toContain('focus:outline-none')
   })
 })

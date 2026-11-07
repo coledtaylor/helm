@@ -2,7 +2,6 @@ import type { JSX } from 'react'
 import { useEffect, useRef } from 'react'
 import { cn } from '../lib/cn'
 import { ChildMarkIcon, type ChildMarkView } from './ChildMark'
-import { TerminalIcon } from './icons'
 import { Overlay } from './Overlay'
 
 /** A session started by the one whose tab closes, as the question lists it. */
@@ -185,12 +184,7 @@ export function ConfirmSessionDialog({
       {/* The design's dialog: one column, 10px between the title, the sentence,
           the list and the buttons, with no rule above the buttons. */}
       <div className="flex flex-col gap-[10px] px-[18px] pt-4 pb-[14px]">
-        <header className="flex items-start gap-[9px]">
-          <TerminalIcon width={13} height={13} className="mt-[3px] shrink-0 text-accent" />
-          <h2 className="text-[14px] leading-[1.4] font-medium text-fg">
-            {message}
-          </h2>
-        </header>
+        <h2 className="text-[14px] leading-[1.4] font-medium text-fg">{message}</h2>
 
         <p className="text-[12.5px] leading-[1.5] text-fg-muted">
           <DetailText detail={detail} folder={folder} />
@@ -198,7 +192,7 @@ export function ConfirmSessionDialog({
 
         {ends.length > 0 && <ChildList kind="ends" items={ends} />}
         {outlives.length > 0 && (
-          <p data-confirm-outlives className="text-[12.5px] leading-[1.5] text-fg-muted">
+          <p data-confirm-outlives className="text-[12px] leading-[1.5] text-fg-muted">
             {outlivesSentence(outlives)}
           </p>
         )}
@@ -225,16 +219,16 @@ export function ConfirmSessionDialog({
             data-confirm-cancel
             onClick={onCancel}
             className={cn(
-              'rounded-well border border-border-strong px-3 py-1 text-[12px] text-fg',
+              'rounded-well border border-border-strong px-3 py-1 text-[12px] font-medium text-fg',
               'transition-colors hover:bg-hover',
               // `:focus`, not the global `:focus-visible`. Focus is placed here
               // by script when the dialog opens, and Chromium does not count
               // that as visible focus - so the ring the rest of the app gets
               // for free never paints, and the one button Enter would press
               // looks no different from the one it would not. The indication is
-              // the form-field one - border turns accent, no offset ring - and
-              // the global ring is suppressed so tabbing here matches opening.
-              'focus:border-accent focus:outline-none'
+              // the design's: a 2px accent outline, 2px off the button, and
+              // the global ring is replaced so tabbing here matches opening.
+              'focus:outline-2 focus:outline-offset-2 focus:outline-accent'
             )}
           >
             Cancel
@@ -246,7 +240,7 @@ export function ConfirmSessionDialog({
               type="button"
               data-confirm-keep
               onClick={onKeep}
-              className="rounded-well border border-border-strong px-3 py-1 text-[12px] text-fg transition-colors hover:bg-hover"
+              className="rounded-well border border-border-strong px-3 py-1 text-[12px] font-medium text-fg transition-colors hover:bg-hover"
             >
               {keepLabel}
             </button>

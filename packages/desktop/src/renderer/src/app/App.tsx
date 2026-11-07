@@ -223,7 +223,12 @@ import {
   type AddHostActions,
 } from "@helm/ui";
 import { sidebarFor, type SidebarView } from "./sidebarFor";
-import { commandRow, pressTreeSession, treeEntries } from "./treeFamilies";
+import {
+  commandRow,
+  peeksOnPress,
+  pressTreeSession,
+  treeEntries,
+} from "./treeFamilies";
 import { openChildTab, usePeek } from "./peek";
 import { PeekTerminal } from "./PeekTerminal";
 import {
@@ -3147,6 +3152,13 @@ export function App(): JSX.Element {
   );
 
   const visibleIds = new Set(visible.map(paneId));
+  // What a row press reads of the panes: which children peek rather than bring a place forward.
+  const peekScope = {
+    layout: open,
+    enabled: showChildren,
+    capacityOf: familyCapacity,
+    roomOf,
+  };
   const tree = ((): {
     byPath: Map<string, TreeSession[]>;
     elsewhere: TreeSession[];
@@ -3183,6 +3195,7 @@ export function App(): JSX.Element {
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
         notice: limitNotices.get(LOCAL_HOST_KEY)?.get(session.id),
+        peeks: peeksOnPress(LOCAL_HOST_KEY, sessions, session.id, peekScope),
         ...commandRow(session),
       };
     };
@@ -3267,6 +3280,7 @@ export function App(): JSX.Element {
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
         notice: limitNotices.get(host.id)?.get(session.id),
+        peeks: peeksOnPress(host.id, hosted, session.id, peekScope),
         ...commandRow(session),
       };
     };

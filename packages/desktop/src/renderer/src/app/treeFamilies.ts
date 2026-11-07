@@ -1,5 +1,6 @@
 import {
   commandState,
+  isChild,
   isCommandChild,
   pressSessionRow,
   sessionFamilies,
@@ -91,6 +92,35 @@ export interface TreePressDeps {
   commit: (op: (layout: PaneLayout) => PaneLayout) => void
 }
 
+function pressScope(deps: Omit<TreePressDeps, 'commit'>): {
+  enabled: boolean
+  capacityOf: (tab: string) => number | null
+  roomOf?: FamilyRoomOf
+} {
+  return {
+    enabled: deps.enabled,
+    capacityOf: deps.capacityOf,
+    ...(deps.roomOf === undefined ? {} : { roomOf: deps.roomOf })
+  }
+}
+
+/**
+ * Whether pressing session `id`'s row would open its peek: the same answer
+ * `pressTreeSession` gives, read without changing any pane. Only a child that
+ * has nowhere on screen here peeks; a session with its own tab, or a child
+ * shown in its parent's family view, brings that tab forward instead.
+ */
+export function peeksOnPress(
+  host: string,
+  there: readonly FamilyMember[],
+  id: number,
+  deps: Omit<TreePressDeps, 'commit'>
+): boolean {
+  const session = there.find((member) => member.id === id)
+  if (session === undefined || !isChild(session)) return false
+  return pressSessionRow(deps.layout, there, id, host, pressScope(deps)).press.to === 'peek'
+}
+
 /**
  * A press on session `id`'s row in the tree, on `host`, whose sessions are
  * `there`: where it goes (`FamilyPress`), and `id` on it is the session whose
@@ -108,11 +138,7 @@ export function pressTreeSession(
   id: number,
   deps: TreePressDeps
 ): FamilyPress {
-  const scope = {
-    enabled: deps.enabled,
-    capacityOf: deps.capacityOf,
-    ...(deps.roomOf === undefined ? {} : { roomOf: deps.roomOf })
-  }
+  const scope = pressScope(deps)
   const { press } = pressSessionRow(deps.layout, there, id, host, scope)
   if (press.to === 'parent-tab') {
     deps.commit((current) => pressSessionRow(current, there, id, host, scope).layout)

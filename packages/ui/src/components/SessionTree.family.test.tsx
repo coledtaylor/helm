@@ -103,8 +103,8 @@ const family = (): ReadonlyMap<string, readonly TreeSession[]> =>
         row(1, 'api-refactor', 'idle', {
           nested: [
             row(2, 'reviewer', 'busy', { hint: TRACKR }),
-            row(3, 'worker', 'busy', { hint: TRACKR }),
-            row(4, 'worker-2', 'waiting', { hint: TRACKR, note: 'needs you' })
+            row(3, 'worker', 'busy', { hint: TRACKR, peeks: true }),
+            row(4, 'worker-2', 'waiting', { hint: TRACKR, note: 'needs you', peeks: true })
           ]
         }),
         row(5, 'docs pass', 'idle')
@@ -573,9 +573,12 @@ describe('SessionTree: a child whose peek is open', () => {
     expect(rowOf(3).getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('S3: a session that is not a child, or has a place on screen, has no popup', () => {
+  it('S3: a session that is not a child, or a child with a place on screen here, has no popup', () => {
     renderTree(family())
     expect(rowOf(1).getAttribute('aria-haspopup')).toBeNull()
     expect(rowOf(1).getAttribute('aria-expanded')).toBeNull()
+    // Row 2 is a child whose press brings a tab or its parent's family view forward, so it is not marked.
+    expect(rowOf(2).getAttribute('aria-haspopup')).toBeNull()
+    expect(rowOf(2).getAttribute('aria-expanded')).toBeNull()
   })
 })

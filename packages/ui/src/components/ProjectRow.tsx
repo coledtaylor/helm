@@ -285,6 +285,12 @@ export interface SessionRowProps {
    * fill and says `aria-expanded` while it is.
    */
   peeking?: boolean | undefined
+  /**
+   * Pressing this row opens the child's peek: it has nowhere on screen here.
+   * Only such a row says `aria-haspopup`; a child with a tab or a card here
+   * brings that forward when pressed.
+   */
+  peeks?: boolean | undefined
 }
 
 /**
@@ -362,12 +368,12 @@ export function SessionRow({
   summary,
   command = false,
   needs = 0,
-  peeking = false
+  peeking = false,
+  peeks = false
 }: SessionRowProps): JSX.Element {
   const waiting = state === 'waiting'
-  // A child with nowhere on screen here opens a peek when pressed: it is not in
-  // front of a pane, and it is a child (drawn under its parent or naming it).
-  const peekable = (guide !== undefined || parentName !== undefined) && shown === null && !outside
+  // Only a child with nowhere on screen here opens a peek when pressed.
+  const peekable = peeks && shown === null && !outside
   const folds = expanded !== null && onToggle !== undefined
   const guideLeft = indent - GUIDE_OFFSET_PX
   const rule = 'absolute border-l border-border-strong'

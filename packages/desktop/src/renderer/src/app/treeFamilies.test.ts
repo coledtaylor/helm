@@ -17,7 +17,7 @@ import {
   type SavedPaneLayout
 } from '@helm/core/types'
 import type { TreeSession } from '@helm/ui'
-import { commandRow, pressTreeSession, treeEntries } from './treeFamilies'
+import { commandRow, peeksOnPress, pressTreeSession, treeEntries } from './treeFamilies'
 
 /**
  * What the Sessions tree is given for sessions that started sessions: a child's
@@ -362,5 +362,58 @@ describe('pressing a child’s row when its parent’s tab is here', () => {
       }
     )
     expect(peeked).toEqual({ to: 'peek', id: 8 })
+  })
+})
+
+describe('which rows say a press opens a peek', () => {
+  const parentTab: PaneRef = { kind: 'session', id: 1 }
+  const family = [
+    session(1, 'lead', 'C:\\work\\helm'),
+    session(3, 'worker', 'C:\\work\\trackr', { parentId: 1, parentName: 'lead' }),
+    session(4, 'reviewer', 'C:\\work\\trackr', { parentId: 1, parentName: 'lead' })
+  ]
+  const layout = (): PaneLayout =>
+    fromSaved({
+      root: {
+        axis: 'row',
+        children: [
+          { panes: [parentTab as SavedPane, { kind: 'history' }], activeId: 'history' },
+          { panes: [{ kind: 'settings' }], activeId: 'settings' }
+        ],
+        sizes: [0.6, 0.4]
+      },
+      focused: 1
+    } satisfies SavedPaneLayout)
+  const deps = (over: { enabled?: boolean; roomOf?: () => boolean; layout?: PaneLayout } = {}) => ({
+    layout: over.layout ?? layout(),
+    enabled: over.enabled ?? true,
+    capacityOf: () => 2,
+    ...(over.roomOf === undefined ? {} : { roomOf: over.roomOf })
+  })
+
+  it('is true for a child with nowhere on screen here and false for one a place is kept for', () => {
+    // Parent tab open, in a pane with room: the child is shown in its family view, so no peek.
+    expect(peeksOnPress(LOCAL_HOST_KEY, family, 3, deps())).toBe(false)
+    // The setting off, or no room: it has nowhere on screen.
+    expect(peeksOnPress(LOCAL_HOST_KEY, family, 3, deps({ enabled: false }))).toBe(true)
+    expect(peeksOnPress(LOCAL_HOST_KEY, family, 3, deps({ roomOf: () => false }))).toBe(true)
+    // A child with a tab of its own brings that tab forward, even in the background.
+    const own = openTab(layout(), { kind: 'session', id: 4 })
+    expect(peeksOnPress(LOCAL_HOST_KEY, family, 4, deps({ enabled: false, layout: own }))).toBe(false)
+  })
+
+  it('is false for a session that is not a child, and for a child whose parent has ended', () => {
+    expect(peeksOnPress(LOCAL_HOST_KEY, family, 1, deps({ enabled: false }))).toBe(false)
+    const ended = [
+      session(1, 'lead', 'C:\\work', { status: 'ended' }),
+      session(3, 'worker', 'C:\\work', { parentId: 1, parentName: 'lead' })
+    ]
+    expect(peeksOnPress(LOCAL_HOST_KEY, ended, 3, deps())).toBe(false)
+  })
+
+  it('changes no pane', () => {
+    const start = layout()
+    peeksOnPress(LOCAL_HOST_KEY, family, 3, deps({ layout: start }))
+    expect(start).toEqual(layout())
   })
 })

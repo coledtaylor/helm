@@ -41,6 +41,12 @@ export interface TreeSession {
   command?: boolean | undefined
   /** A refused start of this session, drawn as one line under its children. */
   notice?: TreeNotice | undefined
+  /**
+   * Pressing this row opens the child's peek, because it has nowhere on screen
+   * here. Only such a row says it opens a popup; a child with a place on screen
+   * brings that place forward.
+   */
+  peeks?: boolean | undefined
 }
 
 /**
@@ -803,6 +809,7 @@ function HostTree({
           onToggle={() => toggle(setFoldedFamilies, session.id)}
           summary={mostUrgent(withNested(started))}
           command={session.command}
+          peeks={session.peeks === true}
           peeking={session.id === peekingRow}
           needs={started.filter((child) => child.state === 'waiting').length}
         />
