@@ -123,7 +123,8 @@ export function FamilyCard({
   header,
   note,
   children,
-  name
+  name,
+  needsYou = false
 }: {
   header: ReactNode
   /** The report note under the header, or nothing. */
@@ -131,10 +132,16 @@ export function FamilyCard({
   /** The child's terminal. */
   children: ReactNode
   name: string
+  /**
+   * The child is waiting on a person: the card takes a 1px warn edge all round,
+   * drawn over its terminal and header, which is all a shown child gets (no toast).
+   */
+  needsYou?: boolean
 }): JSX.Element {
   return (
     <div
       data-family-card={name}
+      data-family-needs-you={needsYou ? '' : undefined}
       className="relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col bg-terminal"
     >
       {header}
@@ -142,6 +149,9 @@ export function FamilyCard({
       <div className="relative min-h-0 flex-1">
         <div className="absolute inset-0">{children}</div>
       </div>
+      {needsYou && (
+        <span aria-hidden data-family-edge className="pointer-events-none absolute inset-0 z-[2] border border-warn/55" />
+      )}
     </div>
   )
 }

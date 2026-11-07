@@ -433,3 +433,33 @@ describe('ChildHeader ended', () => {
     expect(screen.getByRole('button', { name: 'Close reviewer' })).toBeTruthy()
   })
 })
+
+describe('a child that needs you', () => {
+  it('S9: a card takes the warn edge over its header and terminal, and one that does not need you has none', () => {
+    const { container, rerender } = render(
+      <FamilyCard name="worker-2" header={<p>header</p>} needsYou>
+        <p>terminal</p>
+      </FamilyCard>
+    )
+    const edge = container.querySelector<HTMLElement>('[data-family-edge]')!
+    expect(edge.className).toContain('border-warn/55')
+    expect(edge.className).toContain('pointer-events-none')
+    expect(edge.className).toContain('inset-0')
+    expect(container.querySelector('[data-family-card]')?.hasAttribute('data-family-needs-you')).toBe(true)
+
+    rerender(
+      <FamilyCard name="worker-2" header={<p>header</p>}>
+        <p>terminal</p>
+      </FamilyCard>
+    )
+    expect(container.querySelector('[data-family-edge]')).toBeNull()
+  })
+
+  it('S8: a shrunk header and a card’s header show the warn dot', () => {
+    const shrunk = render(<ChildHeader {...header({ shape: 'header', state: 'waiting', status: 'Needs you · 2m' })} />)
+    expect(shrunk.container.querySelector('[data-family-dot="waiting"]')?.className).toContain('bg-warn')
+    shrunk.unmount()
+    const card = render(<ChildHeader {...header({ state: 'waiting', status: 'Needs you · 2m' })} />)
+    expect(card.container.querySelector('[data-family-dot="waiting"]')?.className).toContain('bg-warn')
+  })
+})

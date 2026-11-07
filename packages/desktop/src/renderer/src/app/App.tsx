@@ -308,6 +308,9 @@ import { treeLaunchNotice, type TreeLaunchFailure } from "./launchNotice";
 import {
   closeKeepingRunning,
   keepRemoteTab,
+  confirmChildren,
+  confirmRows,
+  hostQuestionMessage,
   useSessionConfirm,
   useShownSessionTabs,
   type FamilyScope,
@@ -4001,6 +4004,18 @@ export function App(): JSX.Element {
   const { ask: confirmAsk, answer: answerConfirm } =
     useSessionConfirm(HOST_BRIDGES);
   const confirmRequest = confirmAsk?.request ?? null;
+  // The children the question names, drawn with their dot or glyph: the same
+  // list for this window's own question and a host's, from the ids each carries.
+  const confirmed =
+    confirmAsk === null
+      ? { ends: [], outlives: [] }
+      : confirmRows(
+          confirmChildren(
+            confirmAsk.request,
+            sessionsByHost.get(confirmAsk.host) ?? [],
+            (child) => sessionAt({ id: child.id, host: confirmAsk.host })?.indicator ?? null,
+          ),
+        );
 
   /**
    * Settings' Stop host: how many sessions it ends, asked here, then the stop.
@@ -4059,12 +4074,19 @@ export function App(): JSX.Element {
     confirmRequest !== null ? (
       <ConfirmSessionDialog
         kind={confirmRequest.kind}
-        message={confirmRequest.message}
+        message={hostQuestionMessage(
+          confirmRequest.message,
+          confirmAsk === null || confirmAsk.host === LOCAL_HOST_KEY
+            ? LOCAL_HOST_NAME
+            : hostName(confirmAsk.host),
+        )}
         detail={confirmRequest.detail}
         folder={confirmRequest.folder}
         confirmLabel={confirmRequest.confirmLabel}
         keepLabel={confirmRequest.keepLabel}
         sessionNames={confirmRequest.sessionNames}
+        ends={confirmed.ends}
+        outlives={confirmed.outlives}
         onConfirm={() => answerConfirm(true)}
         onKeep={() => answerConfirm(false, true)}
         onCancel={() => answerConfirm(false)}

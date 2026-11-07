@@ -1,8 +1,19 @@
 import type { JSX } from 'react'
 import { useEffect, useRef } from 'react'
 import { cn } from '../lib/cn'
+import { ChildMarkIcon, type ChildMarkView } from './ChildMark'
 import { TerminalIcon } from './icons'
 import { Overlay } from './Overlay'
+
+/** A session started by the one whose tab closes, as the question lists it. */
+export interface ConfirmChild {
+  id: number
+  name: string
+  /** Its dot, or a terminal glyph for a command. */
+  mark: ChildMarkView
+  /** At the right, in mono: its role and branch, or `command` for one that runs a command. */
+  meta: string
+}
 
 export interface ConfirmSessionDialogProps {
   /**
@@ -32,6 +43,13 @@ export interface ConfirmSessionDialogProps {
   keepLabel?: string | undefined
   /** The sessions this ends. Listed unless the message already names the only one. */
   sessionNames: readonly string[]
+  /**
+   * Closing a parent: the running children that end with it, listed with their
+   * dot or glyph in place of `sessionNames`, which names the same sessions.
+   */
+  ends?: readonly ConfirmChild[] | undefined
+  /** Closing a parent: the running children started to outlive it, listed apart. They keep running. */
+  outlives?: readonly ConfirmChild[] | undefined
   onConfirm: () => void
   onKeep?: (() => void) | undefined
   onCancel: () => void
@@ -53,6 +71,37 @@ function DetailText({ detail, folder }: { detail: string; folder: string | undef
       </span>
       {detail.slice(at + folder.length)}
     </>
+  )
+}
+
+/**
+ * The children a parent's close names, one row each: the mark, the name and,
+ * in mono at the right, what it is. Past the limit the rest are counted.
+ */
+function ChildList({ kind, items }: { kind: 'ends' | 'outlives'; items: readonly ConfirmChild[] }): JSX.Element {
+  const listed = items.slice(0, LIST_LIMIT)
+  const rest = items.length - listed.length
+  return (
+    <ul data-confirm-children={kind} className="mt-3 space-y-0.5">
+      {listed.map(({ id, name, mark, meta }) => (
+        <li
+          key={id}
+          data-confirm-child={id}
+          className="flex h-[26px] items-center gap-2 rounded-raised bg-surface-raised px-2 text-[12.5px] text-fg"
+        >
+          <ChildMarkIcon mark={mark} />
+          <span className="min-w-0 truncate" title={name}>
+            {name}
+          </span>
+          <span className="ml-auto shrink-0 truncate font-mono text-[11px] text-fg-subtle">{meta}</span>
+        </li>
+      ))}
+      {rest > 0 && (
+        <li className="px-2 text-[11px] text-fg-subtle">
+          and {rest} more session{rest === 1 ? '' : 's'}
+        </li>
+      )}
+    </ul>
   )
 }
 
@@ -82,6 +131,8 @@ export function ConfirmSessionDialog({
   confirmTone = 'danger',
   keepLabel,
   sessionNames,
+  ends = [],
+  outlives = [],
   onConfirm,
   onKeep,
   onCancel
@@ -99,7 +150,8 @@ export function ConfirmSessionDialog({
   // One session the message already names is not listed again: that would be
   // the same string twice. One it only counts is.
   const only = sessionNames.length === 1 ? sessionNames[0] : undefined
-  const list = sessionNames.length > 1 || (only !== undefined && !message.includes(only))
+  const family = ends.length > 0 || outlives.length > 0
+  const list = !family && (sessionNames.length > 1 || (only !== undefined && !message.includes(only)))
 
   return (
     // Escape and the backdrop both mean "no", and both are `Overlay`'s - see
@@ -122,6 +174,14 @@ export function ConfirmSessionDialog({
         <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">
           <DetailText detail={detail} folder={folder} />
         </p>
+
+        {ends.length > 0 && <ChildList kind="ends" items={ends} />}
+        {outlives.length > 0 && (
+          <>
+            <p className="mt-3 text-[11px] text-fg-subtle">Keep running</p>
+            <ChildList kind="outlives" items={outlives} />
+          </>
+        )}
 
         {list && (
           <ul className="mt-3 space-y-0.5 rounded-raised border border-border bg-surface-raised px-3 py-2">

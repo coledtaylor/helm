@@ -5,6 +5,7 @@ import {
   closeTab,
   hostOf,
   paneId,
+  sessionLabel,
   sessionRef,
   shownSessionIds,
   type ChildMember,
@@ -13,8 +14,10 @@ import {
   type FamilyRoomOf,
   type PaneLayout,
   type PaneRef,
+  type SessionRecord,
   type UrgentState
 } from '@helm/core/types'
+import type { ConfirmChild } from '@helm/ui'
 import type { HelmBridge, SessionConfirmRequest } from '../../../shared/ipc'
 import type { HostWorkspace } from './useHostWorkspaces'
 
@@ -209,6 +212,33 @@ export function confirmChildren<T extends ChildMember>(
       return child === undefined ? [] : [{ child, mark: childMark(child, stateOf(child)) }]
     })
   return { ends: named(request.endingIds), outlives: named(request.outlivingIds) }
+}
+
+/**
+ * A child as the close question lists it: its dot or glyph, its name and, at
+ * the right, its role and branch, or `command` for one that runs a command.
+ */
+export function confirmRows(
+  plan: CloseParentPlan<SessionRecord & ChildMember>
+): { ends: ConfirmChild[]; outlives: ConfirmChild[] } {
+  const row = ({ child, mark }: CloseParentPlan<SessionRecord & ChildMember>['ends'][number]): ConfirmChild => ({
+    id: child.id,
+    name: sessionLabel(child),
+    mark,
+    meta: child.command === true ? 'command' : [child.role, child.branch].filter((part) => part != null && part !== '').join(' · ')
+  })
+  return { ends: plan.ends.map(row), outlives: plan.outlives.map(row) }
+}
+
+/**
+ * A host's own close question names the session and not the host it asks for:
+ * it does not know the name this window gives it. The window adds it, as the
+ * questions it asks itself have it ("on this PC’s host"), and leaves a question
+ * that already names a host, and every other question, as it is.
+ */
+export function hostQuestionMessage(message: string, host: string): string {
+  const suffix = ' is still running.'
+  return message.endsWith(suffix) ? `${message.slice(0, -1)} on ${host}.` : message
 }
 
 /** What Close tab, keep running lets go of (the host's stream, the terminal drawn from it) and the panes it changes. */

@@ -1,6 +1,6 @@
-import type { ChildMember, UrgentState } from '@helm/core/types'
+import type { ChildMember, SessionRecord, UrgentState } from '@helm/core/types'
 import { describe, expect, it } from 'vitest'
-import { confirmChildren } from './hostTabs'
+import { confirmChildren, confirmRows, hostQuestionMessage } from './hostTabs'
 
 const child = (id: number, extra: Partial<ChildMember> = {}): ChildMember => ({
   id,
@@ -31,5 +31,28 @@ describe('the children a close question names', () => {
 
   it('names nothing for a question from a host before protocol 2.1', () => {
     expect(confirmChildren({}, sessions, stateOf)).toEqual({ ends: [], outlives: [] })
+  })
+})
+
+describe('the close question as the window draws it', () => {
+  it('S18: words the host’s question with the host named, as the window words its own, and leaves other questions as they are', () => {
+    expect(hostQuestionMessage('“lead” is still running.', 'this PC’s host')).toBe('“lead” is still running on this PC’s host.')
+    expect(hostQuestionMessage('“lead” is still running.', 'build box')).toBe('“lead” is still running on build box.')
+    expect(hostQuestionMessage('“lead” is still running on build box.', 'build box')).toBe('“lead” is still running on build box.')
+    expect(hostQuestionMessage('Quitting ends 3 sessions.', 'build box')).toBe('Quitting ends 3 sessions.')
+  })
+
+  it('S18: rows each child with its mark, name and what it is, a command as command', () => {
+    const records = [
+      { ...child(8), role: 'reviewer', branch: 'main', cwd: '/r', name: 'rev', label: null },
+      { ...child(10, { command: true }), role: null, branch: 'main', cwd: '/r', name: 'tests', label: null }
+    ] as unknown as Array<SessionRecord & ChildMember>
+    const plan = confirmChildren({ endingIds: [8, 10] }, records, () => 'busy')
+    const rows = confirmRows(plan)
+    expect(rows.ends.map(({ id, mark, meta }) => [id, mark.glyph, meta])).toEqual([
+      [8, 'dot', 'reviewer · main'],
+      [10, 'command', 'command']
+    ])
+    expect(rows.outlives).toEqual([])
   })
 })

@@ -948,6 +948,27 @@ overrides the gate; keep it.
   `overflow-clip-margin: 4px` (`FOCUS_RING_ROOM`) and the ring is whole at the
   island's edge, over its border and the gutter.
 
+  **A child that needs a person is in warn wherever it is drawn.** Its row in
+  the Sessions tree has the `warn` dot and says "needs you" in `warn`; its
+  parent's row counts such children in a `warn` pill after its name, kept while
+  the family is folded away; a shrunk header has the `warn` dot (the session
+  dot's colour for waiting) and a chip has its name in `warn`. A card takes a
+  1px `warn` edge at 55% all round, drawn over its header and terminal
+  (`pointer-events: none`, so it takes no press), and that edge is all a shown
+  child gets: no toast.
+
+  **Closing a parent's tab asks in the window's one question for ending a
+  session**, and lists the children that end with it: a 26px row each on
+  `surface-raised`, `rounded-raised`, 12.5px `fg`, with the child's dot or
+  terminal glyph, its name, and at the end in 11px mono `fg-subtle` its role
+  and branch (`command` for a command). A child started to outlive its parent
+  is listed apart under "Keep running" in 11px `fg-subtle`. The button counts
+  what ends, parent included ("End 4 sessions", "End session" when nothing
+  else ends), and Cancel has the focus. A host's own question, asked of this
+  window for a tab another client closed, is drawn the same and names the host
+  as the window's questions do ("this PC’s host" for the local one); the frame's
+  "on This PC" is this document's wording of that name, not a second one.
+
   **A parent shown alone has its children in its crumb.** A pane that fails
   the room rule, or a device with the setting off, draws the parent's terminal
   alone, and the crumb holds each running child as a chip at the end of the

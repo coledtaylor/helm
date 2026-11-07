@@ -229,6 +229,7 @@ export function FamilyTab({
                 <FamilyCard
                   key={entry.child.id}
                   name={sessionLabel(entry.child)}
+                  needsYou={dotOf(entry.child, kidOf.get(entry.child.id)?.state ?? 'running') === 'waiting'}
                   header={header(entry)}
                   // A later report is another note, which starts folded.
                   note={note === null ? null : <ReportNote key={note.at} label={note.label} text={note.text} />}

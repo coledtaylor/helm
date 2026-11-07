@@ -488,3 +488,14 @@ describe('SessionTree: a parent’s row and a child’s as the design draws them
     expect(summary?.className).toContain('border-success')
   })
 })
+
+describe('SessionTree: a child that needs you', () => {
+  it('S8: says needs you in warn on its row beside a warn dot, and its parent’s row counts it', () => {
+    renderTree(family())
+    const child = rowOf(4)
+    expect(child.querySelector('[data-session-dot="waiting"]')?.className).toContain('bg-warn')
+    const word = [...child.querySelectorAll('span')].find((each) => each.textContent === 'needs you')
+    expect(word?.className).toContain('text-warn')
+    expect(rowOf(1).querySelector('[data-session-needs]')?.textContent).toBe('1')
+  })
+})

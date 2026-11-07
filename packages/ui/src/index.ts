@@ -95,6 +95,7 @@ export { Overlay, type OverlayProps } from './components/Overlay'
 export { Menu, type MenuAnchor, type MenuEntry, type MenuProps } from './components/Menu'
 export {
   ConfirmSessionDialog,
+  type ConfirmChild,
   type ConfirmSessionDialogProps
 } from './components/ConfirmSessionDialog'
 export {

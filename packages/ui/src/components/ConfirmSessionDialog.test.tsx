@@ -160,3 +160,60 @@ describe('ConfirmSessionDialog', () => {
     expect(screen.getByRole('button', { name: 'End session' }).className).toContain('text-danger')
   })
 })
+
+describe('ConfirmSessionDialog closing a parent', () => {
+  const ends = [
+    { id: 2, name: 'reviewer', mark: { glyph: 'dot' as const, state: 'waiting' as const }, meta: 'reviewer · main' },
+    { id: 3, name: 'worker', mark: { glyph: 'dot' as const, state: 'busy' as const }, meta: 'worker · agent/worker' },
+    { id: 4, name: 'tests', mark: { glyph: 'command' as const, state: 'running' as const }, meta: 'command' }
+  ]
+  const outlives = [{ id: 5, name: 'watcher', mark: { glyph: 'dot' as const, state: 'idle' as const }, meta: 'worker · main' }]
+
+  it('S18: names each child that ends with its dot or glyph and what it is, then the one that outlives it, counts what it ends on its button and has Cancel in focus', () => {
+    renderDialog({
+      message: '“api-refactor” is still running on this PC’s host.',
+      sessionNames: ['api-refactor', 'reviewer', 'worker', 'tests'],
+      confirmLabel: 'End 4 sessions',
+      ends,
+      outlives
+    })
+    const dialog = screen.getByRole('alertdialog')
+    const ending = dialog.querySelector('[data-confirm-children="ends"]')!
+    expect([...ending.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
+      'reviewerreviewer · main',
+      'workerworker · agent/worker',
+      'testscommand'
+    ])
+    // The dot of a child that needs you is warn; a command wears the terminal glyph.
+    expect(ending.querySelector('[data-confirm-child="2"] [data-child-dot="waiting"]')?.className).toContain('bg-warn')
+    expect(ending.querySelector('[data-confirm-child="3"] [data-child-dot="busy"]')).not.toBeNull()
+    expect(ending.querySelector('[data-confirm-child="4"] [data-child-command="running"]')).not.toBeNull()
+
+    const keeping = dialog.querySelector('[data-confirm-children="outlives"]')!
+    expect(keeping.textContent).toBe('watcherworker · main')
+    expect(dialog.textContent).toContain('Keep running')
+
+    expect(within(dialog).getByRole('button', { name: 'End 4 sessions' })).toBeTruthy()
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
+    // The sessions are listed once, as children, not again as names.
+    expect(dialog.querySelectorAll('li')).toHaveLength(4)
+  })
+
+  it('lists only the children that outlive it when none ends', () => {
+    renderDialog({ sessionNames: ['api-refactor'], outlives })
+    expect(document.querySelector('[data-confirm-children="ends"]')).toBeNull()
+    expect(document.querySelector('[data-confirm-children="outlives"]')).not.toBeNull()
+  })
+
+  it('says nothing of keeping running when no child does', () => {
+    renderDialog({ sessionNames: ['api-refactor', 'reviewer'], ends: ends.slice(0, 1) })
+    expect(screen.queryByText('Keep running')).toBeNull()
+  })
+
+  it('counts past six children rather than printing them', () => {
+    const many = Array.from({ length: 8 }, (_, at) => ({ ...ends[1]!, id: 10 + at, name: `w${String(at)}` }))
+    renderDialog({ sessionNames: [], ends: many })
+    expect(document.querySelectorAll('[data-confirm-children="ends"] [data-confirm-child]')).toHaveLength(6)
+    expect(screen.getByText('and 2 more sessions')).toBeTruthy()
+  })
+})
