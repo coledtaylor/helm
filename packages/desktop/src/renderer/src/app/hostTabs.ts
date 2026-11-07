@@ -225,7 +225,7 @@ export function confirmRows(
     id: child.id,
     name: sessionLabel(child),
     mark,
-    meta: child.command === true ? 'command' : [child.role, child.branch].filter((part) => part != null && part !== '').join(' · ')
+    meta: mark.glyph === 'command' ? 'command' : [child.role, child.branch].filter((part) => part != null && part !== '').join(' · ')
   })
   return { ends: plan.ends.map(row), outlives: plan.outlives.map(row) }
 }

@@ -1,4 +1,4 @@
-import type { FamilyMember } from './family'
+import { isCommandChild, type FamilyMember } from './family'
 
 /**
  * How one parent's tab arranges its children: which are shrunk, which ended
@@ -249,7 +249,11 @@ export function pruneFamilyState(
 /**
  * An ended child's header: how it ended and when, "Stopped · 14:52" when its
  * parent, the user or the host ended it and "Done · 14:52" when its agent
- * exited by itself, in the time of day where this window is. A child this
+ * exited by itself, in the time of day where this window is. A command child
+ * that exited on its own says "exited 0 · 14:52", with the command's own exit
+ * code; one that was stopped says "Stopped", because the number a system gives
+ * a process it killed is not an exit code, and one whose code was never
+ * observed is told as an agent would be. A child this
  * window's user stopped with Stop (`byYou`) says "Stopped by you". A session
  * whose host lost it says "Lost". With no time (it never saw one end) the time
  * is left off rather than guessed.
@@ -259,11 +263,17 @@ export function endedHeaderText(
     status: string
     stopped?: boolean
     endedAt?: string | null
+    command?: string | null
+    exitCode?: number | null
   },
   byYou = false
 ): string {
   const stopped = byYou && child.stopped === true ? 'Stopped by you' : 'Stopped'
-  const how = child.status === 'lost' ? 'Lost' : child.stopped === true ? stopped : 'Done'
+  const exited =
+    isCommandChild(child) && child.stopped !== true && child.exitCode !== undefined && child.exitCode !== null
+      ? `exited ${String(child.exitCode)}`
+      : null
+  const how = exited ?? (child.status === 'lost' ? 'Lost' : child.stopped === true ? stopped : 'Done')
   if (child.endedAt === undefined || child.endedAt === null) return how
   const at = new Date(child.endedAt)
   if (Number.isNaN(at.getTime())) return how

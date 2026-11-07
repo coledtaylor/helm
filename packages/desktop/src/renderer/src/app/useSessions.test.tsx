@@ -145,6 +145,37 @@ describe('useSessions', () => {
     expect(disposeTerminal).not.toHaveBeenCalled()
   })
 
+  it('adds a command child that exited before the window heard of it, as an ended session, since the host lists running sessions only', async () => {
+    hosting = [record(1)]
+    const { result } = await mounted()
+    await waitFor(() => expect(result.current.sessions).toHaveLength(1))
+
+    const lint = record(2, { parentId: 1, parentName: 'session 1', command: 'pnpm lint', status: 'exited', exitCode: 0, durationMs: 700 })
+    act(() => bridge.emit('session:exit', lint))
+    expect(result.current.sessions.map((s) => [s.id, s.status, s.exitCode])).toEqual([
+      [1, 'running', null],
+      [2, 'exited', 0]
+    ])
+
+    // An agent's exit that nothing listed is not added: it is not a child the window waits to hear of.
+    act(() => bridge.emit('session:exit', record(3, { status: 'exited', exitCode: 0 })))
+    expect(result.current.sessions.map((s) => s.id)).toEqual([1, 2])
+  })
+
+  it('does not add a command child back when its exit comes after the window closed it', async () => {
+    const lint = record(2, { parentId: 1, parentName: 'session 1', command: 'pnpm lint' })
+    hosting = [record(1), lint]
+    const { result } = await mounted()
+    await waitFor(() => expect(result.current.sessions).toHaveLength(2))
+
+    bridge.answer('session:close', () => ({ closed: true }))
+    await act(async () => {
+      await result.current.close(2)
+    })
+    act(() => bridge.emit('session:exit', { ...lint, status: 'exited', exitCode: 0 }))
+    expect(result.current.sessions.map((s) => s.id)).toEqual([1])
+  })
+
   it('keeps the tab when main says the close was declined, and drops it with its terminal when it was not', async () => {
     hosting = [record(1)]
     const { result } = await mounted()

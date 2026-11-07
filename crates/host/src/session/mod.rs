@@ -29,6 +29,7 @@ pub mod describe;
 pub(crate) mod env;
 mod ledger;
 mod live;
+mod person;
 mod redraw;
 mod report;
 mod screen;
@@ -45,11 +46,12 @@ pub use ledger::{
     remote_control_name,
 };
 pub use live::{
-    Attachment, ClientId, GRACE, Session, SessionExit, SessionHost, SessionOutput, StartSession,
+    Attachment, ClientId, GRACE, LAST_LINES, Session, SessionExit, SessionHost, SessionOutput,
+    StartSession,
 };
 pub use report::{
     BlockedKind, MAX_MESSAGE_CHARS, ProgramStatus, ReportState, ReportedStatus, StatusReport,
 };
 pub use screen::{SCROLLBACK_LINES, Screen, TermSize};
-pub use shells::{check_shell, detect_shells, shell_args};
+pub use shells::{check_shell, detect_shells, find_shell, shell_args};
 pub use terminals::{TerminalExit, Terminals};

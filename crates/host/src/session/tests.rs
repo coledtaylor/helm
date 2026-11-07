@@ -817,6 +817,55 @@ fn a_watching_client_caught_up_stays_a_watcher() {
 }
 
 #[test]
+fn only_a_clients_keys_mark_a_person_typed_and_a_parents_text_and_a_terminals_replies_do_not() {
+    let fx = Fixture::new();
+    let folder = fx.dirs.folder("project");
+    let size = TermSize::new(80, 24);
+    let session = fx.start(&folder, &[], size);
+    let _a = Watcher::attach(&session, A, size);
+    assert!(!session.person_typed());
+
+    // A parent's text is not a person typing.
+    session.type_for_parent(b"from the parent\r").unwrap();
+    assert!(!session.person_typed());
+    // Nor is what a client's terminal answers its program with.
+    session.input(A, b"\x1b[12;40R\x1b[?62;4c\x1b[I").unwrap();
+    assert!(!session.person_typed());
+    // A key is, until the session's turn ends.
+    session.input(A, b"x").unwrap();
+    assert!(session.person_typed());
+    session.turn_ended();
+    assert!(!session.person_typed());
+
+    session.end_now().unwrap();
+    assert!(session.wait_exit(PATIENCE).is_some());
+}
+
+#[test]
+fn a_person_typed_mark_is_spent_by_an_idle_that_began_after_the_key_however_brief_the_turn() {
+    let fx = Fixture::new();
+    let folder = fx.dirs.folder("project");
+    let size = TermSize::new(80, 24);
+    let session = fx.start(&folder, &[], size);
+    let _a = Watcher::attach(&session, A, size);
+
+    // Idle since before the key: the key has not been answered.
+    session.input(A, b"x").unwrap();
+    session.idle_since(1);
+    assert!(session.person_typed());
+    // Idle since after it: a turn began and ended since, though no pass saw
+    // the session working.
+    session.idle_since(u64::MAX);
+    assert!(!session.person_typed());
+    // Nothing typed, nothing to spend.
+    session.idle_since(u64::MAX);
+    assert!(!session.person_typed());
+
+    session.end_now().unwrap();
+    assert!(session.wait_exit(PATIENCE).is_some());
+}
+
+#[test]
 fn s18_when_the_program_exits_clients_get_its_code_its_row_records_it_and_its_pty_and_screen_go() {
     let fx = Fixture::new();
     let folder = fx.dirs.folder("project");

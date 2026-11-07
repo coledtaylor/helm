@@ -68,6 +68,20 @@ describe('useHostWorkspaces', () => {
     expect(bridge.invocations).toEqual([])
   })
 
+  it('adds a command child of build-box that exited before the window heard of it, as an ended session', async () => {
+    const box = remoteBridge(BOX)
+    const { result } = renderHook(() => useHostWorkspaces([BOX], [BOX]))
+    await waitFor(() => expect(result.current.byHost.get(BOX)?.sessions).toEqual([deploy]))
+
+    const lint = { id: 4, name: 'lint', label: null, cwd: API, status: 'exited', exitCode: 0, parentId: 3, command: 'pnpm lint' } as SessionRecord
+    act(() => box.emit('session:exit', lint))
+    expect(result.current.byHost.get(BOX)?.sessions).toEqual([deploy, lint])
+
+    // An agent session nothing listed is not added.
+    act(() => box.emit('session:exit', { ...deploy, id: 9, status: 'exited' }))
+    expect(result.current.byHost.get(BOX)?.sessions).toEqual([deploy, lint])
+  })
+
   it('lists build-box’s sessions again when its activity names one the window does not know, however its pushes arrive together', async () => {
     const box = remoteBridge(BOX)
     const { result } = renderHook(() => useHostWorkspaces([BOX], [BOX]))

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { PaneCrumb, type CrumbChip } from './PaneGroup'
@@ -106,5 +106,73 @@ describe('PaneCrumb chips', () => {
     expect(chips?.nextElementSibling).toBe(status)
     // The chips took the row’s slack, so the status does not also grow into it.
     expect(status?.className).not.toContain('flex-1')
+  })
+})
+
+describe('PaneCrumb child tag and parent link', () => {
+  it('spaces the row 8px apart, with the for <parent> link 3px nearer its tag', () => {
+    const { container } = render(
+      <PaneCrumb tag={{ kind: 'role', text: 'reviewer' }} parent={{ name: 'api-refactor', onOpen: () => {} }} place='helm' />
+    )
+    expect(container.querySelector('[data-pane-crumb]')?.className).toContain(' gap-2 ')
+    expect(container.querySelector('[data-crumb="parent"]')?.className).toContain('-ml-[3px]')
+  })
+
+  const tagOf = (container: HTMLElement) => container.querySelector<HTMLElement>('[data-crumb="tag"]')
+  const parentOf = (container: HTMLElement) => container.querySelector<HTMLElement>('[data-crumb="parent"]')
+
+  it('S32: a command child begins with a command tag, fg-muted on an inset border-strong ring with no fill and no layout', () => {
+    const { container } = render(
+      <PaneCrumb tag={{ kind: 'command', text: 'command' }} parent={{ name: 'api-refactor' }} place="helm" />
+    )
+    const tag = tagOf(container)
+    expect(tag?.textContent).toBe('command')
+    expect(tag?.className).toContain('text-fg-muted')
+    // The ring is an inset shadow, so the pill is its 16px line tall and takes no border.
+    expect(tag?.className).toContain('ring-border-strong')
+    expect(tag?.className).toContain('ring-inset')
+    expect(tag?.className).toContain('leading-4')
+    expect(tag?.className).not.toMatch(/(^| )border( |$)/)
+    expect(tag?.className).not.toContain('bg-')
+    // It comes before the parent link and the place.
+    const order = [...container.querySelectorAll('[data-crumb]')].map((el) => el.getAttribute('data-crumb'))
+    expect(order).toEqual(['tag', 'parent', 'place'])
+  })
+
+  it('S32: an agent child begins with its role in accent-text on accent-soft', () => {
+    const { container } = render(<PaneCrumb tag={{ kind: 'role', text: 'reviewer' }} place="helm" />)
+    const tag = tagOf(container)
+    expect(tag?.textContent).toBe('reviewer')
+    expect(tag?.className).toContain('text-accent-text')
+    expect(tag?.className).toContain('bg-accent-soft')
+  })
+
+  it('has no tag for a child with no role, and none for a session that is no child', () => {
+    const { container } = render(<PaneCrumb parent={{ name: 'api-refactor', onOpen: () => {} }} place="helm" />)
+    expect(tagOf(container)).toBeNull()
+    expect(parentOf(container)?.textContent).toBe('for api-refactor')
+    const plain = render(<PaneCrumb place="helm" />)
+    expect(tagOf(plain.container)).toBeNull()
+    expect(parentOf(plain.container)).toBeNull()
+  })
+
+  it('S32: pressing for <parent> opens the parent', () => {
+    const onOpen = vi.fn()
+    const { container } = render(<PaneCrumb parent={{ name: 'api-refactor', onOpen }} place="helm" />)
+    const link = parentOf(container)
+    expect(link?.tagName).toBe('BUTTON')
+    expect(link?.className).toContain('text-fg-muted')
+    expect(link?.className).toContain('hover:text-fg')
+    expect(link?.className).toContain('hover:underline')
+    fireEvent.click(link as HTMLElement)
+    expect(onOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('S32: for <parent> is plain text, not a button, when the window does not list the parent', () => {
+    const { container } = render(<PaneCrumb parent={{ name: 'api-refactor' }} place="helm" />)
+    const link = parentOf(container)
+    expect(link?.textContent).toBe('for api-refactor')
+    expect(link?.tagName).toBe('SPAN')
+    expect(container.querySelector('button')).toBeNull()
   })
 })

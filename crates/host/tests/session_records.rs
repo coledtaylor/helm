@@ -16,11 +16,13 @@ use floti_host::fake_agent;
 use floti_host::server::HostConfig;
 use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_protocol::channel::{from_payload, to_payload};
-use floti_protocol::channels::common::SessionRecord;
+use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::HostStopReason;
-use floti_protocol::channels::sessions::{SessionList, SessionStart, StartSessionRequest};
+use floti_protocol::channels::sessions::{
+    SessionExit, SessionList, SessionStart, StartSessionRequest,
+};
 use floti_protocol::record::{records, records_dir};
-use floti_protocol::{Payload, ProtocolVersion, RequestChannel};
+use floti_protocol::{EventChannel, Payload, ProtocolVersion, RequestChannel};
 use serde_json::Value;
 
 const TERMINAL: &[&str] = &["terminal"];
@@ -36,6 +38,15 @@ fn start_request(folder: &Path) -> StartSessionRequest {
     }
 }
 
+/// Starts a session in `folder` and says its id.
+async fn start_in(client: &mut TestClient, folder: &Path) -> u64 {
+    client
+        .request::<SessionStart>(&start_request(folder))
+        .await
+        .expect("start a session")
+        .id
+}
+
 /// Makes `child`'s row a child of `parent`'s, as a start by an agent tool
 /// will write it, from a connection of the test's own to the host's store.
 fn make_child(data: &Path, child: u64, parent: u64, role: &str) {
@@ -48,6 +59,20 @@ fn make_child(data: &Path, child: u64, parent: u64, role: &str) {
         )
         .expect("link the child's row");
     assert_eq!(changed, 1, "the child's row is there");
+}
+
+/// Makes `child`'s row a command child of `parent`'s running `command`, as a
+/// start by `floti agent run` will write it.
+fn make_command_child(data: &Path, child: u64, parent: u64, name: &str, command: &str) {
+    let store = rusqlite::Connection::open(data.join("floti.db")).expect("open floti.db");
+    store.busy_timeout(PATIENCE).expect("wait for the host");
+    let changed = store
+        .execute(
+            "UPDATE sessions SET parent_session_id = ?2, child_name = ?3, command = ?4 WHERE id = ?1",
+            rusqlite::params![child as i64, parent as i64, name, command],
+        )
+        .expect("link the command child's row");
+    assert_eq!(changed, 1, "the command child's row is there");
 }
 
 /// What the committed record of protocol 2.0 declares for `SessionRecord`.
@@ -173,6 +198,90 @@ async fn s31_a_client_on_2_1_lists_a_child_with_its_parent_and_role_and_a_client
             "{session}"
         );
     }
+
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_on_2_1_lists_a_command_child_with_its_command_and_once_it_exited_its_exit_code_and_a_client_on_2_0_reads_the_same_list()
+ {
+    const EXITS: u64 = 4;
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(HostConfig {
+        run: Default::default(),
+        folders: dirs.folders(),
+        endpoint: endpoint.clone(),
+        backends: vec![Arc::new(agent.backend(["--fake-tick=100"])) as Arc<dyn AgentBackend>],
+        inherited_env: std::env::vars_os()
+            .filter(|(key, _)| key != "SHELL")
+            .chain([(OsString::from("SHELL"), OsString::from("/bin/sh"))])
+            .collect(),
+    });
+
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    client.subscribe_quietly(EXITS, SessionExit::NAME).await;
+    let folder = dirs.folder("project");
+    let lead = start_in(&mut client, &folder).await;
+    let reviewer = start_in(&mut client, &folder).await;
+    let tests = start_in(&mut client, &folder).await;
+    make_child(&dirs.data, reviewer, lead, "reviewer");
+    make_command_child(&dirs.data, tests, lead, "worker", "pnpm test --filter core");
+
+    // While the command runs it names its command and has no exit code; an
+    // agent child and the parent name none.
+    let listed = client.request::<SessionList>(&()).await.unwrap();
+    let record = |id: u64| -> &SessionRecord {
+        listed
+            .iter()
+            .find(|record| record.id == id)
+            .unwrap_or_else(|| panic!("session {id} is listed"))
+    };
+    let running = record(tests);
+    assert_eq!(running.command.as_deref(), Some("pnpm test --filter core"));
+    assert_eq!(running.exit_code, None);
+    assert_eq!(running.parent_id, Some(lead));
+    assert_eq!(running.role, None);
+    for session in [record(reviewer), record(lead)] {
+        assert_eq!(session.command, None, "{} runs no command", session.name);
+    }
+
+    // A client one minor behind reads every field it knows of the same list,
+    // the command child's record included.
+    let mut old = TestClient::connect_at(&endpoint, ProtocolVersion::new(2, 0), TERMINAL).await;
+    let payload: Payload = old
+        .request_on(
+            SessionList::NAME,
+            to_payload(&()).expect("encode the request"),
+        )
+        .await
+        .expect("a 2.0 client lists sessions");
+    let wire: Vec<Value> = from_payload(&payload).expect("the list is readable as plain values");
+    assert_eq!(wire.len(), 3);
+    for session in &wire {
+        assert_eq!(
+            problems_for_a_2_0_reader(session),
+            Vec::<String>::new(),
+            "{session}"
+        );
+    }
+
+    // Once the command exits, the record the host sends with the exit carries
+    // its exit code beside its command, and a 2.0 reader reads it as well.
+    client.attach(1, tests).await;
+    client.type_into(1, b"/exit 3\r").await;
+    let exit: Value = client
+        .event_on(EXITS, "the exit of the command child", |ended: &Value| {
+            ended["id"] == tests
+        })
+        .await;
+    assert_eq!(problems_for_a_2_0_reader(&exit), Vec::<String>::new());
+    let exited: SessionRecord = serde_json::from_value(exit).expect("the exit is a record");
+    assert_eq!(exited.status, SessionStatus::Exited);
+    assert_eq!(exited.exit_code, Some(3));
+    assert_eq!(exited.command.as_deref(), Some("pnpm test --filter core"));
+    assert_eq!(exited.parent_id, Some(lead));
 
     host.stop(HostStopReason::Stop).await;
 }

@@ -223,7 +223,7 @@ import {
   type AddHostActions,
 } from "@helm/ui";
 import { sidebarFor, type SidebarView } from "./sidebarFor";
-import { pressTreeSession, treeEntries } from "./treeFamilies";
+import { commandRow, pressTreeSession, treeEntries } from "./treeFamilies";
 import { openChildTab, usePeek } from "./peek";
 import { PeekTerminal } from "./PeekTerminal";
 import { chipKey, markLabel, peekAnchorFor, peekFacts, peekPlace } from "./peekView";
@@ -271,8 +271,10 @@ import { readable } from "./errors";
 import { TerminalPane, type HostLost } from "./TerminalPane";
 import { TerminalTabPane } from "./TerminalTabPane";
 import { terminalFontStack } from "../terminal";
+import { SessionCrumb } from "./SessionCrumb";
 import {
-  crumbStatus,
+  childCrumb,
+  childTab,
   indicatorOf,
   sessionNote,
   statusCounts as countSessionStates,
@@ -3171,6 +3173,7 @@ export function App(): JSX.Element {
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
         notice: limitNotices.get(LOCAL_HOST_KEY)?.get(session.id),
+        ...commandRow(session),
       };
     };
 
@@ -3254,6 +3257,7 @@ export function App(): JSX.Element {
         shown:
           id === frontId ? "focused" : visibleIds.has(id) ? "visible" : null,
         notice: limitNotices.get(host.id)?.get(session.id),
+        ...commandRow(session),
       };
     };
     for (const { session, row } of treeEntries(listed, rowOf)) {
@@ -3642,7 +3646,7 @@ export function App(): JSX.Element {
                 status === null
                   ? `${label} · ${on} · ${there.record.cwd}`
                   : `${label} · ${on} · ${there.record.cwd}\n${status}`,
-              indicator: there.indicator,
+              ...childTab(there.record, there.indicator),
               // Its host's link is down: a warning ring until it is back.
               away:
                 there.record.status === "running" &&
@@ -3670,7 +3674,7 @@ export function App(): JSX.Element {
               status === null
                 ? `${label} · ${session.cwd}`
                 : `${label} · ${session.cwd}\n${status}`,
-            indicator: stateOf(session),
+            ...childTab(session, stateOf(session)),
             renamable: true,
           },
         ];
@@ -3927,8 +3931,16 @@ export function App(): JSX.Element {
     if (hostOf(ref) !== LOCAL_HOST_KEY) {
       const there = sessionAt(ref);
       if (there === null) return null;
+      const host = hostOf(ref);
+      const child = childCrumb(
+        there.record,
+        (parentId) => openRemoteSession(host, parentId),
+        (parentId) => remoteSessionOf(host, parentId) !== undefined,
+      );
       return (
         <PaneCrumb
+          tag={child.tag}
+          parent={child.parent}
           place={folderName(there.record.cwd)}
           hint={`${hostName(hostOf(ref))} · ${there.record.cwd}`}
           branch={there.record.branch}
@@ -3942,8 +3954,13 @@ export function App(): JSX.Element {
       session.projectPath === null
         ? undefined
         : projectsByPath.get(session.projectPath);
+    const child = childCrumb(session, openSession, (parentId) =>
+      sessionsById.has(parentId),
+    );
     return (
-      <PaneCrumb
+      <SessionCrumb
+        tag={child.tag}
+        parent={child.parent}
         place={project?.name ?? folderName(session.cwd)}
         hint={session.cwd}
         branch={session.branch}
@@ -3953,15 +3970,15 @@ export function App(): JSX.Element {
             ? null
             : (profileNames.get(session.profileId) ?? null)
         }
-        status={crumbStatus(
-          session,
-          stateOf(session),
-          liveByHelmId.get(session.id)?.statusSinceMs ?? null,
-          now,
+        session={session}
+        state={stateOf(session)}
+        since={liveByHelmId.get(session.id)?.statusSinceMs ?? null}
+        now={now}
+        message={
           session.status === "running"
             ? (sessionActivity.get(session.id)?.message ?? null)
-            : null,
-        )}
+            : null
+        }
       />
     );
   };
@@ -4613,6 +4630,9 @@ export function App(): JSX.Element {
         agentChildrenPerParent:
           settings?.agentChildrenPerParent ??
           DEFAULT_SETTINGS.agentChildrenPerParent,
+        agentCommandsPerParent:
+          settings?.agentCommandsPerParent ??
+          DEFAULT_SETTINGS.agentCommandsPerParent,
         agentSessionsPerHost:
           settings?.agentSessionsPerHost ??
           DEFAULT_SETTINGS.agentSessionsPerHost,

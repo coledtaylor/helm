@@ -187,6 +187,7 @@ describe('settings', () => {
       agentSessionsPerHost: 12,
       agentDepth: 3,
       agentStartsPerParent: 20,
+      agentCommandsPerParent: 3,
       agentHeavyPerHost: 2,
       showChildrenInParentTab: false,
       quitSessions: { local: 'keep' },
@@ -897,6 +898,12 @@ describe('settings validation', () => {
       bad: [0, -1, 1001, 16.5, '16', null, NaN, Infinity, true, {}]
     },
     {
+      // Counted apart from the agent limits, with the same range the host takes.
+      key: 'agentCommandsPerParent',
+      good: [1, 4, 32],
+      bad: [0, -1, 33, 4.5, '4', null, NaN, Infinity, true, {}]
+    },
+    {
       key: 'agentHeavyPerHost',
       good: [1, 2, 8],
       bad: [0, -1, 9, 1.5, '1', null, NaN, Infinity, true, {}]
@@ -1139,6 +1146,7 @@ describe('settings validation', () => {
       agentSessionsPerHost: 12,
       agentDepth: 3,
       agentStartsPerParent: 20,
+      agentCommandsPerParent: 3,
       agentHeavyPerHost: 2,
       showChildrenInParentTab: false,
       quitSessions: { local: 'keep' },
@@ -1196,6 +1204,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   agentSessionsPerHost: 12,
   agentDepth: 3,
   agentStartsPerParent: 20,
+  agentCommandsPerParent: 3,
   agentHeavyPerHost: 2,
   showChildrenInParentTab: false,
   quitSessions: { local: 'keep' },

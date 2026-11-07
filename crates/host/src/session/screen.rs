@@ -3,15 +3,21 @@
 //! Every byte the program writes is fed to an `alacritty_terminal` screen, so
 //! a client that attaches late is sent the screen as it is
 //! ([`Screen::redraw`]) rather than a blank terminal until the next repaint.
-//! The host keeps the screen and reads nothing in it: it answers no query
-//! (its event listener drops every reply) and draws no conclusion from what
-//! is on it. A session's status comes from the output stream instead, from
-//! the OSC 7501 reports its program writes ([`super::report`]).
+//! The host keeps the screen, hands a parent its child's screen as text
+//! ([`Screen::text`]: the screen and up to 200 lines above it), and a command
+//! child's recent output lines and its last 40 at its exit
+//! ([`Screen::last_lines`]); it answers no query (its event listener drops
+//! every reply) and draws no conclusion from what is on it. The text is
+//! handed over as it is, to the parent that started the child and to no one
+//! else. A session's status comes from the output stream instead, from the
+//! OSC 7501 reports its program writes ([`super::report`]).
 
 use std::time::Duration;
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Processor, Timeout};
 
@@ -88,6 +94,58 @@ impl Screen {
             u16::try_from(self.term.columns()).unwrap_or(u16::MAX),
             u16::try_from(self.term.screen_lines()).unwrap_or(u16::MAX),
         )
+    }
+
+    /// The screen's text, as plain lines with no escape sequence: the lines
+    /// of the scrollback `above` the screen (at most, and as many as there
+    /// are), then the screen's own. A line that wrapped at the screen's edge
+    /// is one line, and each line loses the blanks at its end. While an
+    /// alternate screen shows, it is that screen's text, which has no
+    /// scrollback.
+    pub fn text(&self, above: usize) -> Vec<String> {
+        let grid = self.term.grid();
+        let columns = grid.columns();
+        let top = i32::try_from(above).map_or(grid.topmost_line().0, |above| {
+            grid.topmost_line().0.max(-above)
+        });
+        let mut lines = Vec::new();
+        let mut line = String::new();
+        for at in top..=grid.bottommost_line().0 {
+            let row = &grid[Line(at)];
+            for column in 0..columns {
+                let cell = &row[Column(column)];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                line.push(cell.c);
+                for combining in cell.zerowidth().into_iter().flatten() {
+                    line.push(*combining);
+                }
+            }
+            if !row[Column(columns - 1)].flags.contains(Flags::WRAPLINE) {
+                lines.push(line.trim_end().to_owned());
+                line.clear();
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line.trim_end().to_owned());
+        }
+        lines
+    }
+
+    /// The last `count` lines of text there are (scrollback and screen), none
+    /// of them blank at the end: what a program printed last, not the empty
+    /// rows under it.
+    pub fn last_lines(&self, count: usize) -> Vec<String> {
+        let mut lines = self.text(usize::MAX);
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        let from = lines.len().saturating_sub(count);
+        lines.split_off(from)
     }
 
     /// Terminal bytes that, written into an empty terminal of this size,
@@ -250,5 +308,89 @@ mod boundary_tests {
         assert_eq!(unfinished(&"é".as_bytes()[..1]), &"é".as_bytes()[..1]);
         assert_eq!(unfinished(&"€".as_bytes()[..2]), &"€".as_bytes()[..2]);
         assert_eq!(unfinished(b"\x1b[3\x18"), b"");
+    }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::*;
+
+    fn fed(cols: u16, rows: u16, written: &str) -> Screen {
+        let mut screen = Screen::new(TermSize::new(cols, rows));
+        screen.feed(written.as_bytes());
+        screen
+    }
+
+    #[test]
+    fn the_text_is_the_screens_lines_with_no_escape_sequence_and_no_blanks_at_their_ends() {
+        let screen = fed(20, 4, "\x1b[31mred\x1b[0m  text\r\nsecond\r\n");
+        assert_eq!(screen.text(0), ["red  text", "second", "", ""]);
+    }
+
+    #[test]
+    fn a_line_that_wrapped_at_the_edge_is_one_line() {
+        let screen = fed(5, 4, "abcdefghij\r\nk");
+        // Four rows, the first two of them one line.
+        assert_eq!(screen.text(0), ["abcdefghij", "k", ""]);
+    }
+
+    #[test]
+    fn the_text_reaches_up_into_the_scrollback_by_as_many_lines_as_asked() {
+        let written: String = (1..=10).map(|n| format!("line {n}\r\n")).collect();
+        let screen = fed(20, 3, &written);
+        assert_eq!(screen.text(0), ["line 9", "line 10", ""]);
+        assert_eq!(
+            screen.text(2),
+            ["line 7", "line 8", "line 9", "line 10", ""]
+        );
+        assert_eq!(screen.text(usize::MAX).len(), 11);
+        assert_eq!(screen.text(usize::MAX)[0], "line 1");
+    }
+
+    #[test]
+    fn more_than_a_screen_of_output_reads_as_the_screen_and_the_lines_asked_for_above_it() {
+        let written: String = (1..=300).map(|n| format!("line {n}\r\n")).collect();
+        let screen = fed(40, 24, &written);
+        // 300 lines and the empty row the cursor is on: 24 rows, the last one
+        // empty, so 23 lines of the 300 are on the screen.
+        let text = screen.text(200);
+        assert_eq!(text.len(), 200 + 24);
+        assert_eq!(text.first().map(String::as_str), Some("line 78"));
+        assert_eq!(
+            text.get(text.len() - 2).map(String::as_str),
+            Some("line 300")
+        );
+        assert_eq!(screen.text(5).len(), 5 + 24);
+    }
+
+    #[test]
+    fn styling_titles_and_cursor_moves_leave_only_the_text_that_is_drawn() {
+        let screen = fed(
+            30,
+            3,
+            "\x1b]0;a title\x07\x1b[1;32mgreen\x1b[0m and \x1b[4mplain\x1b[0m\r\n\x1b[2K\x1b[1Gover\x1b[3Gwritten\r\n",
+        );
+        assert_eq!(screen.text(0), ["green and plain", "ovwritten", ""]);
+        assert!(screen.text(0).iter().all(|line| !line.contains('\x1b')));
+    }
+
+    #[test]
+    fn wide_characters_and_combining_marks_are_one_character_each() {
+        let screen = fed(10, 2, "a\u{4e2d}b e\u{301}\r\n");
+        assert_eq!(screen.text(0)[0], "a\u{4e2d}b e\u{301}");
+    }
+
+    #[test]
+    fn the_last_lines_are_what_was_printed_last_without_the_empty_rows_under_it() {
+        let written: String = (1..=60).map(|n| format!("line {n}\r\n")).collect();
+        let last = fed(80, 24, &written).last_lines(40);
+        assert_eq!(last.len(), 40);
+        assert_eq!(last.first().map(String::as_str), Some("line 21"));
+        assert_eq!(last.last().map(String::as_str), Some("line 60"));
+        assert_eq!(
+            fed(80, 24, "two\r\nlines\r\n").last_lines(40),
+            ["two", "lines"]
+        );
+        assert!(fed(80, 24, "").last_lines(40).is_empty());
     }
 }

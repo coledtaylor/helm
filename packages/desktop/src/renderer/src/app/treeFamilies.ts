@@ -1,4 +1,6 @@
 import {
+  commandState,
+  isCommandChild,
   pressSessionRow,
   sessionFamilies,
   type FamilyMember,
@@ -8,6 +10,36 @@ import {
   type PaneLayout
 } from '@helm/core/types'
 import type { TreeSession } from '@helm/ui'
+
+/**
+ * What a command child's row says of itself, or null for a session that is not
+ * one. A command has no conversation to be busy or waiting in, so its state is
+ * only whether it runs and, once it ended, its exit code: whatever an agent's
+ * records say of the process is not read for it. Its word is `running`, then
+ * `exited <code>`, as the family view's ended header says it.
+ */
+export function commandRow(session: {
+  status: string
+  exitCode?: number | null
+  stopped?: boolean
+  command?: string | null
+}): Pick<TreeSession, 'state' | 'command' | 'note'> | null {
+  if (!isCommandChild(session)) return null
+  return { state: commandState(session), command: true, note: commandWord(session) }
+}
+
+/**
+ * The word for a command child's state: `running`, then `exited <code>`,
+ * `stopped` where the host ended it, or `ended` where its code was never seen.
+ * The row's note, the row's accessible label and the glyph's hover text in the
+ * family view all say this.
+ */
+export function commandWord(session: { status: string; exitCode?: number | null; stopped?: boolean }): string {
+  if (commandState(session) === 'running') return 'running'
+  if (session.stopped === true) return 'stopped'
+  const code = session.exitCode ?? null
+  return code === null ? 'ended' : `exited ${String(code)}`
+}
 
 /** A session the Sessions tree lists in a folder's own list, and the row it draws. */
 export interface TreeEntry<T> {

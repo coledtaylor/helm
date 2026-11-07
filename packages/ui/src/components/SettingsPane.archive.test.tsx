@@ -105,6 +105,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onSessionAgentsChange: vi.fn(),
     agentLimits: {
       agentChildrenPerParent: 4,
+      agentCommandsPerParent: 4,
       agentSessionsPerHost: 8,
       agentHeavyPerHost: 1,
       agentDepth: 2,

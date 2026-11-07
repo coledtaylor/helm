@@ -42,6 +42,28 @@ describe('a host session, as the window reads it', () => {
     expect(record).not.toHaveProperty('parentId')
   })
 
+  it('carries a command child’s command and its exit code once it has exited', () => {
+    const command = 'pnpm test --filter core'
+    const running = sessionFromHost(hostSession({ parentId: 4, parentName: 'lead', command }))
+    expect(running).toMatchObject({ command, exitCode: null })
+    expect(running).not.toHaveProperty('role')
+
+    const endedAt = '2026-11-05T09:30:00.000Z'
+    expect(
+      sessionFromHost(hostSession({ parentId: 4, parentName: 'lead', command, status: 'exited', endedAt, exitCode: 3 }))
+    ).toMatchObject({ command, status: 'exited', exitCode: 3 })
+  })
+
+  it('carries no command for an agent child, a session nobody started, or a host before it', () => {
+    for (const bare of [
+      hostSession({ parentId: 4, parentName: 'lead', role: 'reviewer', command: null }),
+      hostSession({ parentId: 4, parentName: 'lead', role: 'reviewer' }),
+      hostSession()
+    ]) {
+      expect(sessionFromHost(bare)).not.toHaveProperty('command')
+    }
+  })
+
   it('carries that the host ended a session, and nothing for one that ended by itself', () => {
     const endedAt = '2026-11-05T09:30:00.000Z'
     expect(sessionFromHost(hostSession({ status: 'exited', endedAt, stopped: true }))).toMatchObject({

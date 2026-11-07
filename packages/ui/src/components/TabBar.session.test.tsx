@@ -31,6 +31,45 @@ function dotOf(tab: HTMLElement): string[] {
 }
 
 describe('TabBar session tabs', () => {
+  it('draws a command child’s tab with the terminal glyph in its tone where an agent has its dot, and the parent as a muted badge', () => {
+    renderBar([
+      { id: 'session:1', title: 'tests', indicator: 'running', command: true, stateWord: 'running', badge: 'api-refactor' },
+      { id: 'session:2', title: 'lint', indicator: 'ended', command: true, stateWord: 'exited 0', badge: 'api-refactor' },
+      { id: 'session:3', title: 'build', indicator: 'failed', command: true, stateWord: 'exited 1', badge: 'api-refactor' },
+      { id: 'session:4', title: 'reviewer', indicator: 'busy', badge: 'api-refactor' }
+    ])
+    const glyph = (name: string) => screen.getByRole('tab', { name }).querySelector<HTMLElement>('[data-tab-command]')
+    expect(glyph('tests, running')?.className).toContain('text-success')
+    expect(glyph('tests, running')?.querySelector('svg')).not.toBeNull()
+    expect(glyph('lint, exited 0')?.className).toContain('text-fg-subtle')
+    expect(glyph('build, exited 1')?.className).toContain('text-danger')
+    // An agent child keeps its dot.
+    const agent = screen.getByRole('tab', { name: 'reviewer, working' })
+    expect(agent.querySelector('[data-tab-command]')).toBeNull()
+    expect(dotOf(agent)).toContain('rounded-full')
+    expect(agent.querySelector('[data-tab-badge]')?.textContent).toBe('api-refactor')
+    expect(screen.getByRole('tab', { name: 'tests, running' }).querySelector('[data-tab-badge]')?.textContent).toBe('api-refactor')
+  })
+
+  it('names the session that started a child tab in the tab’s accessible name, as the badge shows it', () => {
+    renderBar([
+      { id: 'session:1', title: 'tests', indicator: 'running', command: true, stateWord: 'running', badge: 'api-refactor', startedBy: 'api-refactor' },
+      { id: 'session:2', title: 'reviewer', indicator: 'busy', badge: 'api-refactor', startedBy: 'api-refactor' },
+      { id: 'session:3', title: 'api-refactor', indicator: 'idle' }
+    ])
+    expect(screen.getByRole('tab', { name: 'tests, running, started by api-refactor' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'reviewer, working, started by api-refactor' })).toBeTruthy()
+    // A session nobody started keeps its name and state alone.
+    expect(screen.getByRole('tab', { name: 'api-refactor, ready' })).toBeTruthy()
+  })
+
+  it('draws the warning ring, not the glyph, while a command child’s host is away', () => {
+    renderBar([{ id: 'session:1', title: 'tests', indicator: 'running', command: true, away: true }])
+    const tab = screen.getByRole('tab', { name: 'tests, connection lost' })
+    expect(tab.querySelector('[data-tab-command]')).toBeNull()
+    expect(tab.querySelector('[data-tab-away]')).not.toBeNull()
+  })
+
   it('opens a session tab’s menu on a right-click, and a chosen row is told with the tab it was for', async () => {
     const user = userEvent.setup()
     const onMenu = vi.fn()

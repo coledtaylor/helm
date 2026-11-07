@@ -1,5 +1,6 @@
 // What every fake agent CLI shares: reading argv the way a commander-style
-// parser does, and the run log each fake writes about itself.
+// parser does, reading what is typed at a prompt (keys, a bracketed paste, the
+// agent's stop key), and the run log each fake writes about itself.
 //
 // One fake per backend lives beside this file, named after the backend's id
 // (`claude-code.mjs`). Each one does what Floti and Helm can observe of the
@@ -175,6 +176,93 @@ export function parseArgv(argv, spec) {
   return { command: null, rest: [], options, positionals }
 }
 
+/** What a terminal sends before and after pasted text when the program asked for bracketed paste. */
+export const PASTE_OPEN = '\x1b[200~'
+export const PASTE_CLOSE = '\x1b[201~'
+
+/** What a program writes to ask its terminal for bracketed paste. */
+export const ENABLE_BRACKETED_PASTE = '\x1b[?2004h'
+
+/**
+ * Reads what is typed at a fake's prompt, as the agent's own input handling
+ * does:
+ *
+ * - Text between a paste's open and close markers is one block, whatever it
+ *   holds: its newlines do not submit. `onPaste(text, withSubmit)` is called
+ *   once the close arrives. A submit key that comes in the same read as the
+ *   close is taken as part of the paste, not as a keypress: `withSubmit` is
+ *   then true and nothing is submitted, as an agent that reads a paste and the
+ *   key after it as one input does. A host that wants the paste submitted must
+ *   press the key in a read of its own, after a pause.
+ * - `stopKey` alone in a read (or as a control character among typed text) is
+ *   the agent's stop key: `onStop()`.
+ * - Every other escape sequence (arrows, focus and mouse reports) is dropped
+ *   whole, after `onSequence(sequence)`.
+ * - Each other character is `onKey(character)`.
+ *
+ * The close marker is looked for in the read it is in; a marker split across
+ * two reads is not joined, which a host that writes one paste in one go never
+ * does.
+ */
+export class InputReader {
+  constructor({ submitKey, stopKey, onKey, onPaste, onStop, onSequence }) {
+    this.submitKey = submitKey
+    this.stopKey = stopKey
+    this.onKey = onKey
+    this.onPaste = onPaste
+    this.onStop = onStop
+    this.onSequence = onSequence ?? (() => {})
+    this.pasting = false
+    this.pasted = ''
+  }
+
+  /** Reads `chunk`, one read of the program's input. */
+  feed(chunk) {
+    let rest = chunk
+    while (rest !== '') {
+      if (this.pasting) {
+        const end = rest.indexOf(PASTE_CLOSE)
+        if (end < 0) {
+          this.pasted += rest
+          return
+        }
+        const text = (this.pasted + rest.slice(0, end)).replace(/\r\n?/g, '\n')
+        this.pasted = ''
+        this.pasting = false
+        rest = rest.slice(end + PASTE_CLOSE.length)
+        const withSubmit = rest.startsWith(this.submitKey)
+        if (withSubmit) rest = rest.slice(this.submitKey.length)
+        this.onPaste(text, withSubmit)
+        continue
+      }
+      const open = rest.indexOf(PASTE_OPEN)
+      this.keys(open < 0 ? rest : rest.slice(0, open))
+      if (open < 0) return
+      rest = rest.slice(open + PASTE_OPEN.length)
+      this.pasting = true
+    }
+  }
+
+  /** Typed text and escape sequences, without a paste. */
+  keys(text) {
+    // Matching ESC is the point of the pattern.
+    // eslint-disable-next-line no-control-regex
+    for (const part of text.split(/(\x1b\[[0-?]*[ -/]*[@-~]|\x1b.)/)) {
+      if (part === '') continue
+      if (part === this.stopKey) {
+        this.onStop()
+      } else if (part.startsWith('\x1b')) {
+        this.onSequence(part)
+      } else {
+        for (const key of part) {
+          if (key === this.stopKey) this.onStop()
+          else this.onKey(key)
+        }
+      }
+    }
+  }
+}
+
 /**
  * The run log: one JSON file per run, rewritten whole on every change through
  * a temporary file and a rename, so a reader never sees half of one.
@@ -192,7 +280,22 @@ export function parseArgv(argv, spec) {
  *   conversation records the prompt given with it, the next turn, the same way
  *   (`resumed` says it was reopened).
  * - `mcpServers`: the MCP servers it loaded, by name.
- * - `received`: every line typed at its prompt.
+ * - `received`: every line typed at its prompt, in order, including a line
+ *   that was queued behind a turn in progress.
+ * - `submitKeys`: the key that submitted each of `received`, in order, as the
+ *   text the key arrives as (CR or LF).
+ * - `pastes`: every bracketed paste taken, as `{ text, withSubmit }`; `text`
+ *   is the pasted block as one string, newlines inside it kept, and
+ *   `withSubmit` is true when the submit key arrived in the same read as the
+ *   end of the paste, which is then part of the paste and submits nothing.
+ * - `prompts`: each line taken as a prompt turn, in the order the turns ran.
+ * - `queued`: each line typed while a turn was running, in order; it is taken
+ *   as the next turn once that turn ends.
+ * - `interrupts`: how many times its stop key ended a running turn.
+ * - `listening`: true once it reads its terminal. Until then what is typed
+ *   waits in the terminal, and a paste and the key pressed after it arrive in
+ *   one read, which the fake takes as one paste.
+ * - `answers`: each key that answered the permission prompt `/wait` raised.
  * - `shell`: every command `/shell` ran, as `{ command, stdout, stderr, code }`
  *   (`runShell` below); `code` is null while it runs.
  * - `exitCode`: null while it runs.
@@ -213,6 +316,13 @@ export class RunLog {
       openingPrompt: null,
       mcpServers: {},
       received: [],
+      submitKeys: [],
+      pastes: [],
+      prompts: [],
+      queued: [],
+      interrupts: 0,
+      listening: false,
+      answers: [],
       shell: [],
       exitCode: null,
       ...fields

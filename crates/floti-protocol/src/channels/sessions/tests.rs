@@ -214,10 +214,24 @@ fn record(id: u64) -> SessionRecord {
         parent_id: Some(2),
         parent_name: Some("lead".into()),
         role: Some("reviewer".into()),
+        command: None,
         stopped: false,
         last_report: None,
         outlive: true,
         permission_mode: Some(PermissionMode::AcceptEdits),
+    }
+}
+
+/// A command child that has exited: it names its command and no role, and its
+/// exit code is the record's.
+fn command_child(id: u64) -> SessionRecord {
+    SessionRecord {
+        id,
+        name: "tests".into(),
+        role: None,
+        command: Some("pnpm test --filter @helm/core".into()),
+        exit_code: Some(1),
+        ..record(id)
     }
 }
 
@@ -498,7 +512,7 @@ fn session_requests_and_answers_round_trip_over_cbor() {
         },
         CloseSessionResult { closed: false },
     );
-    exchange::<SessionList>((), vec![record(1), record(2)]);
+    exchange::<SessionList>((), vec![record(1), command_child(2)]);
     exchange::<SessionRename>(
         RenameSessionRequest {
             id: 12,

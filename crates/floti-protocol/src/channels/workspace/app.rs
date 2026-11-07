@@ -123,6 +123,10 @@ pub struct HostSettings {
     /// How many children one session may start in its life.
     #[serde(default = "default_agent_starts_per_parent")]
     pub agent_starts_per_parent: u32,
+    /// How many command children one session may have running at once,
+    /// counted apart from every agent limit above.
+    #[serde(default = "default_agent_commands_per_parent")]
+    pub agent_commands_per_parent: u32,
     /// How many heavy children (those started in a role whose class is heavy)
     /// may run on the host at once.
     #[serde(default = "default_agent_heavy_per_host")]
@@ -136,6 +140,7 @@ pub const DEFAULT_AGENT_CHILDREN_PER_PARENT: u32 = 4;
 pub const DEFAULT_AGENT_SESSIONS_PER_HOST: u32 = 8;
 pub const DEFAULT_AGENT_DEPTH: u32 = 2;
 pub const DEFAULT_AGENT_STARTS_PER_PARENT: u32 = 16;
+pub const DEFAULT_AGENT_COMMANDS_PER_PARENT: u32 = 4;
 pub const DEFAULT_AGENT_HEAVY_PER_HOST: u32 = 1;
 
 fn default_agent_heavy_per_host() -> u32 {
@@ -160,6 +165,10 @@ fn default_agent_depth() -> u32 {
 
 fn default_agent_starts_per_parent() -> u32 {
     DEFAULT_AGENT_STARTS_PER_PARENT
+}
+
+fn default_agent_commands_per_parent() -> u32 {
+    DEFAULT_AGENT_COMMANDS_PER_PARENT
 }
 
 /// A change to some settings. A field left out is unchanged; a nullable
@@ -223,6 +232,9 @@ pub struct HostSettingsPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub agent_starts_per_parent: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_commands_per_parent: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub agent_heavy_per_host: Option<u32>,

@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { EMPTY_INVENTORY, type DiscoveryResult, type Project } from '@helm/core/types'
+import { EMPTY_INVENTORY, commandState, type DiscoveryResult, type Project } from '@helm/core/types'
 import { SessionTree, type SessionTreeProps, type TreeSession } from './SessionTree'
 
 /**
@@ -439,6 +439,65 @@ describe('SessionTree: a parent’s row and a child’s as the design draws them
     // It is still a child of its parent: a step in, with the guide.
     expect(indentOf(3)).toBe(indentOf(1) + 16)
     expect(guides(3)).toEqual(['more', 'elbow'])
+  })
+
+  it('S24: draws a command child’s glyph in success while it runs, fg-subtle after exit 0 and danger after any other code, from its record', () => {
+    const record = (id: number, status: string, exitCode: number | null): TreeSession =>
+      row(id, 'cmd-' + String(id), commandState({ status, exitCode }), { command: true })
+    renderTree(
+      new Map([
+        [
+          HELM.toLowerCase(),
+          [
+            row(1, 'api-refactor', 'idle', {
+              nested: [
+                record(2, 'running', null),
+                record(3, 'exited', 0),
+                record(4, 'exited', 1),
+                record(5, 'exited', 137)
+              ]
+            })
+          ]
+        ]
+      ])
+    )
+    const glyph = (id: number): HTMLElement => {
+      const found = rowOf(id).querySelector<HTMLElement>('[data-session-command]')
+      if (found === null) throw new Error(`no command glyph on session ${String(id)}`)
+      return found
+    }
+    expect(glyph(2).className).toContain('text-success')
+    expect(glyph(3).className).toContain('text-fg-subtle')
+    expect(glyph(4).className).toContain('text-danger')
+    expect(glyph(5).className).toContain('text-danger')
+    // The glyph stands where an agent's dot would; there is no dot beside it.
+    for (const id of [2, 3, 4, 5]) expect(rowOf(id).querySelector('[data-session-dot]')).toBeNull()
+  })
+
+  it('S33: says running or exited <code> in a command child’s accessible label, as its row shows, and never ended or exited with an error', () => {
+    renderTree(
+      new Map([
+        [
+          HELM.toLowerCase(),
+          [
+            row(1, 'api-refactor', 'idle', {
+              nested: [
+                row(2, 'tests', 'running', { command: true, note: 'running' }),
+                row(3, 'lint', 'ended', { command: true, note: 'exited 0' }),
+                row(4, 'build', 'failed', { command: true, note: 'exited 1' }),
+                row(5, 'review', 'failed')
+              ]
+            })
+          ]
+        ]
+      ])
+    )
+    const label = (id: number): string | null => rowOf(id).getAttribute('aria-label')
+    expect(label(2)).toBe('tests, running')
+    expect(label(3)).toBe('lint, exited 0')
+    expect(label(4)).toBe('build, exited 1')
+    // An agent session keeps the state's own words.
+    expect(label(5)).toBe('review, exited with an error')
   })
 
   it('draws the command glyph as its own 12-unit drawing in the 12px box a dot’s column gives it', () => {

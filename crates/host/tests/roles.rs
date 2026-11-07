@@ -1457,8 +1457,9 @@ async fn s10_allowed_tools_become_each_backends_own_allow_form_beside_the_famili
             .iter()
             .filter(|arg| *arg == "--allow-shell")
             .count(),
-        // The role's `git status`, and floti agent start, stop and wait.
-        4
+        // The role's `git status`, and floti agent start, send, wait, read
+        // and stop.
+        6
     );
     host.stop(HostStopReason::Stop).await;
 }

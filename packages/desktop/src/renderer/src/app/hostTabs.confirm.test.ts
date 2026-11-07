@@ -11,7 +11,7 @@ const child = (id: number, extra: Partial<ChildMember> = {}): ChildMember => ({
 })
 
 describe('the children a close question names', () => {
-  const sessions = [child(8), child(9, { outlive: true }), child(10, { command: true })]
+  const sessions = [child(8), child(9, { outlive: true }), child(10, { command: 'npm test' })]
   const stateOf = (session: ChildMember): UrgentState | null => (session.id === 8 ? 'waiting' : 'running')
 
   it('S18: lists those that end and those that outlive, each with its dot or its glyph and its state', () => {
@@ -45,7 +45,7 @@ describe('the close question as the window draws it', () => {
   it('S18: rows each child with its mark, name and what it is, a command as command', () => {
     const records = [
       { ...child(8), role: 'reviewer', branch: 'main', cwd: '/r', name: 'rev', label: null },
-      { ...child(10, { command: true }), role: null, branch: 'main', cwd: '/r', name: 'tests', label: null }
+      { ...child(10, { command: 'npm test' }), role: null, branch: 'main', cwd: '/r', name: 'tests', label: null }
     ] as unknown as Array<SessionRecord & ChildMember>
     const plan = confirmChildren({ endingIds: [8, 10] }, records, () => 'busy')
     const rows = confirmRows(plan)

@@ -6,6 +6,7 @@
 //! All of it is today's `sessions` table, whose `backend` column names the
 //! agent backend each session ran on ([`recorded_backend`]).
 
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -34,7 +35,7 @@ const RECORD_COLUMNS: &str = "id, name, label, cwd, branch, project_path, profil
      parent_session_id, \
      (SELECT coalesce(nullif(parent.label, ''), parent.name) FROM sessions AS parent \
       WHERE parent.id = sessions.parent_session_id), \
-     role, stopped, outlive, permission_mode";
+     role, stopped, command, outlive, permission_mode";
 
 /// The backend a row ran on, from its `backend` column.
 ///
@@ -72,6 +73,33 @@ pub(crate) struct HostLedger {
     frozen: AtomicBool,
     next_seq: AtomicU64,
     exits: broadcast::Sender<ExitNotice>,
+    /// What each command child last printed, taken from its screen as it went
+    /// ([`HostLedger::last_lines_of`]).
+    last_lines: Mutex<KeptLines>,
+}
+
+/// The most command children whose last lines are kept: the oldest are let go
+/// first, so the host holds a bounded amount however many commands it runs.
+const KEPT_COMMANDS: usize = 256;
+
+/// The last lines of the command children that have ended, newest last.
+#[derive(Default)]
+struct KeptLines {
+    lines: HashMap<SessionId, Vec<String>>,
+    order: VecDeque<SessionId>,
+}
+
+impl KeptLines {
+    fn keep(&mut self, id: SessionId, lines: Vec<String>) {
+        if self.lines.insert(id, lines).is_none() {
+            self.order.push_back(id);
+        }
+        while self.order.len() > KEPT_COMMANDS {
+            if let Some(oldest) = self.order.pop_front() {
+                self.lines.remove(&oldest);
+            }
+        }
+    }
 }
 
 impl HostLedger {
@@ -83,7 +111,37 @@ impl HostLedger {
             frozen: AtomicBool::new(false),
             next_seq: AtomicU64::new(1),
             exits,
+            last_lines: Mutex::new(KeptLines::default()),
         }
+    }
+
+    /// The last lines session `id` printed, kept when it ended as a command
+    /// child, so that its parent can be told them and read them later. Empty
+    /// for any other session, and for one the host no longer keeps.
+    pub fn last_lines_of(&self, id: SessionId) -> Vec<String> {
+        self.last_lines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .lines
+            .get(&id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Whether session `id`'s row says it runs a command for the session that
+    /// started it.
+    fn runs_command(&self, id: SessionId) -> bool {
+        self.store()
+            .connection()
+            .query_row(
+                "SELECT command IS NOT NULL FROM sessions WHERE id = ?1",
+                [id.0],
+                |row| row.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .unwrap_or(false)
     }
 
     pub fn store(&self) -> MutexGuard<'_, Store> {
@@ -142,6 +200,18 @@ impl SessionLedger for HostLedger {
         };
         self.notify(id);
         written
+    }
+
+    /// Only a command child's last lines are kept: no other session's screen
+    /// is read by anything.
+    fn screen_ended(&self, id: SessionId, last_lines: Vec<String>) {
+        if last_lines.is_empty() || !self.runs_command(id) {
+            return;
+        }
+        self.last_lines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keep(id, last_lines);
     }
 
     /// The host is ending the session: its row says so before its program
@@ -571,10 +641,13 @@ fn record_from(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
             (!role.is_empty()).then(|| role.to_owned())
         }),
         stopped: row.get(18)?,
+        command: row
+            .get::<_, Option<String>>(19)?
+            .filter(|line| !line.trim().is_empty()),
         last_report: None,
-        outlive: row.get(19)?,
+        outlive: row.get(20)?,
         permission_mode: row
-            .get::<_, Option<String>>(20)?
+            .get::<_, Option<String>>(21)?
             .as_deref()
             .and_then(permission_mode_from_name),
     })

@@ -258,6 +258,7 @@ mod tests {
             parent_id: None,
             parent_name: None,
             role: None,
+            command: None,
             stopped: false,
             last_report: None,
             outlive: false,

@@ -463,3 +463,72 @@ describe('a child that needs you', () => {
     expect(card.container.querySelector('[data-family-dot="waiting"]')?.className).toContain('bg-warn')
   })
 })
+
+describe('ChildHeader of a command child', () => {
+  const command = (props: Partial<ChildHeaderProps> = {}): ChildHeaderProps =>
+    header({ name: 'tests', command: true, role: null, state: 'running', status: 'Running · 1s', onOpenAsTab: undefined, ...props })
+
+  it('S25: shows the terminal glyph where an agent child shows its state dot, in success while it runs, on a card and shrunk', () => {
+    for (const shape of ['card', 'header'] as const) {
+      const { container, unmount } = render(<ChildHeader {...command({ shape })} />)
+      const glyph = container.querySelector('[data-family-command="running"]')!
+      expect(glyph.className).toContain('text-success')
+      expect(glyph.querySelector('svg')).not.toBeNull()
+      expect(container.querySelector('[data-family-dot]')).toBeNull()
+      unmount()
+    }
+  })
+
+  it('S25: shows the glyph in fg-subtle once the command exited 0 and in danger for any other code, on an ended header', () => {
+    const exited0 = render(
+      <ChildHeader {...command({ shape: 'ended', state: 'ended', status: 'exited 0 · 14:52', onStop: undefined, onClose: vi.fn() })} />
+    )
+    expect(exited0.container.querySelector('[data-family-command="ended"]')!.className).toContain('text-fg-subtle')
+    exited0.unmount()
+    const failed = render(
+      <ChildHeader {...command({ shape: 'ended', state: 'failed', status: 'exited 1 · 14:52', onStop: undefined, onClose: vi.fn() })} />
+    )
+    expect(failed.container.querySelector('[data-family-command="failed"]')!.className).toContain('text-danger')
+    expect(failed.container.querySelector('[data-family-dot]')).toBeNull()
+  })
+
+  it('S33: says running or exited <code> on hover of the glyph, never ended or exited with an error', () => {
+    const titleOf = (props: Partial<ChildHeaderProps>): string | null => {
+      const { container, unmount } = render(<ChildHeader {...command(props)} />)
+      const title = container.querySelector('[data-family-command]')!.getAttribute('title')
+      unmount()
+      return title
+    }
+    expect(titleOf({ word: 'running' })).toBe('running')
+    expect(titleOf({ shape: 'ended', state: 'ended', word: 'exited 0', onStop: undefined })).toBe('exited 0')
+    expect(titleOf({ shape: 'ended', state: 'failed', word: 'exited 1', onStop: undefined })).toBe('exited 1')
+  })
+
+  it('S26: reads command in the tag on a card where an agent child names its role, in the muted ring and not the accent fill', () => {
+    const { container } = render(<ChildHeader {...command({ role: 'worker' })} />)
+    const tag = container.querySelector('[data-family-role]')!
+    expect(tag.textContent).toBe('command')
+    expect(tag.className).toContain('text-fg-muted')
+    expect(tag.className).toContain('border-border-strong')
+    expect(tag.className).not.toContain('bg-accent-soft')
+  })
+
+  it('S26: draws no tag on a shrunk or ended header', () => {
+    const shrunk = render(<ChildHeader {...command({ shape: 'header', onStop: undefined })} />)
+    expect(shrunk.container.querySelector('[data-family-role]')).toBeNull()
+    shrunk.unmount()
+    const ended = render(<ChildHeader {...command({ shape: 'ended', state: 'ended', status: 'exited 0 · 14:52', onStop: undefined, onClose: vi.fn() })} />)
+    expect(ended.container.querySelector('[data-family-role]')).toBeNull()
+  })
+
+  it('S27: reads exited <code> · <time> with Close on an ended header, and pressing the words opens its last screen', async () => {
+    const props = command({ shape: 'ended', state: 'ended', status: 'exited 0 · 14:52', onStop: undefined, onClose: vi.fn() })
+    const { container } = render(<ChildHeader {...props} />)
+    const row = container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+    expect(row.querySelector('[data-family-status]')!.textContent).toBe('exited 0 · 14:52')
+    await userEvent.click(within(row).getByRole('button', { name: 'Close tests' }))
+    expect(props.onClose).toHaveBeenCalledTimes(1)
+    await userEvent.click(within(row).getByRole('button', { name: 'Show tests, exited 0 · 14:52' }))
+    expect(props.onPress).toHaveBeenCalledTimes(1)
+  })
+})

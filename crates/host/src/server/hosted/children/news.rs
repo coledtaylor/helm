@@ -27,7 +27,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use floti_protocol::channels::common::ChildReport;
-use floti_protocol::channels::sessions::{SessionActivity, SessionActivityState, StandingNotice};
+use floti_protocol::channels::sessions::{
+    SessionActivity, SessionActivityState, SessionsOverview, StandingNotice,
+};
 use tokio::sync::watch;
 
 use super::inbox::{self, EventKind, Facts, Item, StoppedBy};
@@ -58,6 +60,10 @@ pub(super) struct Seen {
     /// before it is no longer its latest. False when the child already
     /// reported in the turn this pass saw begin: that report is this turn's own.
     pub turn_started: bool,
+    /// The child's turn ended in this pass (it went idle after working or
+    /// after a dialog), with a report or without: what a person typed before
+    /// it is spent.
+    pub turn_ended: bool,
 }
 
 /// The rules for one child, a pure state machine over what passes see.
@@ -128,6 +134,8 @@ impl Tracker {
 
         if now.activity != self.activity {
             let before = std::mem::replace(&mut self.activity, now.activity);
+            seen.turn_ended = now.activity == Some(SessionActivity::Idle)
+                && (working(before) || before == Some(SessionActivity::Waiting));
             match now.activity {
                 Some(SessionActivity::Busy | SessionActivity::Shell) if !working(before) => {
                     self.reported_this_turn = reported_between;
@@ -333,12 +341,22 @@ impl Desk {
 impl Hosted {
     /// One pass of the activity reader over the hosted sessions: the events
     /// each child's doings give its parent. `views` and `states` are the
-    /// pass's input and output, in the same order.
-    pub(crate) fn observe_activity(&self, views: &[HostedView], states: &[SessionActivityState]) {
+    /// pass's input and output, in the same order. `overview` is the pass's
+    /// listing, which says since when each session has had its status: a
+    /// session idle since after a person last typed has had a turn end since,
+    /// even one no pass saw working.
+    pub(crate) fn observe_activity(
+        &self,
+        views: &[HostedView],
+        states: &[SessionActivityState],
+        overview: &SessionsOverview,
+    ) {
         let desk = &self.children.news;
         let mut events: Vec<(SessionId, EventKind, Facts)> = Vec::new();
         let mut moved = false;
         let mut noticed = false;
+        let mut turns_ended: Vec<SessionId> = Vec::new();
+        let mut idle_since: Vec<(SessionId, u64)> = Vec::new();
         {
             let mut watched = desk.watched();
             let live: HashSet<SessionId> = views
@@ -408,6 +426,17 @@ impl Hosted {
                 } else if watched.needs_you.remove(&id).is_some() {
                     noticed = true;
                 }
+                if seen.turn_ended {
+                    turns_ended.push(id);
+                } else if state.activity == Some(SessionActivity::Idle)
+                    && let Some(since) = overview
+                        .sessions
+                        .iter()
+                        .find(|listed| listed.host_session_id == Some(view.id))
+                        .and_then(|listed| listed.status_since_ms)
+                {
+                    idle_since.push((id, since));
+                }
                 if seen.turn_started && watched.last_report.remove(&id).is_some() {
                     watched.report_revision += 1;
                     moved = true;
@@ -419,6 +448,18 @@ impl Hosted {
                 );
             }
             watched.plain.retain(|id| live.contains(id));
+        }
+        for session in turns_ended
+            .into_iter()
+            .filter_map(|id| self.sessions.get(id))
+        {
+            session.turn_ended();
+        }
+        for (session, since) in idle_since
+            .into_iter()
+            .filter_map(|(id, since)| self.sessions.get(id).map(|session| (session, since)))
+        {
+            session.idle_since(since);
         }
         for (child, kind, facts) in events {
             if kind == EventKind::Error {
@@ -571,6 +612,7 @@ impl Hosted {
     pub(crate) fn child_ended(&self, child: SessionId) {
         let ended = rows::ended_of(&self.ledger.store(), child);
         let desk = &self.children.news;
+        let last_lines = self.ledger.last_lines_of(child);
         match ended {
             Ok(Some(ended)) => {
                 let by = desk.take_stopped(child);
@@ -584,8 +626,10 @@ impl Hosted {
                     }
                 } else {
                     Facts {
-                        state: Some("exited".to_owned()),
-                        detail: None,
+                        state: Some(inbox::EXITED.to_owned()),
+                        // A command child's parent is told what it last
+                        // printed with its exit.
+                        detail: (!last_lines.is_empty()).then(|| told_lines(&last_lines)),
                         exit_code: ended.exit_code,
                     }
                 };
@@ -656,6 +700,19 @@ impl Hosted {
     }
 }
 
+/// The most characters of one line of a command's output a parent is told.
+const TOLD_LINE_CHARS: usize = 400;
+
+/// A command child's last lines as one text, each cut to a length a parent
+/// can read.
+fn told_lines(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|line| line.chars().take(TOLD_LINE_CHARS).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The store's own "now", in the text it writes times in.
 fn store_now(store: &crate::store::Store) -> String {
     store
@@ -707,6 +764,24 @@ mod tests {
             kinds(&tracker.observe(&at(Some(Idle)))),
             [EventKind::TurnEnded]
         );
+    }
+
+    #[test]
+    fn a_turn_ends_when_the_child_goes_idle_after_working_or_after_a_dialog_with_or_without_a_report()
+     {
+        let mut tracker = Tracker::default();
+        assert!(!tracker.observe(&at(Some(Idle))).turn_ended);
+        assert!(!tracker.observe(&at(Some(Busy))).turn_ended);
+        assert!(tracker.observe(&at(Some(Idle))).turn_ended);
+        // A turn that reported ends all the same.
+        tracker.observe(&at(Some(Busy)));
+        tracker.reported();
+        assert!(tracker.observe(&at(Some(Idle))).turn_ended);
+        // A dialog that is answered and then leaves the child idle.
+        tracker.observe(&at(Some(Waiting)));
+        assert!(tracker.observe(&at(Some(Idle))).turn_ended);
+        // Passes that change nothing end nothing.
+        assert!(!tracker.observe(&at(Some(Idle))).turn_ended);
     }
 
     #[test]

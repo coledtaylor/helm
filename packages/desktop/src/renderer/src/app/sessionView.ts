@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react'
-import type { SessionActivityState, SessionRecord } from '@helm/core/types'
-import type { CrumbTone, TabIndicator } from '@helm/ui'
+import {
+  commandState,
+  endedHeaderText,
+  isCommandChild,
+  type SessionActivityState,
+  type SessionRecord
+} from '@helm/core/types'
+import type { CrumbParent, CrumbTag, CrumbTone, Tab, TabIndicator } from '@helm/ui'
+import { commandWord } from './treeFamilies'
 
 /**
  * What a session's dot says.
@@ -16,10 +23,7 @@ import type { CrumbTone, TabIndicator } from '@helm/ui'
  * which is the point: a CLI that renames a status degrades to the old
  * behaviour rather than to a guess.
  */
-export function indicatorOf(
-  session: SessionRecord,
-  activity: SessionActivityState | undefined
-): TabIndicator {
+export function indicatorOf(session: SessionRecord, activity: SessionActivityState | undefined): TabIndicator {
   if (session.status !== 'running') return session.exitCode ? 'failed' : 'ended'
   return activity?.activity ?? 'running'
 }
@@ -77,6 +81,7 @@ export function crumbStatus(
   now: number,
   message: string | null = null
 ): { text: string; tone: CrumbTone } {
+  if (isCommandChild(session)) return commandCrumbStatus(session, now)
   const age = since === null ? '' : ` · ${shortAge(now - since)}`
   switch (state) {
     case 'waiting':
@@ -85,10 +90,12 @@ export function crumbStatus(
       return { text: message === null ? 'Error' : `Error · ${message}`, tone: 'danger' }
     case 'busy':
       return { text: `Working${age}`, tone: 'accent' }
+    // A session handing control back says how long it has been idle, as its
+    // card's header does; a background task still running is the dot's
+    // hover text, not the crumb's.
     case 'idle':
-      return { text: 'Idle', tone: 'success' }
     case 'shell':
-      return { text: 'Idle · background task running', tone: 'success' }
+      return { text: `Idle${age}`, tone: 'success' }
     case 'failed':
       return { text: `Exited ${String(session.exitCode ?? '')}`.trim(), tone: 'danger' }
     case 'ended':
@@ -97,8 +104,36 @@ export function crumbStatus(
         tone: 'subtle'
       }
     default:
-      return { text: 'Running', tone: 'subtle' }
+      // A run counts its seconds until it has run a minute, as a command
+      // child's card does while its output scrolls.
+      return { text: since === null ? 'Running' : `Running · ${runAge(now - since)}`, tone: 'subtle' }
   }
+}
+
+/** When a session started, in milliseconds, or null for a time that is not one: how long a command has run. */
+export function startedMs(session: Pick<SessionRecord, 'startedAt'>): number | null {
+  const started = Date.parse(session.startedAt)
+  return Number.isNaN(started) ? null : started
+}
+
+/**
+ * A command child's crumb. A command has no conversation to be busy or waiting
+ * in, so neither the registry nor the OSC indicator is read for it: it runs,
+ * counted from when it started (never from the registry's moment, which is an
+ * agent's), and once it exited it says what its ended header says -
+ * "exited 0 · 14:52" - in fg-subtle after exit 0 and in danger for any other
+ * code. A code never seen keeps the ended header's agent wording.
+ */
+function commandCrumbStatus(session: SessionRecord, now: number): { text: string; tone: CrumbTone } {
+  const state = commandState(session)
+  if (state !== 'running') return { text: endedHeaderText(session), tone: state === 'failed' ? 'danger' : 'subtle' }
+  const from = startedMs(session)
+  return { text: from === null ? 'Running' : `Running · ${runAge(now - from)}`, tone: 'success' }
+}
+
+/** How long a command has run: seconds under a minute, then as {@link shortAge} says it. */
+export function runAge(ms: number): string {
+  return ms < 60_000 ? `${String(Math.max(1, Math.floor(ms / 1000)))}s` : shortAge(ms)
 }
 
 /**
@@ -108,12 +143,7 @@ export function crumbStatus(
  * error is the one word because its program's message does not fit a header
  * (the crumb, the tab and the tooltip of its dot have it).
  */
-export function childStatus(
-  session: SessionRecord,
-  state: TabIndicator,
-  since: number | null,
-  now: number
-): string {
+export function childStatus(session: SessionRecord, state: TabIndicator, since: number | null, now: number): string {
   if (state === 'idle' || state === 'shell') return since === null ? 'Idle' : `Idle · ${shortAge(now - since)}`
   if (state === 'error') return 'Error'
   return crumbStatus(session, state, since, now).text
@@ -139,6 +169,8 @@ export interface StatusCounts {
   waiting: number
   /** Alive, and its program reports an error: never counted idle. */
   error: number
+  /** A command child whose command is still running: it takes no turns, so it is neither working nor idle. */
+  running: number
   /** Alive and none of the above: ready, handed back, or saying nothing. */
   idle: number
 }
@@ -148,9 +180,13 @@ export function statusCounts(
   sessions: readonly SessionRecord[],
   stateOf: (session: SessionRecord) => TabIndicator
 ): StatusCounts {
-  const counts: StatusCounts = { working: 0, waiting: 0, error: 0, idle: 0 }
+  const counts: StatusCounts = { working: 0, waiting: 0, error: 0, running: 0, idle: 0 }
   for (const session of sessions) {
     if (session.status !== 'running') continue
+    if (isCommandChild(session)) {
+      counts.running += 1
+      continue
+    }
     const state = stateOf(session)
     if (state === 'busy') counts.working += 1
     else if (state === 'waiting') counts.waiting += 1
@@ -174,4 +210,71 @@ export function useNow(intervalMs: number): number {
     return () => clearInterval(timer)
   }, [intervalMs])
   return now
+}
+
+/**
+ * The time to the second while `active`: the window's clock (`now`, which
+ * moves every half minute and can be that old) is too coarse for a command
+ * that counts its seconds. While `active` this is the real time, re-read each
+ * second; with `active` off it is `now`.
+ */
+export function useSecondsClock(now: number, active: boolean): number {
+  const [sampled, setSampled] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return undefined
+    const sample = (): void => setSampled(Date.now())
+    // The first sample is at once, because the one held may be from before
+    // this became active.
+    const first = setTimeout(sample, 0)
+    const timer = setInterval(sample, 1000)
+    return () => {
+      clearTimeout(first)
+      clearInterval(timer)
+    }
+  }, [active])
+  return active ? Math.max(sampled, now) : now
+}
+
+/**
+ * What the crumb of a child's own tab begins with: its tag (`command` for a
+ * command child, the role an agent child was started in, none for a child
+ * with no role) and the session that started it. `openParent` is given only
+ * where the window lists that session, so the link is plain text otherwise.
+ */
+export function childCrumb(
+  session: Pick<SessionRecord, 'command' | 'role' | 'parentId' | 'parentName'>,
+  openParent: (parentId: number) => void,
+  listsParent: (parentId: number) => boolean
+): { tag: CrumbTag | undefined; parent: CrumbParent | undefined } {
+  const tag: CrumbTag | undefined = isCommandChild(session)
+    ? { kind: 'command', text: 'command' }
+    : typeof session.role === 'string' && session.role !== ''
+      ? { kind: 'role', text: session.role }
+      : undefined
+  const { parentId, parentName } = session
+  const parent: CrumbParent | undefined =
+    parentId === null || parentId === undefined || typeof parentName !== 'string' || parentName === ''
+      ? undefined
+      : { name: parentName, onOpen: listsParent(parentId) ? () => openParent(parentId) : undefined }
+  return { tag, parent }
+}
+
+/**
+ * What a child's own tab adds to a session tab. A command child's indicator is
+ * the terminal glyph in the glyph's tones (success while it runs, fg-subtle
+ * after exit 0, danger otherwise), read from its command and never from the
+ * registry, and its accessible name says `running` or `exited <code>`. Any
+ * child, command or agent, carries the name of the session that started it as
+ * the muted badge after its title, and the tab's accessible name ends with
+ * `started by <parent>`.
+ */
+export function childTab(
+  session: Pick<SessionRecord, 'status' | 'exitCode' | 'command' | 'parentName'>,
+  indicator: TabIndicator
+): Pick<Tab, 'indicator' | 'command' | 'stateWord' | 'badge' | 'startedBy'> {
+  const parent = typeof session.parentName === 'string' && session.parentName !== '' ? session.parentName : undefined
+  const marks = isCommandChild(session)
+    ? { indicator: commandState(session), command: true, stateWord: commandWord(session) }
+    : { indicator }
+  return parent === undefined ? marks : { ...marks, badge: parent, startedBy: parent }
 }

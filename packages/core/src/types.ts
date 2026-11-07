@@ -376,6 +376,12 @@ export interface SessionRecord {
   /** The role the session was started in, or null for one started with none. */
   role?: string | null
   /**
+   * The command line a command child runs, as its parent gave it after `--`.
+   * Absent for every other session. Its exit code is `exitCode`, once it has
+   * exited.
+   */
+  command?: string | null
+  /**
    * Whether the host ended it - its parent stopped it, a person ended it, or
    * the host went down with it - as against its agent exiting by itself. Only
    * a session that has ended carries it, and absent reads as false: the end of
@@ -1184,6 +1190,11 @@ export const AGENT_CHILDREN_PER_PARENT = { min: 1, max: 32, default: 4 } as cons
 export const AGENT_SESSIONS_PER_HOST = { min: 1, max: 128, default: 8 } as const
 export const AGENT_DEPTH = { min: 1, max: 8, default: 2 } as const
 export const AGENT_STARTS_PER_PARENT = { min: 1, max: 1000, default: 16 } as const
+/**
+ * Command children one session may have running at once, counted apart from
+ * every agent limit above: a test run never takes a reviewer's slot.
+ */
+export const AGENT_COMMANDS_PER_PARENT = { min: 1, max: 32, default: 4 } as const
 export const AGENT_HEAVY_PER_HOST = { min: 1, max: 8, default: 1 } as const
 
 /**
@@ -1726,6 +1737,12 @@ export interface AppSettings {
   /** Agents in a heavy role (an emulator, a dev build, a full suite) that may run on one host at once. */
   agentHeavyPerHost: number
   /**
+   * Command children (`floti agent run`) one session may have running at once.
+   * Counted apart from the agent limits: a command child takes none of their
+   * slots and an agent child takes none of this one.
+   */
+  agentCommandsPerParent: number
+  /**
    * Whether a parent's tab shows its running children beside its terminal while
    * its pane has room, or the parent shows alone with its children in the tree
    * and in its crumb. Kept on this device with the rest of its layout and never
@@ -1878,6 +1895,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   agentSessionsPerHost: AGENT_SESSIONS_PER_HOST.default,
   agentDepth: AGENT_DEPTH.default,
   agentStartsPerParent: AGENT_STARTS_PER_PARENT.default,
+  agentCommandsPerParent: AGENT_COMMANDS_PER_PARENT.default,
   agentHeavyPerHost: AGENT_HEAVY_PER_HOST.default,
   showChildrenInParentTab: true,
   // Empty: this PC's host then ends the sessions Helm started when it quits,

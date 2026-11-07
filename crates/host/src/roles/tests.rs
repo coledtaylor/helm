@@ -80,7 +80,7 @@ fn a_file_with_every_field_reads_as_that_role_and_its_body_is_the_instructions()
     // A comma inside parentheses belongs to the rule.
     assert_eq!(role.allowed_tools, ["Read", "Bash(git log --format=a,b:*)"]);
     assert_eq!(role.disallowed_tools, ["Edit", "Write"]);
-    // Accepted and kept, doing nothing here.
+    // Kept for a plain command line: its submit and stop words are keys.
     assert_eq!(role.command.as_deref(), Some("acme"));
     assert_eq!(role.submit.as_deref(), Some("enter"));
     assert_eq!(role.stop.as_deref(), Some("ctrl-c"));
@@ -182,6 +182,11 @@ fn a_file_that_is_not_exactly_a_role_is_bad_and_says_what_is_wrong() {
     assert!(bad("a", "---\nworktree: maybe\n---\n").contains("worktree must be"));
     assert!(bad("a", "---\nmodel: opus\n---\n").contains("model is a map"));
     assert!(bad("a", "---\nbackend: \"\"\n---\n").contains("backend"));
+    // A submit or stop word that is not a key would press nothing.
+    let submit = bad("a", "---\nsubmit: hit it\n---\n");
+    assert!(submit.contains("submit: hit it is not a key"), "{submit}");
+    let stop = bad("a", "---\nstop: ctrl-9\n---\n");
+    assert!(stop.contains("stop: ctrl-9 is not a key"), "{stop}");
     // Every problem is named, not only the first.
     let two = bad("a", "---\nclass: x\npermission: y\n---\n");
     assert!(two.contains("class") && two.contains("permission"), "{two}");

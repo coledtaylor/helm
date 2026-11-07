@@ -419,6 +419,27 @@ describe('sessions through the local host', () => {
     expect(w.host.sessions.list()).toEqual([])
   })
 
+  it('tells the window of a command child that exited before the host was asked for its list, keeps it until closed, and says nothing of one it closed or of an agent it never listed', async () => {
+    const w = world({ listed: [row()] })
+    await w.connect()
+
+    const lint = row({ id: 9, command: 'pnpm lint', parentId: 7, status: 'exited', exitCode: 0 })
+    w.connection.push('session:exit', lint)
+    expect(w.emitted).toContainEqual({ channel: 'session:exit', payload: expect.objectContaining({ id: 9, command: 'pnpm lint' }) })
+    expect(w.host.sessions.list().map((session) => session.id)).toEqual([7, 9])
+
+    // Closed, its exit heard again is not shown again.
+    await w.host.sessions.close({ id: 9 })
+    w.emitted.length = 0
+    w.connection.push('session:exit', lint)
+    expect(w.emitted).toEqual([])
+    expect(w.host.sessions.list().map((session) => session.id)).toEqual([7])
+
+    // An agent session nobody listed has nobody to tell.
+    w.connection.push('session:exit', row({ id: 12, status: 'exited', exitCode: 0 }))
+    expect(w.emitted).toEqual([])
+  })
+
   it('lists the host’s sessions when it connects and carries each running one’s terminal', async () => {
     const w = world({ listed: [row(), row({ id: 8, status: 'exited', exitCode: 1 })] })
     await w.connect()
@@ -778,6 +799,7 @@ describe('sessions through the local host', () => {
             agentSessionsPerHost: 12,
             agentDepth: 3,
             agentStartsPerParent: 20,
+            agentCommandsPerParent: 2,
             agentHeavyPerHost: 2
           },
           '/bin/claude'
@@ -794,6 +816,7 @@ describe('sessions through the local host', () => {
         agentSessionsPerHost: 12,
         agentDepth: 3,
         agentStartsPerParent: 20,
+        agentCommandsPerParent: 2,
         agentHeavyPerHost: 2
       })
       expect(
@@ -801,13 +824,14 @@ describe('sessions through the local host', () => {
       ).toMatchObject({ browserMcp: true, browserMcpLocalOnly: false, sessionMcp: true })
     })
 
-    it('tells the host the defaults - agents on, 4 children, 8 on the host, 2 deep, 16 starts, 1 heavy - when the user has changed none', () => {
+    it('tells the host the defaults - agents on, 4 children, 8 on the host, 2 deep, 16 starts, 1 heavy, 4 command children - when the user has changed none', () => {
       expect(hostSettingsFor(DEFAULT_SETTINGS, null)).toMatchObject({
         sessionAgents: true,
         agentChildrenPerParent: 4,
         agentSessionsPerHost: 8,
         agentDepth: 2,
         agentStartsPerParent: 16,
+        agentCommandsPerParent: 4,
         agentHeavyPerHost: 1
       })
     })

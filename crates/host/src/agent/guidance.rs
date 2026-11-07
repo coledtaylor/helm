@@ -77,7 +77,7 @@ fn child_section(child: &ChildInstructions) -> String {
 
 fn guide_section(waiting: &str) -> String {
     format!(
-        "# Starting and waiting on agents from your shell\n\nYou can also use `floti agent` from your shell: start, wait and stop, as the floti-agents tools do. {waiting} Add --wait to `floti agent start` to get that child's next news from the same command.\n"
+        "# Starting and waiting on agents from your shell\n\nYou can also use `floti agent` from your shell: start, send, wait, read and stop, as the floti-agents tools do. {waiting} Add --wait to `floti agent start` or `send` to get that child's next news from the same command. For a long command the user should see, such as tests, a build or a dev server, use `floti agent run --name <name> -- <command>` rather than a background command of your own: it runs in your folder in a terminal the user watches, and `floti agent wait <name>` returns its exit code and last 40 lines when it exits. Floti cannot see your own background commands.\n"
     )
 }
 
@@ -147,9 +147,25 @@ mod tests {
         let text = floti_sections(&composition, ANSWERS_AT_ONCE).expect("the guide");
         assert!(text.contains("answers at once"));
         assert!(text.contains("after your next piece of work"));
-        for word in ["start", "wait", "stop"] {
+        for word in ["start", "send", "wait", "read", "stop"] {
             assert!(text.contains(word), "{word}");
         }
+    }
+
+    #[test]
+    fn the_guide_sends_a_long_command_the_user_should_see_through_run() {
+        let composition = Composition {
+            agent_guide: true,
+            ..Composition::default()
+        };
+        let text = floti_sections(&composition, WAKES_ON_BACKGROUND_COMMAND).expect("the guide");
+        assert!(text.contains(
+            "use `floti agent run --name <name> -- <command>` rather than a background command of your own"
+        ));
+        assert!(text.contains("in a terminal the user watches"));
+        assert!(text.contains("returns its exit code and last 40 lines when it exits"));
+        assert!(text.contains("Floti cannot see your own background commands."));
+        assert!(text.contains("Add --wait to `floti agent start` or `send`"));
     }
 
     #[test]

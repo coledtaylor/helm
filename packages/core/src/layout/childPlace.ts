@@ -1,4 +1,4 @@
-import { isChild, type FamilyMember, type UrgentState } from './family'
+import { isChild, isCommandChild, type FamilyMember, type UrgentState } from './family'
 import { familyChildren, familyEntries } from './familyState'
 import { familyOf } from './familyView'
 import { familiesHere, paneId, sessionRef, sessionTabIds, type FamilyRoomOf, type PaneLayout } from './panes'
@@ -10,10 +10,11 @@ import { familiesHere, paneId, sessionRef, sessionTabIds, type FamilyRoomOf, typ
  * here and not found in a window.
  */
 
-/** What these rules read of a session, on top of what the family rules read. */
+/**
+ * What these rules read of a session, on top of what the family rules read. A
+ * command child (`command` is its line) has a glyph, not a dot.
+ */
 export interface ChildMember extends FamilyMember {
-  /** A command a session ran as a child rather than an agent: it has a glyph, not a dot. */
-  command?: boolean | undefined
   /** Whether it was started to keep running when its parent ends. Absent reads as false. */
   outlive?: boolean | undefined
 }
@@ -125,7 +126,7 @@ export interface ChildMark {
 }
 
 export function childMark(child: ChildMember, state: UrgentState | null): ChildMark {
-  return { glyph: child.command === true ? 'command' : 'dot', state }
+  return { glyph: isCommandChild(child) ? 'command' : 'dot', state }
 }
 
 /** One chip in a parent's crumb: the child, and its dot or glyph. */

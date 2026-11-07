@@ -17,7 +17,7 @@ import {
   type SavedPaneLayout
 } from '@helm/core/types'
 import type { TreeSession } from '@helm/ui'
-import { pressTreeSession, treeEntries } from './treeFamilies'
+import { commandRow, pressTreeSession, treeEntries } from './treeFamilies'
 
 /**
  * What the Sessions tree is given for sessions that started sessions: a child's
@@ -28,6 +28,7 @@ import { pressTreeSession, treeEntries } from './treeFamilies'
 interface Listed extends FamilyMember {
   name: string
   cwd: string
+  stopped?: boolean
 }
 
 const session = (
@@ -48,6 +49,67 @@ const rowOf = (listed: Listed): TreeSession => ({
 })
 
 const ids = (rows: readonly TreeSession[] | undefined): string[] => (rows ?? []).map((row) => row.id)
+
+describe('commandRow', () => {
+  const record = (extra: Partial<Listed>): Listed =>
+    session(3, 'tests', '/work/helm', { parentId: 1, parentName: 'api-refactor', ...extra })
+
+  it('S24: marks a command child with its command and a state of running, ended or failed from its record', () => {
+    const command = 'pnpm test'
+    expect(commandRow(record({ command, exitCode: null }))).toEqual({ command: true, state: 'running', note: 'running' })
+    expect(commandRow(record({ command, status: 'exited', exitCode: 0 }))).toEqual({
+      command: true,
+      state: 'ended',
+      note: 'exited 0'
+    })
+    expect(commandRow(record({ command, status: 'exited', exitCode: 1 }))).toEqual({
+      command: true,
+      state: 'failed',
+      note: 'exited 1'
+    })
+    expect(commandRow(record({ command, status: 'exited', exitCode: 130 }))).toEqual({
+      command: true,
+      state: 'failed',
+      note: 'exited 130'
+    })
+  })
+
+  it('reads a command child the host stopped as stopped, not as the number the system gave it', () => {
+    expect(commandRow(record({ command: 'pnpm test', status: 'exited', exitCode: 2147483647, stopped: true }))).toEqual({
+      command: true,
+      state: 'ended',
+      note: 'stopped'
+    })
+  })
+
+  it('reads a command child that ended with no code observed as ended, as an agent would be', () => {
+    expect(commandRow(record({ command: 'make', status: 'lost', exitCode: null }))).toEqual({
+      command: true,
+      state: 'ended',
+      note: 'ended'
+    })
+  })
+
+  it('marks no agent child, and none whose command is empty', () => {
+    expect(commandRow(record({}))).toBeNull()
+    expect(commandRow(record({ command: null }))).toBeNull()
+    expect(commandRow(record({ command: '' }))).toBeNull()
+  })
+
+  it('carries the mark into the row a command child is nested as under its parent', () => {
+    const entries = treeEntries(
+      [
+        session(1, 'api-refactor', '/work/helm'),
+        record({ command: 'pnpm test', status: 'exited', exitCode: 1 })
+      ],
+      (listed) => ({ ...rowOf(listed), ...commandRow(listed) })
+    )
+    const nested = entries[0]?.row.nested ?? []
+    expect(nested).toHaveLength(1)
+    expect(nested[0]).toMatchObject({ id: 'session:3', command: true, state: 'failed' })
+    expect(entries[0]?.row.command).toBeUndefined()
+  })
+})
 
 describe('treeEntries', () => {
   it('S18: nests a child under its parent whatever folder either runs in', () => {

@@ -170,6 +170,7 @@ impl Sessions {
                 last: first,
             }),
         });
+        hosted.use_activity_reader(ActivityHandle(Arc::clone(&reader)));
         let watcher = Arc::clone(&reader);
         std::thread::Builder::new()
             .name("session activity".to_owned())
@@ -453,7 +454,7 @@ fn read_activity(hosted: &Hosted, tracker: &mut ActivityTracker) -> Activity {
         hosted.note_conversation(*id, conversation);
     }
     // What each agent's child is doing is news for its parent.
-    hosted.observe_activity(&views, &pass.states);
+    hosted.observe_activity(&views, &pass.states, &pass.overview);
     Activity {
         states: pass.states,
         overview: pass.overview,

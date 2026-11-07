@@ -207,6 +207,45 @@ describe('endedHeaderText', () => {
     expect(endedHeaderText({ status: 'lost', endedAt: at(23, 0) })).toBe('Lost · 23:00')
   })
 
+  it('says exited and the code for a command child that exited on its own, with the time of day', () => {
+    const command = 'pnpm test'
+    expect(endedHeaderText({ status: 'exited', command, exitCode: 0, endedAt: at(14, 52) })).toBe('exited 0 · 14:52')
+    expect(endedHeaderText({ status: 'exited', command, exitCode: 1, endedAt: at(9, 5) })).toBe('exited 1 · 09:05')
+    expect(endedHeaderText({ status: 'exited', command, exitCode: 3, stopped: false, endedAt: at(9, 5) })).toBe(
+      'exited 3 · 09:05'
+    )
+  })
+
+  it('says Stopped, not a number, for a command child the host ended', () => {
+    const command = 'pnpm test'
+    // The system's number for a process it killed (a Windows termination code,
+    // clamped by the host) is not the command's exit code.
+    const killed = { status: 'exited', command, exitCode: 2147483647, stopped: true, endedAt: at(9, 5) }
+    expect(endedHeaderText(killed)).toBe('Stopped · 09:05')
+    expect(endedHeaderText(killed, true)).toBe('Stopped by you · 09:05')
+    expect(endedHeaderText({ ...killed, exitCode: 137 })).toBe('Stopped · 09:05')
+  })
+
+  it('says exited and the code without a time when it never saw the command end', () => {
+    expect(endedHeaderText({ status: 'exited', command: 'make', exitCode: 2, endedAt: null })).toBe('exited 2')
+    expect(endedHeaderText({ status: 'exited', command: 'make', exitCode: 0, endedAt: 'not a time' })).toBe('exited 0')
+  })
+
+  it('tells a command child whose code was never observed as an agent would be', () => {
+    expect(endedHeaderText({ status: 'exited', command: 'make', exitCode: null, endedAt: at(14, 52) })).toBe(
+      'Done · 14:52'
+    )
+    expect(endedHeaderText({ status: 'exited', command: 'make', stopped: true, endedAt: at(14, 52) })).toBe(
+      'Stopped · 14:52'
+    )
+    expect(endedHeaderText({ status: 'lost', command: 'make', endedAt: null })).toBe('Lost')
+  })
+
+  it('does not read an exit code as a command’s for an agent child', () => {
+    expect(endedHeaderText({ status: 'exited', exitCode: 1, endedAt: at(14, 52) })).toBe('Done · 14:52')
+    expect(endedHeaderText({ status: 'exited', command: null, exitCode: 0, endedAt: at(14, 52) })).toBe('Done · 14:52')
+  })
+
   it('leaves the time off when it never saw one end rather than guessing', () => {
     expect(endedHeaderText({ status: 'exited', stopped: true, endedAt: null })).toBe('Stopped')
     expect(endedHeaderText({ status: 'exited', endedAt: 'not a time' })).toBe('Done')

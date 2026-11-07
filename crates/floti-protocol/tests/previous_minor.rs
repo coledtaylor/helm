@@ -12,9 +12,9 @@ use floti_protocol::channels::sessions::{
     SessionStreamOpen,
 };
 use floti_protocol::channels::workspace::{
-    DEFAULT_AGENT_CHILDREN_PER_PARENT, DEFAULT_AGENT_DEPTH, DEFAULT_AGENT_HEAVY_PER_HOST,
-    DEFAULT_AGENT_SESSIONS_PER_HOST, DEFAULT_AGENT_STARTS_PER_PARENT, DEFAULT_SESSION_AGENTS,
-    HostSettings, HostSettingsPatch,
+    DEFAULT_AGENT_CHILDREN_PER_PARENT, DEFAULT_AGENT_COMMANDS_PER_PARENT, DEFAULT_AGENT_DEPTH,
+    DEFAULT_AGENT_HEAVY_PER_HOST, DEFAULT_AGENT_SESSIONS_PER_HOST, DEFAULT_AGENT_STARTS_PER_PARENT,
+    DEFAULT_SESSION_AGENTS, HostSettings, HostSettingsPatch,
 };
 use floti_protocol::record::{self, records, records_dir};
 use floti_protocol::version::negotiate;
@@ -249,6 +249,73 @@ fn s31_a_2_0_record_read_by_a_2_1_client_has_no_parent_and_no_role() {
     );
     assert_eq!(read.name, "helm-3");
     assert_eq!(read.profile_id, Some(4));
+}
+
+/// A command child that has exited: it names its command, not a role, and its
+/// exit code is the record's.
+fn command_child(parent: &SessionRecord, code: i32) -> SessionRecord {
+    SessionRecord {
+        name: "tests".into(),
+        role: None,
+        command: Some("pnpm test --filter core".into()),
+        status: SessionStatus::Exited,
+        ended_at: Some("2026-10-03T14:52:00Z".into()),
+        exit_code: Some(code),
+        ..child_of(parent)
+    }
+}
+
+#[test]
+fn s23_a_client_on_2_1_reads_a_command_childs_command_and_exit_code_and_an_agent_child_carries_no_command()
+ {
+    let parent = session_v21();
+
+    let read: SessionRecord =
+        from_payload(&to_payload(&command_child(&parent, 3)).unwrap()).unwrap();
+    assert_eq!(read.command.as_deref(), Some("pnpm test --filter core"));
+    assert_eq!(read.exit_code, Some(3));
+    assert_eq!(read.role, None);
+    assert_eq!(read.parent_id, Some(parent.id));
+
+    // A command child still running has no exit code to carry yet.
+    let running = SessionRecord {
+        status: SessionStatus::Running,
+        ended_at: None,
+        exit_code: None,
+        ..command_child(&parent, 0)
+    };
+    let read: SessionRecord = from_payload(&to_payload(&running).unwrap()).unwrap();
+    assert_eq!(read.command.as_deref(), Some("pnpm test --filter core"));
+    assert_eq!(read.exit_code, None);
+
+    // An agent child, and a session nobody started, carry none: null on the
+    // wire, never a made-up value.
+    for session in [child_of(&parent), parent.clone()] {
+        let read: SessionRecord = from_payload(&to_payload(&session).unwrap()).unwrap();
+        assert_eq!(read.command, None);
+        assert_eq!(
+            serde_json::to_value(&session).unwrap()["command"],
+            Value::Null
+        );
+    }
+}
+
+#[test]
+fn s23_a_2_0_client_reads_every_field_it_knows_of_a_command_childs_record() {
+    let child = command_child(&session_v21(), 0);
+    let read: SessionRecordV20 = from_payload(&to_payload(&child).unwrap())
+        .expect("a 2.0 client reads a 2.1 record of a command child");
+    assert_eq!(read.id, child.id);
+    assert_eq!(read.name, "tests");
+    assert_eq!(read.status, SessionStatus::Exited);
+    assert_eq!(read.exit_code, Some(0));
+    assert_eq!(read.ended_at.as_deref(), Some("2026-10-03T14:52:00Z"));
+}
+
+#[test]
+fn s23_a_record_from_a_host_before_2_1_reads_as_no_command() {
+    let read: SessionRecord = from_payload(&to_payload(&session_v20()).unwrap()).unwrap();
+    assert_eq!(read.command, None);
 }
 
 fn stopped_child(parent: &SessionRecord) -> SessionRecord {
@@ -527,6 +594,11 @@ fn settings_from_a_host_before_2_1_read_as_the_defaults() {
         ),
         (8, 2, 16, 1)
     );
+    assert_eq!(
+        read.agent_commands_per_parent,
+        DEFAULT_AGENT_COMMANDS_PER_PARENT
+    );
+    assert_eq!(DEFAULT_AGENT_COMMANDS_PER_PARENT, 4);
     assert_eq!(read.scan_roots, vec!["C:\\work".to_owned()]);
 }
 
@@ -544,9 +616,10 @@ fn a_2_0_clients_settings_patch_changes_none_of_the_agents_settings() {
             patch.agent_sessions_per_host,
             patch.agent_depth,
             patch.agent_starts_per_parent,
+            patch.agent_commands_per_parent,
             patch.agent_heavy_per_host
         ),
-        (None, None, None, None, None, None)
+        (None, None, None, None, None, None, None)
     );
     // A patch that sets none of them does not say them either.
     let said = serde_json::to_value(&patch).unwrap();
@@ -556,6 +629,7 @@ fn a_2_0_clients_settings_patch_changes_none_of_the_agents_settings() {
         "agentSessionsPerHost",
         "agentDepth",
         "agentStartsPerParent",
+        "agentCommandsPerParent",
         "agentHeavyPerHost",
     ] {
         assert!(said.get(key).is_none(), "{key} in {said}");
@@ -655,6 +729,7 @@ fn protocol_2_1_adds_only_optional_fields_and_these_are_all_of_them() {
         (
             "SessionRecord",
             vec![
+                "command",
                 "lastReport",
                 "outlive",
                 "parentId",
@@ -674,6 +749,7 @@ fn protocol_2_1_adds_only_optional_fields_and_these_are_all_of_them() {
                 "agentSessionsPerHost",
                 "agentDepth",
                 "agentStartsPerParent",
+                "agentCommandsPerParent",
                 "agentHeavyPerHost",
             ],
         ),
@@ -685,6 +761,7 @@ fn protocol_2_1_adds_only_optional_fields_and_these_are_all_of_them() {
                 "agentSessionsPerHost",
                 "agentDepth",
                 "agentStartsPerParent",
+                "agentCommandsPerParent",
                 "agentHeavyPerHost",
             ],
         ),

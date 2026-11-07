@@ -5758,6 +5758,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "agentCommandsPerParent": {
+          "default": 4,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "agentDepth": {
           "default": 2,
           "format": "uint32",
@@ -5849,6 +5855,14 @@
     "HostSettingsPatch": {
       "properties": {
         "agentChildrenPerParent": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "agentCommandsPerParent": {
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -10030,6 +10044,13 @@
           "$ref": "#/$defs/BackendId"
         },
         "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "command": {
+          "default": null,
           "type": [
             "string",
             "null"

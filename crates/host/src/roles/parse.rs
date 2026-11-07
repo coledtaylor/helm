@@ -15,6 +15,7 @@ use floti_protocol::channels::sessions::EffortLevel;
 use serde_yaml_ng::{Mapping, Value};
 
 use super::{Role, RoleClass};
+use crate::agent::input::key_bytes;
 use crate::workspace::render::frontmatter::parse_note_frontmatter;
 
 /// The fields a role file has.
@@ -97,8 +98,8 @@ fn apply(role: &mut Role, key: &str, value: &Value) -> Result<(), String> {
         "allowed_tools" => role.allowed_tools = list(key, value)?,
         "disallowed_tools" => role.disallowed_tools = list(key, value)?,
         "command" => role.command = text(key, value)?,
-        "submit" => role.submit = text(key, value)?,
-        "stop" => role.stop = text(key, value)?,
+        "submit" => role.submit = key_word(key, value)?,
+        "stop" => role.stop = key_word(key, value)?,
         other => {
             return Err(format!(
                 "{other} is not a field a role has (the fields are {})",
@@ -116,6 +117,17 @@ fn text(key: &str, value: &Value) -> Result<Option<String>, String> {
         Value::String(text) => Ok(Some(text.trim().to_owned()).filter(|text| !text.is_empty())),
         _ => Err(format!("{key} must be text")),
     }
+}
+
+/// A text field naming a key (`enter`, `ctrl-c`): the word must be one
+/// ([`key_bytes`]), so a typo is a problem with the file and never a key that
+/// quietly presses nothing.
+fn key_word(key: &str, value: &Value) -> Result<Option<String>, String> {
+    let word = text(key, value)?;
+    if let Some(word) = &word {
+        key_bytes(word).map_err(|problem| format!("{key}: {problem}"))?;
+    }
+    Ok(word)
 }
 
 /// `yes`, `no`, `true` or `false`.

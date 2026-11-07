@@ -162,6 +162,8 @@ export {
   PaneGroup,
   paneName,
   type CrumbChip,
+  type CrumbParent,
+  type CrumbTag,
   type CrumbTone,
   type PaneCrumbProps,
   type PaneGroupProps

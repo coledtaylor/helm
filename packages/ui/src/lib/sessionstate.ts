@@ -54,7 +54,12 @@ export const SESSION_STATE_DOT: Record<SessionState, string> = {
   error: 'bg-danger'
 }
 
-/** A command's glyph takes the tone a dot would: it runs, it has ended, or it failed. */
+/**
+ * The tone of a command child's terminal glyph, which takes the tone a dot
+ * would: success while it runs, fg-subtle once it exited 0 (or its end was all
+ * that was seen), danger for any other exit code. The Sessions tree's row and
+ * the family view's header both draw the glyph, and both take it from here.
+ */
 export function commandTone(state: SessionState | null): string {
   if (state === 'failed') return 'text-danger'
   if (state === null || state === 'ended') return 'text-fg-subtle'

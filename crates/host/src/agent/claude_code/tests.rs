@@ -2762,3 +2762,65 @@ fn the_fake_fails_as_the_cli_does_on_a_missing_file_and_reads_variadic_lists_as_
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("error:"));
 }
+
+#[test]
+fn claude_code_takes_text_as_a_paste_submitted_by_enter_and_stopped_by_escape_after_its_recorded_pause()
+ {
+    let input = World::new().backend.input().expect("it takes typed turns");
+    assert_eq!(input.submit, b"\r");
+    assert_eq!(input.stop.as_deref(), Some(&b"\x1b"[..]));
+    assert_eq!(input.pause, INPUT_PAUSE);
+    assert_eq!(INPUT_PAUSE, Duration::from_millis(250));
+    assert_eq!(INPUT_PAUSE_RECORDED_ON, "2.1.319");
+    assert_eq!(
+        input.paste("one\ntwo"),
+        b"\x1b[200~one\ntwo\x1b[201~".to_vec()
+    );
+}
+
+#[test]
+fn a_launch_with_the_agents_family_allows_start_send_wait_read_and_stop_each_on_its_own_and_never_run_or_a_wildcard()
+ {
+    use crate::server::floti_agents::allowances::{launch_server, too_broad, values_after};
+
+    let world = World::new();
+    let (launch, _folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "child".into(),
+        composition: Composition {
+            agent_tools: vec![launch_server()],
+            // The user's own deny rule on one of them.
+            disallowed_tools: vec!["Bash(floti agent send:*)".into()],
+            ..Composition::default()
+        },
+        prompt: Some("go".into()),
+    });
+    let args = world.args(&launch);
+    let broad = too_broad(&args);
+    assert!(
+        broad.is_empty(),
+        "this launch allows more of floti agent than the five commands named on their own: {broad:?}"
+    );
+    let allowed = values_after(&args, "--allowedTools");
+    let commands: Vec<&String> = allowed
+        .iter()
+        .filter(|rule| rule.starts_with("Bash("))
+        .collect();
+    assert_eq!(
+        commands,
+        [
+            "Bash(floti agent start:*)",
+            "Bash(floti agent send:*)",
+            "Bash(floti agent wait:*)",
+            "Bash(floti agent read:*)",
+            "Bash(floti agent stop:*)",
+        ]
+    );
+    assert!(allowed.contains(&"mcp__floti-agents__agents_send".to_owned()));
+    // The deny rule is passed beside the allow rule, and the CLI lets a deny
+    // rule win.
+    assert_eq!(
+        values_after(&args, "--disallowedTools"),
+        ["Bash(floti agent send:*)"]
+    );
+}

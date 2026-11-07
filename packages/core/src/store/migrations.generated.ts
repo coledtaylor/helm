@@ -180,7 +180,13 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
     ]
   },
   {
-    "tag": "0022_abnormal_miss_america",
+    "tag": "0022_concerned_gwen_stacy",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `command` text;"
+    ]
+  },
+  {
+    "tag": "0023_third_the_liberteens",
     "statements": [
       "CREATE TABLE `notices` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`kind` text NOT NULL,\n\t`parent_session_id` integer NOT NULL,\n\t`parent_name` text NOT NULL,\n\t`child_session_id` integer,\n\t`child_name` text,\n\t`text` text NOT NULL,\n\t`limit_kind` text,\n\t`allow_more` integer,\n\t`since` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);",
       "CREATE INDEX `notices_parent_idx` ON `notices` (`parent_session_id`);",

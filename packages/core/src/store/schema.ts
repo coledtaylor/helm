@@ -265,6 +265,12 @@ export const sessions = sqliteTable(
     childName: text('child_name'),
     /** The role it was started in, or null for none. */
     role: text('role'),
+    /**
+     * The command line a command child runs, as its parent gave it after `--`,
+     * or null for every other session. The child's exit code is the row's
+     * `exit_code`.
+     */
+    command: text('command'),
     /** Whether it keeps running when its parent ends. */
     outlive: integer('outlive', { mode: 'boolean' }).notNull().default(false),
     /** Whether it may start children of its own (the second generation). */

@@ -113,14 +113,20 @@ impl ServerHandler for FamilyServer {
         let delivery = parts
             .and_then(|parts| parts.extensions.get::<Delivery>().cloned())
             .unwrap_or_default();
-        // The tools this caller is listed: one it is not listed is one the
-        // family does not have.
-        if !self
+        // The tools this caller is listed, and those only its shell may call:
+        // one it is not given is one the family does not have.
+        let listed = self
             .family
             .tools_for(caller)
             .iter()
-            .any(|tool| tool.name == request.name)
-        {
+            .any(|tool| tool.name == request.name);
+        let from_shell = caller.shell
+            && self
+                .family
+                .shell_tools()
+                .iter()
+                .any(|name| *name == request.name);
+        if !listed && !from_shell {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "{} has no tool named {}.",
                 self.family.name(),

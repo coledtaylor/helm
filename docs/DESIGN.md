@@ -480,16 +480,34 @@ overrides the gate; keep it.
   identical in the strip - or "shared", for a page of yours a session may
   drive. The page itself says which session can drive it in a 30px
   `accent-soft` note above it, `accent-text`, with a secondary "Stop sharing"
-  when the user shared it. A strip with no tabs and no actions is **not drawn**.
+  when the user shared it. A child session's tab (started by another session)
+  carries the same word: the name of the session that started it, which also
+  ends the tab's accessible name ("reviewer, working, started by
+  api-refactor"), because the badge is drawn and not read. A command
+  child's tab has the 12px terminal glyph in place of the dot, in the family
+  header's tones (`commandTone`), and says "running", "exited <code>" or "stopped" to a
+  screen reader. A strip with no tabs and no actions is **not drawn**.
 - **The crumb row**: under a session's tab, 26px of mono `fg-subtle` naming
   where it is - project `›` branch `·` profile - and, at the right in Inter,
   what it is doing and for how long, in its state's tone ("Working · 4m" in
-  `accent-text`, "Needs you · 2m" in `warn`). It is the branch's home now that
+  `accent-text`, "Needs you · 2m" in `warn`, "Idle · 1m" in `success`, as the
+  family header says it). It is the branch's home now that
   tabs are one line: two sessions on one project are told apart here, with the
   room to say the branch in full. A page's tab has no crumb - the page's own
-  header names what it is about. A parent shown alone, with no room for its
-  family view, also carries its children as chips here (below, "A parent shown
-  alone has its children in its crumb").
+  header names what it is about. A child's own tab (started by another
+  session with the host's agent tools) begins its crumb, before the place, with
+  its tag and a `for <parent>` link: the tag of a command child reads
+  "command" in `fg-muted` on a 1px `border-strong` ring with no fill (as the
+  family header's; the ring is an inset shadow, so the pill is 16px tall with
+  7px of padding), an agent child's names its role in `accent-text` on
+  `accent-soft`, and a child with no role has no tag. The link is Inter 11px
+  `fg-muted`, `fg` and underlined on hover, with the page's focus ring;
+  pressing it brings the parent's tab forward or opens one. The row's gap is
+  8px and the link sits 3px nearer the tag. Where the window
+  does not list the parent, "for <parent>" is plain text, not a button. A
+  parent shown alone, with no room for its family view, also carries its
+  children as chips here (below, "A parent shown alone has its children in its
+  crumb").
 - **The session tab's state dot.** A session tab carries a 6px dot in place of
   a kind icon, and it says two different kinds of thing: what Helm knows about
   the process, and what the session says about itself. Claude Code publishes its
@@ -654,8 +672,9 @@ overrides the gate; keep it.
   found" in `warn`. The two versions lead because they are what the bar is read
   for when something is off. After another hairline come your sessions, each
   count with its dot ("2 working", "1 needs you" in `warn`, "1 in error" in
-  `danger` for a session whose program reports an error, "2 idle" with the
-  idle ring), or "No sessions running". On the right, the plan's usage. The scan
+  `danger` for a session whose program reports an error, "1 running" with a
+  filled `success` dot for a command child whose command still runs, "2 idle"
+  with the idle ring), or "No sessions running". On the right, the plan's usage. The scan
   time is in Settings: it is a fact about Helm nobody acts on.
 - **Section labels**: the 10px/600 caps label style, everywhere a section
   needs a name.
@@ -912,7 +931,16 @@ overrides the gate; keep it.
   as a 10px tag in `accent-text` on `accent-soft`, the state and for how long
   at the right in 10.5px `fg-muted` ("Working · 4m"), then **Open as tab** and
   **Stop** as 10.5px buttons in `border-strong`, Stop in `danger` with a
-  `danger` edge at 45%. Pressing the words shrinks the card; Stop asks first, in the
+  `danger` edge at 45%. A command child (`floti agent run`) has `CommandChildIcon`, 12px, where the dot
+  would be, in `success` while it runs, `fg-subtle` once it exited 0 and `danger`
+  for any other code (the dot's tones, `commandTone`), on a card, a shrunk
+  header and an ended header alike; its tag reads "command" in `fg-muted` on a
+  1px `border-strong` ring with no fill, where an agent's names its role, its
+  running header counts its seconds ("Running · 5s", then "Running · 1m" from
+  a minute on), and its ended header reads "exited 0 · 14:52" ("exited <code> · <time>") with
+  **Close**; a command the host ended (Stop, its parent, the host) reads
+  "Stopped · 14:52" ("Stopped by you" after this window's Stop) in `fg-subtle`,
+  because the number a system gives a process it killed is not an exit code. Pressing the words shrinks the card; Stop asks first, in the
   window's one question for ending a running session ("*name* is still running
   on *host*. Ending it stops the Claude Code session in *folder*. *Parent*,
   which started it, is told.", End session / Cancel, Cancel focused; the

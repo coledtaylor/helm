@@ -497,6 +497,7 @@ describe('the link to the local host', () => {
           agentSessionsPerHost: 8,
           agentDepth: 2,
           agentStartsPerParent: 16,
+          agentCommandsPerParent: 4,
           agentHeavyPerHost: 1
         })
       ])

@@ -111,6 +111,8 @@ interface HarnessProps {
   enabled?: boolean
   /** The children that run a command and not an agent. */
   commands?: number[]
+  /** The window's clock, which can be older than the real time. */
+  now?: number
   onStop?: (id: number) => Promise<boolean> | void
 }
 
@@ -120,6 +122,7 @@ function Harness({
   front = true,
   enabled = true,
   commands = [],
+  now = NOW,
   onStop = vi.fn()
 }: HarnessProps): JSX.Element {
   const [panes, setPanes] = useState(START)
@@ -145,7 +148,7 @@ function Harness({
         own={parent}
         kids={kids}
         family={familyOf(panes, TAB)}
-        now={NOW}
+        now={now}
         windowsBuild={null}
         arrange={setPanes}
         onStop={onStop}
@@ -399,6 +402,145 @@ describe('a parent’s tab with children', () => {
     expect(within(header as HTMLElement).queryByRole('button', { name: /Stop reviewer/ })).toBeNull()
     // Its terminal is kept for the last screen, but no card holds it.
     expect(view.container.querySelector('[data-family-cards]')!.contains(getTerminal(2)!.element)).toBe(false)
+  })
+
+  describe('a command child', () => {
+    const exited = (id: number, name: string, code: number): SessionRecord =>
+      child(id, name, {
+        command: 'pnpm test',
+        status: 'exited',
+        exitCode: code,
+        endedAt: new Date(2026, 9, 29, 14, 52).toISOString()
+      })
+
+    it('S25 S26: has the terminal glyph in success where an agent has its dot and the command tag on its card while it runs', () => {
+      const view = mount(WIDE, [LEAD, child(2, 'reviewer', { role: 'reviewer' }), child(3, 'tests', { command: 'pnpm test', role: null })])
+
+      const tests = card(view.container, 'tests')
+      expect(tests.querySelector('[data-family-command="running"]')!.className).toContain('text-success')
+      expect(tests.querySelector('[data-family-dot]')).toBeNull()
+      expect(tests.querySelector('[data-family-role]')!.textContent).toBe('command')
+      const reviewer = card(view.container, 'reviewer')
+      expect(reviewer.querySelector('[data-family-command]')).toBeNull()
+      expect(reviewer.querySelector('[data-family-role]')!.textContent).toBe('reviewer')
+    })
+
+    it('S25: says how long a command has run on its card, from when it started', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      try {
+        const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test', startedAt: new Date(NOW - 4 * MINUTE).toISOString() })])
+
+        expect(card(view.container, 'tests').querySelector('[data-family-status]')!.textContent).toBe('Running · 4m')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('S25: counts a command’s seconds from the real time, not from the window’s clock, which can be 30 seconds old', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      try {
+        const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test', startedAt: new Date(NOW - 25_000).toISOString() })], {
+          now: NOW - 25_000
+        })
+        const status = (): string | null => card(view.container, 'tests').querySelector('[data-family-status]')!.textContent
+
+        expect(status()).toBe('Running · 25s')
+        act(() => {
+          vi.advanceTimersByTime(4_000)
+        })
+        expect(status()).toBe('Running · 29s')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('S25: counts a command’s seconds on its card until it has run a minute, and keeps counting while it runs', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      try {
+        const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test', startedAt: new Date(NOW - 5_000).toISOString() })])
+        const status = (): string | null => card(view.container, 'tests').querySelector('[data-family-status]')!.textContent
+
+        expect(status()).toBe('Running · 5s')
+        act(() => {
+          vi.advanceTimersByTime(3_000)
+        })
+        expect(status()).toBe('Running · 8s')
+        act(() => {
+          vi.advanceTimersByTime(60_000)
+        })
+        expect(status()).toBe('Running · 1m')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('S25 S27: shrinks to an ended header with the glyph in fg-subtle reading exited 0 and the time, with Close', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
+      view.list([LEAD, exited(3, 'tests', 0)])
+
+      const header = view.container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+      expect(header.querySelector('[data-family-status]')!.textContent).toBe('exited 0 · 14:52')
+      expect(header.querySelector('[data-family-command="ended"]')!.className).toContain('text-fg-subtle')
+      expect(header.querySelector('[data-family-dot]')).toBeNull()
+      expect(within(header).getByRole('button', { name: 'Close tests' })).toBeTruthy()
+      expect(within(header).queryByRole('button', { name: /Stop tests/ })).toBeNull()
+    })
+
+    it('S25 S27: a command that failed has the glyph in danger and reads exited with its code', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
+      view.list([LEAD, exited(3, 'tests', 137)])
+
+      const header = view.container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+      expect(header.querySelector('[data-family-status]')!.textContent).toBe('exited 137 · 14:52')
+      expect(header.querySelector('[data-family-command="failed"]')!.className).toContain('text-danger')
+    })
+
+    it('S25 S27: a command the host ended reads Stopped with the glyph in fg-subtle, not the number the system gave it', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
+      view.list([
+        LEAD,
+        child(3, 'tests', {
+          command: 'pnpm test',
+          status: 'exited',
+          exitCode: 2147483647,
+          stopped: true,
+          endedAt: new Date(2026, 9, 29, 14, 52).toISOString()
+        })
+      ])
+
+      const header = view.container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+      expect(header.querySelector('[data-family-status]')!.textContent).toBe('Stopped · 14:52')
+      expect(header.querySelector('[data-family-command="ended"]')!.className).toContain('text-fg-subtle')
+      expect(header.querySelector('[data-family-command]')!.getAttribute('title')).toBe('stopped')
+    })
+
+    it('S33: its glyph says running while it runs and exited <code> once it exited, as the header does', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
+      expect(card(view.container, 'tests').querySelector('[data-family-command]')!.getAttribute('title')).toBe('running')
+      view.list([LEAD, exited(3, 'tests', 137)])
+
+      const header = view.container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+      expect(header.querySelector('[data-family-command]')!.getAttribute('title')).toBe('exited 137')
+    })
+
+    it('S25: a command child shrunk to a header keeps its glyph in the dot’s place and has no tag', () => {
+      const { container } = mount(SHORT, [
+        LEAD,
+        child(2, 'alpha'),
+        child(3, 'beta'),
+        child(4, 'gamma'),
+        child(5, 'tests', { command: 'pnpm test' })
+      ])
+
+      expect(headerNames(container)).toEqual(['gamma', 'tests'])
+      const headers = container.querySelector<HTMLElement>('[data-family-headers]')!
+      expect(headers.querySelectorAll('[data-family-dot]')).toHaveLength(1)
+      expect(headers.querySelectorAll('[data-family-command="running"]')).toHaveLength(1)
+      expect(headers.querySelector('[data-family-role]')).toBeNull()
+    })
   })
 
   it('S17: leaves every ended child’s header its row, though the pane had room for a card for each child', () => {

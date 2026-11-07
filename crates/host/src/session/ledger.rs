@@ -79,6 +79,9 @@ pub struct ParentLink {
     pub name: String,
     /// The role it was started in.
     pub role: Option<String>,
+    /// The command line it runs, for a command child; null for every other
+    /// session.
+    pub command: Option<String>,
     /// Whether it keeps running when its parent ends.
     pub outlive: bool,
     /// Whether it may start children of its own.
@@ -98,6 +101,12 @@ pub trait SessionLedger: Send + Sync {
     /// running is left as it is. The host no longer lists the session by
     /// then.
     fn finished(&self, id: SessionId, exit: &SessionExit) -> Result<()>;
+
+    /// Hands the ledger the last lines of text on session `id`'s screen, just
+    /// before its end is recorded and the screen goes: a command child's
+    /// parent is told them with its exit. A ledger that keeps none does
+    /// nothing.
+    fn screen_ended(&self, _id: SessionId, _last_lines: Vec<String>) {}
 
     /// Records that the host is about to end session `id` itself - a close, a
     /// stop, its parent ending, a quit - before its program exits, so the
@@ -134,10 +143,10 @@ impl SessionLedger for Mutex<Store> {
             .query_row(
                 "INSERT INTO sessions (name, cwd, argv, claude_session_id, backend, \
                  project_path, profile_id, permission_mode, branch, parent_session_id, \
-                 parent_conversation_id, child_name, role, outlive, can_start, child_class, \
-                 child_worktree, remote_control_name, status) \
+                 parent_conversation_id, child_name, role, command, outlive, can_start, \
+                 child_class, child_worktree, remote_control_name, status) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                 ?16, ?17, ?18, 'running') RETURNING id",
+                 ?16, ?17, ?18, ?19, 'running') RETURNING id",
                 params![
                     row.name,
                     row.cwd.to_string_lossy(),
@@ -152,6 +161,7 @@ impl SessionLedger for Mutex<Store> {
                     parent.and_then(|link| link.conversation_id.as_deref()),
                     parent.map(|link| link.name.as_str()),
                     parent.and_then(|link| link.role.as_deref()),
+                    parent.and_then(|link| link.command.as_deref()),
                     parent.is_some_and(|link| link.outlive),
                     parent.is_some_and(|link| link.can_start),
                     parent.map(|link| if link.heavy { "heavy" } else { "light" }),

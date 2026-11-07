@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionActivity, SessionActivityState, SessionRecord } from '@helm/core/types'
-import { childStatus, crumbStatus, indicatorOf, sessionNote, statusCounts, statusHint } from './sessionView'
+import { childCrumb, childStatus, childTab, crumbStatus, indicatorOf, sessionNote, statusCounts, statusHint } from './sessionView'
 
 function session(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -31,6 +31,62 @@ function said(
 }
 
 const MINUTE = 60_000
+
+describe('the crumb of a session that handed control back', () => {
+  const now = Date.parse('2026-10-02T12:00:00.000Z')
+
+  it('says Idle with how long, as the card’s header does, for ready and for background task still running', () => {
+    expect(crumbStatus(session(), 'idle', now - MINUTE, now)).toEqual({ text: 'Idle · 1m', tone: 'success' })
+    expect(crumbStatus(session(), 'shell', now - MINUTE, now)).toEqual({ text: 'Idle · 1m', tone: 'success' })
+    expect(crumbStatus(session(), 'idle', now - 20 * MINUTE, now).text).toBe(childStatus(session(), 'idle', now - 20 * MINUTE, now))
+  })
+
+  it('says Idle alone where no time is known', () => {
+    expect(crumbStatus(session(), 'idle', null, now)).toEqual({ text: 'Idle', tone: 'success' })
+    expect(crumbStatus(session(), 'shell', null, now).text).toBe('Idle')
+  })
+})
+
+describe('childTab', () => {
+  const command = { command: 'pnpm test', parentName: 'api-refactor' }
+
+  it('draws a command child as the terminal glyph in the glyph’s state, saying running or exited <code>', () => {
+    expect(childTab(session({ ...command }), 'busy')).toEqual({
+      indicator: 'running',
+      command: true,
+      stateWord: 'running',
+      badge: 'api-refactor',
+      startedBy: 'api-refactor'
+    })
+    expect(childTab(session({ ...command, status: 'exited', exitCode: 0 }), 'ended')).toMatchObject({
+      indicator: 'ended',
+      stateWord: 'exited 0'
+    })
+    expect(childTab(session({ ...command, status: 'exited', exitCode: 2 }), 'failed')).toMatchObject({
+      indicator: 'failed',
+      stateWord: 'exited 2'
+    })
+  })
+
+  it('says stopped, in the ended glyph, for a command child the host ended', () => {
+    expect(
+      childTab(session({ ...command, status: 'exited', exitCode: 2147483647, stopped: true }), 'failed')
+    ).toMatchObject({ indicator: 'ended', stateWord: 'stopped' })
+  })
+
+  it('keeps an agent child’s own dot and gives it the parent’s name as its badge', () => {
+    expect(childTab(session({ role: 'reviewer', parentName: 'api-refactor' }), 'busy')).toEqual({
+      indicator: 'busy',
+      badge: 'api-refactor',
+      startedBy: 'api-refactor'
+    })
+  })
+
+  it('gives a session nobody started no badge', () => {
+    expect(childTab(session(), 'idle')).toEqual({ indicator: 'idle' })
+    expect(childTab(session({ parentName: '' }), 'idle')).toEqual({ indicator: 'idle' })
+  })
+})
 
 describe('indicatorOf', () => {
   it('paints a running session with what its record says it is doing', () => {
@@ -77,9 +133,14 @@ describe('what the tree row and the crumb say', () => {
     expect(crumbStatus(session(), 'busy', now - 90 * MINUTE, now)).toEqual({ text: 'Working · 1h', tone: 'accent' })
     expect(crumbStatus(session(), 'idle', null, now)).toEqual({ text: 'Idle', tone: 'success' })
     expect(crumbStatus(session(), 'running', null, now)).toEqual({ text: 'Running', tone: 'subtle' })
+    expect(crumbStatus(session(), 'running', now - 4 * MINUTE, now)).toEqual({ text: 'Running · 4m', tone: 'subtle' })
+    expect(crumbStatus(session(), 'running', now - 10_000, now)).toEqual({ text: 'Running · 10s', tone: 'subtle' })
+    expect(crumbStatus(session(), 'running', now - 59_999, now).text).toBe('Running · 59s')
+    expect(crumbStatus(session(), 'running', now - 60_000, now).text).toBe('Running · 1m')
+    expect(crumbStatus(session(), 'running', now, now).text).toBe('Running · 1s')
   })
 
-  it('says a reported error, with the program\'s message in the crumb, in the danger tone', () => {
+  it("says a reported error, with the program's message in the crumb, in the danger tone", () => {
     expect(sessionNote('error', now - 4 * MINUTE, now)).toBe('error')
     expect(crumbStatus(session(), 'error', now - 4 * MINUTE, now, 'build failed')).toEqual({
       text: 'Error · build failed',
@@ -126,6 +187,73 @@ describe('what the tree row and the crumb say', () => {
   it('keeps a child’s reported error to one word in its header, the program’s message being the crumb’s', () => {
     expect(childStatus(session(), 'error', now - 4 * MINUTE, now)).toBe('Error')
   })
+
+  describe('of a command child', () => {
+    const command = (over: Partial<SessionRecord> = {}): SessionRecord =>
+      session({ command: 'pnpm test', startedAt: new Date(now - 4 * MINUTE).toISOString(), ...over })
+    const exited = (exitCode: number | null): SessionRecord =>
+      command({ status: 'exited', exitCode, endedAt: new Date(2026, 9, 29, 14, 52).toISOString() })
+
+    it('S30: counts its run in the success tone from when it started, in seconds until a minute', () => {
+      const started = (ago: number): SessionRecord => command({ startedAt: new Date(now - ago).toISOString() })
+      expect(crumbStatus(started(1000), 'running', null, now)).toEqual({ text: 'Running · 1s', tone: 'success' })
+      expect(crumbStatus(started(2000), 'running', null, now)).toEqual({ text: 'Running · 2s', tone: 'success' })
+      expect(crumbStatus(started(59_999), 'running', null, now).text).toBe('Running · 59s')
+      expect(crumbStatus(started(MINUTE), 'running', null, now)).toEqual({ text: 'Running · 1m', tone: 'success' })
+      expect(crumbStatus(command(), 'running', null, now).text).toBe('Running · 4m')
+    })
+
+    it('S30: takes its state and its start from the command, not from the registry or the indicator', () => {
+      expect(crumbStatus(command(), 'busy', now - 10_000, now)).toEqual({ text: 'Running · 4m', tone: 'success' })
+      expect(crumbStatus(command(), 'waiting', null, now).tone).toBe('success')
+      expect(crumbStatus(command(), 'idle', null, now).text).toBe('Running · 4m')
+    })
+
+    it('S30: says only Running where its start is not a time', () => {
+      expect(crumbStatus(command({ startedAt: 'never' }), 'running', null, now)).toEqual({
+        text: 'Running',
+        tone: 'success'
+      })
+    })
+
+    it('S31: says exited 0 and when in fg-subtle, as its ended header does', () => {
+      expect(crumbStatus(exited(0), 'ended', null, now)).toEqual({ text: 'exited 0 · 14:52', tone: 'subtle' })
+    })
+
+    it('S31: says any other exit code in danger', () => {
+      expect(crumbStatus(exited(1), 'failed', null, now)).toEqual({ text: 'exited 1 · 14:52', tone: 'danger' })
+      expect(crumbStatus(exited(137), 'failed', null, now)).toEqual({ text: 'exited 137 · 14:52', tone: 'danger' })
+    })
+
+    it('says Stopped in fg-subtle for a command the host ended, never the number the system gave it', () => {
+      const stopped = command({
+        status: 'exited',
+        exitCode: 2147483647,
+        stopped: true,
+        endedAt: new Date(2026, 9, 29, 14, 52).toISOString()
+      })
+      expect(crumbStatus(stopped, 'failed', null, now)).toEqual({ text: 'Stopped · 14:52', tone: 'subtle' })
+    })
+
+    it('S31: keeps the ended header’s wording in fg-subtle for a code that was never seen', () => {
+      expect(crumbStatus(exited(null), 'ended', null, now)).toEqual({ text: 'Done · 14:52', tone: 'subtle' })
+      expect(crumbStatus(command({ status: 'lost' }), 'ended', null, now)).toEqual({ text: 'Lost', tone: 'subtle' })
+    })
+
+    it('leaves an agent’s and a plain session’s crumb as it was', () => {
+      expect(crumbStatus(session(), 'running', now - 4 * MINUTE, now)).toEqual({ text: 'Running · 4m', tone: 'subtle' })
+      expect(
+        crumbStatus(session({ status: 'exited', exitCode: 0, durationMs: 3 * 60 * MINUTE }), 'ended', null, now)
+      ).toEqual({
+        text: 'Ended after 3h',
+        tone: 'subtle'
+      })
+    })
+
+    it('keeps its card header’s text', () => {
+      expect(childStatus(command(), 'running', null, now)).toBe('Running · 4m')
+    })
+  })
 })
 
 describe('statusCounts', () => {
@@ -144,7 +272,62 @@ describe('statusCounts', () => {
       working: 1,
       waiting: 1,
       error: 1,
+      running: 0,
       idle: 3
     })
+  })
+
+  it('counts a command child whose command runs as running, never as idle, and one that exited not at all', () => {
+    const sessions = [
+      session({ id: 1 }),
+      session({ id: 2, command: 'pnpm test' }),
+      session({ id: 3, command: 'pnpm build' }),
+      session({ id: 4, command: 'pnpm lint', status: 'exited', exitCode: 0 })
+    ]
+    expect(statusCounts(sessions, () => 'running')).toEqual({
+      working: 0,
+      waiting: 0,
+      error: 0,
+      running: 2,
+      idle: 1
+    })
+  })
+})
+
+describe('childCrumb', () => {
+  const open = (): void => {}
+  const lists = (): boolean => true
+  const parentOf = { parentId: 7, parentName: 'api-refactor' }
+
+  it('S32: a command child is tagged command', () => {
+    const { tag, parent } = childCrumb(session({ ...parentOf, command: 'pnpm test' }), open, lists)
+    expect(tag).toEqual({ kind: 'command', text: 'command' })
+    expect(parent?.name).toBe('api-refactor')
+  })
+
+  it('S32: an agent child is tagged with its role, and one with no role has no tag', () => {
+    expect(childCrumb(session({ ...parentOf, role: 'reviewer' }), open, lists).tag).toEqual({
+      kind: 'role',
+      text: 'reviewer'
+    })
+    expect(childCrumb(session({ ...parentOf, role: null }), open, lists).tag).toBeUndefined()
+    expect(childCrumb(session({ ...parentOf, role: '' }), open, lists).tag).toBeUndefined()
+  })
+
+  it('S32: the link opens the parent by its id where the window lists it, and is plain text where not', () => {
+    const opened: number[] = []
+    const listed = childCrumb(session(parentOf), (id) => opened.push(id), lists)
+    listed.parent?.onOpen?.()
+    expect(opened).toEqual([7])
+    const unlisted = childCrumb(
+      session(parentOf),
+      (id) => opened.push(id),
+      () => false
+    )
+    expect(unlisted.parent).toEqual({ name: 'api-refactor', onOpen: undefined })
+  })
+
+  it('a session nobody started has neither tag nor link', () => {
+    expect(childCrumb(session(), open, lists)).toEqual({ tag: undefined, parent: undefined })
   })
 })

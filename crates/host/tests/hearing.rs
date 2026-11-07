@@ -572,6 +572,8 @@ struct Run {
     /// composed.
     instructions: Option<String>,
     received: Vec<String>,
+    /// The text of each bracketed paste it took.
+    pastes: Vec<String>,
     shell: Vec<ShellRun>,
 }
 
@@ -599,6 +601,15 @@ impl Run {
             servers,
             instructions: log["composedInstructions"].as_str().map(str::to_owned),
             received: strings(&log["received"]),
+            pastes: log["pastes"]
+                .as_array()
+                .map(|pastes| {
+                    pastes
+                        .iter()
+                        .map(|paste| paste["text"].as_str().unwrap_or_default().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default(),
             shell: serde_json::from_value(log["shell"].clone()).unwrap_or_default(),
         }
     }
@@ -614,6 +625,11 @@ impl Run {
                 .collect(),
             instructions: record.instructions.clone(),
             received: record.received.clone(),
+            pastes: record
+                .pastes
+                .iter()
+                .map(|paste| paste.text.clone())
+                .collect(),
             shell: record.shell.clone(),
         }
     }
@@ -1345,7 +1361,7 @@ async fn s2_a_session_with_no_parent_has_no_agents_report_and_a_child_has_it_all
             !names.iter().any(|name| name == "agents_report"),
             "{names:?}"
         );
-        assert_eq!(names.len(), 5, "{names:?}");
+        assert_eq!(names.len(), 7, "{names:?}");
         let refused = person
             .call("agents_report", json!({ "state": "done", "text": "x" }))
             .await;
@@ -1376,7 +1392,7 @@ async fn s2_a_session_with_no_parent_has_no_agents_report_and_a_child_has_it_all
         );
         // A child that reports is listed it by the same family, so the
         // person's session is untouched by it.
-        assert_eq!(person.tool_names().await.len(), 5);
+        assert_eq!(person.tool_names().await.len(), 7);
         world.close(&child).await;
         world.close(&person).await;
     }
@@ -2331,7 +2347,11 @@ async fn s21_each_session_with_the_family_is_given_the_guide_with_its_backends_l
             "{told}"
         );
         assert!(told.contains(line), "{backend}: {told}");
-        assert!(told.contains("start, wait and stop"), "{told}");
+        assert!(told.contains("start, send, wait, read and stop"), "{told}");
+        assert!(
+            told.contains("floti agent run --name <name> -- <command>"),
+            "{told}"
+        );
         assert!(
             told.contains("fails") || told.contains("whenever it fails"),
             "{told}"
@@ -2433,6 +2453,380 @@ async fn s22_a_start_with_wait_returns_the_new_childs_name_and_its_next_news_and
     assert_eq!(answer["ended"], "nothingNew", "{answer}");
     let rest = plain.hear(json!({})).await;
     assert_eq!(rest.events(), ["old:report"], "{rest:?}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// A send that refuses, and a send that waits
+// ---------------------------------------------------------------------------
+
+impl Agent {
+    async fn send(&self, child: &str, text: &str) -> Called {
+        self.call("agents_send", json!({ "child": child, "text": text }))
+            .await
+    }
+}
+
+impl World {
+    /// Nothing of `text` reached `child`'s terminal: it took no such line and
+    /// no paste held it.
+    fn assert_untyped(&self, child: &Agent, text: &str) {
+        let run = self.reread(child);
+        assert!(
+            !run.received.iter().any(|line| line.contains(text)),
+            "{} took {text:?}: {:?}",
+            child.name(),
+            run.received
+        );
+        assert!(
+            !run.pastes.iter().any(|paste| paste.contains(text)),
+            "{} was pasted {text:?}: {:?}",
+            child.name(),
+            run.pastes
+        );
+    }
+
+    /// Waits until `child` has taken `line`.
+    async fn took(&self, child: &Agent, line: &str) {
+        eventually("the child to take the line", async || {
+            self.reread(child)
+                .received
+                .iter()
+                .any(|got| got == line)
+                .then_some(())
+        })
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s4_a_send_to_a_child_waiting_on_a_prompt_is_refused_typing_nothing_and_goes_through_once_it_is_answered()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("send-prompt");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    // One child whose agent keeps records, one that only reports its status.
+    for (name, backend) in [("records", CLAUDE), ("reporter", BARE)] {
+        parent
+            .start(json!({ "task": "work", "name": name, "backend": backend }))
+            .await
+            .done();
+    }
+    world.calm(&parent, &["records"]).await;
+    for name in ["records", "reporter"] {
+        let child = world.child_of(&parent, name).await;
+        let mut watch = Watch::open(&world).await;
+        // The parent's own send brings the child to a permission prompt: no
+        // person has typed there.
+        parent.send(name, "/wait").await.done();
+        watch.until(&child, SessionActivity::Waiting).await;
+
+        let refused = parent.send(name, "ignored while asking").await;
+        assert!(
+            refused
+                .refused()
+                .contains("waiting on a prompt a person must answer"),
+            "{name}: {refused:?}"
+        );
+        assert!(
+            refused.refused().contains("nothing was typed"),
+            "{name}: {refused:?}"
+        );
+        world.assert_untyped(&child, "ignored while asking");
+
+        // A person answers the prompt; the child is at rest and takes a send.
+        let mut client = world.client().await;
+        client.attach(1, child.id()).await;
+        client.type_into(1, b"y").await;
+        watch.until(&child, SessionActivity::Idle).await;
+        parent.send(name, "after the prompt").await.done();
+        world.took(&child, "after the prompt").await;
+        drop(client);
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_a_send_after_a_person_typed_is_refused_typing_nothing_until_the_childs_next_turn_ends()
+{
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("send-person");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    for (name, backend) in [("records", CLAUDE), ("reporter", BARE)] {
+        parent
+            .start(json!({ "task": "work", "name": name, "backend": backend }))
+            .await
+            .done();
+    }
+    world.calm(&parent, &["records"]).await;
+    for name in ["records", "reporter"] {
+        let child = world.child_of(&parent, name).await;
+        // A person starts a turn in the child's terminal.
+        let mut watch = world.hold_busy(&child).await;
+        let refused = parent.send(name, "ignored after a person").await;
+        assert!(
+            refused.refused().contains("A person has typed in"),
+            "{name}: {refused:?}"
+        );
+        assert!(
+            refused.refused().contains("nothing was typed"),
+            "{name}: {refused:?}"
+        );
+        world.assert_untyped(&child, "ignored after a person");
+
+        // The turn ends: what the person typed is spent.
+        world.release(&child).await;
+        watch.until(&child, SessionActivity::Idle).await;
+        parent.send(name, "after the turn").await.done();
+        world.took(&child, "after the turn").await;
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_right_after_a_prompt_appears_in_the_childs_records_is_refused_without_waiting_for_a_pass()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("send-fresh-prompt");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "records", "backend": CLAUDE }))
+        .await
+        .done();
+    world.calm(&parent, &["records"]).await;
+    let child = world.child_of(&parent, "records").await;
+
+    // The child reaches a permission prompt, which only its records say, and
+    // the next send comes at once, not after a published pass.
+    parent.send("records", "/wait").await.done();
+    world.took(&child, "/wait").await;
+    let refused = parent.send("records", "typed into the prompt").await;
+    assert!(
+        refused
+            .refused()
+            .contains("waiting on a prompt a person must answer"),
+        "{refused:?}"
+    );
+    world.assert_untyped(&child, "typed into the prompt");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_goes_through_after_a_person_typed_a_line_whose_turn_was_over_before_any_pass_saw_it()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("send-quick-turn");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    for (name, backend) in [("records", CLAUDE), ("reporter", BARE)] {
+        parent
+            .start(json!({ "task": "work", "name": name, "backend": backend }))
+            .await
+            .done();
+    }
+    world.calm(&parent, &["records"]).await;
+    for name in ["records", "reporter"] {
+        let child = world.child_of(&parent, name).await;
+        // A turn of a millisecond: busy and idle again within one read of its
+        // records, and within one of its reports.
+        world.type_line(&child, "/busy 1").await;
+        eventually(
+            "a send to go through once the person's turn is over",
+            async || (!parent.send(name, "after the quick turn").await.failed).then_some(()),
+        )
+        .await;
+        world.took(&child, "after the quick turn").await;
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s12_a_send_with_wait_returns_that_childs_next_news_where_a_wait_holds_and_leaves_the_rest_unseen()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("send-wait");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    for (name, backend) in [("target", CLAUDE), ("bystander", CLAUDE)] {
+        parent
+            .start(json!({ "task": "work", "name": name, "backend": backend }))
+            .await
+            .done();
+    }
+    let target = world.child_of(&parent, "target").await;
+    let bystander = world.child_of(&parent, "bystander").await;
+    world.calm(&parent, &["target", "bystander"]).await;
+
+    // The target reports: that is the news, and the bystander's stays.
+    bystander.report("note", "bystander news").await.done();
+    let mut sent = parent
+        .open(
+            "agents_send",
+            json!({ "child": "target", "text": "do the thing", "wait": true }),
+        )
+        .await;
+    assert!(sent.streamed, "a send that waits holds as a wait does");
+    world.took(&target, "do the thing").await;
+    target.report("done", "the thing is done").await.done();
+    let answered = sent.called().await;
+    assert!(
+        answered.text().starts_with("Sent to target."),
+        "{answered:?}"
+    );
+    let body = answered.done();
+    assert_eq!(body["sent"], "target");
+    let heard = Heard(body);
+    assert_eq!(heard.events(), ["target:report"], "{heard:?}");
+    let rest = parent.hear(json!({})).await;
+    assert_eq!(rest.events(), ["bystander:report"], "{rest:?}");
+
+    // The turn it gave ends: that is the news.
+    world.calm(&parent, &["target", "bystander"]).await;
+    let mut sent = parent
+        .open(
+            "agents_send",
+            json!({ "child": "target", "text": "/busy 2000", "wait": true }),
+        )
+        .await;
+    assert!(sent.streamed);
+    let heard = Heard(sent.called().await.done());
+    assert_eq!(heard.events(), ["target:turn_ended"], "{heard:?}");
+
+    // It asks for a permission: that is the news.
+    world.calm(&parent, &["target", "bystander"]).await;
+    let mut sent = parent
+        .open(
+            "agents_send",
+            json!({ "child": "target", "text": "/wait", "wait": true }),
+        )
+        .await;
+    let heard = Heard(sent.called().await.done());
+    assert_eq!(heard.events(), ["target:needs_you"], "{heard:?}");
+    assert_eq!(heard.news()[0]["state"], "permission prompt");
+
+    // A person answers it, and the child ends on the text it is sent next.
+    let mut watch = Watch::open(&world).await;
+    let mut client = world.client().await;
+    client.attach(1, target.id()).await;
+    client.type_into(1, b"y").await;
+    watch.until(&target, SessionActivity::Idle).await;
+    drop(client);
+    world.calm(&parent, &["target", "bystander"]).await;
+    let mut sent = parent
+        .open(
+            "agents_send",
+            json!({ "child": "target", "text": "/exit", "wait": true }),
+        )
+        .await;
+    let heard = Heard(sent.called().await.done());
+    assert_eq!(heard.events(), ["target:ended"], "{heard:?}");
+    world.ended("the target to exit", &[target.id()]).await;
+
+    // To a child that has ended the send is refused, and no wait begins.
+    let refused = parent
+        .call(
+            "agents_send",
+            json!({ "child": "target", "text": "again", "wait": true }),
+        )
+        .await;
+    assert!(
+        refused.refused().contains("target has ended"),
+        "{refused:?}"
+    );
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s12_a_person_typing_in_the_parent_ends_a_sends_held_wait_and_the_text_was_sent() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("send-wait-typed");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "target", "backend": CLAUDE }))
+        .await
+        .done();
+    let target = world.child_of(&parent, "target").await;
+    world.calm(&parent, &["target"]).await;
+    let mut sent = parent
+        .open(
+            "agents_send",
+            json!({ "child": "target", "text": "go on", "wait": true }),
+        )
+        .await;
+    assert!(sent.streamed);
+    world.took(&target, "go on").await;
+    world.type_line(&parent, "hello").await;
+    let heard = Heard(sent.called().await.done());
+    assert_eq!(heard.ended(), "typed", "{heard:?}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s12_where_a_wait_cannot_hold_a_send_with_wait_answers_at_once_with_that_childs_unseen_news()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("send-wait-at-once");
+    let parent = world.session(OTHER, &folder, "plain parent").await;
+    for name in ["target", "bystander"] {
+        parent
+            .start(json!({ "task": "work", "name": name, "backend": OTHER }))
+            .await
+            .done();
+    }
+    let target = world.child_of(&parent, "target").await;
+    let bystander = world.child_of(&parent, "bystander").await;
+
+    // Nothing of the target's is unseen: the send answers at once, saying so.
+    bystander.report("note", "kept for later").await.done();
+    let mut sent = parent
+        .open(
+            "agents_send",
+            json!({ "child": "target", "text": "go", "wait": true }),
+        )
+        .await;
+    assert!(
+        !sent.streamed,
+        "this parent's agent cannot wait in the background"
+    );
+    let answered = sent.called().await;
+    assert!(
+        answered.text().starts_with("Sent to target."),
+        "{answered:?}"
+    );
+    assert!(answered.text().contains("Nothing new yet."), "{answered:?}");
+    assert_eq!(Heard(answered.done()).ended(), "nothingNew");
+    world.took(&target, "go").await;
+
+    // With the target's news unseen it comes with the send, and only it.
+    target.report("done", "target words").await.done();
+    let mut sent = parent
+        .open(
+            "agents_send",
+            json!({ "child": "target", "text": "more", "wait": true }),
+        )
+        .await;
+    let heard = Heard(sent.called().await.done());
+    assert_eq!(heard.events(), ["target:report"], "{heard:?}");
+    let rest = parent.hear(json!({})).await;
+    assert_eq!(rest.events(), ["bystander:report"], "{rest:?}");
+
+    // From the shell the same: the command prints the child and its news.
+    target.report("done", "from the shell").await.done();
+    let ran = world
+        .shell(
+            &parent,
+            "floti agent send --wait --json target \"and again\"",
+        )
+        .await;
+    assert_eq!(ran.code, Some(0), "{ran:?}");
+    let answer: Value = serde_json::from_str(ran.stdout.trim()).expect("JSON");
+    assert_eq!(answer["sent"], "target", "{answer}");
+    assert_eq!(answer["news"][0]["text"], "from the shell", "{answer}");
     host.stop(HostStopReason::Stop).await;
 }
 

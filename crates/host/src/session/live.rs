@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
@@ -32,6 +33,7 @@ use tokio::sync::watch;
 
 use super::env::session_env;
 use super::ledger::{NewSessionRow, SessionId, SessionLedger, SessionOrigin};
+use super::person::is_a_person_typing;
 use super::report::{ProgramStatus, ReportedStatus};
 use super::screen::{Screen, TermSize};
 use crate::agent::LaunchSpec;
@@ -57,6 +59,10 @@ pub(super) fn end_after_grace(exited_within: impl FnOnce(Duration) -> bool, forc
 /// before the session is reported ended without the rest. A child that kept
 /// the terminal open would otherwise hold the session open.
 const DRAIN: Duration = Duration::from_secs(2);
+
+/// How many of the last lines of text on a screen are handed on when its
+/// session ends: what a command child's parent is told with its exit.
+pub const LAST_LINES: usize = 40;
 
 const READ_CHUNK: usize = 64 * 1024;
 
@@ -281,6 +287,7 @@ impl SessionHost {
             }),
             ended: Condvar::new(),
             typed: watch::Sender::new(0),
+            person_typed: AtomicU64::new(0),
             pty: Mutex::new(Some(Pty::Kept {
                 link: Arc::clone(&link),
                 handle: held.handle,
@@ -374,6 +381,7 @@ impl SessionHost {
             }),
             ended: Condvar::new(),
             typed: watch::Sender::new(0),
+            person_typed: AtomicU64::new(0),
             pty: Mutex::new(Some(Pty::Here { master, writer })),
         });
         // Before the output thread starts: a client attached here misses
@@ -480,6 +488,7 @@ impl SessionHost {
             }),
             ended: Condvar::new(),
             typed: watch::Sender::new(0),
+            person_typed: AtomicU64::new(0),
             pty: Mutex::new(Some(Pty::Kept {
                 link: Arc::clone(&link),
                 handle,
@@ -565,6 +574,10 @@ pub struct Session {
     /// Counts the times a client has typed into it, so a wait on news can end
     /// at once when a person does.
     typed: watch::Sender<u64>,
+    /// When a client last typed into it since its last turn ended, in
+    /// milliseconds since the epoch, or 0 when none has
+    /// ([`Session::person_typed`]). Only [`Session::input`] sets it.
+    person_typed: AtomicU64,
     /// Taken when the session is closed or its program exits. Lock order:
     /// `state`, then `pty`.
     pty: Mutex<Option<Pty>>,
@@ -758,6 +771,9 @@ impl Session {
     /// Sends the keys `client` typed to the program, first giving the
     /// session that client's size.
     pub fn input(&self, client: ClientId, bytes: &[u8]) -> Result<()> {
+        if is_a_person_typing(bytes) {
+            self.person_typed.store(now_ms().max(1), Ordering::SeqCst);
+        }
         {
             let mut state = lock(&self.state);
             if state.exit.is_some() {
@@ -781,6 +797,51 @@ impl Session {
             .map_err(|err| Error::io(format!("type into session {}", self.id), err))?;
         self.typed.send_modify(|typed| *typed += 1);
         Ok(())
+    }
+
+    /// Sends `bytes` to the program as a parent's turn for it, which no
+    /// client types: the session keeps the size it has, and it does not count
+    /// as a person typing ([`Session::typing`]), so a wait of the child's own
+    /// is not cut short by what its parent sent. Only `agents_send` calls it.
+    pub fn type_for_parent(&self, bytes: &[u8]) -> Result<()> {
+        if lock(&self.state).exit.is_some() {
+            return Err(self.has_ended());
+        }
+        let mut pty = lock(&self.pty);
+        let pty = pty.as_mut().ok_or_else(|| self.has_ended())?;
+        pty.write(bytes)
+            .map_err(|err| Error::io(format!("type into session {}", self.id), err))
+    }
+
+    /// Whether a client has typed into the session since its last turn ended
+    /// ([`Session::turn_ended`]): what a client's terminal answers its program
+    /// with is not typing. A parent's send is refused while this holds,
+    /// because a person's keys come first and may be half a line in the
+    /// prompt. It is set here, for the bytes a client sent, and nowhere else.
+    pub fn person_typed(&self) -> bool {
+        self.person_typed.load(Ordering::SeqCst) != 0
+    }
+
+    /// The session's turn has ended: what a person typed before it is spent,
+    /// so a parent's send goes through again.
+    pub fn turn_ended(&self) {
+        self.person_typed.store(0, Ordering::SeqCst);
+    }
+
+    /// The session has been idle since `idle_since_ms` (milliseconds since the
+    /// epoch). When that is after the last time a person typed, a turn began
+    /// and ended since, however briefly: what they typed is spent. A pass that
+    /// never saw the session working still learns this from the time its
+    /// status began. A key typed after `idle_since_ms` is not spent; one in
+    /// the same millisecond is, since the program cannot have answered it
+    /// sooner than it began its idle.
+    pub fn idle_since(&self, idle_since_ms: u64) {
+        let typed = self.person_typed.load(Ordering::SeqCst);
+        if typed != 0 && idle_since_ms >= typed {
+            let _ =
+                self.person_typed
+                    .compare_exchange(typed, 0, Ordering::SeqCst, Ordering::SeqCst);
+        }
     }
 
     /// Changes each time a client types into the session. What the host
@@ -878,6 +939,21 @@ impl Session {
         };
         let size = master.get_size().ok()?;
         Some(TermSize::new(size.cols, size.rows))
+    }
+
+    /// The screen's text as plain lines, the screen's own and up to `above`
+    /// lines of scrollback above them, without the empty rows under the last
+    /// line there is. `None` once the session has ended and its screen is
+    /// gone. This is what a parent reads of its child; nothing here reads
+    /// the text for meaning.
+    pub(crate) fn screen_text(&self, above: usize) -> Option<Vec<String>> {
+        let state = lock(&self.state);
+        let screen = state.screen.as_ref()?;
+        let mut lines = screen.text(above);
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        Some(lines)
     }
 
     /// Runs `f` on the session's screen while it has one.
@@ -981,6 +1057,18 @@ impl Session {
         drop(lock(&self.pty).take());
         if let Some(drained) = drained {
             let _ = drained.recv_timeout(DRAIN);
+        }
+
+        // The screen goes with the program; what a command child last printed
+        // is handed on first, for its parent to be told.
+        if let Some(shared) = self.host.upgrade() {
+            let last_lines = lock(&self.state)
+                .screen
+                .as_ref()
+                .map(|screen| screen.last_lines(LAST_LINES));
+            if let Some(last_lines) = last_lines {
+                shared.ledger.screen_ended(self.id, last_lines);
+            }
         }
 
         // Unlisted first: recording the end tells the clients, and one that

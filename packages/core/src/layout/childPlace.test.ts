@@ -137,7 +137,7 @@ describe('the chips a parent’s crumb holds', () => {
   it('draws a command child as a terminal glyph, holds an ended child, and leaves out a child with a tab of its own', () => {
     const family = [
       session(1),
-      session(2, 1, { command: true }),
+      session(2, 1, { command: 'npm test' }),
       session(3, 1),
       { ...session(4, 1), status: 'exited' }
     ]
@@ -160,7 +160,7 @@ describe('the chips a parent’s crumb holds', () => {
 describe('a child’s mark', () => {
   it('is a dot for an agent and a terminal glyph for a command, each with the state that tones it', () => {
     expect(childMark(session(2, 1), 'waiting')).toEqual({ glyph: 'dot', state: 'waiting' })
-    expect(childMark(session(3, 1, { command: true }), 'failed')).toEqual({ glyph: 'command', state: 'failed' })
+    expect(childMark(session(3, 1, { command: 'npm test' }), 'failed')).toEqual({ glyph: 'command', state: 'failed' })
   })
 })
 
@@ -202,7 +202,7 @@ describe('closing a parent', () => {
   })
 
   it('gives each child its dot or glyph, in the order the sessions are listed', () => {
-    const family = [session(1), session(3, 1, { command: true }), session(2, 1)]
+    const family = [session(1), session(3, 1, { command: 'npm test' }), session(2, 1)]
     const plan = closeParentPlan(family, 1, (child) => (child.id === 2 ? 'waiting' : 'running'))
     expect(plan.ends.map((item) => [item.child.id, item.mark])).toEqual([
       [3, { glyph: 'command', state: 'running' }],

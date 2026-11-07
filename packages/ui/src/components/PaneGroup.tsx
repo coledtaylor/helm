@@ -124,7 +124,23 @@ export interface CrumbChip {
   onPress: () => void
 }
 
+/** What a child session is: a command child, or an agent started in a role. */
+export interface CrumbTag {
+  kind: 'command' | 'role'
+  text: string
+}
+
+/** The session that started a child. Without `onOpen` the window does not list it, so its name is plain text. */
+export interface CrumbParent {
+  name: string
+  onOpen?: (() => void) | undefined
+}
+
 export interface PaneCrumbProps {
+  /** A child's tag: `command`, or the role it was started in. Absent for a child with no role. */
+  tag?: CrumbTag | undefined
+  /** The session that started it, for a child. */
+  parent?: CrumbParent | undefined
   /** Where the session is: its project, as named in the tree. */
   place: string
   /** The children of the session, as chips, when its pane has no room for the family view. */
@@ -141,19 +157,60 @@ export interface PaneCrumbProps {
 
 /**
  * The row under a session's tab: project › branch · profile, and on the right
- * what the session is doing and for how long.
+ * what the session is doing and for how long. A child's row begins with its
+ * tag and a link to the session that started it.
  *
  * The tab above is one line, so what told two sessions on one project apart -
  * the branch - lives here, in mono, where it has the whole width of the pane to
  * be read in rather than a 240px tab's second line.
  */
-export function PaneCrumb({ place, chips, branch, profile, status, hint }: PaneCrumbProps): JSX.Element {
+export function PaneCrumb({
+  tag,
+  parent,
+  place,
+  chips,
+  branch,
+  profile,
+  status,
+  hint
+}: PaneCrumbProps): JSX.Element {
   const withChips = chips !== undefined && chips.length > 0
   return (
     <div
       data-pane-crumb
-      className="flex h-[26px] shrink-0 items-center gap-1.5 border-b border-border px-3 font-mono text-[11px] text-fg-subtle"
+      className="flex h-[26px] shrink-0 items-center gap-2 border-b border-border px-3 font-mono text-[11px] text-fg-subtle"
     >
+      {tag !== undefined && (
+        <span
+          data-crumb="tag"
+          data-crumb-tag={tag.kind}
+          className={cn(
+            'shrink-0 rounded-full px-[7px] font-sans text-[10px] leading-4 font-medium',
+            // The command tag's ring is drawn inside the 16px pill and takes no
+            // room, as the frame's inset shadow does.
+            tag.kind === 'command'
+              ? 'text-fg-muted ring-1 ring-border-strong ring-inset'
+              : 'bg-accent-soft text-accent-text'
+          )}
+        >
+          {tag.text}
+        </span>
+      )}
+      {parent !== undefined &&
+        (parent.onOpen !== undefined ? (
+          <button
+            type="button"
+            data-crumb="parent"
+            onClick={parent.onOpen}
+            className="-ml-[3px] shrink-0 rounded-sm font-sans text-[11px] text-fg-muted hover:text-fg hover:underline"
+          >
+            for {parent.name}
+          </button>
+        ) : (
+          <span data-crumb="parent" className="-ml-[3px] shrink-0 font-sans text-[11px] text-fg-muted">
+            for {parent.name}
+          </span>
+        ))}
       <span data-crumb="place" title={hint} className="min-w-0 shrink-0 truncate text-fg-muted">
         {place}
       </span>
@@ -273,11 +330,7 @@ export function PaneActions({
           onClick={onMaximize}
           data-maximize={maximized ? 'restore' : 'pane'}
         >
-          {maximized ? (
-            <UnmaximizeIcon width={13} height={13} />
-          ) : (
-            <MaximizeIcon width={13} height={13} />
-          )}
+          {maximized ? <UnmaximizeIcon width={13} height={13} /> : <MaximizeIcon width={13} height={13} />}
         </PaneButton>
       )}
       {canClose && (

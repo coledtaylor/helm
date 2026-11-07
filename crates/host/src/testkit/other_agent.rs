@@ -20,14 +20,19 @@ use serde::Deserialize;
 
 use super::{TestDirs, unique_name};
 use crate::agent::{
-    AgentBackend, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder, LaunchRequest,
-    LaunchSpec, Permissions, Registration, ResumeRequest, Resumer, ToolRule, parts_not_taken,
+    AgentBackend, AgentInput, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder,
+    LaunchRequest, LaunchSpec, Permissions, Registration, ResumeRequest, Resumer, ToolRule,
+    parts_not_taken,
 };
 use crate::{Error, Result};
 
 /// The variable naming the folder the fake keeps its conversations and run
 /// logs in.
 pub const OTHER_AGENT_HOME_VAR: &str = "OTHER_AGENT_HOME";
+
+/// The pause its adapter declares between a paste and the submit key: not
+/// Claude Code's.
+pub const INPUT_PAUSE: Duration = Duration::from_millis(50);
 
 /// One server the fake loaded from its tools config.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -44,6 +49,17 @@ pub struct ShellRun {
     pub stderr: String,
     /// `None` while it runs.
     pub code: Option<i32>,
+}
+
+/// One bracketed paste a fake took as one block.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pasted {
+    /// What was pasted, newlines and all.
+    pub text: String,
+    /// Whether the submit key arrived in the same read as the paste's end,
+    /// which makes it part of the paste.
+    pub with_submit: bool,
 }
 
 /// What one run of the fake recorded.
@@ -78,6 +94,26 @@ pub struct OtherAgentRecord {
     /// Every command a typed `/shell` ran, in order.
     #[serde(default)]
     pub shell: Vec<ShellRun>,
+    /// Every bracketed paste it took, in order.
+    #[serde(default)]
+    pub pastes: Vec<Pasted>,
+    /// The key that submitted each of `received`, in order.
+    #[serde(default)]
+    pub submit_keys: Vec<String>,
+    /// Each line it took as a turn, in the order the turns ran.
+    #[serde(default)]
+    pub prompts: Vec<String>,
+    /// Each line typed while a turn was running, which it took as the next
+    /// turn once that one ended.
+    #[serde(default)]
+    pub queued: Vec<String>,
+    /// How many times its stop key ended a turn.
+    #[serde(default)]
+    pub interrupts: u32,
+    /// Whether it reads its terminal yet: until then what is typed waits in
+    /// the terminal and a paste and the key after it arrive in one read.
+    #[serde(default)]
+    pub listening: bool,
     /// `None` while it runs.
     pub exit_code: Option<i32>,
 }
@@ -478,6 +514,13 @@ impl AgentBackend for OtherAgentBackend {
     fn takes_instructions(&self) -> bool {
         true
     }
+
+    /// A bracketed paste, submitted by LF after [`INPUT_PAUSE`] and stopped
+    /// by Ctrl-X: unlike Claude Code's CR, Escape and pause, so a test can
+    /// show that the keys a send presses come from the adapter.
+    fn input(&self) -> Option<AgentInput> {
+        Some(AgentInput::bracketed(b"\n", Some(b"\x18"), INPUT_PAUSE))
+    }
 }
 
 impl Resumer for OtherAgentBackend {
@@ -514,6 +557,16 @@ mod tests {
         backend: OtherAgentBackend,
         /// Last: fields drop in order, and the folder goes only once nothing in it is open.
         dirs: TestDirs,
+    }
+
+    #[test]
+    fn the_other_agent_takes_text_as_a_paste_submitted_by_lf_and_stopped_by_ctrl_x() {
+        let world = World::new();
+        let input = world.backend.input().expect("it takes typed turns");
+        assert_eq!(input.submit, b"\n");
+        assert_eq!(input.stop.as_deref(), Some(&b"\x18"[..]));
+        assert_eq!(input.pause, INPUT_PAUSE);
+        assert_eq!(input.paste("a\nb"), b"\x1b[200~a\nb\x1b[201~".to_vec());
     }
 
     impl World {
@@ -706,6 +759,63 @@ mod tests {
         let (bare, folder) = world.launch(&request(world.dirs.folder("work")));
         assert!(!world.args(&bare).iter().any(|arg| arg == "--tools-config"));
         assert!(!folder.path().join("tools.json").exists());
+    }
+
+    #[test]
+    fn a_launch_with_the_agents_family_allows_start_send_wait_read_and_stop_each_on_its_own_and_never_run_or_a_wildcard()
+     {
+        use crate::server::floti_agents::allowances::{each_value_of, launch_server, too_broad};
+
+        let world = World::new();
+        let (launch, _folder) = world.launch(&LaunchRequest {
+            composition: Composition {
+                agent_tools: vec![launch_server()],
+                ..Composition::default()
+            },
+            ..request(world.dirs.folder("work"))
+        });
+        let args = world.args(&launch);
+        let broad = too_broad(&args);
+        assert!(
+            broad.is_empty(),
+            "this launch allows more of floti agent than the five commands named on their own: {broad:?}"
+        );
+        assert_eq!(
+            each_value_of(&args, "--allow-shell"),
+            [
+                "floti agent start",
+                "floti agent send",
+                "floti agent wait",
+                "floti agent read",
+                "floti agent stop",
+            ]
+        );
+        assert!(
+            each_value_of(&args, "--allow-tool").contains(&"floti-agents.agents_send".to_owned())
+        );
+
+        // A deny rule of the user's is one this agent cannot enforce, so a
+        // launch that carries one is refused rather than left to the allow
+        // rules.
+        let folder = world.launch_folder();
+        let refused = world
+            .backend
+            .launch(
+                &LaunchRequest {
+                    composition: Composition {
+                        agent_tools: vec![launch_server()],
+                        disallowed_tools: vec!["Bash(floti agent send:*)".into()],
+                        ..Composition::default()
+                    },
+                    ..request(world.dirs.folder("work"))
+                },
+                &folder,
+            )
+            .unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "other-agent cannot enforce the disallowed_tools rule Bash(floti agent send:*)"
+        );
     }
 
     #[test]

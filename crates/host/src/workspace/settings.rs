@@ -22,9 +22,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use floti_protocol::BackendId;
 use floti_protocol::channels::workspace::{
-    DEFAULT_AGENT_CHILDREN_PER_PARENT, DEFAULT_AGENT_DEPTH, DEFAULT_AGENT_HEAVY_PER_HOST,
-    DEFAULT_AGENT_SESSIONS_PER_HOST, DEFAULT_AGENT_STARTS_PER_PARENT, DEFAULT_SESSION_AGENTS,
-    HostSettings, HostSettingsPatch,
+    DEFAULT_AGENT_CHILDREN_PER_PARENT, DEFAULT_AGENT_COMMANDS_PER_PARENT, DEFAULT_AGENT_DEPTH,
+    DEFAULT_AGENT_HEAVY_PER_HOST, DEFAULT_AGENT_SESSIONS_PER_HOST, DEFAULT_AGENT_STARTS_PER_PARENT,
+    DEFAULT_SESSION_AGENTS, HostSettings, HostSettingsPatch,
 };
 use rusqlite::{Connection, params};
 use serde::Serialize;
@@ -55,6 +55,7 @@ const AGENT_CHILDREN_PER_PARENT: &str = "agentChildrenPerParent";
 const AGENT_SESSIONS_PER_HOST: &str = "agentSessionsPerHost";
 const AGENT_DEPTH: &str = "agentDepth";
 const AGENT_STARTS_PER_PARENT: &str = "agentStartsPerParent";
+const AGENT_COMMANDS_PER_PARENT: &str = "agentCommandsPerParent";
 const AGENT_HEAVY_PER_HOST: &str = "agentHeavyPerHost";
 
 /// What each limit may be set to. A limit of none is the setting "Sessions
@@ -64,6 +65,7 @@ pub const AGENT_CHILDREN_PER_PARENT_RANGE: RangeInclusive<u32> = 1..=32;
 pub const AGENT_SESSIONS_PER_HOST_RANGE: RangeInclusive<u32> = 1..=128;
 pub const AGENT_DEPTH_RANGE: RangeInclusive<u32> = 1..=8;
 pub const AGENT_STARTS_PER_PARENT_RANGE: RangeInclusive<u32> = 1..=1000;
+pub const AGENT_COMMANDS_PER_PARENT_RANGE: RangeInclusive<u32> = 1..=32;
 pub const AGENT_HEAVY_PER_HOST_RANGE: RangeInclusive<u32> = 1..=8;
 
 /// The settings of a host nobody has changed anything on.
@@ -86,6 +88,7 @@ pub fn defaults() -> HostSettings {
         agent_sessions_per_host: DEFAULT_AGENT_SESSIONS_PER_HOST,
         agent_depth: DEFAULT_AGENT_DEPTH,
         agent_starts_per_parent: DEFAULT_AGENT_STARTS_PER_PARENT,
+        agent_commands_per_parent: DEFAULT_AGENT_COMMANDS_PER_PARENT,
         agent_heavy_per_host: DEFAULT_AGENT_HEAVY_PER_HOST,
     }
 }
@@ -153,6 +156,13 @@ pub fn read(conn: &Connection) -> Result<HostSettings> {
             text,
             &AGENT_STARTS_PER_PARENT_RANGE,
             &mut settings.agent_starts_per_parent,
+        )
+    });
+    take(AGENT_COMMANDS_PER_PARENT, &mut |text| {
+        set_within(
+            text,
+            &AGENT_COMMANDS_PER_PARENT_RANGE,
+            &mut settings.agent_commands_per_parent,
         )
     });
     take(AGENT_HEAVY_PER_HOST, &mut |text| {
@@ -266,6 +276,11 @@ pub fn problems(patch: &HostSettingsPatch) -> Vec<String> {
             AGENT_STARTS_PER_PARENT,
             patch.agent_starts_per_parent,
             AGENT_STARTS_PER_PARENT_RANGE,
+        ),
+        (
+            AGENT_COMMANDS_PER_PARENT,
+            patch.agent_commands_per_parent,
+            AGENT_COMMANDS_PER_PARENT_RANGE,
         ),
         (
             AGENT_HEAVY_PER_HOST,
@@ -451,6 +466,9 @@ pub fn write(
     }
     if let Some(value) = &patch.agent_starts_per_parent {
         put(AGENT_STARTS_PER_PARENT, value);
+    }
+    if let Some(value) = &patch.agent_commands_per_parent {
+        put(AGENT_COMMANDS_PER_PARENT, value);
     }
     if let Some(value) = &patch.agent_heavy_per_host {
         put(AGENT_HEAVY_PER_HOST, value);

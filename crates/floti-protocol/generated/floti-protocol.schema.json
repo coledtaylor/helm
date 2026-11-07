@@ -4348,6 +4348,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "agentCommandsPerParent": {
+          "default": 4,
+          "description": "How many command children one session may have running at once,\ncounted apart from every agent limit above.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "agentDepth": {
           "default": 2,
           "description": "How many generations of sessions a session may start below it.",
@@ -4455,6 +4462,14 @@
       "description": "A change to some settings. A field left out is unchanged; a nullable\nfield sent as null is cleared.",
       "properties": {
         "agentChildrenPerParent": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "agentCommandsPerParent": {
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -8934,6 +8949,14 @@
         },
         "branch": {
           "description": "The branch `cwd` was on when this was spawned. Null for a folder that\nis not a repository, a detached HEAD, or a read that failed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "command": {
+          "default": null,
+          "description": "The command line a command child runs, as its parent gave it after\n`--`, or null for every other session. A command child's exit code is\n`exit_code`, once it has exited. Absent from a host before protocol\n2.1, which reads as null.",
           "type": [
             "string",
             "null"

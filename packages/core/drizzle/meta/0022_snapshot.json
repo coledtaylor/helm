@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8ca1e29d-1ef0-43fb-b3da-18a619eea54c",
+  "id": "321c4f37-6467-4cb2-a5a9-9c98785c315e",
   "prevId": "a84653d2-7b36-4ad3-9216-e73c2105f957",
   "tables": {
     "agent_inbox": {
@@ -440,95 +440,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "notices": {
-      "name": "notices",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "parent_session_id": {
-          "name": "parent_session_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "parent_name": {
-          "name": "parent_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "child_session_id": {
-          "name": "child_session_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "child_name": {
-          "name": "child_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "text": {
-          "name": "text",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "limit_kind": {
-          "name": "limit_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "allow_more": {
-          "name": "allow_more",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "since": {
-          "name": "since",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
-        }
-      },
-      "indexes": {
-        "notices_parent_idx": {
-          "name": "notices_parent_idx",
-          "columns": [
-            "parent_session_id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "plugin_settings": {
       "name": "plugin_settings",
       "columns": {
@@ -709,13 +620,6 @@
         },
         "session_agents": {
           "name": "session_agents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "remote_control": {
-          "name": "remote_control",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
@@ -1014,6 +918,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "command": {
+          "name": "command",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "outlive": {
           "name": "outlive",
           "type": "integer",
@@ -1052,21 +963,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
-        },
-        "remote_control_name": {
-          "name": "remote_control_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "extra_starts": {
-          "name": "extra_starts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
         },
         "status": {
           "name": "status",

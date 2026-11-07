@@ -3,7 +3,7 @@ import type { Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { PROJECT_KIND_ICON } from '../lib/projectIcons'
 import { ROW_SELECTED, ROW_SELECTED_GROUP } from '../lib/rows'
-import { commandTone, SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
+import { SESSION_STATE_DOT, SESSION_STATE_LABEL, commandTone, type SessionState } from '../lib/sessionstate'
 import { CaretIcon, CommandChildIcon, FolderIcon, PinIcon, TerminalIcon } from './icons'
 
 /** The caret's column: 16px, so a row with nothing to expand keeps its icon in line. */
@@ -375,7 +375,7 @@ export function SessionRow({
         type="button"
         data-session-row={id}
         aria-current={shown === 'focused' ? 'true' : undefined}
-        aria-label={`${label}, ${state === null ? 'state unknown' : SESSION_STATE_LABEL[state]}${outside ? ', outside Helm' : ''}${parentName === undefined ? '' : `, started by ${parentName}`}${needs === 0 ? '' : `, ${String(needs)} of its sessions waiting for you`}`}
+        aria-label={`${label}, ${state === null ? 'state unknown' : command && note !== '' ? note : SESSION_STATE_LABEL[state]}${outside ? ', outside Helm' : ''}${parentName === undefined ? '' : `, started by ${parentName}`}${needs === 0 ? '' : `, ${String(needs)} of its sessions waiting for you`}`}
         onClick={() => onOpen(id)}
         style={{ paddingLeft: indent }}
         className={cn(
