@@ -353,6 +353,9 @@ impl World {
         entries
             .filter_map(|entry| {
                 let path = entry.ok()?.path();
+                if path.extension()? != "json" {
+                    return None;
+                }
                 serde_json::from_slice(&std::fs::read(path).ok()?).ok()
             })
             .collect()
