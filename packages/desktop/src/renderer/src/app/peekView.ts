@@ -1,0 +1,134 @@
+import { sessionLabel, type ChildMark, type PermissionMode, type SessionRecord } from '@helm/core/types'
+import {
+  SESSION_STATE_LABEL,
+  type ChildPeekProps,
+  type PeekTone,
+  type PopupAnchor,
+  type TabIndicator
+} from '@helm/ui'
+import type { PeekTarget } from './peek'
+
+/**
+ * What the peek says of a child, from its row and its state. The wording lives
+ * here so the view only draws, and so the chip, the peek and the tree agree on
+ * what a state is called.
+ */
+
+/** What a state chip says and how it is toned: the dot's own tones, in a word. */
+export function peekState(state: TabIndicator): { label: string; tone: PeekTone } {
+  switch (state) {
+    case 'busy':
+      return { label: 'working', tone: 'working' }
+    case 'waiting':
+      return { label: 'needs you', tone: 'needs' }
+    case 'idle':
+    case 'shell':
+      return { label: 'idle', tone: 'idle' }
+    case 'running':
+      return { label: 'running', tone: 'idle' }
+    case 'error':
+    case 'failed':
+      return { label: state === 'error' ? 'error' : 'failed', tone: 'danger' }
+    case 'ended':
+      return { label: 'ended', tone: 'neutral' }
+  }
+}
+
+/** A permission mode as the peek's Mode row says it: the launcher's words, lower case, as the frame sets it in mono. */
+const MODE_WORDS: Readonly<Record<PermissionMode, string>> = {
+  manual: 'ask first',
+  plan: 'plan',
+  acceptEdits: 'accept edits',
+  auto: 'auto',
+  dontAsk: 'don’t ask',
+  bypassPermissions: 'bypass permissions'
+}
+
+/** The last path segment of a folder, either separator. */
+function folderOf(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, '')
+  const at = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  return at < 0 ? trimmed : trimmed.slice(at + 1)
+}
+
+/** What a child of the peek's facts are, everything the popover shows but its screen and its buttons. */
+export type PeekFacts = Pick<
+  ChildPeekProps,
+  'name' | 'mark' | 'state' | 'role' | 'command' | 'folder' | 'folderPath' | 'branch' | 'mode' | 'runsIn' | 'report'
+>
+
+/**
+ * The peek's facts for `child`: who it is (its role, or its command), where
+ * it runs, the mode it was launched in and its last report. `command` is the
+ * command line of a child that runs one and not an agent, which has no role,
+ * mode or report; absent for an agent child.
+ */
+export function peekFacts(
+  child: SessionRecord,
+  indicator: TabIndicator,
+  mark: ChildMark,
+  command?: { line: string; runsIn?: string }
+): PeekFacts {
+  const report = child.lastReport
+  return {
+    name: sessionLabel(child),
+    mark,
+    state: peekState(indicator),
+    role: child.role ?? null,
+    command: command?.line,
+    folder: folderOf(child.cwd),
+    folderPath: child.cwd,
+    branch: child.branch,
+    mode: child.permissionMode === undefined ? null : MODE_WORDS[child.permissionMode],
+    runsIn: command?.runsIn,
+    report:
+      command !== undefined || report === undefined || report.text.trim() === ''
+        ? null
+        : { state: report.state, text: report.text }
+  }
+}
+
+/** Names a chip in a parent's crumb to the window, which finds it to place the peek under it. */
+export const chipKey = (host: string, id: number): string => `${host}:${String(id)}`
+
+/** The peek's width, which a centred fallback needs to know. */
+const PEEK_WIDTH = 470
+
+/** The element the peek of `target` opened from, or null when it is not on screen (a closed sidebar). */
+function anchorElement(target: Pick<PeekTarget, 'host' | 'id' | 'anchor'>, doc: Document): HTMLElement | null {
+  if (target.anchor.kind === 'chip') {
+    const key = chipKey(target.host, target.id)
+    return [...doc.querySelectorAll<HTMLElement>('[data-crumb-chip]')].find((chip) => chip.dataset.crumbChip === key) ?? null
+  }
+  const group = [...doc.querySelectorAll<HTMLElement>('[data-host-group]')].find(
+    (each) => each.dataset.hostGroup === target.host
+  )
+  const row = `session:${String(target.id)}`
+  return [...(group?.querySelectorAll<HTMLElement>('[data-session-row]') ?? [])].find((each) => each.dataset.sessionRow === row) ?? null
+}
+
+/**
+ * Where the peek of `target` goes: beside the row it was opened from, or under
+ * the chip, and in the middle of the window's top when what it opened from is
+ * not on screen (a notification clicked with the sidebar closed).
+ */
+export function peekPlace(
+  target: Pick<PeekTarget, 'host' | 'id' | 'anchor'>,
+  doc: Document = document
+): { at: PopupAnchor; element: HTMLElement | null } {
+  const element = anchorElement(target, doc)
+  if (element === null) {
+    return { at: { x: Math.max(8, (window.innerWidth - PEEK_WIDTH) / 2), y: 80 }, element: null }
+  }
+  const rect = element.getBoundingClientRect()
+  if (target.anchor.kind === 'chip') {
+    // Under the chip, a little to its left, as the design sets it.
+    return { at: { below: new DOMRect(rect.left - 8, rect.top, rect.width, rect.height) }, element }
+  }
+  return { at: { x: rect.right + 10, y: rect.top - 16 }, element }
+}
+
+/** The mark's state in words, for a chip's label. */
+export function markLabel(mark: ChildMark): string {
+  return mark.state === null ? 'state unknown' : SESSION_STATE_LABEL[mark.state]
+}

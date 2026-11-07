@@ -1,6 +1,7 @@
 import type { JSX, ReactNode, Ref } from 'react'
 import { cn } from '../lib/cn'
 import { shortcutLabel } from '../lib/platform'
+import { ChildMarkIcon, type ChildMarkView } from './ChildMark'
 import { CloseIcon, MaximizeIcon, SplitIcon, UnmaximizeIcon } from './icons'
 
 /** "First pane", "Second pane", ... and past the words, "Pane 9". */
@@ -104,9 +105,30 @@ const CRUMB_TONE: Record<CrumbTone, string> = {
   subtle: 'text-fg-subtle'
 }
 
+/**
+ * One child of the session in front, as a chip in its crumb: its dot or
+ * glyph and its name. The chips stand in for the family view in a pane that
+ * has no room for it, so the children are on screen with the sidebar closed.
+ */
+export interface CrumbChip {
+  /** Names the chip to the window, which finds it to place the peek under it. */
+  chipKey: string
+  name: string
+  mark: ChildMarkView
+  /** What the mark says in words, for the chip's label. */
+  stateLabel: string
+  /** The child waits on a person: its words are in warn. */
+  needsYou: boolean
+  /** Its peek is open, opened from this chip. */
+  open: boolean
+  onPress: () => void
+}
+
 export interface PaneCrumbProps {
   /** Where the session is: its project, as named in the tree. */
   place: string
+  /** The children of the session, as chips, when its pane has no room for the family view. */
+  chips?: readonly CrumbChip[] | undefined
   /** The branch its folder was on when it started, when it is a repository. */
   branch?: string | null | undefined
   /** The profile it was launched from, if it was one. */
@@ -125,7 +147,8 @@ export interface PaneCrumbProps {
  * the branch - lives here, in mono, where it has the whole width of the pane to
  * be read in rather than a 240px tab's second line.
  */
-export function PaneCrumb({ place, branch, profile, status, hint }: PaneCrumbProps): JSX.Element {
+export function PaneCrumb({ place, chips, branch, profile, status, hint }: PaneCrumbProps): JSX.Element {
+  const withChips = chips !== undefined && chips.length > 0
   return (
     <div
       data-pane-crumb
@@ -154,12 +177,41 @@ export function PaneCrumb({ place, branch, profile, status, hint }: PaneCrumbPro
           right-aligned in it: a program's error message can be 200 characters,
           so it ends in an ellipsis rather than squeezing the branch, and its
           hover text has it whole. */}
+      {withChips && (
+        // The chips take the room the place leaves, at the end of the row,
+        // with the status after them, as the design draws it.
+        <span data-crumb="chips" className="ml-auto flex min-w-0 shrink-0 gap-1 overflow-hidden">
+          {chips.map((chip) => (
+            <button
+              key={chip.chipKey}
+              type="button"
+              data-crumb-chip={chip.chipKey}
+              aria-haspopup="dialog"
+              aria-expanded={chip.open}
+              aria-label={`${chip.name}, ${chip.stateLabel}, peek`}
+              onClick={chip.onPress}
+              className={cn(
+                'inline-flex h-[18px] shrink-0 items-center gap-[5px] rounded-full border-0 bg-surface-raised px-[7px] font-sans text-[11px] whitespace-nowrap transition-colors focus-visible:outline-offset-[-1px]',
+                chip.needsYou ? 'text-warn hover:bg-active' : 'text-fg-muted hover:bg-active hover:text-fg',
+                chip.open && 'bg-active',
+                chip.open && !chip.needsYou && 'text-fg'
+              )}
+            >
+              <ChildMarkIcon mark={chip.mark} />
+              {chip.name}
+            </button>
+          ))}
+        </span>
+      )}
       {status !== undefined && (
         <span
           data-crumb="status"
           title={status.text}
           className={cn(
-            'min-w-0 flex-1 basis-0 truncate text-right font-sans tabular-nums',
+            'min-w-0 truncate text-right font-sans tabular-nums',
+            // Without chips the status takes the rest of the row; with them
+            // the chips are pushed to the end and the status follows.
+            withChips ? 'shrink pl-1.5' : 'flex-1 basis-0',
             CRUMB_TONE[status.tone]
           )}
         >

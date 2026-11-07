@@ -14,8 +14,10 @@ import {
   activeRef,
   besideOf,
   browserSearchName,
+  childMark,
   childPlace,
   closeGroup,
+  crumbChips,
   closeTab,
   cycleTab,
   DEFAULT_SETTINGS,
@@ -102,6 +104,7 @@ import {
   BROWSER_ZOOM,
   BrowserPages,
   BrowserPane,
+  ChildPeek,
   cn,
   CodeIcon,
   CommandPalette,
@@ -200,6 +203,7 @@ import {
   type ProfilePrediction,
   type QuickOpenAt,
   type QuickOpenMode,
+  type CrumbChip,
   type RailItem,
   type SettingsSectionId,
   type Tab,
@@ -217,6 +221,8 @@ import {
 import { sidebarFor, type SidebarView } from "./sidebarFor";
 import { pressTreeSession, treeEntries } from "./treeFamilies";
 import { openChildTab, usePeek } from "./peek";
+import { PeekTerminal } from "./PeekTerminal";
+import { chipKey, markLabel, peekFacts, peekPlace } from "./peekView";
 import { useNeedsYou, type HostAttention } from "./needsYou";
 import { hostNoticesSource } from "./noticesSource";
 import { useHostNotices } from "./useNotices";
@@ -3313,6 +3319,24 @@ export function App(): JSX.Element {
     },
   });
 
+  // Where the peek goes, read from the row or chip it opened from when it
+  // opened; the popover closes on a resize, so it is not placed again.
+  const peekAt = useMemo(
+    () =>
+      peek.target === null
+        ? null
+        : peekPlace({
+            host: peek.target.host,
+            id: peek.target.id,
+            anchor: peek.target.anchor,
+          }),
+    [peek.target?.host, peek.target?.id, peek.target?.anchor.kind], // eslint-disable-line react-hooks/exhaustive-deps -- the target's fields are the key; the object is new on each anchor change
+  );
+  const peekAnchorRef = useMemo(
+    () => ({ current: peekAt?.element ?? null }),
+    [peekAt],
+  );
+
   /** What each host's notices and listed sessions say of the children that need a person. */
   const noticeViews = useHostNotices(hostNoticesSource);
   const attentionHosts = useMemo<HostAttention<SessionRecord>[]>(
@@ -3684,6 +3708,35 @@ export function App(): JSX.Element {
     }
   };
 
+  /**
+   * The chips in the crumb of a session's tab: its running children, when its
+   * pane has no room for the family view or this device shows none. A chip
+   * opens the child's peek under itself.
+   */
+  const chipsOf = (ref: { id: number; host?: string }): CrumbChip[] => {
+    const host = ref.host ?? LOCAL_HOST_KEY;
+    return crumbChips(
+      open,
+      sessionsByHost.get(host) ?? [],
+      host,
+      ref.id,
+      placeScope,
+      (child) => sessionAt({ id: child.id, host })?.indicator ?? null,
+    ).map(({ child, mark }) => ({
+      chipKey: chipKey(host, child.id),
+      name: sessionLabel(child),
+      mark,
+      stateLabel: markLabel(mark),
+      needsYou: mark.state === "waiting",
+      open:
+        peek.target?.host === host &&
+        peek.target.id === child.id &&
+        peek.target.anchor.kind === "chip",
+      onPress: () =>
+        peek.store.open(host, child.id, { kind: "chip", parentId: ref.id }),
+    }));
+  };
+
   /** The crumb under a session's tab. */
   const crumbFor = (ref: PaneRef | null): ReactNode => {
     if (ref?.kind === "file") {
@@ -3730,6 +3783,7 @@ export function App(): JSX.Element {
           place={folderName(there.record.cwd)}
           hint={`${hostName(hostOf(ref))} · ${there.record.cwd}`}
           branch={there.record.branch}
+          chips={chipsOf(ref)}
         />
       );
     }
@@ -3744,6 +3798,7 @@ export function App(): JSX.Element {
         place={project?.name ?? folderName(session.cwd)}
         hint={session.cwd}
         branch={session.branch}
+        chips={chipsOf(ref)}
         profile={
           session.profileId === null
             ? null
@@ -3761,6 +3816,49 @@ export function App(): JSX.Element {
       />
     );
   };
+
+  /**
+   * The peek of a running child with nowhere on screen here: beside its row or
+   * under its chip, its screen through the host's watch-only attach. Open and
+   * Stop are the store's (a tab in the parent's pane strip or the focused
+   * pane; the question stopping any running session asks).
+   */
+  const peekedChild =
+    peek.target === null
+      ? null
+      : (sessionsByHost
+          .get(peek.target.host)
+          ?.find((each) => each.id === peek.target?.id) ?? null);
+  const peekedState =
+    peek.target === null
+      ? null
+      : sessionAt({ id: peek.target.id, host: peek.target.host });
+  const childPeek =
+    peek.target !== null &&
+    peekAt !== null &&
+    peekedChild !== null &&
+    peekedChild.status === "running" &&
+    peekedState !== null ? (
+      <ChildPeek
+        key={chipKey(peek.target.host, peek.target.id)}
+        {...peekFacts(
+          peekedChild,
+          peekedState.indicator,
+          childMark(peekedChild, peekedState.indicator),
+        )}
+        screen={
+          <PeekTerminal
+            attach={peek.store.attach}
+            windowsBuild={info?.windowsBuild ?? null}
+          />
+        }
+        at={peekAt.at}
+        anchorRef={peekAnchorRef}
+        onClose={peek.store.close}
+        onStop={peek.store.stop}
+        onOpen={peek.store.openAsTab}
+      />
+    ) : null;
 
   // ---------------------------------------------------------------------------
   // Dialogs
@@ -5892,6 +5990,7 @@ export function App(): JSX.Element {
           />
         )}
 
+        {childPeek}
         {harnessDialog}
         {templateDialogs}
         {confirmDialog}

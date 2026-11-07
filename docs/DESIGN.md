@@ -487,7 +487,9 @@ overrides the gate; keep it.
   `accent-text`, "Needs you · 2m" in `warn`). It is the branch's home now that
   tabs are one line: two sessions on one project are told apart here, with the
   room to say the branch in full. A page's tab has no crumb - the page's own
-  header names what it is about.
+  header names what it is about. A parent shown alone, with no room for its
+  family view, also carries its children as chips here (below, "A parent shown
+  alone has its children in its crumb").
 - **The session tab's state dot.** A session tab carries a 6px dot in place of
   a kind icon, and it says two different kinds of thing: what Helm knows about
   the process, and what the session says about itself. Claude Code publishes its
@@ -945,6 +947,33 @@ overrides the gate; keep it.
   The note is as wide as the pane, so a pane clips with `overflow-clip` and
   `overflow-clip-margin: 4px` (`FOCUS_RING_ROOM`) and the ring is whole at the
   island's edge, over its border and the gutter.
+
+  **A parent shown alone has its children in its crumb.** A pane that fails
+  the room rule, or a device with the setting off, draws the parent's terminal
+  alone, and the crumb holds each running child as a chip at the end of the
+  row, before the status: an 18px pill on `surface-raised`, `fg-muted` Inter
+  11px, with the child's 6px state dot or, for a command, its terminal glyph,
+  and its name. Hover or an open peek takes `active` and `fg`; a child that
+  needs a person has its name in `warn`. A chip opens that child's peek under
+  itself (`aria-haspopup="dialog"`), so the children are on screen with the
+  sidebar closed.
+
+  **The peek is a popover for a child with nowhere on screen here**, opened
+  from its row in the Sessions tree (beside the row) or from a chip (under it),
+  470px wide on `surface-raised` with a `border-strong` hairline, `rounded-well`
+  and no shadow. It is an overlay (`overlayMounted`), so a browser view stands
+  down for it; Escape, the close button and a press outside close it, and
+  focus goes back to the row or chip. Top to bottom: the child's mark, name and
+  a state chip in the dot's tone, with the close button at the end; the facts as
+  mono `fg-muted` 11px rows (an agent's Role, Folder, Branch and Mode; a
+  command's Command in `fg`, Folder, Branch and Runs in); its screen, live and
+  read-only through the host's watch-only attach, 150px high on the terminal's
+  ground, drawn at the child's own grid scaled to the width of the box and held
+  to its bottom edge; its last report as the `accent-soft` note with the 2px
+  accent edge, under a "Last report · done" label in the small caps label type;
+  and the foot: "Watching only. Open it to type." in `fg-subtle`, Stop in
+  `danger` (it asks first, as stopping any session does, and the peek stays up
+  for the question) and Open in the accent outline.
 - **Agent worktrees**: a project page for a folder on this PC lists the
   checkouts Floti made for its agents in a section of its own, under the
   sections above it and shown only when the repository has any. One row each:

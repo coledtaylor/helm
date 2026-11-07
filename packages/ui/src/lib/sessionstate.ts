@@ -54,6 +54,13 @@ export const SESSION_STATE_DOT: Record<SessionState, string> = {
   error: 'bg-danger'
 }
 
+/** A command's glyph takes the tone a dot would: it runs, it has ended, or it failed. */
+export function commandTone(state: SessionState | null): string {
+  if (state === 'failed') return 'text-danger'
+  if (state === null || state === 'ended') return 'text-fg-subtle'
+  return 'text-success'
+}
+
 /** The same eight, in words, for a label and for anyone not using colour. */
 export const SESSION_STATE_LABEL: Record<SessionState, string> = {
   running: 'running',

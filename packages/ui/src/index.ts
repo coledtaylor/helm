@@ -160,10 +160,13 @@ export {
   PaneCrumb,
   PaneGroup,
   paneName,
+  type CrumbChip,
   type CrumbTone,
   type PaneCrumbProps,
   type PaneGroupProps
 } from './components/PaneGroup'
+export { ChildMarkIcon, type ChildMarkView } from './components/ChildMark'
+export { ChildPeek, type ChildPeekProps, type PeekTone } from './components/ChildPeek'
 export {
   ChildHeader,
   FAMILY_HEADER_PX,
@@ -212,6 +215,8 @@ export {
 export { Sidebar, SidebarAction, type SidebarProps } from './components/Sidebar'
 export { StatusBar, type StatusBarProps, type StatusHostItem, type StatusPluginItem } from './components/StatusBar'
 export { TabBar, type Tab, type TabBarProps, type TabIndicator } from './components/TabBar'
+export { SESSION_STATE_LABEL, type SessionState } from './lib/sessionstate'
+export type { PopupAnchor } from './lib/popup'
 export {
   BROWSER_PAGE_MIME,
   BrowserPages,

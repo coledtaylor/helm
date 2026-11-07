@@ -3,7 +3,7 @@ import type { Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { PROJECT_KIND_ICON } from '../lib/projectIcons'
 import { ROW_SELECTED, ROW_SELECTED_GROUP } from '../lib/rows'
-import { SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
+import { commandTone, SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
 import { CaretIcon, CommandChildIcon, FolderIcon, PinIcon, TerminalIcon } from './icons'
 
 /** The caret's column: 16px, so a row with nothing to expand keeps its icon in line. */
@@ -318,12 +318,6 @@ const CARET_LEFT_PX = 17
  * session with nothing to fold keeps its own.
  */
 const CARET_DOT_SHIFT_PX = 3
-/** A command's glyph takes the tone a dot would: it runs, it has ended, or it failed. */
-function commandTone(state: SessionState | null): string {
-  if (state === 'failed') return 'text-danger'
-  if (state === null || state === 'ended') return 'text-fg-subtle'
-  return 'text-success'
-}
 
 /**
  * A live session, under the project it is running in.
