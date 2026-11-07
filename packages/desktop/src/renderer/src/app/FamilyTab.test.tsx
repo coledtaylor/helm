@@ -498,6 +498,17 @@ describe('a parent’s tab with children', () => {
       expect(header.querySelector('[data-family-command="failed"]')!.className).toContain('text-danger')
     })
 
+    it('S37: a command that crashed with a wrapped code reads exited -1073741819 · 14:52, its glyph in danger and saying so', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
+      view.list([LEAD, exited(3, 'tests', -1073741819)])
+
+      const header = view.container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+      expect(header.querySelector('[data-family-status]')!.textContent).toBe('exited -1073741819 · 14:52')
+      expect(header.textContent).not.toContain('2147483647')
+      expect(header.querySelector('[data-family-command="failed"]')!.className).toContain('text-danger')
+      expect(header.querySelector('[data-family-command]')!.getAttribute('title')).toBe('exited -1073741819')
+    })
+
     it('S25 S27: a command the host ended reads Stopped with the glyph in fg-subtle, not the number the system gave it', () => {
       const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
       view.list([

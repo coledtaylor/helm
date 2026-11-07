@@ -74,6 +74,13 @@ describe('childTab', () => {
     ).toMatchObject({ indicator: 'ended', stateWord: 'stopped' })
   })
 
+  it('S37: gives a wrapped exit code as it is, in the failed glyph, for the tab’s accessible name', () => {
+    expect(childTab(session({ ...command, status: 'exited', exitCode: -1073741819 }), 'failed')).toMatchObject({
+      indicator: 'failed',
+      stateWord: 'exited -1073741819'
+    })
+  })
+
   it('keeps an agent child’s own dot and gives it the parent’s name as its badge', () => {
     expect(childTab(session({ role: 'reviewer', parentName: 'api-refactor' }), 'busy')).toEqual({
       indicator: 'busy',
@@ -114,6 +121,7 @@ describe('indicatorOf', () => {
   it('lets how a session ended outrank the last thing its record said', () => {
     expect(indicatorOf(session({ status: 'exited', exitCode: 0 }), said('busy'))).toBe('ended')
     expect(indicatorOf(session({ status: 'exited', exitCode: 3 }), said('waiting'))).toBe('failed')
+    expect(indicatorOf(session({ status: 'exited', exitCode: -1073741819 }), undefined)).toBe('failed')
     expect(indicatorOf(session({ status: 'exited', exitCode: null }), undefined)).toBe('ended')
     expect(indicatorOf(session({ status: 'lost' }), said('busy'))).toBe('ended')
   })
@@ -223,6 +231,13 @@ describe('what the tree row and the crumb say', () => {
     it('S31: says any other exit code in danger', () => {
       expect(crumbStatus(exited(1), 'failed', null, now)).toEqual({ text: 'exited 1 · 14:52', tone: 'danger' })
       expect(crumbStatus(exited(137), 'failed', null, now)).toEqual({ text: 'exited 137 · 14:52', tone: 'danger' })
+    })
+
+    it('S37: says a wrapped code (0xC0000005) as it is, in danger, never 2147483647', () => {
+      expect(crumbStatus(exited(-1073741819), 'failed', null, now)).toEqual({
+        text: 'exited -1073741819 · 14:52',
+        tone: 'danger'
+      })
     })
 
     it('says Stopped in fg-subtle for a command the host ended, never the number the system gave it', () => {

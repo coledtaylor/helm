@@ -937,7 +937,14 @@ overrides the gate; keep it.
   a minute on), and its ended header reads "exited 0 · 14:52" ("exited <code> · <time>") with
   **Close**; a command the host ended (Stop, its parent, the host) reads
   "Stopped · 14:52" ("Stopped by you" after this window's Stop) in `fg-subtle`,
-  because the number a system gives a process it killed is not an exit code. Pressing the words shrinks the card; Stop asks first, in the
+  because the number a system gives a process it killed is not an exit code. An exit code
+  is the number the OS reports wrapped to a signed 32-bit value (a crash such
+  as 0xC0000005 reads "exited -1073741819"), everywhere the window says it. The
+  command's own tab says the same in its ended bar: "Stopped" for one the host
+  ended, in the bar's ended tone (`border-border`, `bg-surface-sunken`,
+  `fg-muted`, an `fg-subtle` dot) and never `danger`, and "Session exited with
+  code <code>" in `danger` for one that exited on its own with any code but 0.
+  Pressing the words shrinks the card; Stop asks first, in the
   window's one question for ending a running session ("*name* is still running
   on *host*. Ending it stops the Claude Code session in *folder*. *Parent*,
   which started it, is told.", End session / Cancel, Cancel focused; the

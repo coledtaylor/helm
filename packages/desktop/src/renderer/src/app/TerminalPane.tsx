@@ -1,7 +1,7 @@
 import type { JSX } from 'react'
 import { useEffect, useRef } from 'react'
 import type { SessionRecord } from '@helm/core'
-import { LOCAL_HOST_KEY } from '@helm/core/types'
+import { isCommandChild, LOCAL_HOST_KEY } from '@helm/core/types'
 import { cn, HostLostBanner, SessionEndedBar, type SessionLost } from '@helm/ui'
 import { getTerminal, mountTerminal } from './terminals'
 import { terminalPrefs } from './termprefs'
@@ -141,6 +141,9 @@ export function TerminalPane({
           durationMs={session.durationMs}
           onClose={() => onClose(session.id)}
           {...(lost !== undefined && session.status === 'lost' ? { lost } : {})}
+          // A command the host ended says so, as its crumb and ended header do:
+          // the number the system gave a process it killed is not an exit code.
+          stopped={isCommandChild(session) && session.stopped === true}
         />
       )}
       {/* The gutter is a wrapper rather than padding on the terminal's own
