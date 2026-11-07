@@ -417,7 +417,12 @@ impl Hosted {
                         }
                         Some(_) => {}
                         None => {
-                            if let Some(notice) = self.needs_you_notice(id, &text) {
+                            let began = overview
+                                .sessions
+                                .iter()
+                                .find(|listed| listed.host_session_id == Some(view.id))
+                                .and_then(|listed| listed.status_since_ms);
+                            if let Some(notice) = self.needs_you_notice(id, &text, began) {
                                 watched.needs_you.insert(id, notice);
                                 noticed = true;
                             }
@@ -476,8 +481,17 @@ impl Hosted {
     }
 
     /// The needs-you notice for child `child`, waiting on `text`, or `None`
-    /// when it is not a child with a parent.
-    fn needs_you_notice(&self, child: SessionId, text: &str) -> Option<StandingNotice> {
+    /// when it is not a child with a parent. The notice began when the agent
+    /// says its status did (`began`, milliseconds since the epoch), so a host
+    /// that starts again, or a pass that loses the notice and finds it again,
+    /// does not make a child that has waited all along begin to wait anew; with
+    /// no such time it began now.
+    fn needs_you_notice(
+        &self,
+        child: SessionId,
+        text: &str,
+        began: Option<u64>,
+    ) -> Option<StandingNotice> {
         let store = self.ledger.store();
         let link = match rows::link_of(&store, child) {
             Ok(link) => link?,
@@ -496,7 +510,9 @@ impl Hosted {
             link.parent,
             &parent,
             text,
-            store_now(&store),
+            began
+                .and_then(|ms| store_time(&store, ms))
+                .unwrap_or_else(|| store_now(&store)),
         ))
     }
 
@@ -714,6 +730,19 @@ fn told_lines(lines: &[String]) -> String {
 }
 
 /// The store's own "now", in the text it writes times in.
+/// `ms` milliseconds since the epoch, written as `store_now` writes a time.
+fn store_time(store: &crate::store::Store, ms: u64) -> Option<String> {
+    let seconds = i64::try_from(ms).ok()? as f64 / 1000.0;
+    store
+        .connection()
+        .query_row(
+            "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?1, 'unixepoch')",
+            [seconds],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
 fn store_now(store: &crate::store::Store) -> String {
     store
         .connection()

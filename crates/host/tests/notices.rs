@@ -1019,3 +1019,39 @@ async fn s23_a_2_1_client_follows_dismisses_allows_and_watches_while_a_2_0_clien
     .await;
     host.stop(HostStopReason::Stop).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_child_still_waiting_when_the_host_comes_back_stands_in_the_first_list_a_window_is_given_and_began_when_it_began()
+ {
+    let world = World::new();
+    let first = world.host().await;
+    let parent = world.session(&world.project("waiting"), "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "asker" }))
+        .await
+        .done();
+    let asker = world.child_of(&parent, "asker").await;
+    world.type_line(&asker, "/wait").await;
+    let before = world
+        .notices_where("a needs-you notice to stand", |notices| {
+            !of_kind(notices, NoticeKind::NeedsYou).is_empty()
+        })
+        .await
+        .remove(0);
+
+    // The host goes down and comes back with the session the keeper held,
+    // still waiting. The list a window is given when it connects at once has
+    // the notice, and it began when the child began waiting, so a window that
+    // was connected before does not take it for a new one.
+    first.crash().await;
+    let second = world.host().await;
+    let standing = world.notices().await;
+    let after = of_kind(&standing, NoticeKind::NeedsYou);
+    assert_eq!(after.len(), 1, "{standing:?}");
+    assert_eq!(after[0].id, before.id);
+    assert_eq!(
+        after[0].since, before.since,
+        "the notice began again with the host"
+    );
+    second.stop(HostStopReason::Stop).await;
+}
