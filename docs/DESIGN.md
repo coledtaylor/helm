@@ -939,7 +939,9 @@ overrides the gate; keep it.
   pressing it again folds it back to the line; the card's terminal gives up the
   room. A running agent child's card has one while it reports, and so does a
   child that is open as its own tab, above its terminal; a command child's, a
-  header and an ended child's last screen never do.
+  header and an ended child's last screen never do. Keyboard focus on the note
+  takes the page's ring, 2px accent at 2px outside the note, drawn whole over
+  the header and the terminal beside it and not inset like the card header's.
 - **Agent worktrees**: a project page for a folder on this PC lists the
   checkouts Floti made for its agents in a section of its own, under the
   sections above it and shown only when the repository has any. One row each:

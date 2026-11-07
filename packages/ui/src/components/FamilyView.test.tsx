@@ -190,6 +190,42 @@ describe('ReportNote', () => {
   })
 })
 
+describe('ReportNote focus', () => {
+  it('takes the page’s focus ring outside the note, not an inset one, and sits above the terminal that follows it', () => {
+    const { container } = render(<ReportNote label="Reported done" text="Tests pass." />)
+    const note = container.querySelector<HTMLElement>('[data-family-note]')!
+    // No utility sets the ring: the global `:focus-visible` (2px accent at 2px offset) does.
+    expect(note.className).not.toMatch(/outline|ring-/)
+    // A positioned terminal after the note would paint over the ring's lower edge.
+    expect(note.className).toContain('relative')
+    expect(note.className).toContain('z-[1]')
+  })
+
+  it('is not inside anything that clips the ring, in a card or in a child’s own tab', () => {
+    const note = <ReportNote label="Reported done" text="Tests pass." />
+    const card = render(
+      <FamilyKids
+        axis="column"
+        cardCount={1}
+        headersMax={100}
+        headers={null}
+        cards={
+          <FamilyCard name="worker" header={<header>the header</header>} note={note}>
+            <p>the terminal</p>
+          </FamilyCard>
+        }
+      />
+    )
+    const own = render(<FamilyFrame axis={null} parent={<p>terminal</p>} note={note} />)
+    for (const { container } of [card, own]) {
+      const found = container.querySelector<HTMLElement>('[data-family-note]')!
+      for (let up = found.parentElement; up !== null && up !== container.parentElement; up = up.parentElement) {
+        expect(up.className, up.outerHTML.slice(0, 80)).not.toMatch(/overflow-(hidden|clip|auto|scroll|x-|y-)/)
+      }
+    }
+  })
+})
+
 describe('FamilyFrame with a report note', () => {
   it('draws the note above the parent’s terminal without moving the terminal when the note comes and goes', () => {
     const terminal = <p data-testid="terminal">parent terminal</p>
