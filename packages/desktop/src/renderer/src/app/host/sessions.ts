@@ -1,4 +1,5 @@
 import {
+  isCommandChild,
   sessionLabel,
   withReportOf,
   type SessionActivityState,
@@ -137,6 +138,8 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
 
   /** Every session the host listed or this window started, until it is ended here. */
   const records = new Map<number, SessionRecord>()
+  /** The sessions whose tab was closed: an exit that comes after is not theirs to show. */
+  const closed = new Set<number>()
   /** The sessions with a tab in this window, whose terminals are carried while they run. */
   const shown = new Set<number>()
   let focused: readonly number[] = []
@@ -265,8 +268,10 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
   const onExit = (row: P.SessionRecord): void => {
     const record = sessionFromHost(row)
     streams.close('session:data', record.id)
-    // A session whose tab was closed has nobody to tell.
-    if (!records.has(record.id)) return
+    // A session whose tab was closed has nobody to tell. A command a session started that
+    // ended before the window was told of it is the one exit nobody was told of (the host
+    // lists running sessions only), and it is kept like any other, to show how it ended.
+    if (!records.has(record.id) && (!isCommandChild(record) || closed.has(record.id))) return
     records.set(record.id, record)
     events.tell('session:exit', record)
   }
@@ -448,6 +453,7 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
         // `session:exit`, and the window forgets it when it is closed there.
         if (req.keep === true) return { closed: true }
         records.delete(req.id)
+        closed.add(req.id)
         shown.delete(req.id)
         streams.close('session:data', req.id)
         if (focused.includes(req.id)) {

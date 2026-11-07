@@ -195,6 +195,32 @@ describe('sessions over the window’s own connection', () => {
     ])
   })
 
+  it('tells the window of a command child that exited before it was listed, keeps it until closed, and says nothing of one it closed or of an agent it never listed', async () => {
+    const { adapters, connection } = world({ listed: [row()] })
+    const exits = hear(adapters, 'session:exit')
+    await ask(adapters, 'session:list')
+
+    // The host lists running sessions only, so a command that exits at once is heard of here and nowhere else.
+    const lint = row({ id: 9, command: 'pnpm lint', parentId: 7, status: 'exited', exitCode: 0 })
+    connection.push('session:exit', lint)
+    expect(exits).toEqual([expect.objectContaining({ id: 9, command: 'pnpm lint', exitCode: 0 })])
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([
+      expect.objectContaining({ id: 7 }),
+      expect.objectContaining({ id: 9 })
+    ])
+
+    // Closed, its exit heard again is not shown again.
+    await ask(adapters, 'session:close', { id: 9 })
+    exits.length = 0
+    connection.push('session:exit', lint)
+    expect(exits).toEqual([])
+    await expect(ask(adapters, 'session:list')).resolves.toEqual([expect.objectContaining({ id: 7 })])
+
+    // An agent session nobody listed has nobody to tell.
+    connection.push('session:exit', row({ id: 12, status: 'exited', exitCode: 0 }))
+    expect(exits).toEqual([])
+  })
+
   it('asks before Stop on a child’s card ends it, says its parent is told, and keeps the session where it ended once agreed', async () => {
     const { adapters, connection } = world({
       listed: [row({ id: 7, name: 'lead' }), row({ id: 8, name: 'reviewer', parentId: 7 })]
