@@ -20,6 +20,8 @@
 //! - [`content`]: notes and documents, and the renderer.
 //! - [`files`]: the Files view.
 //! - [`worktrees`]: a project's agent worktrees, listed and removed.
+//! - [`notices`]: the notices standing on the host (`notices:changed`), and
+//!   dismissing one or allowing a parent more starts.
 //! - [`plugins`]: registered plugin folders and `plugins:changed`, and the
 //!   calls, asks and deliveries of the plugin pages clients frame.
 //! - [`agent_browser`]: the agent browser tools' calls, carried to a client
@@ -39,6 +41,7 @@ mod discovery;
 mod files;
 mod forwards;
 mod history;
+mod notices;
 mod plugins;
 mod profiles;
 mod resources;
@@ -283,6 +286,7 @@ impl Features {
             Box::new(content::Content::new(&context)?),
             Box::new(files::Files::new(&context)?),
             Box::new(worktrees::Worktrees::new(&context)?),
+            Box::new(notices::Notices::new(&context)?),
         ];
         let plugins = plugins::Plugins::new(
             &context,

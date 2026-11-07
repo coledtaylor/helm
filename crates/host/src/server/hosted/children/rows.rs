@@ -35,6 +35,8 @@ pub(super) struct ParentFacts {
     pub can_start: bool,
     /// How its own parent calls it, when it is a child.
     pub child_name: Option<String>,
+    /// How many starts beyond the starts setting it was allowed.
+    pub extra_starts: u32,
 }
 
 pub(super) fn parent_facts(store: &Store, id: SessionId) -> Result<ParentFacts> {
@@ -42,7 +44,7 @@ pub(super) fn parent_facts(store: &Store, id: SessionId) -> Result<ParentFacts> 
         .connection()
         .query_row(
             "SELECT cwd, permission_mode, coalesce(last_claude_session_id, claude_session_id), \
-             child_name, can_start FROM sessions WHERE id = ?1",
+             child_name, can_start, extra_starts FROM sessions WHERE id = ?1",
             [id.0],
             |row| {
                 Ok((
@@ -51,12 +53,13 @@ pub(super) fn parent_facts(store: &Store, id: SessionId) -> Result<ParentFacts> 
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, bool>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             },
         )
         .optional()
         .map_err(sql("read the session that is starting an agent"))?;
-    let Some((cwd, mode, conversation_id, child_name, can_start)) = found else {
+    let Some((cwd, mode, conversation_id, child_name, can_start, extra_starts)) = found else {
         return Err(Error::Refused(
             "Your session is not in this host's record.".to_owned(),
         ));
@@ -68,6 +71,7 @@ pub(super) fn parent_facts(store: &Store, id: SessionId) -> Result<ParentFacts> 
         depth: depth_of(store, id)?,
         can_start: child_name.is_none() || can_start,
         child_name,
+        extra_starts: u32::try_from(extra_starts).unwrap_or(0),
     })
 }
 

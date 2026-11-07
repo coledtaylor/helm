@@ -188,6 +188,9 @@ impl Hosted {
             None => TakenBack::default(),
         };
         let lost = records::reconcile_running(&ledger.store(), &held)?;
+        // A refusal or an error is kept for a parent that still runs, not for
+        // one that ended while no host was there to say so.
+        children.clear_unowned_notices(&ledger.store());
         // Children the keeper kept running are not news again.
         children.adopt(held.iter().copied());
         let mut devices = Devices::default();

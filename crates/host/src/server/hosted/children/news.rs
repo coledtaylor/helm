@@ -27,11 +27,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use floti_protocol::channels::common::ChildReport;
-use floti_protocol::channels::sessions::{SessionActivity, SessionActivityState};
+use floti_protocol::channels::sessions::{SessionActivity, SessionActivityState, StandingNotice};
 use tokio::sync::watch;
 
 use super::inbox::{self, EventKind, Facts, Item, StoppedBy};
-use super::rows;
+use super::{notices, rows};
 use crate::server::hosted::{Hosted, session_id};
 use crate::session::{HostedView, ReportState, ReportedStatus, SessionId};
 
@@ -178,6 +178,15 @@ fn needs_you(waiting_for: Option<&str>) -> Facts {
     }
 }
 
+/// What a waiting child waits on, as its notice says it.
+fn waiting_text(waiting_for: Option<&str>) -> String {
+    waiting_for
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or("waiting for you")
+        .to_owned()
+}
+
 /// A child's last report, for its record until its next turn starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LastReport {
@@ -214,6 +223,8 @@ struct Watched {
     /// Counts the changes to `last_report`, which the clients' listing shows
     /// and the activity reader publishes again when it moves.
     report_revision: u64,
+    /// The needs-you notice of each child whose activity is waiting.
+    needs_you: HashMap<SessionId, StandingNotice>,
 }
 
 /// The children the host watches, and the signal waits sleep on.
@@ -222,6 +233,8 @@ pub(in crate::server::hosted) struct Desk {
     /// Counts what changed for a wait: news written, a child's activity
     /// moved, a session ended.
     changes: watch::Sender<u64>,
+    /// Counts the changes to the standing notices.
+    standing: watch::Sender<u64>,
 }
 
 impl Desk {
@@ -229,7 +242,29 @@ impl Desk {
         Self {
             watched: Mutex::new(Watched::default()),
             changes: watch::Sender::new(0),
+            standing: watch::Sender::new(0),
         }
+    }
+
+    /// The needs-you notices standing now, by child.
+    pub fn needs_you_notices(&self) -> Vec<StandingNotice> {
+        let watched = self.watched();
+        let mut standing: Vec<(&SessionId, &StandingNotice)> = watched.needs_you.iter().collect();
+        standing.sort_by_key(|(id, _)| **id);
+        standing
+            .into_iter()
+            .map(|(_, notice)| notice.clone())
+            .collect()
+    }
+
+    /// Changes to the standing notices from now on.
+    pub fn notices_changes(&self) -> watch::Receiver<u64> {
+        self.standing.subscribe()
+    }
+
+    /// The standing notices have changed.
+    pub fn notices_moved(&self) {
+        self.standing.send_modify(|changes| *changes += 1);
     }
 
     fn watched(&self) -> MutexGuard<'_, Watched> {
@@ -279,7 +314,9 @@ impl Desk {
         self.watched().report_revision
     }
 
-    fn forget(&self, id: SessionId) {
+    /// Lets go of what is kept about session `id`. Whether it had a needs-you
+    /// notice standing.
+    fn forget(&self, id: SessionId) -> bool {
         let mut watched = self.watched();
         watched.trackers.remove(&id);
         watched.activity.remove(&id);
@@ -289,6 +326,7 @@ impl Desk {
         if watched.last_report.remove(&id).is_some() {
             watched.report_revision += 1;
         }
+        watched.needs_you.remove(&id).is_some()
     }
 }
 
@@ -300,6 +338,7 @@ impl Hosted {
         let desk = &self.children.news;
         let mut events: Vec<(SessionId, EventKind, Facts)> = Vec::new();
         let mut moved = false;
+        let mut noticed = false;
         {
             let mut watched = desk.watched();
             let live: HashSet<SessionId> = views
@@ -351,6 +390,24 @@ impl Hosted {
                 if watched.activity.insert(id, state.activity) != Some(state.activity) {
                     moved = true;
                 }
+                if state.activity == Some(SessionActivity::Waiting) {
+                    let text = waiting_text(state.waiting_for.as_deref());
+                    match watched.needs_you.get_mut(&id) {
+                        Some(notice) if notice.text != text => {
+                            notice.text = text;
+                            noticed = true;
+                        }
+                        Some(_) => {}
+                        None => {
+                            if let Some(notice) = self.needs_you_notice(id, &text) {
+                                watched.needs_you.insert(id, notice);
+                                noticed = true;
+                            }
+                        }
+                    }
+                } else if watched.needs_you.remove(&id).is_some() {
+                    noticed = true;
+                }
                 if seen.turn_started && watched.last_report.remove(&id).is_some() {
                     watched.report_revision += 1;
                     moved = true;
@@ -364,11 +421,60 @@ impl Hosted {
             watched.plain.retain(|id| live.contains(id));
         }
         for (child, kind, facts) in events {
+            if kind == EventKind::Error {
+                self.program_error_noticed(child, &facts);
+            }
             self.write_news(child, kind, &facts);
+        }
+        if noticed {
+            desk.notices_moved();
         }
         if moved {
             desk.bump();
         }
+    }
+
+    /// The needs-you notice for child `child`, waiting on `text`, or `None`
+    /// when it is not a child with a parent.
+    fn needs_you_notice(&self, child: SessionId, text: &str) -> Option<StandingNotice> {
+        let store = self.ledger.store();
+        let link = match rows::link_of(&store, child) {
+            Ok(link) => link?,
+            Err(err) => {
+                log_line!("floti host: {err}");
+                return None;
+            }
+        };
+        let parent = rows::label_of(&store, link.parent)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        Some(notices::needs_you(
+            child,
+            &link.name,
+            link.parent,
+            &parent,
+            text,
+            store_now(&store),
+        ))
+    }
+
+    /// Child `child`'s program reported an error: a notice stands until it is
+    /// dismissed or the parent ends.
+    fn program_error_noticed(&self, child: SessionId, facts: &Facts) {
+        let link = match rows::link_of(&self.ledger.store(), child) {
+            Ok(Some(link)) => link,
+            Ok(None) => return,
+            Err(err) => {
+                log_line!("floti host: {err}");
+                return;
+            }
+        };
+        let text = match facts.detail.as_deref() {
+            Some(message) => format!("{} reported an error: {message}", link.name),
+            None => format!("{} reported an error.", link.name),
+        };
+        self.error_noticed(&link, Some(child), &text);
     }
 
     /// Writes `facts` as an event of child `child` into its parent's inbox,
@@ -484,17 +590,39 @@ impl Hosted {
                     }
                 };
                 self.write_news_to(&ended.link, Some(child), EventKind::Ended, &facts);
+                if !ended.stopped
+                    && let Some(code) = ended.exit_code.filter(|code| *code != 0)
+                {
+                    self.error_noticed(
+                        &ended.link,
+                        Some(child),
+                        &format!(
+                            "{} ended in error: it exited with code {code}.",
+                            ended.link.name
+                        ),
+                    );
+                }
             }
             Ok(None) => {}
             Err(err) => log_line!("floti host: {err}"),
         }
-        desk.forget(child);
+        // What it was waiting on is no longer standing, and nothing stands
+        // under a session that has ended.
+        if desk.forget(child) {
+            desk.notices_moved();
+        }
+        self.notices_of_ended(child);
         // A wait on a parent that has ended looks again.
         desk.bump();
     }
 
     /// A child of `parent` could not be started: `reason` is news for it.
     pub(super) fn launch_failed(&self, link: &rows::Link, reason: &str) {
+        self.error_noticed(
+            link,
+            None,
+            &format!("{} could not be started: {reason}", link.name),
+        );
         self.write_news_to(
             link,
             None,

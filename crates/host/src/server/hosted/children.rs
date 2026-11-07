@@ -38,6 +38,7 @@ mod compose;
 mod folders;
 mod inbox;
 mod news;
+mod notices;
 mod rows;
 mod wait;
 
@@ -53,7 +54,7 @@ use std::time::Duration;
 
 use floti_protocol::BackendId;
 use floti_protocol::channels::common::PermissionMode;
-use floti_protocol::channels::sessions::Profile;
+use floti_protocol::channels::sessions::{NoticeLimit, Profile};
 use tokio::sync::broadcast::{self, error::RecvError};
 
 use super::{Hosted, Plan, lock};
@@ -102,6 +103,14 @@ impl Children {
     /// with `adopted`: their first pass is where they were, not news.
     pub(super) fn adopt(&self, adopted: impl IntoIterator<Item = SessionId>) {
         self.news.adopt(adopted);
+    }
+
+    /// The host has started: the notices of parents that are no longer
+    /// running go.
+    pub(super) fn clear_unowned_notices(&self, store: &crate::store::Store) {
+        if let Err(err) = notices::remove_unowned(store) {
+            log_line!("floti host: {err}");
+        }
     }
 
     pub(super) fn new(inherited_env: &[(OsString, OsString)]) -> Self {
@@ -406,7 +415,7 @@ impl Hosted {
             )
         };
         if let Some(refusal) = limits_error {
-            return Err(refusal);
+            return Err(self.refused(parent, refusal));
         }
 
         // Everything is judged: only now is anything written.
@@ -478,6 +487,19 @@ impl Hosted {
             branch: launched.session.branch,
             worktree: made.map(|made| made.name),
         })
+    }
+
+    /// A limit refused a start of `parent`: the notice it leaves stands for
+    /// the person. Answers the sentence the refusal is told in.
+    fn refused(&self, parent: SessionId, refusal: Refusal) -> String {
+        self.limit_refused(
+            parent,
+            notices::Limit {
+                limit: refusal.limit,
+                text: &refusal.text,
+                allow_more: refusal.allow_more,
+            },
+        )
     }
 
     /// The parent may have ended while a child started, after the exit notice
@@ -640,7 +662,8 @@ impl Hosted {
             &existing,
             &load,
             child.class == RoleClass::Heavy,
-        )?;
+        )
+        .map_err(|refusal| self.refused(parent, refusal))?;
 
         // Everything is judged: only now does anything run.
         let launched = self.run(
@@ -767,13 +790,16 @@ impl Hosted {
         let made = u32::try_from(existing.len()).unwrap_or(u32::MAX);
         let on_host = u32::try_from(load.running.len()).unwrap_or(u32::MAX);
         let heavy_on_host = u32::try_from(load.heavy.len()).unwrap_or(u32::MAX);
+        let starts_allowed = settings
+            .agent_starts_per_parent
+            .saturating_add(facts.extra_starts);
         Ok(ChildrenListed {
             children,
             limits: LimitsLeft {
                 children_per_parent: settings.agent_children_per_parent,
                 children_left: settings.agent_children_per_parent.saturating_sub(running),
-                starts_per_parent: settings.agent_starts_per_parent,
-                starts_left: settings.agent_starts_per_parent.saturating_sub(made),
+                starts_per_parent: starts_allowed,
+                starts_left: starts_allowed.saturating_sub(made),
                 sessions_per_host: settings.agent_sessions_per_host,
                 host_left: settings.agent_sessions_per_host.saturating_sub(on_host),
                 heavy_per_host: settings.agent_heavy_per_host,
@@ -1273,8 +1299,33 @@ fn depth_refusal(
     None
 }
 
-/// Whether a start is within every limit; a sentence naming the limit and
-/// what holds it when it is not.
+/// A start a limit refused: which limit, and the sentence that names it and
+/// what holds it.
+struct Refusal {
+    limit: NoticeLimit,
+    text: String,
+    /// For the starts limit, how many starts allowing more adds.
+    allow_more: Option<u32>,
+}
+
+impl Refusal {
+    fn new(limit: NoticeLimit, text: String) -> Self {
+        Self {
+            limit,
+            text,
+            allow_more: None,
+        }
+    }
+}
+
+impl From<Refusal> for String {
+    fn from(refusal: Refusal) -> Self {
+        refusal.text
+    }
+}
+
+/// Whether a start is within every limit; the limit and a sentence naming it
+/// and what holds it when it is not.
 fn judge(
     settings: &floti_protocol::channels::workspace::HostSettings,
     facts: &rows::ParentFacts,
@@ -1283,18 +1334,21 @@ fn judge(
     made: &[rows::ChildRow],
     load: &HostLoad,
     heavy: bool,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let host_running = &load.running;
     if let Some(refusal) = depth_refusal(settings, facts) {
-        return Err(refusal);
+        return Err(Refusal::new(NoticeLimit::Depth, refusal));
     }
     let per_parent = settings.agent_children_per_parent as usize;
     if running.len() >= per_parent {
         let names: Vec<&str> = running.iter().map(|child| child.name.as_str()).collect();
-        return Err(format!(
-            "The limit of {per_parent} running agents per parent holds: you have {} running ({}). Wait for news from them and start again.",
-            running.len(),
-            names.join(", ")
+        return Err(Refusal::new(
+            NoticeLimit::Children,
+            format!(
+                "The limit of {per_parent} running agents per parent holds: you have {} running ({}). Wait for news from them and start again.",
+                running.len(),
+                names.join(", ")
+            ),
         ));
     }
     let per_host = settings.agent_sessions_per_host as usize;
@@ -1305,9 +1359,12 @@ fn judge(
         } else {
             format!("{} of them yours ({})", mine.len(), mine.join(", "))
         };
-        return Err(format!(
-            "The limit of {per_host} agent sessions running on this host holds: {} are running, {yours}. Wait for news and start again.",
-            host_running.len()
+        return Err(Refusal::new(
+            NoticeLimit::Sessions,
+            format!(
+                "The limit of {per_host} agent sessions running on this host holds: {} are running, {yours}. Wait for news and start again.",
+                host_running.len()
+            ),
         ));
     }
     let heavy_limit = settings.agent_heavy_per_host as usize;
@@ -1317,24 +1374,35 @@ fn judge(
             .iter()
             .map(|holder| format!("{} (started by {})", holder.name, holder.started_by))
             .collect();
-        return Err(format!(
-            "The heavy limit of {heavy_limit} holds: {} heavy agent{} running on this host, {}. Wait for news and start again.",
-            load.heavy.len(),
-            if load.heavy.len() == 1 {
-                " is"
-            } else {
-                "s are"
-            },
-            holders.join(", ")
+        return Err(Refusal::new(
+            NoticeLimit::Heavy,
+            format!(
+                "The heavy limit of {heavy_limit} holds: {} heavy agent{} running on this host, {}. Wait for news and start again.",
+                load.heavy.len(),
+                if load.heavy.len() == 1 {
+                    " is"
+                } else {
+                    "s are"
+                },
+                holders.join(", ")
+            ),
         ));
     }
-    let per_life = settings.agent_starts_per_parent as usize;
+    // What the parent was allowed beyond the setting counts with it.
+    let per_life =
+        (settings.agent_starts_per_parent as usize).saturating_add(facts.extra_starts as usize);
     if starts_made >= per_life {
         let names: Vec<&str> = made.iter().map(|child| child.name.as_str()).collect();
-        return Err(format!(
-            "The limit of {per_life} starts per parent holds: you have made {starts_made} starts ({}). Wait for news and start again.",
-            names.join(", ")
-        ));
+        return Err(Refusal {
+            allow_more: Some(settings.agent_starts_per_parent),
+            ..Refusal::new(
+                NoticeLimit::Starts,
+                format!(
+                    "The limit of {per_life} starts per parent holds: you have made {starts_made} starts ({}). Wait for news and start again.",
+                    names.join(", ")
+                ),
+            )
+        });
     }
     Ok(())
 }
