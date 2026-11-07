@@ -28,6 +28,18 @@
 //! What a wait returns is marked heard only once the answer has reached its
 //! caller ([`Delivery`]), so a dropped wait loses nothing.
 //!
+//! **A wait is a task where the agent offers them.** An agent whose backend
+//! declares MCP tasks (`Hosted::waits_as_task`; Claude Code from 2.1.304) and
+//! asks for them on its own tool call (the tasks extension at 2026-07-28) has
+//! `agents_wait`, and `agents_start` or `agents_send` with `wait`, answered at once with a
+//! working task ([`ToolFamily::answers_as_task`]). The wait runs inside it and
+//! always holds; the task completes with the text and JSON a held wait would
+//! return, and the news in it is marked heard once `tasks/get` has handed that
+//! result over in full. Cancelling the task, the session ending or a host
+//! restart drops it and leaves the news for the next wait. Without the
+//! extension, over 2025-06-18, from the shell, or for an agent that declares
+//! no tasks, a wait is held or answered at once as above.
+//!
 //! **`agents_report` is a child's.** It is listed and allowed, per caller, only
 //! for a session that has a parent; anyone else is told the family has no such
 //! tool.
@@ -214,6 +226,11 @@ impl ToolFamily for FlotiAgents {
             .collect()
     }
 
+    /// Its waits can answer as MCP tasks, where a caller asks for them.
+    fn offers_tasks(&self) -> bool {
+        true
+    }
+
     /// A wait, or a start that waits, holds where the caller's agent can wait
     /// in the background (`Hosted::waits_hold`).
     fn holds(&self, caller: Caller, name: &str, arguments: &JsonObject) -> bool {
@@ -222,14 +239,7 @@ impl ToolFamily for FlotiAgents {
         if name == AGENTS_RUN {
             return matches!(arguments.get("wait"), Some(Value::Bool(true)));
         }
-        let waits = match name {
-            AGENTS_WAIT => true,
-            AGENTS_START | AGENTS_SEND => {
-                matches!(arguments.get("wait"), Some(Value::Bool(true)))
-            }
-            _ => false,
-        };
-        waits
+        is_wait(name, arguments)
             && caller
                 .session
                 .zip(self.hosted())
@@ -238,6 +248,20 @@ impl ToolFamily for FlotiAgents {
 
     fn shell_tools(&self) -> Vec<String> {
         SHELL_TOOLS.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// A wait, or a start that waits, from the agent's own tool call is a task
+    /// where the caller's agent declares MCP tasks (`Hosted::waits_as_task`).
+    /// Without the tasks extension, over 2025-06-18 (the listener asks only
+    /// of a call at 2026-07-28 that declares it), from the caller's shell, or
+    /// from an agent that declares none, it holds or answers at once as
+    /// [`Self::holds`] says.
+    fn answers_as_task(&self, caller: Caller, name: &str, arguments: &JsonObject) -> bool {
+        is_wait(name, arguments)
+            && caller
+                .session
+                .zip(self.hosted())
+                .is_some_and(|(session, hosted)| hosted.waits_as_task(session, caller.shell))
     }
 
     fn allowed_commands(&self) -> Vec<String> {
@@ -287,6 +311,16 @@ impl ToolFamily for FlotiAgents {
     }
 }
 
+/// Whether the call of tool `name` waits for news: `agents_wait`, or
+/// `agents_start` or `agents_send` with `wait` true.
+fn is_wait(name: &str, arguments: &JsonObject) -> bool {
+    match name {
+        AGENTS_WAIT => true,
+        AGENTS_START | AGENTS_SEND => matches!(arguments.get("wait"), Some(Value::Bool(true))),
+        _ => false,
+    }
+}
+
 /// A call that may wait: who is calling, how, and where to say what it
 /// returned once it has been delivered.
 struct Waiter<'a> {
@@ -298,10 +332,12 @@ struct Waiter<'a> {
 }
 
 impl Waiter<'_> {
-    /// Waits for the caller's news as asked, holding where its agent can, and
-    /// says the news returned is heard once the answer has been delivered.
+    /// Waits for the caller's news as asked, holding where its agent can (and
+    /// always inside an MCP task, which is how such an agent holds), and says
+    /// the news returned is heard once the answer has been delivered: for a
+    /// task, once `tasks/get` has handed over its completed result.
     async fn wait(&self, wait_for: WaitFor, children: Vec<String>) -> Result<Waited, String> {
-        let hold = self.hosted.waits_hold(self.me, self.shell);
+        let hold = self.delivery.is_task() || self.hosted.waits_hold(self.me, self.shell);
         self.wait_holding(hold, wait_for, children).await
     }
 

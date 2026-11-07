@@ -104,6 +104,16 @@ impl World {
         }
     }
 
+    /// A world whose fake `claude` reports `version`, to the adapter's version
+    /// probe and to every session alike: both run in the folder the fake's
+    /// config names, where it reads the version from (the host runs in this
+    /// process, whose environment a test does not change).
+    fn reporting(version: &str) -> Self {
+        let world = Self::new();
+        std::fs::write(world.claude.join("fake-version"), version).expect("write the version");
+        world
+    }
+
     fn config(&self) -> HostConfig {
         let claude = ClaudeCodeSettings {
             search_first: Vec::new(),
@@ -775,6 +785,64 @@ impl Agent {
         Call::open(&url, &token, true, tool, arguments).await
     }
 
+    /// As [`Self::open`], for a call made at `revision`.
+    async fn open_as(&self, revision: Revision, shell: bool, tool: &str, arguments: Value) -> Call {
+        let (url, token) = self.route();
+        Call::open_as(&url, &token, shell, &revision, tool, arguments).await
+    }
+
+    /// A call made as Claude Code 2.1.304 and later makes it, declaring the
+    /// tasks extension, answered with the task it started.
+    async fn start_task(&self, tool: &str, arguments: Value) -> String {
+        let mut call = self
+            .open_as(Revision::WithTasks, false, tool, arguments)
+            .await;
+        assert!(!call.streamed, "a task is one JSON reply");
+        let created = call.answer().await.expect("the call was answered");
+        assert!(created.get("error").is_none(), "{created}");
+        let created = &created["result"];
+        assert_eq!(created["resultType"], "task", "{created}");
+        assert_eq!(created["status"], "working", "{created}");
+        created["taskId"].as_str().expect("a task id").to_owned()
+    }
+
+    /// `tasks/get` or `tasks/cancel` for task `id`, with this session's token.
+    async fn task_request(&self, method: &str, id: &str) -> Reply {
+        let (url, token) = self.route();
+        let revision = Revision::WithTasks;
+        let mut params = json!({ "taskId": id });
+        params["_meta"] = revision.meta();
+        let headers = revision.headers(method, id);
+        let headers: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        post_headed(
+            &url,
+            Some(&token),
+            &headers,
+            &json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }),
+        )
+        .await
+    }
+
+    /// Task `id`, as `tasks/get` answers it: its result when it is working or
+    /// completed, an error object when it is not found.
+    async fn task(&self, id: &str) -> Value {
+        self.task_request("tasks/get", id).await.json()
+    }
+
+    /// Polls task `id` until it has completed, and answers the `tasks/get`
+    /// that delivered it.
+    async fn completed_task(&self, id: &str) -> Value {
+        eventually("the task to complete", async || {
+            let answer = self.task(id).await;
+            assert!(answer.get("error").is_none(), "{answer}");
+            (answer["result"]["status"] == "completed").then(|| answer["result"].clone())
+        })
+        .await
+    }
+
     async fn call(&self, tool: &str, arguments: Value) -> Called {
         self.open(tool, arguments).await.called().await
     }
@@ -925,6 +993,13 @@ struct Reply {
 }
 
 impl Reply {
+    /// The JSON-RPC message answered, whether it holds a result or an error.
+    fn json(&self) -> Value {
+        assert_eq!(self.status, 200, "{self:?}");
+        serde_json::from_slice(&self.body)
+            .unwrap_or_else(|err| panic!("{err}: {}", String::from_utf8_lossy(&self.body)))
+    }
+
     fn result(&self) -> Value {
         assert_eq!(self.status, 200, "{self:?}");
         let answer: Value = serde_json::from_slice(&self.body)
@@ -950,6 +1025,16 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// One POST of `body` to `url`, carrying `token` when there is one, read to
 /// the end of its answer: for a request that does not hold.
 async fn post(url: &str, token: Option<&str>, body: &Value) -> Reply {
+    post_headed(url, token, &[], body).await
+}
+
+/// As [`post`], with more headers.
+async fn post_headed(
+    url: &str,
+    token: Option<&str>,
+    headers: &[(&str, &str)],
+    body: &Value,
+) -> Reply {
     let (address, path) = split_url(url);
     let body = body.to_string();
     let mut head = format!(
@@ -960,6 +1045,9 @@ async fn post(url: &str, token: Option<&str>, body: &Value) -> Reply {
     );
     if let Some(token) = token {
         head.push_str(&format!("Authorization: Bearer {token}\r\n"));
+    }
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
     }
     head.push_str("\r\n");
     tokio::time::timeout(PATIENCE, async {
@@ -992,6 +1080,80 @@ async fn rpc(url: &str, token: Option<&str>, method: &str, params: Value) -> Rep
     .await
 }
 
+/// `server/discover`, as a client of revision 2026-07-28 sends it.
+async fn discover(url: &str, token: &str) -> Reply {
+    post_headed(
+        url,
+        Some(token),
+        &[
+            ("MCP-Protocol-Version", "2026-07-28"),
+            ("Mcp-Method", "server/discover"),
+        ],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": { "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            } },
+        }),
+    )
+    .await
+}
+
+const TASKS_EXTENSION: &str = "io.modelcontextprotocol/tasks";
+
+/// The MCP revision a request is made at, and what its metadata declares.
+#[derive(Debug, Clone, Copy)]
+enum Revision {
+    /// Names none, as a client of an earlier revision makes it.
+    None,
+    /// 2025-06-18, whose metadata declares the tasks extension all the same.
+    Earlier,
+    /// 2026-07-28, declaring no extension.
+    WithoutTasks,
+    /// 2026-07-28, declaring the tasks extension, as Claude Code 2.1.304 and
+    /// later does to every server.
+    WithTasks,
+}
+
+impl Revision {
+    /// The request metadata (`_meta`) of a call made so.
+    fn meta(self) -> Value {
+        let extensions = json!({ "extensions": { TASKS_EXTENSION: {} } });
+        match self {
+            Self::None => json!({}),
+            Self::Earlier => json!({
+                "io.modelcontextprotocol/protocolVersion": "2025-06-18",
+                "io.modelcontextprotocol/clientCapabilities": extensions,
+            }),
+            Self::WithoutTasks => json!({
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }),
+            Self::WithTasks => json!({
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": extensions,
+                "io.modelcontextprotocol/clientInfo": { "name": "hearing", "version": "1" },
+            }),
+        }
+    }
+
+    /// The headers a request of `method` about `name` carries.
+    fn headers(self, method: &str, name: &str) -> Vec<(&'static str, String)> {
+        match self {
+            Self::None => Vec::new(),
+            Self::Earlier => vec![("MCP-Protocol-Version", "2025-06-18".to_owned())],
+            Self::WithoutTasks | Self::WithTasks => vec![
+                ("MCP-Protocol-Version", "2026-07-28".to_owned()),
+                ("Mcp-Method", method.to_owned()),
+                ("Mcp-Name", name.to_owned()),
+            ],
+        }
+    }
+}
+
 /// A tool call whose answer is read as it arrives. A call that holds is
 /// answered as an event stream, which says it is still there and ends with the
 /// result; any other call is one JSON reply.
@@ -1016,15 +1178,36 @@ impl Call {
     /// Sends a call of `tool` and reads the head of the answer. `shell` says
     /// the call comes from `floti agent` in the session's shell.
     async fn open(url: &str, token: &str, shell: bool, tool: &str, arguments: Value) -> Self {
+        Self::open_as(url, token, shell, &Revision::None, tool, arguments).await
+    }
+
+    /// As [`Self::open`], for a call made as `revision` says.
+    async fn open_as(
+        url: &str,
+        token: &str,
+        shell: bool,
+        revision: &Revision,
+        tool: &str,
+        arguments: Value,
+    ) -> Self {
         let (address, path) = split_url(url);
+        let mut meta = revision.meta();
+        meta["progressToken"] = json!("hearing");
         let body = json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": { "name": tool, "arguments": arguments, "_meta": { "progressToken": "hearing" } },
+            "params": { "name": tool, "arguments": arguments, "_meta": meta },
         })
         .to_string();
-        let marker = if shell { "x-floti-shell: 1\r\n" } else { "" };
+        let mut marker = if shell {
+            "x-floti-shell: 1\r\n".to_owned()
+        } else {
+            String::new()
+        };
+        for (name, value) in revision.headers("tools/call", tool) {
+            marker.push_str(&format!("{name}: {value}\r\n"));
+        }
         let head = format!(
             "POST {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\
              Accept: application/json, text/event-stream\r\nContent-Type: application/json\r\n\
@@ -1797,7 +1980,8 @@ async fn s10_a_launch_that_fails_or_a_program_that_reports_an_error_is_news_with
 #[tokio::test(flavor = "multi_thread")]
 async fn s11_a_claude_code_parents_wait_is_moved_to_the_background_and_its_result_is_its_next_turn()
 {
-    let world = World::new();
+    // Before 2.1.304 the CLI has no MCP tasks, so its long call is held.
+    let world = World::reporting("2.1.303");
     let host = world.host().await;
     let folder = world.project("background");
     let parent = world.session(CLAUDE, &folder, "parent").await;
@@ -2035,8 +2219,585 @@ async fn s14_typing_into_the_parent_ends_a_held_wait_at_once_and_loses_no_news()
 }
 
 // ---------------------------------------------------------------------------
+// A wait that is an MCP task
+// ---------------------------------------------------------------------------
+
+/// What a completed task carries as the tool's answer: its JSON block.
+fn tasks_answer(task: &Value) -> Value {
+    assert_eq!(task["result"]["isError"], false, "{task}");
+    let block = task["result"]["content"][1]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a JSON block in {task}"));
+    serde_json::from_str(block).expect("JSON")
+}
+
+/// What a completed task carries as the tool's answer: its text block.
+fn tasks_text(task: &Value) -> &str {
+    task["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a text block in {task}"))
+}
+
+impl World {
+    /// How many reports whose text is `said` no wait has handed over yet.
+    fn unseen_report(&self, said: &str) -> i64 {
+        self.db()
+            .query_row(
+                "SELECT count(*) FROM agent_inbox \
+                 WHERE seen_at IS NULL AND event = 'report' AND detail = ?1",
+                [said],
+                |row| row.get(0),
+            )
+            .expect("count the unseen reports")
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3_a_wait_carrying_the_tasks_extension_is_a_working_task_that_completes_on_news_or_typing_and_is_heard_once_fetched()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("task-wait");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "worker", "backend": OTHER }))
+        .await
+        .done();
+    let worker = world.child_of(&parent, "worker").await;
+
+    // Answered at once with a task that is working, while the child works.
+    let id = parent.start_task("agents_wait", json!({})).await;
+    let working = parent.task(&id).await;
+    assert_eq!(working["result"]["status"], "working", "{working}");
+    assert_eq!(working["result"]["taskId"], id.as_str());
+
+    // The child's next news completes it with what is unseen, and that news
+    // stays unseen until the completed result has been fetched.
+    worker.report("done", "ready").await.done();
+    assert_eq!(world.unseen_report("ready"), 1, "{}", world.inbox_text());
+    let done = parent.completed_task(&id).await;
+    assert!(
+        tasks_text(&done).contains("worker reported done: ready"),
+        "{done}"
+    );
+    let heard = Heard(tasks_answer(&done));
+    assert_eq!(heard.events(), ["worker:report"], "{heard:?}");
+    assert_eq!(heard.ended(), "news", "{heard:?}");
+    eventually(
+        "the news to be heard once the result was fetched",
+        async || (world.unseen_report("ready") == 0).then_some(()),
+    )
+    .await;
+    // The result was taken once: the task is gone.
+    assert_eq!(parent.task(&id).await["error"]["code"], -32602);
+
+    // Someone typing into the parent first completes it with what is unseen.
+    let id = parent
+        .start_task("agents_wait", json!({ "for": "all" }))
+        .await;
+    worker.report("note", "kept").await.done();
+    assert_eq!(world.unseen_report("kept"), 1, "{}", world.inbox_text());
+    let mut typed = 0;
+    // One poll for the whole loop: a poll dropped after the host handed over
+    // its result would leave the next one with no task to find.
+    let completed = parent.completed_task(&id);
+    tokio::pin!(completed);
+    let done = loop {
+        tokio::select! {
+            done = &mut completed => break done,
+            () = async { world.type_line(&parent, &format!("hello {typed}")).await } => typed += 1,
+        }
+    };
+    let heard = Heard(tasks_answer(&done));
+    assert_eq!(heard.ended(), "typed", "{heard:?}");
+    assert_eq!(heard.events(), ["worker:report"], "{heard:?}");
+    eventually(
+        "the news to be heard once the result was fetched",
+        async || (world.unseen_report("kept") == 0).then_some(()),
+    )
+    .await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s4_a_cancelled_task_leaves_its_news_for_the_next_wait_and_another_sessions_token_finds_none()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("task-cancel");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "worker", "backend": OTHER }))
+        .await
+        .done();
+    let worker = world.child_of(&parent, "worker").await;
+    let stranger = world.session(CLAUDE, &folder, "stranger").await;
+
+    let id = parent
+        .start_task("agents_wait", json!({ "for": "all" }))
+        .await;
+    worker.report("note", "kept").await.done();
+
+    // Another session's token finds no such task, exactly as for an id that
+    // never was, and cannot cancel it.
+    let missing = stranger.task(&id).await;
+    assert_eq!(missing["error"]["code"], -32602, "{missing}");
+    assert_eq!(missing["error"], stranger.task("never-was").await["error"]);
+    let refused = stranger.task_request("tasks/cancel", &id).await.json();
+    assert_eq!(refused["error"], missing["error"], "{refused}");
+    let still = parent.task(&id).await;
+    assert_eq!(still["result"]["status"], "working", "{still}");
+
+    // Cancelling drops the work, and nothing it held counts as heard: the
+    // next wait returns the news.
+    let cancelled = parent.task_request("tasks/cancel", &id).await.result();
+    assert_eq!(cancelled["resultType"], "complete", "{cancelled}");
+    assert_eq!(parent.task(&id).await["error"]["code"], -32602);
+    assert_eq!(world.unseen_report("kept"), 1, "{}", world.inbox_text());
+    let heard = parent.hear(json!({})).await;
+    assert_eq!(heard.events(), ["worker:report"], "{heard:?}");
+    assert_eq!(heard.news()[0]["text"], "kept");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s4_a_task_whose_session_ends_is_dropped_and_leaves_its_news_unseen() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("task-session-ends");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "worker", "backend": OTHER }))
+        .await
+        .done();
+    let worker = world.child_of(&parent, "worker").await;
+
+    let id = parent.start_task("agents_wait", json!({})).await;
+    worker.report("note", "unheard").await.done();
+    world.type_line(&parent, "/exit").await;
+    world.ended("the parent to end", &[parent.id()]).await;
+
+    // Its token is gone with it, so the task cannot be fetched, and the news
+    // was never handed over.
+    eventually("the ended session's token to be refused", async || {
+        (parent.task_request("tasks/get", &id).await.status == 401).then_some(())
+    })
+    .await;
+    assert_eq!(world.unseen_report("unheard"), 1, "{}", world.inbox_text());
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s4_a_host_restart_before_the_result_is_fetched_leaves_the_news_for_the_next_wait() {
+    let world = World::new();
+    let first = world.host().await;
+    let folder = world.project("task-restart");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "worker", "backend": OTHER }))
+        .await
+        .done();
+    let worker = world.child_of(&parent, "worker").await;
+
+    // Whether the task has completed yet or not, nobody has fetched it.
+    let id = parent.start_task("agents_wait", json!({})).await;
+    worker.report("note", "before the restart").await.done();
+    first.crash().await;
+    assert_eq!(
+        world.unseen_report("before the restart"),
+        1,
+        "{}",
+        world.inbox_text()
+    );
+
+    let second = world.host().await;
+    let gone = parent.task(&id).await;
+    assert_eq!(
+        gone["error"]["code"], -32602,
+        "a restart has no tasks: {gone}"
+    );
+    let heard = parent.hear(json!({})).await;
+    assert_eq!(heard.events(), ["worker:report"], "{heard:?}");
+    assert_eq!(heard.news()[0]["text"], "before the restart");
+    second.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_a_wait_without_the_tasks_extension_or_over_2025_06_18_or_from_the_shell_is_held_as_before()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("task-not-asked");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "worker", "backend": OTHER }))
+        .await
+        .done();
+    let worker = world.child_of(&parent, "worker").await;
+
+    // The parent's backend declares MCP tasks, yet each of these is a stream
+    // that ends with the news (its minute-by-minute progress is stepped in
+    // `agent_tools/front.rs`), and none is a task.
+    for (revision, shell) in [
+        (Revision::None, false),
+        (Revision::WithoutTasks, false),
+        (Revision::Earlier, false),
+        (Revision::WithTasks, true),
+    ] {
+        let mut held = parent
+            .open_as(revision, shell, "agents_wait", json!({}))
+            .await;
+        assert!(
+            held.streamed,
+            "{revision:?}, shell {shell}: held as a stream"
+        );
+        worker.report("note", "held").await.done();
+        let message = held.answer().await.expect("the wait is answered");
+        assert!(
+            message["result"].get("taskId").is_none(),
+            "{revision:?}, shell {shell}: {message}"
+        );
+        let heard = Heard(Called::of(&message).done());
+        assert_eq!(heard.events(), ["worker:report"], "{revision:?}: {heard:?}");
+        eventually("the news to be heard", async || {
+            (world.unseen() == 0).then_some(())
+        })
+        .await;
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s6_an_agent_that_declares_no_tasks_is_answered_at_once_and_never_with_a_task() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("task-undeclared");
+    let parent = world.session(OTHER, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "worker", "backend": OTHER }))
+        .await
+        .done();
+    let worker = world.child_of(&parent, "worker").await;
+    worker.report("note", "kept").await.done();
+
+    // Unseen news is given at once, a wait with none is told to ask again,
+    // and a start that waits is answered at once: all as plain results.
+    let mut call = parent
+        .open_as(Revision::WithTasks, false, "agents_wait", json!({}))
+        .await;
+    assert!(!call.streamed);
+    let message = call.answer().await.expect("answered");
+    assert!(message["result"].get("taskId").is_none(), "{message}");
+    assert_eq!(
+        Heard(Called::of(&message).done()).events(),
+        ["worker:report"]
+    );
+    let mut call = parent
+        .open_as(Revision::WithTasks, false, "agents_wait", json!({}))
+        .await;
+    assert!(!call.streamed);
+    let message = call.answer().await.expect("answered");
+    assert!(message["result"].get("taskId").is_none(), "{message}");
+    let answered = Called::of(&message);
+    assert!(answered.text().contains("Nothing new yet."), "{answered:?}");
+    assert_eq!(Heard(answered.done()).ended(), "nothingNew");
+    let mut call = parent
+        .open_as(
+            Revision::WithTasks,
+            false,
+            "agents_start",
+            json!({ "task": "go", "name": "fresh", "backend": OTHER, "wait": true }),
+        )
+        .await;
+    assert!(!call.streamed);
+    let message = call.answer().await.expect("answered");
+    assert!(message["result"].get("taskId").is_none(), "{message}");
+    let answered = Called::of(&message);
+    assert!(
+        answered.text().starts_with("Started fresh."),
+        "{answered:?}"
+    );
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s6_claude_code_before_2_1_304_holds_its_wait_and_never_answers_a_task() {
+    let world = World::reporting("2.1.303");
+    let host = world.host().await;
+    let folder = world.project("task-too-early");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "worker", "backend": OTHER }))
+        .await
+        .done();
+    let worker = world.child_of(&parent, "worker").await;
+
+    // Its agent moves a long call to the background, so the wait is held as
+    // a stream, though the call declares the tasks extension.
+    let mut held = parent
+        .open_as(Revision::WithTasks, false, "agents_wait", json!({}))
+        .await;
+    assert!(held.streamed, "held where the agent backgrounds long calls");
+    worker.report("note", "held").await.done();
+    let message = held.answer().await.expect("the wait is answered");
+    assert!(message["result"].get("taskId").is_none(), "{message}");
+    assert_eq!(
+        Heard(Called::of(&message).done()).events(),
+        ["worker:report"]
+    );
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s8_a_start_with_wait_carrying_the_tasks_extension_is_a_task_with_the_new_childs_next_news()
+{
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("task-start-wait");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "old work", "name": "old", "backend": OTHER }))
+        .await
+        .done();
+    let old = world.child_of(&parent, "old").await;
+    old.report("note", "old news").await.done();
+
+    let id = parent
+        .start_task(
+            "agents_start",
+            json!({ "task": "go", "name": "fresh", "backend": OTHER, "wait": true }),
+        )
+        .await;
+    let fresh = world.child_when_started(&parent, "fresh").await;
+    let working = parent.task(&id).await;
+    assert_eq!(working["result"]["status"], "working", "{working}");
+    fresh.report("done", "fresh words").await.done();
+
+    let done = parent.completed_task(&id).await;
+    assert!(tasks_text(&done).starts_with("Started fresh."), "{done}");
+    let body = tasks_answer(&done);
+    assert_eq!(body["name"], "fresh");
+    let heard = Heard(body);
+    assert_eq!(heard.events(), ["fresh:report"], "{heard:?}");
+    // The other child's news stays for the next wait.
+    assert_eq!(world.unseen_report("old news"), 1, "{}", world.inbox_text());
+    let rest = parent.hear(json!({})).await;
+    assert_eq!(rest.events(), ["old:report"], "{rest:?}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s12_a_send_with_wait_carrying_the_tasks_extension_is_a_task_with_that_childs_next_news_and_from_the_shell_it_is_held()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("task-send-wait");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    for name in ["target", "bystander"] {
+        parent
+            .start(json!({ "task": "work", "name": name, "backend": CLAUDE }))
+            .await
+            .done();
+    }
+    let target = world.child_of(&parent, "target").await;
+    let bystander = world.child_of(&parent, "bystander").await;
+    world.calm(&parent, &["target", "bystander"]).await;
+    bystander.report("note", "bystander news").await.done();
+
+    // From the agent's own call, declaring the extension, the send is a task
+    // that completes with the target's next news, as a start's wait does.
+    let id = parent
+        .start_task(
+            "agents_send",
+            json!({ "child": "target", "text": "do the thing", "wait": true }),
+        )
+        .await;
+    world.took(&target, "do the thing").await;
+    let working = parent.task(&id).await;
+    assert_eq!(working["result"]["status"], "working", "{working}");
+    target.report("done", "the thing is done").await.done();
+    let done = parent.completed_task(&id).await;
+    assert!(tasks_text(&done).starts_with("Sent to target."), "{done}");
+    let body = tasks_answer(&done);
+    assert_eq!(body["sent"], "target");
+    let heard = Heard(body);
+    assert_eq!(heard.events(), ["target:report"], "{heard:?}");
+    // The other child's news stays for the next wait.
+    assert_eq!(
+        world.unseen_report("bystander news"),
+        1,
+        "{}",
+        world.inbox_text()
+    );
+    let rest = parent.hear(json!({})).await;
+    assert_eq!(rest.events(), ["bystander:report"], "{rest:?}");
+
+    // From the caller's shell there is no task to poll: it is held as a wait
+    // is, and ends with the news.
+    world.calm(&parent, &["target", "bystander"]).await;
+    let mut held = parent
+        .open_as(
+            Revision::WithTasks,
+            true,
+            "agents_send",
+            json!({ "child": "target", "text": "once more", "wait": true }),
+        )
+        .await;
+    assert!(held.streamed, "held as a stream from the shell");
+    world.took(&target, "once more").await;
+    target.report("done", "again").await.done();
+    let message = held.answer().await.expect("the send is answered");
+    assert!(message["result"].get("taskId").is_none(), "{message}");
+    let heard = Heard(Called::of(&message).done());
+    assert_eq!(heard.events(), ["target:report"], "{heard:?}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s7_a_claude_code_parent_at_2_1_304_takes_the_completed_task_as_its_next_turn_unprompted() {
+    let world = World::reporting("2.1.304");
+    let host = world.host().await;
+    let folder = world.project("task-turn");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "worker", "backend": OTHER }))
+        .await
+        .done();
+    let worker = world.child_of(&parent, "worker").await;
+
+    // The parent's agent waits with its own tool call, declaring the tasks
+    // extension, and is answered with a task: it is idle at once.
+    world
+        .type_line(&parent, "/mcp floti-agents agents_wait {}")
+        .await;
+    let call = eventually("the call to be answered with a task", async || {
+        let call = world.claude_log(&parent)["mcpCalls"][0].clone();
+        call["taskId"].is_string().then_some(call)
+    })
+    .await;
+    assert_eq!(call["backgrounded"], true, "{call}");
+    assert!(
+        world.claude_log(&parent)["turns"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // A report completes the task, and nothing is typed into the parent: it
+    // takes the completed result as its next turn.
+    worker.report("done", "All shipped.").await.done();
+    let turn = eventually("the parent to take the result as a turn", async || {
+        world.claude_log(&parent)["turns"][0]["text"]
+            .as_str()
+            .map(str::to_owned)
+    })
+    .await;
+    assert!(turn.starts_with("agents_wait finished:"), "{turn}");
+    assert!(
+        turn.contains("worker reported done: All shipped."),
+        "{turn}"
+    );
+    let call = world.claude_log(&parent)["mcpCalls"][0].clone();
+    assert_eq!(call["taskStatus"], "completed", "{call}");
+    assert_eq!(call["isError"], false, "{call}");
+    assert!(call["polls"].as_u64().is_some_and(|polls| polls >= 1));
+    assert_eq!(world.claude_log(&parent)["turns"][0]["kind"], "mcp");
+    // The news was heard once the result was fetched in full.
+    eventually("the news to be heard after the fetch", async || {
+        (world.unseen_report("All shipped.") == 0).then_some(())
+    })
+    .await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s7_a_task_the_host_no_longer_holds_is_taken_as_a_failed_call() {
+    let world = World::reporting("2.1.304");
+    let host = world.host().await;
+    let folder = world.project("task-failed");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "worker", "backend": OTHER }))
+        .await
+        .done();
+    let worker = world.child_of(&parent, "worker").await;
+    worker.report("note", "kept").await.done();
+    parent.hear(json!({})).await;
+
+    world
+        .type_line(&parent, "/mcp floti-agents agents_wait {\"for\":\"all\"}")
+        .await;
+    let call = eventually("the call to be answered with a task", async || {
+        let call = world.claude_log(&parent)["mcpCalls"][0].clone();
+        call["taskId"].is_string().then_some(call)
+    })
+    .await;
+
+    // The task is cancelled behind the fake's back: its next poll finds none.
+    let id = call["taskId"].as_str().unwrap();
+    parent.task_request("tasks/cancel", id).await.result();
+    let turn = eventually("the parent to take the failure as a turn", async || {
+        world.claude_log(&parent)["turns"][0]["text"]
+            .as_str()
+            .map(str::to_owned)
+    })
+    .await;
+    assert!(turn.starts_with("agents_wait failed:"), "{turn}");
+    let call = world.claude_log(&parent)["mcpCalls"][0].clone();
+    assert_eq!(call["taskStatus"], "not found", "{call}");
+    assert_eq!(call["isError"], true, "{call}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
 // What each session is told
 // ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agents_family_is_discovered_at_2026_07_28_with_the_tasks_extension_and_the_handshake_names_none()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("discovered");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    let (url, token) = parent.route();
+
+    let discovered = discover(&url, &token).await.result();
+    assert!(
+        discovered["supportedVersions"]
+            .as_array()
+            .expect("versions")
+            .contains(&json!("2026-07-28")),
+        "{discovered}"
+    );
+    assert!(
+        discovered["capabilities"]["extensions"]["io.modelcontextprotocol/tasks"].is_object(),
+        "{discovered}"
+    );
+
+    // The handshake of 2025-06-18 is answered as it always was.
+    let initialized = rpc(
+        &url,
+        Some(&token),
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "hearing", "version": "1" },
+        }),
+    )
+    .await
+    .result();
+    assert_eq!(
+        initialized["protocolVersion"], "2025-06-18",
+        "{initialized}"
+    );
+    assert!(
+        initialized["capabilities"].get("extensions").is_none(),
+        "{initialized}"
+    );
+    host.stop(HostStopReason::Stop).await;
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn s15_a_child_is_told_its_parent_and_role_beside_its_roles_and_the_family_has_a_manual() {
