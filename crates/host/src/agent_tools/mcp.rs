@@ -7,9 +7,10 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig,
-    Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock,
+    CreateTaskResult, GetTaskParams, GetTaskResult, Implementation, InitializeRequestParams,
+    InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
+    ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
@@ -17,6 +18,7 @@ use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use tokio::sync::watch;
 
+use super::tasks::{AsTask, Tasks};
 use super::{Caller, Delivery, ToolFamily};
 
 /// Set once nobody waits on a call any more: the session cancelled it, or
@@ -34,13 +36,20 @@ impl Abandoned {
 }
 
 /// The revisions spoken, newest first. A client asking for one of them gets
-/// it; any other gets the first, so a client is never told its own unknown
-/// version is supported.
+/// it. 2026-07-28 has no `initialize`: a client reaches it with
+/// `server/discover` or a request whose metadata names it, never by asking
+/// `initialize` for it.
 const SUPPORTED_VERSIONS: &[ProtocolVersion] = &[
+    ProtocolVersion::V_2026_07_28,
     ProtocolVersion::V_2025_06_18,
     ProtocolVersion::V_2025_03_26,
     ProtocolVersion::V_2024_11_05,
 ];
+
+/// What a client that asks `initialize` for a revision this server does not
+/// speak is answered with, and what a request naming no revision gets, so a
+/// client is never told its own unknown version is supported.
+const FALLBACK_VERSION: ProtocolVersion = ProtocolVersion::V_2025_06_18;
 
 /// A family's `rmcp` service.
 pub(super) type FamilyService = StreamableHttpService<FamilyServer, NeverSessionManager>;
@@ -68,18 +77,68 @@ pub(super) struct FamilyServer {
 }
 
 impl ServerHandler for FamilyServer {
+    /// What the family is at 2026-07-28, which is where `server/discover`
+    /// answers from and where the tasks methods are checked: the tasks
+    /// extension is named only by a family that offers it. The handshake of
+    /// the revisions before it says no extension ([`Self::initialize`]).
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        let mut capabilities = ServerCapabilities::builder().enable_tools();
+        if self.family.offers_tasks() {
+            capabilities = capabilities.enable_tasks();
+        }
+        ServerConfig::new(capabilities.build())
             .with_server_info(Implementation::new(
                 self.family.name(),
                 crate::version::FLOTI_VERSION,
             ))
             .with_instructions(self.family.instructions())
-            .with_protocol_version(SUPPORTED_VERSIONS[0].clone())
+            .with_protocol_version(FALLBACK_VERSION)
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         Cow::Borrowed(SUPPORTED_VERSIONS)
+    }
+
+    /// The handshake of the revisions that have one, answered as it always
+    /// was: no extensions, so nothing in it hints at a task.
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        context.peer.set_peer_info(request.clone());
+        let mut answer = self.negotiate_initialize(&request)?;
+        answer.capabilities.extensions = None;
+        Ok(answer)
+    }
+
+    /// `tasks/get`: the state of one of the caller's tasks. A task of another
+    /// grant is answered exactly as one that does not exist. The completed
+    /// result counts as taken once this reply has been handed over whole.
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, ErrorData> {
+        let (caller, tasks, delivery) = task_parts(&context)?;
+        tasks
+            .get(caller.grant, &request.task_id, &delivery)
+            .ok_or_else(unknown_task)
+    }
+
+    /// `tasks/cancel`: drops one of the caller's tasks and its work, running
+    /// nothing the work asked for on delivery.
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        let (caller, tasks, _) = task_parts(&context)?;
+        if tasks.cancel(caller.grant, &request.task_id) {
+            Ok(())
+        } else {
+            Err(unknown_task())
+        }
     }
 
     async fn list_tools(
@@ -129,6 +188,20 @@ impl ServerHandler for FamilyServer {
             .into());
         }
         let arguments = request.arguments.unwrap_or_default();
+        // A call the listener decided to answer as a task is held by it, in
+        // memory, under the caller's grant, and answered at once.
+        if let Some(tasks) = parts
+            .filter(|parts| parts.extensions.get::<AsTask>().is_some())
+            .and_then(|parts| parts.extensions.get::<Arc<Tasks>>())
+        {
+            let seed = tasks.start(
+                caller,
+                Arc::clone(&self.family),
+                request.name.to_string(),
+                arguments,
+            );
+            return Ok(CreateTaskResult::new(seed).into());
+        }
         let call = self
             .family
             .call_with(caller, &request.name, arguments, delivery);
@@ -156,6 +229,29 @@ fn caller_of(context: &RequestContext<RoleServer>) -> Option<Caller> {
         .get::<http::request::Parts>()
         .and_then(|parts| parts.extensions.get::<Caller>())
         .copied()
+}
+
+/// Who is calling, the listener's tasks and this request's own delivery, for
+/// a tasks method.
+fn task_parts(
+    context: &RequestContext<RoleServer>,
+) -> Result<(Caller, Arc<Tasks>, Delivery), ErrorData> {
+    let parts = context.extensions.get::<http::request::Parts>();
+    let caller = caller_of(context)
+        .ok_or_else(|| ErrorData::internal_error("a request arrived with no caller", None))?;
+    let tasks = parts
+        .and_then(|parts| parts.extensions.get::<Arc<Tasks>>().cloned())
+        .ok_or_else(|| ErrorData::internal_error("a request arrived with no tasks", None))?;
+    let delivery = parts
+        .and_then(|parts| parts.extensions.get::<Delivery>().cloned())
+        .unwrap_or_default();
+    Ok((caller, tasks, delivery))
+}
+
+/// What a task that is not the caller's, never was or is gone is answered
+/// with: the same for each, so a task id says nothing about another grant.
+fn unknown_task() -> ErrorData {
+    ErrorData::invalid_params("There is no such task.", None)
 }
 
 /// What a call nobody waits on is answered with, should the answer still

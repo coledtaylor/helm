@@ -458,6 +458,16 @@ fn split_url(url: &str) -> (SocketAddr, String) {
 
 /// One POST of `body` to `url`, carrying `token` when there is one.
 async fn post(url: &str, token: Option<&str>, body: &Value) -> Reply {
+    post_headed(url, token, &[], body).await
+}
+
+/// As [`post`], with more headers.
+async fn post_headed(
+    url: &str,
+    token: Option<&str>,
+    headers: &[(&str, &str)],
+    body: &Value,
+) -> Reply {
     let (address, path) = split_url(url);
     let body = body.to_string();
     let mut head = format!(
@@ -468,6 +478,9 @@ async fn post(url: &str, token: Option<&str>, body: &Value) -> Reply {
     );
     if let Some(token) = token {
         head.push_str(&format!("Authorization: Bearer {token}\r\n"));
+    }
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
     }
     head.push_str("\r\n");
     tokio::time::timeout(PATIENCE, async {
@@ -520,6 +533,28 @@ async fn rpc(url: &str, token: Option<&str>, method: &str, params: Value) -> Rep
         url,
         token,
         &json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }),
+    )
+    .await
+}
+
+/// `server/discover`, as a client of revision 2026-07-28 sends it.
+async fn discover(url: &str, token: &str) -> Reply {
+    post_headed(
+        url,
+        Some(token),
+        &[
+            ("MCP-Protocol-Version", "2026-07-28"),
+            ("Mcp-Method", "server/discover"),
+        ],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": { "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            } },
+        }),
     )
     .await
 }
@@ -960,7 +995,43 @@ async fn s13_s2_the_server_names_itself_helm_sessions_negotiates_and_lists_today
         let instructions = result["instructions"].as_str().unwrap();
         assert!(instructions.contains("read-only"), "{instructions}");
         assert!(instructions.contains("sessions_list"), "{instructions}");
+        assert!(
+            result["capabilities"].get("extensions").is_none(),
+            "{result}"
+        );
     }
+
+    // 2026-07-28 has no handshake: asking `initialize` for it is answered in
+    // 2025-06-18, and a client reaches it with `server/discover`. This family
+    // is awareness only, so it names no tasks extension.
+    let asked = rpc(
+        &alpha.url,
+        Some(&alpha.token),
+        "initialize",
+        json!({
+            "protocolVersion": "2026-07-28",
+            "capabilities": {},
+            "clientInfo": { "name": "claude-code", "version": "2.1.300" },
+        }),
+    )
+    .await
+    .result();
+    assert_eq!(asked["protocolVersion"], "2025-06-18", "{asked}");
+    let discovered = discover(&alpha.url, &alpha.token).await.result();
+    let versions = discovered["supportedVersions"]
+        .as_array()
+        .expect("versions");
+    assert!(versions.contains(&json!("2026-07-28")), "{discovered}");
+    assert!(versions.contains(&json!("2025-06-18")), "{discovered}");
+    assert_eq!(discovered["resultType"], "complete", "{discovered}");
+    assert!(
+        discovered["capabilities"]["tools"].is_object(),
+        "{discovered}"
+    );
+    assert!(
+        discovered["capabilities"].get("extensions").is_none(),
+        "{discovered}"
+    );
 
     let notified = post(
         &alpha.url,

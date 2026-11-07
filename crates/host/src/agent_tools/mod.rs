@@ -45,6 +45,23 @@
 //! the result as the last event. Every other call, in every family, keeps its
 //! one JSON reply. The minutes are Tokio's own, so a test steps them.
 //!
+//! **A call can be answered as a task, too.** A client that asks for
+//! revision 2026-07-28 (`server/discover`, or a request whose metadata names
+//! it) and declares the `io.modelcontextprotocol/tasks` extension may have a
+//! call answered at once with a working task ([`ToolFamily::answers_as_task`]
+//! decides, and only a family that [`ToolFamily::offers_tasks`] names the
+//! extension). The listener runs the call's future held in memory under the
+//! caller's grant; `tasks/get` answers working, or completed with the result,
+//! and the family's [`Delivery`] hook runs only when a `tasks/get` reply
+//! carrying that result has been handed to the connection whole, the task
+//! being gone then. `tasks/cancel`, the grant's token being revoked, the
+//! session ending and the listener stopping drop the future and run no hook,
+//! and a restart has no task, since none is stored. Another grant's token
+//! finds no task, answered as an id that never was. Nothing is timed: a task
+//! completes when its call does. Every other request, at 2025-06-18, at an
+//! earlier or unknown revision, or without the extension, keeps the answer
+//! it has always had, and `initialize` is answered with 2025-06-18 at best.
+//!
 //! **A family can ask to hear that its answer arrived.** An answer that
 //! consumes something, as a wait consumes news, is not given until it has
 //! reached the session in full: the family sets [`Delivery::on_delivered`]
@@ -76,6 +93,7 @@
 
 mod front;
 mod mcp;
+mod tasks;
 mod tokens;
 
 #[cfg(test)]
@@ -157,6 +175,25 @@ pub trait ToolFamily: Send + Sync + 'static {
     /// still there (a progress notification each minute) and then the result.
     /// Decided from the request alone, before the call is run.
     fn holds(&self, caller: Caller, name: &str, arguments: &JsonObject) -> bool {
+        let _ = (caller, name, arguments);
+        false
+    }
+
+    /// Whether this family offers the MCP tasks extension: its
+    /// `server/discover` answer names `io.modelcontextprotocol/tasks` and it
+    /// answers `tasks/get` and `tasks/cancel`. A family that does not offers
+    /// none of that, whatever a client declares.
+    fn offers_tasks(&self) -> bool {
+        false
+    }
+
+    /// Whether this call is answered as an MCP task: at once with a task that
+    /// is working, while the call runs on, held by the listener under the
+    /// caller's grant. Decided from the request alone, before the call is run,
+    /// as [`Self::holds`] is, and asked only of a call at 2026-07-28 whose
+    /// client declared the tasks extension, and only of a family that
+    /// [`Self::offers_tasks`]. Such a call is not held as a stream.
+    fn answers_as_task(&self, caller: Caller, name: &str, arguments: &JsonObject) -> bool {
         let _ = (caller, name, arguments);
         false
     }

@@ -13,6 +13,8 @@ use super::front::MAX_BODY_BYTES;
 use super::*;
 use crate::testkit::PATIENCE;
 
+mod task_answers;
+
 const MCP_ACCEPT: &str = "application/json, text/event-stream";
 
 /// A family with two tools: `whoami`, read-only, which says which session

@@ -47,7 +47,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 
+use rmcp::model::{ProtocolVersion, TASKS_EXTENSION_ID};
+
 use super::mcp::{self, Abandoned, FamilyService};
+use super::tasks::{AsTask, Tasks};
 use super::tokens::Tokens;
 use super::{Caller, Delivery, FamilySource, GrantId, Hook, JsonObject, SHELL_HEADER, ToolFamily};
 
@@ -72,6 +75,8 @@ pub(super) struct Router {
     /// The tool calls each grant has waiting, by JSON-RPC id, so a session's
     /// `notifications/cancelled` and its token's revocation reach them.
     in_flight: Mutex<InFlight>,
+    /// The calls answered as tasks, held by grant.
+    tasks: Arc<Tasks>,
 }
 
 type InFlight = HashMap<GrantId, HashMap<String, watch::Sender<bool>>>;
@@ -100,6 +105,7 @@ impl Router {
             source,
             tokens: Mutex::new(Tokens::default()),
             in_flight: Mutex::new(HashMap::new()),
+            tasks: Arc::default(),
         }
     }
 
@@ -132,22 +138,26 @@ impl Router {
             .collect()
     }
 
-    /// Abandons every call `grant` has waiting: its token is gone.
+    /// Abandons every call `grant` has waiting, and drops every task it has
+    /// held, with nothing they asked for on delivery run: its token is gone.
     pub(super) fn abandon_grant(&self, grant: GrantId) {
         if let Some(calls) = self.in_flight().remove(&grant) {
             for abandoned in calls.values() {
                 let _ = abandoned.send(true);
             }
         }
+        self.tasks.abandon_grant(grant);
     }
 
-    /// Abandons every call waiting: the listener is stopping.
+    /// Abandons every call waiting and drops every task: the listener is
+    /// stopping.
     pub(super) fn abandon_all(&self) {
         for (_, calls) in self.in_flight().drain() {
             for abandoned in calls.values() {
                 let _ = abandoned.send(true);
             }
         }
+        self.tasks.abandon_all();
     }
 
     fn in_flight(&self) -> MutexGuard<'_, InFlight> {
@@ -228,12 +238,26 @@ impl Router {
             .headers
             .insert(ACCEPT, HeaderValue::from_static(MCP_ACCEPT));
         parts.extensions.insert(caller);
+        parts.extensions.insert(Arc::clone(&self.tasks));
+        // A call answered as a task is a one-reply call that starts one: only
+        // when it is at 2026-07-28 and declares the tasks extension, and the
+        // family says so. Every other request keeps the answer it has always
+        // had.
+        let as_task = matches!(
+            &message,
+            Cancellation::Call(call) if call.declares_tasks
+                && family.def.answers_as_task(caller, &call.name, &call.arguments)
+        );
+        if as_task {
+            parts.extensions.insert(AsTask);
+        }
         let delivery = Delivery::default();
         parts.extensions.insert(delivery.clone());
         let request = Request::from_parts(parts, Full::new(body));
         // A call that holds is answered as a stream, so it can say it is
         // still there; every other call is one JSON reply.
         if let Cancellation::Call(call) = &message
+            && !as_task
             && family.def.holds(caller, &call.name, &call.arguments)
         {
             return stream_call(
@@ -547,6 +571,26 @@ struct CallInfo {
     arguments: JsonObject,
     /// What the client asked progress to be reported on, when it did.
     progress_token: Option<serde_json::Value>,
+    /// The request's metadata names 2026-07-28 and the client capabilities it
+    /// carries declare the tasks extension: the only request a call may be
+    /// answered as a task to.
+    declares_tasks: bool,
+}
+
+/// Whether a `tools/call`'s `_meta` names the revision that carries tasks and
+/// declares the tasks extension.
+fn declares_tasks(meta: Option<&serde_json::Value>) -> bool {
+    let Some(meta) = meta else {
+        return false;
+    };
+    meta.get("io.modelcontextprotocol/protocolVersion")
+        .and_then(serde_json::Value::as_str)
+        == Some(ProtocolVersion::V_2026_07_28.as_str())
+        && meta
+            .get("io.modelcontextprotocol/clientCapabilities")
+            .and_then(|capabilities| capabilities.get("extensions"))
+            .and_then(|extensions| extensions.get(TASKS_EXTENSION_ID))
+            .is_some_and(serde_json::Value::is_object)
 }
 
 fn cancellation_of(body: &[u8]) -> Cancellation {
@@ -578,6 +622,7 @@ fn cancellation_of(body: &[u8]) -> Cancellation {
                     .and_then(|meta| meta.get("progressToken"))
                     .filter(|token| token.is_string() || token.is_number())
                     .cloned(),
+                declares_tasks: declares_tasks(params.and_then(|params| params.get("_meta"))),
             }))
         }
         Some(_) => Cancellation::None,
@@ -716,8 +761,19 @@ const MCP_ACCEPT: &str = "application/json, text/event-stream";
 
 /// The methods every family answers. A request for any other is answered
 /// here, in the family's own words, rather than as whatever a library makes
-/// of a method it was never given.
-const METHODS: [&str; 4] = ["initialize", "ping", "tools/list", "tools/call"];
+/// of a method it was never given. `tasks/get` and `tasks/cancel` are every
+/// family's to be asked, and a family that offers no tasks answers them as a
+/// method it has not got; `tasks/update` is no family's, since no task here
+/// ever asks its client for input.
+const METHODS: [&str; 7] = [
+    "initialize",
+    "server/discover",
+    "ping",
+    "tools/list",
+    "tools/call",
+    "tasks/get",
+    "tasks/cancel",
+];
 
 /// The JSON-RPC error a body is answered with before `rmcp` sees it, as
 /// today's listener answers: not JSON (-32700), a batch or anything but one

@@ -196,6 +196,11 @@ impl ToolFamily for FlotiAgents {
             .collect()
     }
 
+    /// Its waits can answer as MCP tasks, where a caller asks for them.
+    fn offers_tasks(&self) -> bool {
+        true
+    }
+
     /// A wait, or a start that waits, holds where the caller's agent can wait
     /// in the background (`Hosted::waits_hold`).
     fn holds(&self, caller: Caller, name: &str, arguments: &JsonObject) -> bool {

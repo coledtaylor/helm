@@ -934,6 +934,16 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// One POST of `body` to `url`, carrying `token` when there is one, read to
 /// the end of its answer: for a request that does not hold.
 async fn post(url: &str, token: Option<&str>, body: &Value) -> Reply {
+    post_headed(url, token, &[], body).await
+}
+
+/// As [`post`], with more headers.
+async fn post_headed(
+    url: &str,
+    token: Option<&str>,
+    headers: &[(&str, &str)],
+    body: &Value,
+) -> Reply {
     let (address, path) = split_url(url);
     let body = body.to_string();
     let mut head = format!(
@@ -944,6 +954,9 @@ async fn post(url: &str, token: Option<&str>, body: &Value) -> Reply {
     );
     if let Some(token) = token {
         head.push_str(&format!("Authorization: Bearer {token}\r\n"));
+    }
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
     }
     head.push_str("\r\n");
     tokio::time::timeout(PATIENCE, async {
@@ -972,6 +985,28 @@ async fn rpc(url: &str, token: Option<&str>, method: &str, params: Value) -> Rep
         url,
         token,
         &json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }),
+    )
+    .await
+}
+
+/// `server/discover`, as a client of revision 2026-07-28 sends it.
+async fn discover(url: &str, token: &str) -> Reply {
+    post_headed(
+        url,
+        Some(token),
+        &[
+            ("MCP-Protocol-Version", "2026-07-28"),
+            ("Mcp-Method", "server/discover"),
+        ],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": { "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            } },
+        }),
     )
     .await
 }
@@ -2021,6 +2056,52 @@ async fn s14_typing_into_the_parent_ends_a_held_wait_at_once_and_loses_no_news()
 // ---------------------------------------------------------------------------
 // What each session is told
 // ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agents_family_is_discovered_at_2026_07_28_with_the_tasks_extension_and_the_handshake_names_none()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("discovered");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    let (url, token) = parent.route();
+
+    let discovered = discover(&url, &token).await.result();
+    assert!(
+        discovered["supportedVersions"]
+            .as_array()
+            .expect("versions")
+            .contains(&json!("2026-07-28")),
+        "{discovered}"
+    );
+    assert!(
+        discovered["capabilities"]["extensions"]["io.modelcontextprotocol/tasks"].is_object(),
+        "{discovered}"
+    );
+
+    // The handshake of 2025-06-18 is answered as it always was.
+    let initialized = rpc(
+        &url,
+        Some(&token),
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "hearing", "version": "1" },
+        }),
+    )
+    .await
+    .result();
+    assert_eq!(
+        initialized["protocolVersion"], "2025-06-18",
+        "{initialized}"
+    );
+    assert!(
+        initialized["capabilities"].get("extensions").is_none(),
+        "{initialized}"
+    );
+    host.stop(HostStopReason::Stop).await;
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn s15_a_child_is_told_its_parent_and_role_beside_its_roles_and_the_family_has_a_manual() {
