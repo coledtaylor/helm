@@ -236,6 +236,7 @@ import {
 } from "./peekView";
 import { useNeedsYou, type HostAttention } from "./needsYou";
 import { hostNoticesSource } from "./noticesSource";
+import { useStackWidth } from "./attentionReach";
 import {
   awayRows,
   limitNoticesByParent,
@@ -3174,7 +3175,9 @@ export function App(): JSX.Element {
         id,
         label: sessionLabel(session),
         state,
-        note: sessionNote(state, live?.statusSinceMs ?? null, now),
+        note: sessionNote(state, live?.statusSinceMs ?? null, now, {
+          stopped: session.stopped,
+        }),
         hint: status === null ? session.cwd : `${session.cwd}\n${status}`,
         outside: false,
         shown:
@@ -3502,10 +3505,12 @@ export function App(): JSX.Element {
     () => (attentionShowing && !sidebarShown ? overlayMounted() : undefined),
     [attentionShowing, sidebarShown],
   );
+  const stackMaxWidth = useStackWidth(sidebarShown, attentionShowing);
   const attentionStack = attentionShowing ? (
     <div
       data-attention-stack
       className="pointer-events-none fixed bottom-8 left-2 z-40 flex flex-col gap-2"
+      style={{ maxWidth: stackMaxWidth }}
     >
       {awayLists.map((list) => (
         <AwayList

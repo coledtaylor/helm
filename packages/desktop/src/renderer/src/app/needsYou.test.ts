@@ -94,6 +94,14 @@ describe('the toasts for children that need a person', () => {
     expect(toast).toMatchObject({ childId: 3, childName: 'worker-3', startedBy: 'lead', action: 'peek' })
   })
 
+  it('leaves what stood when the connection opened to While you were away, which lists it with its own Peek and Open', () => {
+    const before = waiting(3)
+    const after = waiting(2, { since: '2026-11-06T10:30:00Z' })
+    const elsewhere = fromSaved({ root: { panes: [sessionRef(9)], activeId: null }, focused: 0 })
+    const toasts = needsYouToasts([hostOf([before, after], [before])], elsewhere, scope(), new Set())
+    expect(toasts.map((toast) => toast.childId)).toEqual([2])
+  })
+
   it('S11: offers Peek for a child that is a chip in a pane with no room, and for every child with the setting off', () => {
     expect(needsYouToasts([hostOf([waiting(3)])], parentOnly(), scope({ roomOf: () => false }), new Set())).toEqual([
       expect.objectContaining({ childId: 3, action: 'peek' })

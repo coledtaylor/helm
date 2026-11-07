@@ -39,7 +39,7 @@ export function AwayList({ host, rows, onClose }: AwayListProps): JSX.Element {
     <section
       aria-label="While you were away"
       data-away-list
-      className="pointer-events-auto flex w-[372px] max-w-[calc(100vw-16px)] flex-col rounded-well border border-border-strong bg-surface-raised"
+      className="pointer-events-auto flex w-[372px] max-w-full flex-col rounded-well border border-border-strong bg-surface-raised"
     >
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2 text-[12.5px] font-medium text-fg">
         <span className="min-w-0 truncate">While you were away on {host}</span>

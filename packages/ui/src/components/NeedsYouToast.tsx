@@ -34,7 +34,7 @@ export function NeedsYouToast({ name, detail, action, onOpen, onClose }: NeedsYo
     <div
       role="status"
       data-needs-you-toast={name}
-      className="pointer-events-auto flex w-[330px] max-w-[calc(100vw-16px)] flex-col gap-1.5 rounded-well border border-border-strong bg-surface-raised px-3 py-[11px]"
+      className="pointer-events-auto flex w-[330px] max-w-full flex-col gap-1.5 rounded-well border border-border-strong bg-surface-raised px-3 py-[11px]"
     >
       <div className="flex items-center gap-2 text-[12.5px] font-medium text-fg">
         <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warn" />

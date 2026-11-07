@@ -118,6 +118,14 @@ describe('indicatorOf', () => {
     expect(indicatorOf(session({ status: 'lost' }), said('busy'))).toBe('ended')
   })
 
+  it('S25: reads an agent the host ended as ended, and as stopped on its row, whatever code the system gave its end', () => {
+    const stopped = session({ status: 'exited', exitCode: 1, stopped: true })
+    expect(indicatorOf(stopped, undefined)).toBe('ended')
+    expect(sessionNote('ended', null, 0, { stopped: true })).toBe('stopped')
+    expect(sessionNote('ended', null, 0, { stopped: false })).toBe('ended')
+    expect(sessionNote('failed', null, 0, { stopped: true })).toBe('failed')
+  })
+
   it('never says a command child is waiting or busy: it runs, then it ended or failed', () => {
     const command = (over: Partial<SessionRecord> = {}): SessionRecord => session({ command: 'pnpm test', ...over })
     expect(indicatorOf(command(), said('waiting', 'permission prompt'))).toBe('running')

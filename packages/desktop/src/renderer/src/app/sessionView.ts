@@ -26,7 +26,8 @@ import { commandWord } from './treeFamilies'
 export function indicatorOf(session: SessionRecord, activity: SessionActivityState | undefined): TabIndicator {
   // A command has no conversation to be busy or waiting in: it runs, then it ended or failed.
   if (isCommandChild(session)) return commandState(session)
-  if (session.status !== 'running') return session.exitCode ? 'failed' : 'ended'
+  // An agent the host ended (Stop, End, its parent ending) did not fail, whatever code the system gave its end.
+  if (session.status !== 'running') return session.exitCode && session.stopped !== true ? 'failed' : 'ended'
   return activity?.activity ?? 'running'
 }
 
@@ -49,9 +50,15 @@ export function shortAge(ms: number): string {
  *
  * `since` is when the session entered its current state, from the registry,
  * or null where nothing says - in which case a working session says nothing
- * rather than an age measured from the wrong moment.
+ * rather than an age measured from the wrong moment. A session the host ended
+ * says `stopped` and one that exited by itself `ended`.
  */
-export function sessionNote(state: TabIndicator, since: number | null, now: number): string {
+export function sessionNote(
+  state: TabIndicator,
+  since: number | null,
+  now: number,
+  how: { stopped?: boolean | undefined } = {}
+): string {
   switch (state) {
     case 'waiting':
       return 'needs you'
@@ -63,7 +70,7 @@ export function sessionNote(state: TabIndicator, since: number | null, now: numb
     case 'shell':
       return 'idle'
     case 'ended':
-      return 'ended'
+      return how.stopped === true ? 'stopped' : 'ended'
     case 'failed':
       return 'failed'
     default:

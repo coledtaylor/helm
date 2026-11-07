@@ -60,7 +60,8 @@ function needsYouOf<T extends ChildMember>(attention: HostAttention<T>): Array<{
 /**
  * The toasts to show: one for each needs-you notice whose child is a header,
  * a chip or on screen nowhere (`needsYouToast`), and none for a child shown as
- * a card or with a tab, whose warn edge says it. `closed` holds the toasts the
+ * a card or with a tab, whose warn edge says it, and none for one that stood when
+ * the window connected: While you were away lists it. `closed` holds the toasts the
  * user closed in this window.
  */
 export function needsYouToasts<T extends ChildMember>(
@@ -73,7 +74,7 @@ export function needsYouToasts<T extends ChildMember>(
   for (const attention of hosts) {
     for (const { notice, child } of needsYouOf(attention)) {
       const key = toastKey(attention.host, notice)
-      if (closed.has(key)) continue
+      if (closed.has(key) || attention.notices.atConnect.has(noticeKey(notice))) continue
       const action = needsYouToast(childPlace(layout, attention.sessions, attention.host, child.id, scope))
       if (action === null) continue
       toasts.push({

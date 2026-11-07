@@ -1040,7 +1040,8 @@ overrides the gate; keep it.
   **A child that needs a person has a toast, and a window that connects to a
   host with notices standing has While you were away.** Both are cards on
   `surface-raised` with a `border-strong` hairline, `rounded-well` and no
-  shadow, the toast 330px wide and the list 372px, drawn in one stack at the window's left edge, 8px in and
+  shadow, the toast 330px wide and the list 372px (each no wider than the room left of the panes, less the 8px inset and the 4px gutter, so a narrow sidebar
+  makes them narrower and not cut off), drawn in one stack at the window's left edge, 8px in and
   just above the status bar, over the rail and the sidebar. That is where no
   browser view reaches, so they are not overlays and do not stand the page down;
   with the sidebar hidden the stack is over the panes and does stand it down.
