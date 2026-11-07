@@ -139,6 +139,9 @@ impl Hosted {
         };
         let turn = self.children.typing_lock(target.session.id());
         let _one_at_a_time = turn.lock().await;
+        // The records as of now, not as of the last pass: a prompt that
+        // appeared since is seen before anything is typed.
+        self.read_activity_now().await;
         self.refuse_at_a_prompt_or_after_a_person(&target)?;
         type_turn(
             &*target.session,

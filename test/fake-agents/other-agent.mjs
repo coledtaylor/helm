@@ -428,3 +428,5 @@ process.stdin.setEncoding('utf8')
 const input = new InputReader({ submitKey: '\n', stopKey: '\x18', onKey, onPaste, onStop })
 process.stdin.on('data', (chunk) => input.feed(chunk))
 process.stdin.on('end', () => exit(0))
+log.listening = true
+saveLog()

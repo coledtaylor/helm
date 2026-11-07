@@ -228,6 +228,8 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   const { link, streams } = deps
   /** The tabs: every session the host listed or started, until its tab is closed. */
   const records = new Map<number, SessionRecord>()
+  /** The sessions whose tab was closed: an exit that comes after is not theirs to show. */
+  const closed = new Set<number>()
   const grids = new Map<number, { cols: number; rows: number }>()
   let focused: readonly number[] = []
   const changed = new Set<() => void>()
@@ -298,8 +300,11 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
     const record = sessionFromHost(row)
     streams?.close('session:data', record.id)
     dropOpener(record.id)
-    // A session whose tab was closed has nobody to tell.
-    if (!records.has(record.id)) return
+    // A session whose tab was closed has nobody to tell. A command a session
+    // started that ended before the host was asked for its list is the one
+    // exit nobody was told of (the host lists running sessions only), and it
+    // is kept like any other, to show how it ended.
+    if (!records.has(record.id) && (record.command === undefined || closed.has(record.id))) return
     records.set(record.id, record)
     deps.emit('session:exit', record)
     announce()
@@ -521,6 +526,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
         await (await host()).request('session:close', { id: req.id, force: true })
       }
       records.delete(req.id)
+      closed.add(req.id)
       grids.delete(req.id)
       dropOpener(req.id)
       streams?.close('session:data', req.id)

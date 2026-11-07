@@ -18,7 +18,14 @@ export interface StatusBarProps {
    * background task still running, and one that has not said anything yet, as
    * well as one that is simply ready.
    */
-  sessions: { working: number; waiting: number; error: number; idle: number };
+  sessions: {
+    working: number;
+    waiting: number;
+    error: number;
+    /** Command children whose command is still running. */
+    running?: number | undefined;
+    idle: number;
+  };
   /** Brings the next session that is waiting on you to the front. */
   onShowWaiting: () => void;
   /**
@@ -139,8 +146,13 @@ export function StatusBar({
   plugins = [],
   hosts = [],
 }: StatusBarProps): JSX.Element {
+  const running = sessions.running ?? 0;
   const total =
-    sessions.working + sessions.waiting + sessions.error + sessions.idle;
+    sessions.working +
+    sessions.waiting +
+    sessions.error +
+    running +
+    sessions.idle;
   return (
     // No island and no border: the status bar is the one strip that sits
     // directly on the canvas (DESIGN.md), a caption under the islands rather
@@ -239,6 +251,17 @@ export function StatusBar({
             >
               <span aria-hidden className="size-1.5 rounded-full bg-danger" />
               {sessions.error} in error
+            </span>
+          )}
+          {/* A command a session started and you watch: it runs, and takes
+              no turns, so it is neither working nor idle. */}
+          {running > 0 && (
+            <span
+              data-status-sessions="running"
+              className="flex shrink-0 items-center gap-1.5"
+            >
+              <span aria-hidden className="size-1.5 rounded-full bg-success" />
+              {running} running
             </span>
           )}
           {sessions.idle > 0 && (

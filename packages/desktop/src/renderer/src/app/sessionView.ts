@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { SessionActivityState, SessionRecord } from '@helm/core/types'
+import { isCommandChild, type SessionActivityState, type SessionRecord } from '@helm/core/types'
 import type { CrumbTone, TabIndicator } from '@helm/ui'
 
 /**
@@ -97,9 +97,15 @@ export function crumbStatus(
         tone: 'subtle'
       }
     default:
-      // A run of less than a minute says only that it runs: its age would be "now".
-      return { text: since === null || now - since < 60_000 ? 'Running' : `Running${age}`, tone: 'subtle' }
+      // A run counts its seconds until it has run a minute, as a command
+      // child's card does while its output scrolls.
+      return { text: since === null ? 'Running' : `Running · ${runAge(now - since)}`, tone: 'subtle' }
   }
+}
+
+/** How long a command has run: seconds under a minute, then as {@link shortAge} says it. */
+export function runAge(ms: number): string {
+  return ms < 60_000 ? `${String(Math.max(1, Math.floor(ms / 1000)))}s` : shortAge(ms)
 }
 
 /**
@@ -140,6 +146,8 @@ export interface StatusCounts {
   waiting: number
   /** Alive, and its program reports an error: never counted idle. */
   error: number
+  /** A command child whose command is still running: it takes no turns, so it is neither working nor idle. */
+  running: number
   /** Alive and none of the above: ready, handed back, or saying nothing. */
   idle: number
 }
@@ -149,9 +157,13 @@ export function statusCounts(
   sessions: readonly SessionRecord[],
   stateOf: (session: SessionRecord) => TabIndicator
 ): StatusCounts {
-  const counts: StatusCounts = { working: 0, waiting: 0, error: 0, idle: 0 }
+  const counts: StatusCounts = { working: 0, waiting: 0, error: 0, running: 0, idle: 0 }
   for (const session of sessions) {
     if (session.status !== 'running') continue
+    if (isCommandChild(session)) {
+      counts.running += 1
+      continue
+    }
     const state = stateOf(session)
     if (state === 'busy') counts.working += 1
     else if (state === 'waiting') counts.waiting += 1
@@ -175,4 +187,21 @@ export function useNow(intervalMs: number): number {
     return () => clearInterval(timer)
   }, [intervalMs])
   return now
+}
+
+/**
+ * `now`, kept to the second while `active`: the window's clock moves every
+ * half minute, and a command that runs counts its seconds. Each tick adds the
+ * time passed since `now` was given, so a new `now` from the window's clock is
+ * the one this follows, and with `active` off (or no tick yet) it is `now`.
+ */
+export function useSecondsFrom(now: number, active: boolean): number {
+  const [ticked, setTicked] = useState({ now, passed: 0 })
+  useEffect(() => {
+    if (!active) return undefined
+    const origin = Date.now()
+    const timer = setInterval(() => setTicked({ now, passed: Date.now() - origin }), 1000)
+    return () => clearInterval(timer)
+  }, [active, now])
+  return active && ticked.now === now ? now + ticked.passed : now
 }

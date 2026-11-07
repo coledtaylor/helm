@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Project, SessionActivityState, SessionRecord } from '@helm/core'
-import { isChild, withReports } from '@helm/core/types'
+import { isChild, isCommandChild, withReports } from '@helm/core/types'
 import { helm } from './bridge'
 import { disposeTerminal, estimateGrid } from './terminals'
 
@@ -71,6 +71,8 @@ export function useSessions(onActivate: (id: number) => void, reconnects = 0): S
   const [sessions, setSessions] = useState<SessionRecord[]>([])
   const [listed, setListed] = useState(false)
   const listedRef = useRef(false)
+  // The sessions this window closed, whose exit may still be on its way.
+  const closedRef = useRef(new Set<number>())
   const [activity, setActivity] = useState<Map<number, SessionActivityState>>(new Map())
   const [launchError, setLaunchError] = useState<string | null>(null)
 
@@ -111,7 +113,16 @@ export function useSessions(onActivate: (id: number) => void, reconnects = 0): S
       helm.on('session:exit', (record) => {
         // Replaced rather than removed: an exited session keeps its tab and its
         // scrollback until someone closes it.
-        setSessions((current) => current.map((s) => (s.id === record.id ? record : s)))
+        setSessions((current) => {
+          if (current.some((s) => s.id === record.id)) return current.map((s) => (s.id === record.id ? record : s))
+          // A command a session started that exited before any listing or
+          // activity named it: the host lists running sessions only, so this
+          // is the only time the window hears of it, and its parent's family
+          // view and the tree show it ended.
+          return listedRef.current && isCommandChild(record) && !closedRef.current.has(record.id)
+            ? [...current, record]
+            : current
+        })
       }),
       helm.on('session:activate', ({ id }) => activateRef.current(id)),
       // The whole set every time, so a window that missed a push - mounted
@@ -197,6 +208,8 @@ export function useSessions(onActivate: (id: number) => void, reconnects = 0): S
   const close = useCallback(async (id: number): Promise<boolean> => {
     const { closed } = await helm.invoke('session:close', { id })
     if (!closed) return false
+    // Its exit, heard after this, is not a session to add back.
+    closedRef.current.add(id)
     setSessions((current) => current.filter((s) => s.id !== id))
     disposeTerminal(id)
     return true

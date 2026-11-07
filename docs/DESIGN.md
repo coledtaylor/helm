@@ -652,8 +652,9 @@ overrides the gate; keep it.
   found" in `warn`. The two versions lead because they are what the bar is read
   for when something is off. After another hairline come your sessions, each
   count with its dot ("2 working", "1 needs you" in `warn`, "1 in error" in
-  `danger` for a session whose program reports an error, "2 idle" with the
-  idle ring), or "No sessions running". On the right, the plan's usage. The scan
+  `danger` for a session whose program reports an error, "1 running" with a
+  filled `success` dot for a command child whose command still runs, "2 idle"
+  with the idle ring), or "No sessions running". On the right, the plan's usage. The scan
   time is in Settings: it is a fact about Helm nobody acts on.
 - **Section labels**: the 10px/600 caps label style, everywhere a section
   needs a name.
@@ -914,8 +915,9 @@ overrides the gate; keep it.
   would be, in `success` while it runs, `fg-subtle` once it exited 0 and `danger`
   for any other code (the dot's tones, `commandTone`), on a card, a shrunk
   header and an ended header alike; its tag reads "command" in `fg-muted` on a
-  1px `border-strong` ring with no fill, where an agent's names its role, and
-  its ended header reads "exited 0 · 14:52" ("exited <code> · <time>") with
+  1px `border-strong` ring with no fill, where an agent's names its role, its
+  running header counts its seconds ("Running · 5s", then "Running · 1m" from
+  a minute on), and its ended header reads "exited 0 · 14:52" ("exited <code> · <time>") with
   **Close**. Pressing the words shrinks the card; Stop asks first, in the
   window's one question for ending a running session ("*name* is still running
   on *host*. Ending it stops the Claude Code session in *folder*. *Parent*,

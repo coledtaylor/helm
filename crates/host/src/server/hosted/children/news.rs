@@ -27,7 +27,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use floti_protocol::channels::common::ChildReport;
-use floti_protocol::channels::sessions::{SessionActivity, SessionActivityState};
+use floti_protocol::channels::sessions::{SessionActivity, SessionActivityState, SessionsOverview};
 use tokio::sync::watch;
 
 use super::inbox::{self, EventKind, Facts, Item, StoppedBy};
@@ -301,12 +301,21 @@ impl Desk {
 impl Hosted {
     /// One pass of the activity reader over the hosted sessions: the events
     /// each child's doings give its parent. `views` and `states` are the
-    /// pass's input and output, in the same order.
-    pub(crate) fn observe_activity(&self, views: &[HostedView], states: &[SessionActivityState]) {
+    /// pass's input and output, in the same order. `overview` is the pass's
+    /// listing, which says since when each session has had its status: a
+    /// session idle since after a person last typed has had a turn end since,
+    /// even one no pass saw working.
+    pub(crate) fn observe_activity(
+        &self,
+        views: &[HostedView],
+        states: &[SessionActivityState],
+        overview: &SessionsOverview,
+    ) {
         let desk = &self.children.news;
         let mut events: Vec<(SessionId, EventKind, Facts)> = Vec::new();
         let mut moved = false;
         let mut turns_ended: Vec<SessionId> = Vec::new();
+        let mut idle_since: Vec<(SessionId, u64)> = Vec::new();
         {
             let mut watched = desk.watched();
             let live: HashSet<SessionId> = views
@@ -360,6 +369,14 @@ impl Hosted {
                 }
                 if seen.turn_ended {
                     turns_ended.push(id);
+                } else if state.activity == Some(SessionActivity::Idle)
+                    && let Some(since) = overview
+                        .sessions
+                        .iter()
+                        .find(|listed| listed.host_session_id == Some(view.id))
+                        .and_then(|listed| listed.status_since_ms)
+                {
+                    idle_since.push((id, since));
                 }
                 if seen.turn_started && watched.last_report.remove(&id).is_some() {
                     watched.report_revision += 1;
@@ -378,6 +395,12 @@ impl Hosted {
             .filter_map(|id| self.sessions.get(id))
         {
             session.turn_ended();
+        }
+        for (session, since) in idle_since
+            .into_iter()
+            .filter_map(|(id, since)| self.sessions.get(id).map(|session| (session, since)))
+        {
+            session.idle_since(since);
         }
         for (child, kind, facts) in events {
             self.write_news(child, kind, &facts);

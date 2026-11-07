@@ -292,6 +292,9 @@ export class InputReader {
  * - `queued`: each line typed while a turn was running, in order; it is taken
  *   as the next turn once that turn ends.
  * - `interrupts`: how many times its stop key ended a running turn.
+ * - `listening`: true once it reads its terminal. Until then what is typed
+ *   waits in the terminal, and a paste and the key pressed after it arrive in
+ *   one read, which the fake takes as one paste.
  * - `answers`: each key that answered the permission prompt `/wait` raised.
  * - `shell`: every command `/shell` ran, as `{ command, stdout, stderr, code }`
  *   (`runShell` below); `code` is null while it runs.
@@ -318,6 +321,7 @@ export class RunLog {
       prompts: [],
       queued: [],
       interrupts: 0,
+      listening: false,
       answers: [],
       shell: [],
       exitCode: null,

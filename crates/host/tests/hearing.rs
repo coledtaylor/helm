@@ -2586,6 +2586,64 @@ async fn s5_a_send_after_a_person_typed_is_refused_typing_nothing_until_the_chil
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_send_right_after_a_prompt_appears_in_the_childs_records_is_refused_without_waiting_for_a_pass()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("send-fresh-prompt");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "records", "backend": CLAUDE }))
+        .await
+        .done();
+    world.calm(&parent, &["records"]).await;
+    let child = world.child_of(&parent, "records").await;
+
+    // The child reaches a permission prompt, which only its records say, and
+    // the next send comes at once, not after a published pass.
+    parent.send("records", "/wait").await.done();
+    world.took(&child, "/wait").await;
+    let refused = parent.send("records", "typed into the prompt").await;
+    assert!(
+        refused
+            .refused()
+            .contains("waiting on a prompt a person must answer"),
+        "{refused:?}"
+    );
+    world.assert_untyped(&child, "typed into the prompt");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_goes_through_after_a_person_typed_a_line_whose_turn_was_over_before_any_pass_saw_it()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("send-quick-turn");
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    for (name, backend) in [("records", CLAUDE), ("reporter", BARE)] {
+        parent
+            .start(json!({ "task": "work", "name": name, "backend": backend }))
+            .await
+            .done();
+    }
+    world.calm(&parent, &["records"]).await;
+    for name in ["records", "reporter"] {
+        let child = world.child_of(&parent, name).await;
+        // A turn of a millisecond: busy and idle again within one read of its
+        // records, and within one of its reports.
+        world.type_line(&child, "/busy 1").await;
+        eventually(
+            "a send to go through once the person's turn is over",
+            async || (!parent.send(name, "after the quick turn").await.failed).then_some(()),
+        )
+        .await;
+        world.took(&child, "after the quick turn").await;
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn s12_a_send_with_wait_returns_that_childs_next_news_where_a_wait_holds_and_leaves_the_rest_unseen()
  {
     let world = World::new();

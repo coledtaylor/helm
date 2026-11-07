@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DiscoveryResult, SessionActivityState, SessionRecord } from '@helm/core'
-import { isChild, isProjectPinned, withProjectPinned, withReports } from '@helm/core/types'
+import { isChild, isCommandChild, isProjectPinned, withProjectPinned, withReports } from '@helm/core/types'
 import type { HelmBridge } from '../../../shared/ipc'
 import { bridgeFor } from './bridge'
 import { readable } from './errors'
@@ -149,7 +149,12 @@ export function useHostWorkspaces(
         bridge.on('session:exit', (record) =>
           patch(host, (current) => ({
             ...current,
-            sessions: current.sessions.map((session) => (session.id === record.id ? record : session))
+            // A command that exited before the window heard of it is added ended: the host lists running sessions only.
+            sessions: current.sessions.some((session) => session.id === record.id)
+              ? current.sessions.map((session) => (session.id === record.id ? record : session))
+              : isCommandChild(record)
+                ? [...current.sessions, record]
+                : current.sessions
           }))
         ),
         bridge.on('session:activity', (states) => {

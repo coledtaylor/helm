@@ -428,6 +428,26 @@ describe('a parent’s tab with children', () => {
       expect(card(view.container, 'tests').querySelector('[data-family-status]')!.textContent).toBe('Running · 4m')
     })
 
+    it('S25: counts a command’s seconds on its card until it has run a minute, and keeps counting while it runs', () => {
+      vi.useFakeTimers()
+      try {
+        const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test', startedAt: new Date(NOW - 5_000).toISOString() })])
+        const status = (): string | null => card(view.container, 'tests').querySelector('[data-family-status]')!.textContent
+
+        expect(status()).toBe('Running · 5s')
+        act(() => {
+          vi.advanceTimersByTime(3_000)
+        })
+        expect(status()).toBe('Running · 8s')
+        act(() => {
+          vi.advanceTimersByTime(60_000)
+        })
+        expect(status()).toBe('Running · 1m')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('S25 S27: shrinks to an ended header with the glyph in fg-subtle reading exited 0 and the time, with Close', () => {
       const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
       view.list([LEAD, exited(3, 'tests', 0)])

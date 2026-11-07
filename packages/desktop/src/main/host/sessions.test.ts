@@ -419,6 +419,27 @@ describe('sessions through the local host', () => {
     expect(w.host.sessions.list()).toEqual([])
   })
 
+  it('tells the window of a command child that exited before the host was asked for its list, keeps it until closed, and says nothing of one it closed or of an agent it never listed', async () => {
+    const w = world({ listed: [row()] })
+    await w.connect()
+
+    const lint = row({ id: 9, command: 'pnpm lint', parentId: 7, status: 'exited', exitCode: 0 })
+    w.connection.push('session:exit', lint)
+    expect(w.emitted).toContainEqual({ channel: 'session:exit', payload: expect.objectContaining({ id: 9, command: 'pnpm lint' }) })
+    expect(w.host.sessions.list().map((session) => session.id)).toEqual([7, 9])
+
+    // Closed, its exit heard again is not shown again.
+    await w.host.sessions.close({ id: 9 })
+    w.emitted.length = 0
+    w.connection.push('session:exit', lint)
+    expect(w.emitted).toEqual([])
+    expect(w.host.sessions.list().map((session) => session.id)).toEqual([7])
+
+    // An agent session nobody listed has nobody to tell.
+    w.connection.push('session:exit', row({ id: 12, status: 'exited', exitCode: 0 }))
+    expect(w.emitted).toEqual([])
+  })
+
   it('lists the host’s sessions when it connects and carries each running one’s terminal', async () => {
     const w = world({ listed: [row(), row({ id: 8, status: 'exited', exitCode: 1 })] })
     await w.connect()

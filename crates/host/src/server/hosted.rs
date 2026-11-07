@@ -38,6 +38,7 @@ use floti_protocol::{BackendId, Knowable};
 use tokio::sync::watch;
 
 use super::agent_tools::HostAgentTools;
+use super::features::ActivityHandle;
 use super::floti_agents::FAMILY;
 use super::records::{self, HostLedger, LostRow};
 use crate::agent::claude_code::{parse_instant, sanitize_session_name, unique_session_name};
@@ -104,6 +105,10 @@ pub(crate) struct Hosted {
     /// The host's agent tools, once it has built them. A launch before then,
     /// or on a host without them, is given none.
     agent_tools: OnceLock<Arc<HostAgentTools>>,
+    /// The reader of the backends' records, once the sessions feature has
+    /// built it: what a send reads afresh, so it never types into a prompt
+    /// the last pass had not yet seen.
+    activity: OnceLock<ActivityHandle>,
     /// What starting children for the sessions that ask needs: roles, where
     /// the `floti` executable is, and the one lock that takes starts in turn.
     children: Children,
@@ -212,6 +217,7 @@ impl Hosted {
             keeper,
             stopped: AtomicBool::new(false),
             agent_tools: OnceLock::new(),
+            activity: OnceLock::new(),
             children,
             devices: Mutex::new(devices),
             held_distros: AtomicUsize::new(0),
@@ -351,6 +357,20 @@ impl Hosted {
         }
         self.settle();
         Ok(opened)
+    }
+
+    /// Gives the host the reader of the backends' records. Only the first
+    /// given is kept.
+    pub(crate) fn use_activity_reader(&self, activity: ActivityHandle) {
+        let _ = self.activity.set(activity);
+    }
+
+    /// Reads the backends' records now and gives what they say to the waits
+    /// and to the marks a send checks. Blocking, so it runs off the runtime.
+    pub(crate) async fn read_activity_now(&self) {
+        if let Some(activity) = self.activity.get().cloned() {
+            let _ = tokio::task::spawn_blocking(move || activity.read_now()).await;
+        }
     }
 
     /// Gives every launch from now on the host's agent tools, and serves

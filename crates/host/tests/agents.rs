@@ -587,6 +587,8 @@ struct Run {
     queued: Vec<String>,
     /// How many times its stop key ended a turn.
     interrupts: u64,
+    /// Whether it reads its terminal yet.
+    listening: bool,
 }
 
 impl Run {
@@ -634,6 +636,7 @@ impl Run {
             prompts: strings(&log["prompts"]),
             queued: strings(&log["queued"]),
             interrupts: log["interrupts"].as_u64().unwrap_or(0),
+            listening: log["listening"].as_bool().unwrap_or(false),
         }
     }
 
@@ -660,6 +663,7 @@ impl Run {
             prompts: record.prompts.clone(),
             queued: record.queued.clone(),
             interrupts: u64::from(record.interrupts),
+            listening: record.listening,
         }
     }
 
@@ -3490,6 +3494,13 @@ impl World {
             .await
             .done();
         let child = self.child_of(&parent, name).await;
+        // A paste and the key after it that reach a child before it reads its
+        // terminal arrive in one read and are taken as one paste, so a send
+        // waits for the child to read.
+        eventually("the child to read its terminal", async || {
+            self.reread(&child).listening.then_some(())
+        })
+        .await;
         (parent, child)
     }
 
@@ -3699,6 +3710,12 @@ async fn a_send_reaches_only_the_callers_own_running_children() {
     world.ended("the child to stop", &[child.id()]).await;
     let refused = parent.send("mine", "hello").await;
     assert!(refused.refused().contains("mine has ended"), "{refused:?}");
+    assert!(
+        refused
+            .refused()
+            .contains("Resume it with agents_start resume"),
+        "{refused:?}"
+    );
 
     // None of that typed anything into any child.
     for run in [world.reread(&other_child), world.reread(&child)] {
@@ -3883,12 +3900,19 @@ fn pid_of(ran: &Value) -> u32 {
     u32::try_from(ran["pid"].as_u64().expect("a pid")).unwrap()
 }
 
-/// The row of the command child `parent` started under `name`.
-async fn command_child(world: &World, parent: &Agent, name: &str) -> SessionRecord {
-    let id = eventually("the command child's row", async || {
+/// The id of the command child `parent` started under `name`, which may have
+/// exited already: the host lists the sessions running now only.
+async fn command_child_id(world: &World, parent: &Agent, name: &str) -> u64 {
+    eventually("the command child's row", async || {
         world.newest_child_id(parent.id(), name)
     })
-    .await;
+    .await
+}
+
+/// The row of the command child `parent` started under `name`, which is
+/// still running (a command that exits is not in the host's list).
+async fn command_child(world: &World, parent: &Agent, name: &str) -> SessionRecord {
+    let id = command_child_id(world, parent, name).await;
     world.record(id).await
 }
 
@@ -4059,8 +4083,8 @@ async fn a_command_child_ends_with_its_exit_code_and_its_parent_is_told_the_last
             )
             .await;
         assert_eq!(started.code, Some(0), "{started:?}");
-        let child = command_child(&world, &parent, "tests").await;
-        let ended = ended_row(&world, child.id).await;
+        let child = command_child_id(&world, &parent, "tests").await;
+        let ended = ended_row(&world, child).await;
         assert_eq!(ended.exit_code, Some(3), "{ended:?}");
         assert!(!ended.stopped, "it exited on its own: {ended:?}");
 
@@ -4517,8 +4541,8 @@ async fn a_parent_reads_a_command_childs_recent_output_while_it_runs_and_its_las
             )
             .await;
         assert_eq!(ran.code, Some(0), "{ran:?}");
-        let finished = command_child(&world, &parent, "finished").await;
-        assert_eq!(ended_row(&world, finished.id).await.exit_code, Some(3));
+        let finished = command_child_id(&world, &parent, "finished").await;
+        assert_eq!(ended_row(&world, finished).await.exit_code, Some(3));
         let after = parent.read("finished", None).await;
         let body = after.done();
         assert_eq!(body["command"], true, "{body}");

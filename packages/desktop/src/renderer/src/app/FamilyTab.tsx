@@ -30,7 +30,7 @@ import {
   type TabIndicator
 } from '@helm/ui'
 import { forgetFamilyRoom, reportFamilyRoom } from './familyRooms'
-import { childStatus } from './sessionView'
+import { childStatus, useSecondsFrom } from './sessionView'
 import { TerminalPane, type HostLost } from './TerminalPane'
 import { terminalCell } from './terminals'
 import { useBodySize, useDevicePixelRatio } from './useBodySize'
@@ -176,6 +176,14 @@ export function FamilyTab({
   // A command child is known by its record's command; a kid the window marked is one too.
   const isCommand = (child: SessionRecord): boolean => isCommandChild(child) || kidOf.get(child.id)?.command === true
 
+  // A command's header counts its seconds while it runs, which the window's
+  // own clock, moving every half minute, does not: this tab ticks each second
+  // only while it holds a command that is running.
+  const clock = useSecondsFrom(
+    now,
+    kids.some((kid) => kid.session.status === 'running' && isCommand(kid.session))
+  )
+
   const header = ({ child, shape }: FamilyEntry<SessionRecord>): JSX.Element => {
     const kid = kidOf.get(child.id)
     const name = sessionLabel(child)
@@ -192,7 +200,7 @@ export function FamilyTab({
         command={command}
         status={
           running
-            ? childStatus(child, state, kid?.since ?? (command ? startedMs(child) : null), now)
+            ? childStatus(child, state, kid?.since ?? (command ? startedMs(child) : null), command ? clock : now)
             : endedHeaderText(child, stoppedByYou.has(child.id))
         }
         onPress={() =>

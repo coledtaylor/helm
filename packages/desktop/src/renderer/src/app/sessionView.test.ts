@@ -78,7 +78,10 @@ describe('what the tree row and the crumb say', () => {
     expect(crumbStatus(session(), 'idle', null, now)).toEqual({ text: 'Idle', tone: 'success' })
     expect(crumbStatus(session(), 'running', null, now)).toEqual({ text: 'Running', tone: 'subtle' })
     expect(crumbStatus(session(), 'running', now - 4 * MINUTE, now)).toEqual({ text: 'Running · 4m', tone: 'subtle' })
-    expect(crumbStatus(session(), 'running', now - 10_000, now)).toEqual({ text: 'Running', tone: 'subtle' })
+    expect(crumbStatus(session(), 'running', now - 10_000, now)).toEqual({ text: 'Running · 10s', tone: 'subtle' })
+    expect(crumbStatus(session(), 'running', now - 59_999, now).text).toBe('Running · 59s')
+    expect(crumbStatus(session(), 'running', now - 60_000, now).text).toBe('Running · 1m')
+    expect(crumbStatus(session(), 'running', now, now).text).toBe('Running · 1s')
   })
 
   it('says a reported error, with the program\'s message in the crumb, in the danger tone', () => {
@@ -146,7 +149,24 @@ describe('statusCounts', () => {
       working: 1,
       waiting: 1,
       error: 1,
+      running: 0,
       idle: 3
+    })
+  })
+
+  it('counts a command child whose command runs as running, never as idle, and one that exited not at all', () => {
+    const sessions = [
+      session({ id: 1 }),
+      session({ id: 2, command: 'pnpm test' }),
+      session({ id: 3, command: 'pnpm build' }),
+      session({ id: 4, command: 'pnpm lint', status: 'exited', exitCode: 0 })
+    ]
+    expect(statusCounts(sessions, () => 'running')).toEqual({
+      working: 0,
+      waiting: 0,
+      error: 0,
+      running: 2,
+      idle: 1
     })
   })
 })

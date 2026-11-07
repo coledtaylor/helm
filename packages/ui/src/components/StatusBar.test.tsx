@@ -397,6 +397,30 @@ describe("StatusBar: sessions", () => {
     );
   });
 
+  it("counts the commands sessions run apart from the idle ones, with a filled success dot, as the design's status bar does", () => {
+    renderBar({
+      sessions: { working: 1, waiting: 0, error: 0, running: 1, idle: 2 },
+    });
+    expect(segments().slice(3, 7)).toEqual([
+      "|",
+      "1 working",
+      "1 running",
+      "2 idle",
+    ]);
+    const running = document.querySelector('[data-status-sessions="running"]');
+    expect(running?.querySelector("[aria-hidden]")?.className).toContain(
+      "bg-success",
+    );
+  });
+
+  it("counts a lone running command as a session running, not as none", () => {
+    renderBar({
+      sessions: { working: 0, waiting: 0, error: 0, running: 1, idle: 0 },
+    });
+    expect(segments()).toContain("1 running");
+    expect(segments()).not.toContain("No sessions running");
+  });
+
   it("counts a lone erroring session as running, not as none", () => {
     renderBar({ sessions: { working: 0, waiting: 0, error: 1, idle: 0 } });
     expect(segments()).toContain("1 in error");

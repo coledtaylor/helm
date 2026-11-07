@@ -1114,3 +1114,5 @@ const input = new InputReader({
 })
 process.stdin.on('data', (chunk) => input.feed(chunk))
 process.stdin.on('end', () => exit(0))
+log.listening = true
+saveLog()

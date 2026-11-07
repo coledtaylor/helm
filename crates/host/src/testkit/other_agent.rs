@@ -110,6 +110,10 @@ pub struct OtherAgentRecord {
     /// How many times its stop key ended a turn.
     #[serde(default)]
     pub interrupts: u32,
+    /// Whether it reads its terminal yet: until then what is typed waits in
+    /// the terminal and a paste and the key after it arrive in one read.
+    #[serde(default)]
+    pub listening: bool,
     /// `None` while it runs.
     pub exit_code: Option<i32>,
 }
