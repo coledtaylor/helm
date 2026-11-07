@@ -1005,6 +1005,7 @@ fn cli_send(child: &str, text: &str, interrupt: bool) -> SendCommand {
         child: child.to_owned(),
         text: text.to_owned(),
         interrupt,
+        wait: false,
         json: false,
     }
 }
@@ -3472,6 +3473,20 @@ impl World {
         let child = self.child_of(&parent, name).await;
         (parent, child)
     }
+
+    /// Has `parent` give its child `name` a turn that runs until `/idle`. A
+    /// person typing it would be a person typing, which a send refuses after.
+    async fn give_a_held_turn(&self, parent: &Agent, child: &Agent, name: &str) {
+        parent.send(name, "/busy hold").await.done();
+        eventually("the child to begin the held turn", async || {
+            self.reread(child)
+                .received
+                .iter()
+                .any(|line| line == "/busy hold")
+                .then_some(())
+        })
+        .await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3527,7 +3542,7 @@ async fn a_text_sent_to_a_working_child_is_accepted_and_is_its_next_turn_once_th
     for backend in [CLAUDE, OTHER] {
         let name = format!("busy-{backend}");
         let (parent, child) = world.family(backend, &name).await;
-        world.type_line(&child, "/busy hold").await;
+        world.give_a_held_turn(&parent, &child, &name).await;
 
         let sent = parent.send(&name, "next task\nin two lines").await.done();
         assert_eq!(sent["sent"], name.as_str(), "{backend}");
@@ -3571,7 +3586,7 @@ async fn a_send_that_interrupts_presses_the_stop_key_first_and_the_child_takes_t
                 if by_command { "command" } else { "tool" }
             );
             let (parent, child) = world.family(backend, &name).await;
-            world.type_line(&child, "/busy hold").await;
+            world.give_a_held_turn(&parent, &child, &name).await;
 
             if by_command {
                 let (url, token) = parent.route();
@@ -3670,6 +3685,117 @@ async fn a_send_reaches_only_the_callers_own_running_children() {
     for run in [world.reread(&other_child), world.reread(&child)] {
         assert!(!run.received.iter().any(|line| line.contains("hello")));
         assert!(run.pastes.is_empty(), "{:?}", run.pastes);
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+/// What a run has been typed, as the fake logged it: every line it took, every
+/// paste and every turn.
+fn typed_into(run: &Run) -> (Vec<String>, Vec<(String, bool)>, Vec<String>) {
+    (
+        run.received.clone(),
+        run.pastes.clone(),
+        run.prompts.clone(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_names_only_the_callers_own_children_and_nothing_else_is_typed_into_any_session() {
+    let world = World::new();
+    let host = world.host().await;
+    // A parent with two children (so each is the other's sibling), another
+    // family on the other backends, and a session nobody started with a tool.
+    let a = world
+        .session(CLAUDE, &world.project("alpha"), "alpha")
+        .await;
+    let b = world.session(OTHER, &world.project("bravo"), "bravo").await;
+    let x = world.session(OTHER, &world.project("xray"), "xray").await;
+    for (parent, kid, backend) in [
+        (&a, "a-one", OTHER),
+        (&a, "a-two", CLAUDE),
+        (&b, "b-one", CLAUDE),
+    ] {
+        parent
+            .start(json!({ "task": "work", "name": kid, "backend": backend }))
+            .await
+            .done();
+    }
+    let a_one = world.child_of(&a, "a-one").await;
+    let a_two = world.child_of(&a, "a-two").await;
+    let b_one = world.child_of(&b, "b-one").await;
+
+    let everyone: [(&Agent, Option<&str>, Option<u64>); 6] = [
+        (&a, None, None),
+        (&b, None, None),
+        (&x, None, None),
+        (&a_one, Some("a-one"), Some(a.id())),
+        (&a_two, Some("a-two"), Some(a.id())),
+        (&b_one, Some("b-one"), Some(b.id())),
+    ];
+    let before: Vec<_> = everyone
+        .iter()
+        .map(|(agent, _, _)| typed_into(&world.reread(agent)))
+        .collect();
+
+    const MARKER: &str = "TYPED-WHERE-IT-MUST-NOT-BE";
+    let mut calls = 0;
+    for (caller, _, _) in everyone {
+        for (other, child_name, owner) in everyone {
+            // The caller's own children are what a send is for.
+            if owner == Some(caller.id()) {
+                continue;
+            }
+            // Its parent, itself, a sibling or a session it did not start: by
+            // name, id, conversation, process and folder.
+            for target in names_of(other, child_name)
+                .into_iter()
+                .filter(|target| !target.trim().is_empty())
+            {
+                let call = format!("{} naming {} as {target:?}", caller.name(), other.name());
+                let sent = caller.send(&target, MARKER).await;
+                assert!(
+                    sent.refused().contains("No agent of yours is named"),
+                    "agents_send {call}: {sent:?}"
+                );
+                let (url, token) = caller.route();
+                let by_command = subcommand(
+                    Subcommand::Send(cli_send(&target, MARKER, true)),
+                    url,
+                    token,
+                )
+                .await;
+                assert_eq!(
+                    by_command.code, 1,
+                    "floti agent send {call}: {by_command:?}"
+                );
+                assert!(
+                    by_command
+                        .err
+                        .as_deref()
+                        .is_some_and(|err| err.contains("No agent of yours is named")),
+                    "floti agent send {call}: {by_command:?}"
+                );
+                calls += 1;
+            }
+        }
+    }
+    assert!(calls > 60, "the reach test made {calls} rounds of calls");
+
+    for ((agent, _, _), before) in everyone.iter().zip(&before) {
+        let run = world.reread(agent);
+        assert_eq!(
+            &typed_into(&run),
+            before,
+            "something was typed into {}",
+            agent.name()
+        );
+        assert!(
+            !run.received.iter().any(|line| line.contains(MARKER)),
+            "{} took the text",
+            agent.name()
+        );
+        assert_eq!(run.interrupts, 0, "{} was interrupted", agent.name());
+        assert_eq!(world.status(agent.id()), "running");
     }
     host.stop(HostStopReason::Stop).await;
 }

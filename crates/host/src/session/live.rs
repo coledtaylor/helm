@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
@@ -32,6 +33,7 @@ use tokio::sync::watch;
 
 use super::env::session_env;
 use super::ledger::{NewSessionRow, SessionId, SessionLedger, SessionOrigin};
+use super::person::is_a_person_typing;
 use super::report::{ProgramStatus, ReportedStatus};
 use super::screen::{Screen, TermSize};
 use crate::agent::LaunchSpec;
@@ -281,6 +283,7 @@ impl SessionHost {
             }),
             ended: Condvar::new(),
             typed: watch::Sender::new(0),
+            person_typed: AtomicBool::new(false),
             pty: Mutex::new(Some(Pty::Kept {
                 link: Arc::clone(&link),
                 handle: held.handle,
@@ -374,6 +377,7 @@ impl SessionHost {
             }),
             ended: Condvar::new(),
             typed: watch::Sender::new(0),
+            person_typed: AtomicBool::new(false),
             pty: Mutex::new(Some(Pty::Here { master, writer })),
         });
         // Before the output thread starts: a client attached here misses
@@ -480,6 +484,7 @@ impl SessionHost {
             }),
             ended: Condvar::new(),
             typed: watch::Sender::new(0),
+            person_typed: AtomicBool::new(false),
             pty: Mutex::new(Some(Pty::Kept {
                 link: Arc::clone(&link),
                 handle,
@@ -565,6 +570,9 @@ pub struct Session {
     /// Counts the times a client has typed into it, so a wait on news can end
     /// at once when a person does.
     typed: watch::Sender<u64>,
+    /// Whether a client has typed into it since its last turn ended
+    /// ([`Session::person_typed`]). Only [`Session::input`] sets it.
+    person_typed: AtomicBool,
     /// Taken when the session is closed or its program exits. Lock order:
     /// `state`, then `pty`.
     pty: Mutex<Option<Pty>>,
@@ -717,6 +725,9 @@ impl Session {
     /// Sends the keys `client` typed to the program, first giving the
     /// session that client's size.
     pub fn input(&self, client: ClientId, bytes: &[u8]) -> Result<()> {
+        if is_a_person_typing(bytes) {
+            self.person_typed.store(true, Ordering::SeqCst);
+        }
         {
             let mut state = lock(&self.state);
             if state.exit.is_some() {
@@ -747,6 +758,21 @@ impl Session {
         let pty = pty.as_mut().ok_or_else(|| self.has_ended())?;
         pty.write(bytes)
             .map_err(|err| Error::io(format!("type into session {}", self.id), err))
+    }
+
+    /// Whether a client has typed into the session since its last turn ended
+    /// ([`Session::turn_ended`]): what a client's terminal answers its program
+    /// with is not typing. A parent's send is refused while this holds,
+    /// because a person's keys come first and may be half a line in the
+    /// prompt. It is set here, for the bytes a client sent, and nowhere else.
+    pub fn person_typed(&self) -> bool {
+        self.person_typed.load(Ordering::SeqCst)
+    }
+
+    /// The session's turn has ended: what a person typed before it is spent,
+    /// so a parent's send goes through again.
+    pub fn turn_ended(&self) {
+        self.person_typed.store(false, Ordering::SeqCst);
     }
 
     /// Changes each time a client types into the session. What the host

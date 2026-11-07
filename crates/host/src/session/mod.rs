@@ -29,6 +29,7 @@ pub mod describe;
 pub(crate) mod env;
 mod ledger;
 mod live;
+mod person;
 mod redraw;
 mod report;
 mod screen;

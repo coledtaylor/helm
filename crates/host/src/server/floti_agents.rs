@@ -18,8 +18,8 @@
 //! **News comes through a wait.** What a child tells its parent (its report,
 //! that it needs a person, that its turn ended, that it ended, an error) is
 //! kept in the parent's inbox (`hosted/children/inbox.rs`) and returned by
-//! `agents_wait`, or by `agents_start` with `wait`, in order, naming the child
-//! and the event. A wait holds, answering as a stream that says it is still
+//! `agents_wait`, or by `agents_start` and `agents_send` with `wait`, in order,
+//! naming the child and the event. A wait holds, answering as a stream that says it is still
 //! there, only where the caller's agent can wait in the background: its own
 //! tool call for one that moves long calls to the background, a command in its
 //! shell (`floti agent wait`, marked by the shell header) for one that wakes
@@ -208,7 +208,9 @@ impl ToolFamily for FlotiAgents {
     fn holds(&self, caller: Caller, name: &str, arguments: &JsonObject) -> bool {
         let waits = match name {
             AGENTS_WAIT => true,
-            AGENTS_START => matches!(arguments.get("wait"), Some(Value::Bool(true))),
+            AGENTS_START | AGENTS_SEND => {
+                matches!(arguments.get("wait"), Some(Value::Bool(true)))
+            }
             _ => false,
         };
         waits
@@ -251,7 +253,7 @@ impl ToolFamily for FlotiAgents {
             };
             match name {
                 AGENTS_START => start(&from, &arguments).await,
-                AGENTS_SEND => send(hosted, me, &arguments).await,
+                AGENTS_SEND => send(&from, &arguments).await,
                 AGENTS_WAIT => wait(&from, &arguments).await,
                 AGENTS_REPORT => report(Arc::clone(&hosted), me, &arguments).await,
                 AGENTS_LIST => list(hosted, me).await,
@@ -363,23 +365,46 @@ async fn wait(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
     }
 }
 
-/// `agents_send`: text typed into one of `me`'s children as its next turn.
-async fn send(hosted: Arc<Hosted>, me: SessionId, arguments: &JsonObject) -> CallToolResult {
-    let request = match send_request(arguments) {
-        Ok(request) => request,
+/// `agents_send`: text typed into one of `me`'s children as its next turn;
+/// with `wait`, then that child's next news.
+async fn send(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
+    let asked = send_request(arguments).and_then(|request| {
+        let wait = flag(arguments, "wait")?.unwrap_or(false);
+        Ok((request, wait))
+    });
+    let (request, wait) = match asked {
+        Ok(asked) => asked,
         Err(refusal) => return problem(&refusal),
     };
-    match hosted.send_to_child(me, request).await {
+    match from.hosted.send_to_child(from.me, request).await {
         Ok(sent) => {
             let how = if sent.interrupted {
                 " after stopping its turn in progress"
             } else {
                 ""
             };
-            answer(
-                format!("Sent to {}{how}.", sent.name),
-                json!({ "sent": sent.name, "interrupted": sent.interrupted }),
-            )
+            let mut text = format!("Sent to {}{how}.", sent.name);
+            let mut body = json!({ "sent": sent.name, "interrupted": sent.interrupted });
+            if wait {
+                // Only that child's news: the rest stays in the inbox for a wait.
+                match from.wait(WaitFor::Any, vec![sent.name.clone()]).await {
+                    Ok(waited) => {
+                        text.push_str("\n\n");
+                        text.push_str(&waited_text(&waited));
+                        if let (Some(body), Value::Object(news)) =
+                            (body.as_object_mut(), waited_json(&waited))
+                        {
+                            body.extend(news);
+                        }
+                    }
+                    Err(refusal) => {
+                        text.push_str(&format!(
+                            "\n\nIt was sent, but waiting on it failed: {refusal}"
+                        ));
+                    }
+                }
+            }
+            answer(text, body)
         }
         Err(refusal) => problem(&refusal),
     }

@@ -62,7 +62,7 @@
     },
     {
       "name": "agents_send",
-      "description": "Type text into one of your agents as its next turn, as its user would: the text is pasted into its terminal as one block, so a text of several lines is one turn, and then submitted. Text sent while the agent is working is taken as its next turn once the current one ends. With interrupt: true the agent's own stop key is pressed first, to end the turn in progress so that it does this instead. Pass the name agents_start answered with. A name that is not one of your agents is not found; an agent that has ended, one that interrupt cannot be used on because it has no stop key, and a plain terminal, which takes no turns, are refused and the answer says which. It answers once the text has been submitted; what the agent does with it comes back as its news.",
+      "description": "Type text into one of your agents as its next turn, as its user would: the text is pasted into its terminal as one block, so a text of several lines is one turn, and then submitted. Text sent while the agent is working is taken as its next turn once the current one ends. With interrupt: true the agent's own stop key is pressed first, to end the turn in progress so that it does this instead. Pass the name agents_start answered with. A name that is not one of your agents is not found; an agent that has ended, one that interrupt cannot be used on because it has no stop key, and a plain terminal, which takes no turns, are refused and the answer says which. It is also refused, saying so and typing nothing, while the agent waits on a permission prompt or any other dialog (only a person answers those), and when a person has typed into its terminal since its last turn ended; send again once it is working or its next turn has ended. It answers once the text has been submitted; what the agent does with it comes back as its news, or with wait: true as this call's answer.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -77,6 +77,10 @@
           "interrupt": {
             "type": "boolean",
             "description": "Whether to press the agent's stop key first, to end its turn in progress. Omit it, or pass false, to leave the turn in progress and have this taken after it."
+          },
+          "wait": {
+            "type": "boolean",
+            "description": "Whether to hold the call until the agent has news after the text, and answer with its first news: its report, that it needs you, that its turn ended, that it ended or an error. Omit it, or pass false, to answer as soon as the text is submitted."
           }
         },
         "required": [

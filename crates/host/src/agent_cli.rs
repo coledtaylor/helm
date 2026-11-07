@@ -42,7 +42,7 @@ pub const URL_VAR: &str = "FLOTI_AGENT_URL";
 pub const TOKEN_VAR: &str = "FLOTI_AGENT_TOKEN";
 
 /// What `floti agent` accepts.
-pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent start --resume <name> --task <text> [--wait] [--json]\n       floti agent send [--interrupt] [--json] <name> [--] <text>\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
+pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent start --resume <name> --task <text> [--wait] [--json]\n       floti agent send [--interrupt] [--wait] [--json] <name> [--] <text>\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
 
 /// How long a connection waits to be made.
 const CONNECT_WAIT: Duration = Duration::from_secs(10);
@@ -69,6 +69,9 @@ pub struct SendText {
     /// Whether `--interrupt` was given: the agent's stop key is pressed
     /// before the text.
     pub interrupt: bool,
+    /// Whether `--wait` was given: the command then also prints the agent's
+    /// next news.
+    pub wait: bool,
     pub json: bool,
 }
 
@@ -208,6 +211,7 @@ fn parse_send(args: &[String]) -> Result<SendText, String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--interrupt" => send.interrupt = true,
+            "--wait" => send.wait = true,
             "--json" => send.json = true,
             "--" => {
                 let rest: Vec<&String> = args.by_ref().collect();
@@ -341,6 +345,9 @@ fn send_arguments(send: &SendText) -> Value {
     let mut arguments = json!({ "child": send.child, "text": send.text });
     if send.interrupt {
         arguments["interrupt"] = json!(true);
+    }
+    if send.wait {
+        arguments["wait"] = json!(true);
     }
     arguments
 }
@@ -714,6 +721,7 @@ mod tests {
                 child: "worker".to_owned(),
                 text: "do this\nand that".to_owned(),
                 interrupt: false,
+                wait: false,
                 json: false,
             }))
         );
@@ -723,6 +731,7 @@ mod tests {
                 child: "worker".to_owned(),
                 text: "stop".to_owned(),
                 interrupt: true,
+                wait: false,
                 json: true,
             }))
         );
@@ -733,6 +742,7 @@ mod tests {
                 child: "worker".to_owned(),
                 text: "--interrupt is a flag".to_owned(),
                 interrupt: false,
+                wait: false,
                 json: false,
             }))
         );
@@ -747,11 +757,24 @@ mod tests {
             vec!["send", "worker", "one", "two"],
             vec!["send", "worker", "--", "one", "two"],
             vec!["send", "worker", "one", "--", "two"],
-            vec!["send", "--wait", "worker", "text"],
+            vec!["send", "--wait=yes", "worker", "text"],
             vec!["send", "--force", "worker", "text"],
         ] {
             assert!(parse(&args(&bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn send_takes_wait_and_asks_for_it_only_when_given() {
+        let Ok(Command::Send(send)) = parse(&args(&["send", "--wait", "worker", "text"])) else {
+            panic!("send --wait parses");
+        };
+        assert!(send.wait);
+        assert_eq!(
+            send_arguments(&send),
+            json!({ "child": "worker", "text": "text", "wait": true })
+        );
+        assert!(send_arguments(&SendText::default()).get("wait").is_none());
     }
 
     #[test]
@@ -760,6 +783,7 @@ mod tests {
             child: "worker".to_owned(),
             text: "hello".to_owned(),
             interrupt: false,
+            wait: false,
             json: false,
         };
         assert_eq!(
@@ -769,6 +793,7 @@ mod tests {
         assert_eq!(
             send_arguments(&SendText {
                 interrupt: true,
+                wait: false,
                 ..sent.clone()
             }),
             json!({ "child": "worker", "text": "hello", "interrupt": true })

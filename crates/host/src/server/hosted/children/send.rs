@@ -7,6 +7,14 @@
 //! children, and anything else is not found. A child that has ended takes
 //! nothing.
 //!
+//! **Refusals type nothing, and say which.** The child has ended (resume it
+//! with `agents_start` `resume`); it waits on a permission prompt or any other
+//! dialog, which only a person answers (its activity: its backend's records
+//! first, then its program's OSC 7501 `blocked`); a person has typed into its
+//! terminal since its last turn ended (marked where a client's bytes reach
+//! the session, cleared where the child's turn ends); or it is not an agent,
+//! which takes no turns.
+//!
 //! **The keys are the backend's.** What opens and closes a paste, what
 //! submits it, what stops a turn and how long to wait between the end of the
 //! paste and the submit key are declared by the child's adapter
@@ -33,7 +41,8 @@ use tokio::time::sleep;
 use super::{not_found, rows};
 use crate::agent::AgentInput;
 use crate::server::hosted::Hosted;
-use crate::session::{Session, SessionId};
+use crate::session::{ReportState, Session, SessionId};
+use floti_protocol::channels::sessions::SessionActivity;
 
 /// What `agents_send` was asked: the child, the text and whether to stop the
 /// child's turn in progress first.
@@ -130,6 +139,7 @@ impl Hosted {
         };
         let turn = self.children.typing_lock(target.session.id());
         let _one_at_a_time = turn.lock().await;
+        self.refuse_at_a_prompt_or_after_a_person(&target)?;
         type_turn(
             &*target.session,
             &target.input,
@@ -141,6 +151,32 @@ impl Hosted {
             name: target.name,
             interrupted: request.interrupt,
         })
+    }
+
+    /// Nothing is typed while the child waits on a prompt or any other dialog
+    /// (Floti answers none), or when a person has typed into its terminal
+    /// since its last turn ended (their keys come first).
+    fn refuse_at_a_prompt_or_after_a_person(&self, target: &Target) -> Result<(), String> {
+        let name = &target.name;
+        let blocked = matches!(
+            target.session.reported_status(),
+            Some(status) if status.report.state == ReportState::Blocked
+        );
+        if blocked
+            || self.children.news.activity_of(target.session.id()) == Some(SessionActivity::Waiting)
+        {
+            return Err(format!(
+                "{name} is waiting on a prompt a person must answer, so nothing was typed. \
+                 Floti answers no prompt; send again once it is working again."
+            ));
+        }
+        if target.session.person_typed() {
+            return Err(format!(
+                "A person has typed in {name}'s terminal since its last turn, so nothing was typed. \
+                 Send again once its next turn has ended."
+            ));
+        }
+        Ok(())
     }
 
     /// The running child of `parent` called `name`, with its backend's input.
@@ -165,7 +201,13 @@ impl Hosted {
             let session = self.sessions.get(found.id).filter(|_| found.running);
             (
                 (found.name.clone(), found.backend.clone()),
-                session.ok_or_else(|| format!("{} has ended, so it takes no more.", found.name))?,
+                session.ok_or_else(|| {
+                    format!(
+                        "{} has ended, so it takes nothing more. Resume it with agents_start \
+                         resume to give it another turn.",
+                        found.name
+                    )
+                })?,
             )
         };
         let (name, backend) = child;

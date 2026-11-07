@@ -58,6 +58,10 @@ pub(super) struct Seen {
     /// before it is no longer its latest. False when the child already
     /// reported in the turn this pass saw begin: that report is this turn's own.
     pub turn_started: bool,
+    /// The child's turn ended in this pass (it went idle after working or
+    /// after a dialog), with a report or without: what a person typed before
+    /// it is spent.
+    pub turn_ended: bool,
 }
 
 /// The rules for one child, a pure state machine over what passes see.
@@ -128,6 +132,8 @@ impl Tracker {
 
         if now.activity != self.activity {
             let before = std::mem::replace(&mut self.activity, now.activity);
+            seen.turn_ended = now.activity == Some(SessionActivity::Idle)
+                && (working(before) || before == Some(SessionActivity::Waiting));
             match now.activity {
                 Some(SessionActivity::Busy | SessionActivity::Shell) if !working(before) => {
                     self.reported_this_turn = reported_between;
@@ -300,6 +306,7 @@ impl Hosted {
         let desk = &self.children.news;
         let mut events: Vec<(SessionId, EventKind, Facts)> = Vec::new();
         let mut moved = false;
+        let mut turns_ended: Vec<SessionId> = Vec::new();
         {
             let mut watched = desk.watched();
             let live: HashSet<SessionId> = views
@@ -351,6 +358,9 @@ impl Hosted {
                 if watched.activity.insert(id, state.activity) != Some(state.activity) {
                     moved = true;
                 }
+                if seen.turn_ended {
+                    turns_ended.push(id);
+                }
                 if seen.turn_started && watched.last_report.remove(&id).is_some() {
                     watched.report_revision += 1;
                     moved = true;
@@ -362,6 +372,12 @@ impl Hosted {
                 );
             }
             watched.plain.retain(|id| live.contains(id));
+        }
+        for session in turns_ended
+            .into_iter()
+            .filter_map(|id| self.sessions.get(id))
+        {
+            session.turn_ended();
         }
         for (child, kind, facts) in events {
             self.write_news(child, kind, &facts);
@@ -579,6 +595,24 @@ mod tests {
             kinds(&tracker.observe(&at(Some(Idle)))),
             [EventKind::TurnEnded]
         );
+    }
+
+    #[test]
+    fn a_turn_ends_when_the_child_goes_idle_after_working_or_after_a_dialog_with_or_without_a_report()
+     {
+        let mut tracker = Tracker::default();
+        assert!(!tracker.observe(&at(Some(Idle))).turn_ended);
+        assert!(!tracker.observe(&at(Some(Busy))).turn_ended);
+        assert!(tracker.observe(&at(Some(Idle))).turn_ended);
+        // A turn that reported ends all the same.
+        tracker.observe(&at(Some(Busy)));
+        tracker.reported();
+        assert!(tracker.observe(&at(Some(Idle))).turn_ended);
+        // A dialog that is answered and then leaves the child idle.
+        tracker.observe(&at(Some(Waiting)));
+        assert!(tracker.observe(&at(Some(Idle))).turn_ended);
+        // Passes that change nothing end nothing.
+        assert!(!tracker.observe(&at(Some(Idle))).turn_ended);
     }
 
     #[test]
