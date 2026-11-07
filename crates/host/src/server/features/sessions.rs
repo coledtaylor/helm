@@ -293,15 +293,29 @@ impl Sessions {
         })
     }
 
+    /// Attaches `client` to `session` to watch only: its current screen and
+    /// live output reach the client, and its keys and sizes reach nothing.
+    fn watch(client: ClientId, session: Arc<Session>) -> Result<TerminalAttachment, String> {
+        let attachment = session.watch(client).map_err(|err| err.to_string())?;
+        Ok(TerminalAttachment {
+            session,
+            redraw: attachment.redraw,
+            output: attachment.output,
+        })
+    }
+
     fn attach_session(
         &self,
         client: ClientId,
         open: SessionStreamOpen,
     ) -> Result<TerminalAttachment, String> {
-        let SessionStreamOpen { id, .. } = open;
+        let SessionStreamOpen { id, watch } = open;
         let session = session_id(id)
             .and_then(|id| self.hosted.sessions().get(id))
             .ok_or_else(|| format!("Session {id} is not running on this Floti host."))?;
+        if watch {
+            return Self::watch(client, session);
+        }
         Self::attach(client, session)
     }
 

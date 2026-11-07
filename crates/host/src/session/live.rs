@@ -634,6 +634,8 @@ struct State {
 struct Attached {
     size: TermSize,
     output: UnboundedSender<SessionOutput>,
+    /// Attached to watch: its input and its size reach nothing.
+    watching: bool,
 }
 
 impl Session {
@@ -678,6 +680,35 @@ impl Session {
     /// does, and so does a terminal reporting its size before anyone has
     /// typed ([`Session::resize`]).
     pub fn attach(&self, client: ClientId, size: TermSize) -> Result<Attachment> {
+        self.attach_as(client, size, false)
+    }
+
+    /// Attaches `client` to watch only: it is sent the current screen and
+    /// everything after it, at the session's own size, and nothing it sends
+    /// reaches the program. Its keys are dropped, it never becomes the one
+    /// that typed last, and a size it reports changes nothing. Attaching
+    /// `client` any other way replaces this, as attaching again always does.
+    pub fn watch(&self, client: ClientId) -> Result<Attachment> {
+        let size = self.size();
+        self.attach_as(client, size, true)
+    }
+
+    /// Attaches `client` afresh the way it is attached now: a watcher stays
+    /// one, anyone else is attached to type. For a stream that fell behind
+    /// and is caught up.
+    pub fn reattach(&self, client: ClientId) -> Result<Attachment> {
+        let (size, watching) = {
+            let state = lock(&self.state);
+            let watching = state
+                .clients
+                .get(&client)
+                .is_some_and(|attached| attached.watching);
+            (state.size, watching)
+        };
+        self.attach_as(client, size, watching)
+    }
+
+    fn attach_as(&self, client: ClientId, size: TermSize, watching: bool) -> Result<Attachment> {
         let mut state = lock(&self.state);
         let session_size = state.size;
         let Some(screen) = state.screen.as_mut() else {
@@ -685,7 +716,14 @@ impl Session {
         };
         let redraw = screen.redraw();
         let (output, receiver) = unbounded_channel();
-        state.clients.insert(client, Attached { size, output });
+        state.clients.insert(
+            client,
+            Attached {
+                size,
+                output,
+                watching,
+            },
+        );
         Ok(Attachment {
             redraw,
             size: session_size,
@@ -706,6 +744,9 @@ impl Session {
     pub fn resize(&self, client: ClientId, size: TermSize) -> Result<()> {
         let mut state = lock(&self.state);
         if let Some(attached) = state.clients.get_mut(&client) {
+            if attached.watching {
+                return Ok(());
+            }
             attached.size = size;
         }
         if state.typist.is_none_or(|typist| typist == client) {
@@ -721,6 +762,13 @@ impl Session {
             let mut state = lock(&self.state);
             if state.exit.is_some() {
                 return Err(self.has_ended());
+            }
+            if state
+                .clients
+                .get(&client)
+                .is_some_and(|attached| attached.watching)
+            {
+                return Ok(());
             }
             state.typist = Some(client);
             if let Some(size) = state.clients.get(&client).map(|attached| attached.size) {

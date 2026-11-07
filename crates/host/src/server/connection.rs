@@ -1260,8 +1260,8 @@ impl Connection {
             return;
         };
         // Attaching again replaces the attachment it fell behind on, whose
-        // output stops with it.
-        match session.attach(client, session.size()) {
+        // output stops with it. A watcher stays one.
+        match session.reattach(client) {
             Ok(attachment) => {
                 forward.abort();
                 *forward = streams::forward_output(stream, token, attachment.output, feed.clone());

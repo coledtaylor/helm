@@ -271,6 +271,18 @@ impl Watcher {
         }
     }
 
+    /// A watch-only attachment.
+    fn watch(session: &Session, client: ClientId) -> Self {
+        let attachment = session.watch(client).expect("watch");
+        Self {
+            redraw: attachment.redraw,
+            output: attachment.output,
+            data: Vec::new(),
+            events: Vec::new(),
+            closed: false,
+        }
+    }
+
     /// Takes in what has arrived; whether anything had.
     fn pump(&mut self) -> bool {
         let mut any = false;
@@ -726,6 +738,79 @@ fn a_session_nobody_has_typed_into_takes_the_size_its_clients_terminal_reports()
     assert_eq!(session.size(), large);
     session.resize(A, card).unwrap();
     assert_eq!(session.size(), large, "A's report waits until A types");
+
+    session.end_now().unwrap();
+    assert!(session.wait_exit(PATIENCE).is_some());
+}
+
+#[test]
+fn a_watching_client_gets_the_screen_and_output_but_sets_no_size_and_types_nothing() {
+    let fx = Fixture::new();
+    let folder = fx.dirs.folder("project");
+    let started = TermSize::new(120, 32);
+    // Nobody has typed: a size reported by an ordinary client would apply.
+    let session = fx.start_for(&folder, &[], started, None);
+    let mut typist = Watcher::attach(&session, A, started);
+    session.input(A, b"first\r").unwrap();
+    typist.wait_for_text("echo: first");
+
+    // The watcher is sent the screen as it is, and live output after it.
+    let mut watcher = Watcher::watch(&session, B);
+    assert!(
+        String::from_utf8_lossy(&watcher.redraw).contains("echo: first"),
+        "the watcher is given the current screen"
+    );
+
+    // Its keys reach nothing, and it does not become the one that typed
+    // last.
+    session.input(B, b"stolen\r").unwrap();
+    session.resize(B, TermSize::new(40, 10)).unwrap();
+    assert_eq!(session.size(), started, "a watcher's size is not taken");
+    assert_eq!(session.pty_size(), Some(started));
+
+    session.input(A, b"later\r").unwrap();
+    typist.wait_for_text("echo: later");
+    watcher.wait_for_text("echo: later");
+    assert!(!typist.has("stolen"), "the program was typed into");
+    assert!(!watcher.has("stolen"));
+    assert_eq!(session.size(), started);
+
+    // A's size still applies as the typist's: B's report changed nothing for
+    // A either.
+    let wide = TermSize::new(132, 50);
+    session.resize(A, wide).unwrap();
+    assert_eq!(session.size(), wide);
+    watcher.wait_for("told of the size", |w| {
+        w.events.contains(&SessionOutput::Resized(wide))
+    });
+
+    // Attached to type, the same client is an ordinary one.
+    let _b = Watcher::attach(&session, B, TermSize::new(90, 30));
+    session.input(B, b"mine\r").unwrap();
+    assert_eq!(session.size(), TermSize::new(90, 30));
+
+    session.end_now().unwrap();
+    assert!(session.wait_exit(PATIENCE).is_some());
+}
+
+#[test]
+fn a_watching_client_caught_up_stays_a_watcher() {
+    let fx = Fixture::new();
+    let folder = fx.dirs.folder("project");
+    let size = TermSize::new(80, 24);
+    let session = fx.start_for(&folder, &[], size, None);
+    let _watcher = Watcher::watch(&session, B);
+    let _again = session.reattach(B).expect("reattach");
+    session.input(B, b"stolen\r").unwrap();
+    session.resize(B, TermSize::new(40, 10)).unwrap();
+    assert_eq!(session.size(), size);
+    assert!(session.typing().borrow().eq(&0), "nothing was typed");
+
+    // One that typed stays one.
+    let _a = Watcher::attach(&session, A, size);
+    let _again = session.reattach(A).expect("reattach");
+    session.input(A, b"typed\r").unwrap();
+    assert_eq!(*session.typing().borrow(), 1);
 
     session.end_now().unwrap();
     assert!(session.wait_exit(PATIENCE).is_some());

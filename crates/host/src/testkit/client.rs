@@ -414,6 +414,18 @@ impl TestClient {
         .await;
     }
 
+    /// Opens a watch-only terminal on session `id` as stream `stream`: the
+    /// screen and live output come, and nothing sent reaches the session.
+    pub async fn watch(&mut self, stream: u64, id: u64) {
+        self.send(&Message::StreamOpen(StreamOpen {
+            stream,
+            channel: SessionTerminal::NAME.to_owned(),
+            params: to_payload(&SessionStreamOpen { id, watch: true })
+                .expect("encode stream params"),
+        }))
+        .await;
+    }
+
     /// Types `bytes` into the session on `stream`.
     pub async fn type_into(&mut self, stream: u64, bytes: &[u8]) {
         self.send(&Message::StreamData(StreamData {
