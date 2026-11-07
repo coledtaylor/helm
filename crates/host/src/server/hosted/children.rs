@@ -619,6 +619,18 @@ impl Hosted {
                 log_line!("floti host: {name}: {warning}");
             }
         }
+        // A reopened child is told again of the session that started it.
+        composition.child = Some(ChildInstructions {
+            parent: rows::label_of(&self.ledger.store(), parent)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+            role: child
+                .role
+                .clone()
+                .unwrap_or_else(|| DEFAULT_ROLE.to_owned()),
+            reports: backend.tool_support().mcp_tools,
+        });
         judge(
             &settings,
             facts,

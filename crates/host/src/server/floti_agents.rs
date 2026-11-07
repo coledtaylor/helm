@@ -306,18 +306,13 @@ async fn start(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
     let branch = started.branch.as_deref().unwrap_or("none");
     let verb = if resumed { "Resumed" } else { "Started" };
     let mut text = format!(
-        "{verb} {name}.
-name: {name}
-backend: {backend}
-folder: {folder}
-branch: {branch}",
+        "{verb} {name}.\nname: {name}\nbackend: {backend}\nfolder: {folder}\nbranch: {branch}",
         name = started.name,
         backend = started.backend,
         folder = started.folder,
     );
     if let Some(worktree) = &started.worktree {
-        text.push_str(&format!("
-worktree: {worktree}"));
+        text.push_str(&format!("\nworktree: {worktree}"));
     }
     let mut body = json!({
         "name": started.name,
@@ -330,9 +325,7 @@ worktree: {worktree}"));
         // Only that child's news: the rest stays in the inbox for a wait.
         match from.wait(WaitFor::Any, vec![started.name.clone()]).await {
             Ok(waited) => {
-                text.push_str("
-
-");
+                text.push_str("\n\n");
                 text.push_str(&waited_text(&waited));
                 if let (Some(body), Value::Object(news)) =
                     (body.as_object_mut(), waited_json(&waited))
@@ -342,9 +335,7 @@ worktree: {worktree}"));
             }
             Err(refusal) => {
                 text.push_str(&format!(
-                    "
-
-It is running, but waiting on it failed: {refusal}"
+                    "\n\nIt is running, but waiting on it failed: {refusal}"
                 ));
             }
         }

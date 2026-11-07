@@ -2601,6 +2601,19 @@ async fn a_parent_resumes_its_ended_child_under_its_name_with_the_task_as_its_ne
             "{:?}",
             resumed.run.instructions
         );
+        // And it is told again which session started it and in what role.
+        assert!(
+            resumed
+                .run
+                .instructions
+                .as_deref()
+                .is_some_and(|text| text.contains(&format!(
+                    "You were started by another session, {}, as briefed.",
+                    parent.name()
+                ))),
+            "{:?}",
+            resumed.run.instructions
+        );
         // The same child: its name, its parent, its role, outlive and
         // can_start, and the mode it had.
         assert_eq!(resumed.record.parent_id, Some(parent.id()));

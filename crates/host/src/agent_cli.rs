@@ -41,10 +41,7 @@ pub const URL_VAR: &str = "FLOTI_AGENT_URL";
 pub const TOKEN_VAR: &str = "FLOTI_AGENT_TOKEN";
 
 /// What `floti agent` accepts.
-pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]
-       floti agent start --resume <name> --task <text> [--wait] [--json]
-       floti agent wait [--all] [--json] [<name>...]
-       floti agent stop <name> [--json]";
+pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent start --resume <name> --task <text> [--wait] [--json]\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
 
 /// How long a connection waits to be made.
 const CONNECT_WAIT: Duration = Duration::from_secs(10);
