@@ -1395,6 +1395,9 @@ mod tests {
             (json!(255), 255),
             (json!(256), 1),
             (json!(-1), 1),
+            // 0xC0000005 wrapped to a signed 32-bit value: it fits no exit
+            // status, so the call ends with 1 and its text and JSON carry it.
+            (json!(-1_073_741_819), 1),
         ] {
             let host = host(vec![
                 rpc_result(json!({})),

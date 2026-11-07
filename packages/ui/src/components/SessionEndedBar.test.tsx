@@ -21,6 +21,46 @@ describe('SessionEndedBar', () => {
     expect(screen.getByRole('status').textContent).toBe('Session exited with code 3Close tab')
   })
 
+  it('gives a wrapped exit code as the system reports it, in danger', () => {
+    render(<SessionEndedBar exitCode={-1073741819} durationMs={null} onClose={vi.fn()} />)
+    const bar = screen.getByRole('status')
+    expect(bar.textContent).toBe('Session exited with code -1073741819Close tab')
+    expect(bar.textContent).not.toContain('2147483647')
+    expect(bar.className).toContain('text-danger')
+  })
+
+  it('lays a failed or lost bar\'s tint over an opaque surface, so a light theme does not show the terminal\'s dark ground through it', () => {
+    const { rerender } = render(<SessionEndedBar exitCode={5} durationMs={null} onClose={vi.fn()} />)
+    const failed = screen.getByRole('status').className
+    expect(failed).toContain('bg-surface ')
+    expect(failed).toContain('from-danger/10')
+    expect(failed).not.toMatch(/(^| )bg-danger\/10/)
+    rerender(
+      <SessionEndedBar
+        exitCode={null}
+        durationMs={null}
+        onClose={vi.fn()}
+        lost={{ hostName: 'this PC’s host', restoreReady: false, onRestore: vi.fn() }}
+      />
+    )
+    const lost = screen.getByRole('status').className
+    expect(lost).toContain('bg-surface ')
+    expect(lost).toContain('from-warn/10')
+  })
+
+  it('says a session the host ended was stopped, in the ended tone, whatever number the system gave its termination', () => {
+    render(<SessionEndedBar exitCode={2147483647} durationMs={4_000} onClose={vi.fn()} stopped />)
+    const bar = screen.getByRole('status')
+    expect(bar.textContent).toBe('Stoppedafter 4sClose tab')
+    expect(bar.textContent).not.toContain('Session exited with code')
+    expect(bar.className).toContain('border-border')
+    expect(bar.className).toContain('bg-surface-sunken')
+    expect(bar.className).toContain('text-fg-muted')
+    expect(bar.className).not.toContain('danger')
+    expect(bar.firstElementChild?.className).toContain('bg-fg-subtle')
+    expect(bar.firstElementChild?.className).not.toContain('danger')
+  })
+
   it('says only that it ended when no exit code was observed', () => {
     render(<SessionEndedBar exitCode={null} durationMs={800} onClose={vi.fn()} />)
     expect(screen.getByRole('status').textContent).toBe('Session endedafter 800msClose tab')

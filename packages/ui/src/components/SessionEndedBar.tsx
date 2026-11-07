@@ -19,6 +19,13 @@ export interface SessionEndedBarProps {
   onClose: () => void
   /** Set when the session was lost with its host rather than ending. */
   lost?: SessionLost
+  /**
+   * Set when the host ended the session (Stop, its parent, its parent ending),
+   * so the number the system gave its termination is not an exit code: the bar
+   * says "Stopped" in the ended tone, as the tab's crumb and the family view's
+   * ended header do, and never in danger.
+   */
+  stopped?: boolean
 }
 
 const barButton = cn(
@@ -38,8 +45,14 @@ const barButton = cn(
  * it resumes the conversation through the restore offer the host makes once
  * it is back, so Restore waits until that offer holds this session.
  */
-export function SessionEndedBar({ exitCode, durationMs, onClose, lost }: SessionEndedBarProps): JSX.Element {
-  const failed = lost === undefined && exitCode !== null && exitCode !== 0
+export function SessionEndedBar({
+  exitCode,
+  durationMs,
+  onClose,
+  lost,
+  stopped = false
+}: SessionEndedBarProps): JSX.Element {
+  const failed = lost === undefined && !stopped && exitCode !== null && exitCode !== 0
 
   return (
     <div
@@ -47,10 +60,13 @@ export function SessionEndedBar({ exitCode, durationMs, onClose, lost }: Session
       data-session-ended={lost === undefined ? 'ended' : 'lost'}
       className={cn(
         'flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-[11px]',
+        // The tint is a gradient over an opaque `surface`: the pane behind the
+        // bar is the terminal's own dark ground in every theme, and a plain
+        // translucent fill would read as near-black red in a light theme.
         failed
-          ? 'border-danger/30 bg-danger/10 text-danger'
+          ? 'border-danger/30 bg-surface bg-linear-to-r from-danger/10 to-danger/10 text-danger'
           : lost !== undefined
-            ? 'border-warn/30 bg-warn/10 text-warn'
+            ? 'border-warn/30 bg-surface bg-linear-to-r from-warn/10 to-warn/10 text-warn'
             : 'border-border bg-surface-sunken text-fg-muted'
       )}
     >
@@ -64,11 +80,13 @@ export function SessionEndedBar({ exitCode, durationMs, onClose, lost }: Session
       <span className="font-medium">
         {lost !== undefined
           ? `Session lost on ${lost.hostName}`
-          : exitCode === null
-            ? 'Session ended'
-            : failed
-              ? `Session exited with code ${String(exitCode)}`
-              : 'Session ended'}
+          : stopped
+            ? 'Stopped'
+            : exitCode === null
+              ? 'Session ended'
+              : failed
+                ? `Session exited with code ${String(exitCode)}`
+                : 'Session ended'}
       </span>
       {lost === undefined && durationMs !== null && (
         <span className="text-fg-subtle tabular-nums">after {formatDuration(durationMs)}</span>

@@ -70,6 +70,45 @@ describe('TerminalPane', () => {
     expect(onClose).toHaveBeenCalledWith(3)
   })
 
+  it('S38: a command child the host ended has an ended bar that says it was stopped, not the number the system gave it', () => {
+    const stopped: SessionRecord = {
+      ...SESSION,
+      status: 'exited',
+      command: 'pnpm test',
+      stopped: true,
+      exitCode: 2147483647,
+      durationMs: 4_000
+    }
+    render(<TerminalPane session={stopped} active windowsBuild={null} onClose={vi.fn()} />)
+    const bar = screen.getByRole('status')
+    expect(bar.textContent).toContain('Stopped')
+    expect(bar.textContent).not.toContain('Session exited with code')
+    expect(bar.className).toContain('text-fg-muted')
+    expect(bar.className).not.toContain('danger')
+  })
+
+  it('S38: a command child that exited on its own gives its exit code in the bar, wrapped as the system reports it', () => {
+    const crashed: SessionRecord = { ...SESSION, status: 'exited', command: 'pnpm test', exitCode: -1073741819 }
+    const { rerender } = render(<TerminalPane session={crashed} active windowsBuild={null} onClose={vi.fn()} />)
+    expect(screen.getByRole('status').textContent).toContain('Session exited with code -1073741819')
+    expect(screen.getByRole('status').className).toContain('text-danger')
+
+    rerender(<TerminalPane session={{ ...crashed, exitCode: 0 }} active windowsBuild={null} onClose={vi.fn()} />)
+    expect(screen.getByRole('status').textContent).toContain('Session ended')
+    expect(screen.getByRole('status').className).not.toContain('danger')
+  })
+
+  it('S38: an agent child the host ended, and a session that is not a child, keep the bar as it is', () => {
+    const agent: SessionRecord = { ...SESSION, status: 'exited', parentId: 1, stopped: true, exitCode: 143 }
+    const { rerender } = render(<TerminalPane session={agent} active windowsBuild={null} onClose={vi.fn()} />)
+    expect(screen.getByRole('status').textContent).toContain('Session exited with code 143')
+
+    rerender(
+      <TerminalPane session={{ ...SESSION, status: 'exited', exitCode: 2 }} active windowsBuild={null} onClose={vi.fn()} />
+    )
+    expect(screen.getByRole('status').textContent).toContain('Session exited with code 2')
+  })
+
   it('keeps a session lost with its host on its last screen, dimmed with input off, and offers Restore', async () => {
     const onRestore = vi.fn()
     const lostSession: SessionRecord = {

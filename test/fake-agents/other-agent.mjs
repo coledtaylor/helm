@@ -50,7 +50,9 @@
 //
 // Commands typed at its prompt:
 //   /exit        exit 0
-//   /crash       exit 3
+//   /crash [code]  exit with code, 3 when none; a crash with a large code, such as
+//                  /crash -1073741819 (0xC0000005 on Windows), ends the way a
+//                  crashed Windows program does
 //   /busy <ms>   run a turn for that long, or until Ctrl-X, reporting
 //                `working` and then `idle` (OSC 7501)
 //   /busy hold   run a turn until `/idle` is typed or Ctrl-X is pressed
@@ -242,6 +244,11 @@ openConversation()
 log.openingPrompt = parsed.positionals[0] ?? null
 
 let exiting = false
+/** The code `/crash <code>` ends with: the one given, 3 when none or not a whole number. */
+function crashCode(arg) {
+  return /^-?[0-9]+$/.test(arg ?? '') ? Number(arg) : 3
+}
+
 function exit(code) {
   if (exiting) return
   exiting = true
@@ -309,7 +316,7 @@ function submit(line, key) {
 function run(line) {
   const [command, arg] = line.trim().split(/\s+/, 2)
   if (command === '/exit') return exit(0)
-  if (command === '/crash') return exit(3)
+  if (command === '/crash') return exit(crashCode(arg))
   if (command === '/busy') {
     if (runningTurns.length === 0) reportStatus(['state=working'])
     const turn = { held: arg === 'hold', timer: null }

@@ -122,6 +122,8 @@ pub struct PtermResizeRequest {
 pub struct PtermExited {
     #[ts(type = "number")]
     pub id: u64,
+    /// The shell's exit code as the OS reports it, wrapped to a signed 32-bit
+    /// value: Windows' 0xC0000005 reads -1073741819.
     pub exit_code: i32,
 }
 

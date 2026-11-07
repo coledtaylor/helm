@@ -1828,6 +1828,9 @@ async fn a_servers_host_that_is_killed_is_started_again_by_its_unit_and_takes_it
     let agent = fake_agent!(&dirs);
     let endpoint = local_endpoint(&dirs.folders());
     let mut host = UnitHost::start(&dirs, &agent);
+    // `floti connect` says no host is running until the unit's host answers
+    // on its socket, so the desktop's bridge starts once it does.
+    drop(TestClient::connect(&endpoint, &["terminal"]).await);
     let desktop = dirs.root().join("the desktop");
     let through_ssh = || bridge_through(&dirs, &dirs.runtime, &desktop, &ssh_transport());
     let mut bridge = Bridge::spawn(through_ssh());

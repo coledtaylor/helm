@@ -17,7 +17,7 @@ import {
   type SavedPaneLayout
 } from '@helm/core/types'
 import type { TreeSession } from '@helm/ui'
-import { commandRow, peeksOnPress, pressTreeSession, treeEntries } from './treeFamilies'
+import { commandRow, commandWord, peeksOnPress, pressTreeSession, treeEntries } from './treeFamilies'
 
 /**
  * What the Sessions tree is given for sessions that started sessions: a child's
@@ -72,6 +72,12 @@ describe('commandRow', () => {
       state: 'failed',
       note: 'exited 130'
     })
+  })
+
+  it('S37: gives a code the host wrapped (0xC0000005) as it is, a failed command, never 2147483647', () => {
+    const crashed = commandRow(record({ command: 'pnpm test', status: 'exited', exitCode: -1073741819 }))
+    expect(crashed).toEqual({ command: true, state: 'failed', note: 'exited -1073741819' })
+    expect(commandWord({ status: 'exited', exitCode: -1073741819 })).toBe('exited -1073741819')
   })
 
   it('reads a command child the host stopped as stopped, not as the number the system gave it', () => {

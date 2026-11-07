@@ -2510,7 +2510,12 @@ path: string, };
 
 export type PtermCloseRequest = { id: number, };
 
-export type PtermExited = { id: number, exitCode: number, };
+export type PtermExited = { id: number, 
+/**
+ * The shell's exit code as the OS reports it, wrapped to a signed 32-bit
+ * value: Windows' 0xC0000005 reads -1073741819.
+ */
+exitCode: number, };
 
 export type PtermOpenRequest = { 
 /**
@@ -3036,7 +3041,9 @@ startedAt: string,
 endedAt: string | null, durationMs: number | null, 
 /**
  * Null while running, and for a session whose exit code was never
- * observed.
+ * observed. The code as the OS reports it, wrapped to a signed 32-bit
+ * value: Windows' 0xC0000005 reads -1073741819, as PowerShell's
+ * `$LASTEXITCODE` says.
  */
 exitCode: number | null, 
 /**

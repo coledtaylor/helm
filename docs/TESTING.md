@@ -570,7 +570,7 @@ config dir is `CLAUDE_CONFIG_DIR`, or `~/.claude`.
 - `mcp add-json` and `mcp remove` write `.mcp.json` or `~/.claude.json` as the
   real CLI does.
 
-At its prompt: `/exit` and `/crash` end it with 0 and 3, `/wait` reports
+At its prompt: `/exit` ends it with 0 and `/crash [code]` with the code given (3 when none; `/crash -1073741819` ends 0xC0000005 on Windows), `/wait` reports
 "waiting" (a permission prompt) until `y` or `n`, `/busy <ms>` reports "busy"
 for that long and `/busy hold` until `/idle` ends the turn (a test that must
 see a turn begin, or end it when it means to, holds it: a busy period shorter
@@ -626,7 +626,7 @@ run-log shape, with `conversation`, `resumed`, `title`, `model`, `mode`,
 - It declares MCP tools, and neither moves a long call to the background nor
   supports MCP tasks.
 
-At its prompt: `/exit` and `/crash` end it with 0 and 3, `/shell <command>` runs
+At its prompt: `/exit` ends it with 0 and `/crash [code]` with the code given (3 when none; `/crash -1073741819` ends 0xC0000005 on Windows), `/shell <command>` runs
 a shell command as Claude Code's fake does, `/report <state> [text]` writes its
 program status (OSC 7501: `working`, `idle`, `done` with a message, `blocked`
 with a kind such as `question` or `auth`, or `error` with a message) and

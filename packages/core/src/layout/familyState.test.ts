@@ -216,6 +216,12 @@ describe('endedHeaderText', () => {
     )
   })
 
+  it('S37: says a wrapped code (0xC0000005) as it is, never 2147483647', () => {
+    expect(endedHeaderText({ status: 'exited', command: 'pnpm test', exitCode: -1073741819, endedAt: at(14, 52) })).toBe(
+      'exited -1073741819 · 14:52'
+    )
+  })
+
   it('says Stopped, not a number, for a command child the host ended', () => {
     const command = 'pnpm test'
     // The system's number for a process it killed (a Windows termination code,
