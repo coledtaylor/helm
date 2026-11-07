@@ -90,6 +90,12 @@ function dotOf(child: SessionRecord, state: TabIndicator, command: boolean): Tab
   return state === 'failed' && child.stopped !== true ? 'failed' : 'ended'
 }
 
+/** When a session started, in milliseconds, or null for a time that is not one: how long a command has run. */
+function startedMs(child: SessionRecord): number | null {
+  const started = Date.parse(child.startedAt)
+  return Number.isNaN(started) ? null : started
+}
+
 /**
  * A session's tab: its terminal and, around it, its children.
  *
@@ -186,7 +192,7 @@ export function FamilyTab({
         command={command}
         status={
           running
-            ? childStatus(child, state, kid?.since ?? null, now)
+            ? childStatus(child, state, kid?.since ?? (command ? startedMs(child) : null), now)
             : endedHeaderText(child, stoppedByYou.has(child.id))
         }
         onPress={() =>

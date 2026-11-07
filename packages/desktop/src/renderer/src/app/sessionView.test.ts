@@ -77,6 +77,8 @@ describe('what the tree row and the crumb say', () => {
     expect(crumbStatus(session(), 'busy', now - 90 * MINUTE, now)).toEqual({ text: 'Working · 1h', tone: 'accent' })
     expect(crumbStatus(session(), 'idle', null, now)).toEqual({ text: 'Idle', tone: 'success' })
     expect(crumbStatus(session(), 'running', null, now)).toEqual({ text: 'Running', tone: 'subtle' })
+    expect(crumbStatus(session(), 'running', now - 4 * MINUTE, now)).toEqual({ text: 'Running · 4m', tone: 'subtle' })
+    expect(crumbStatus(session(), 'running', now - 10_000, now)).toEqual({ text: 'Running', tone: 'subtle' })
   })
 
   it('says a reported error, with the program\'s message in the crumb, in the danger tone', () => {

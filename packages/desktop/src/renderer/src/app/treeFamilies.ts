@@ -13,14 +13,19 @@ import type { TreeSession } from '@helm/ui'
  * What a command child's row says of itself, or null for a session that is not
  * one. A command has no conversation to be busy or waiting in, so its state is
  * only whether it runs and, once it ended, its exit code: whatever an agent's
- * records say of the process is not read for it.
+ * records say of the process is not read for it. Its word is `running`, then
+ * `exited <code>`, as the family view's ended header says it.
  */
 export function commandRow(session: {
   status: string
   exitCode?: number | null
   command?: string | null
-}): Pick<TreeSession, 'state' | 'command'> | null {
-  return isCommandChild(session) ? { state: commandState(session), command: true } : null
+}): Pick<TreeSession, 'state' | 'command' | 'note'> | null {
+  if (!isCommandChild(session)) return null
+  const state = commandState(session)
+  const code = session.exitCode ?? null
+  const note = state === 'running' ? 'running' : code === null ? 'ended' : `exited ${String(code)}`
+  return { state, command: true, note }
 }
 
 /** A session the Sessions tree lists in a folder's own list, and the row it draws. */

@@ -97,7 +97,8 @@ export function crumbStatus(
         tone: 'subtle'
       }
     default:
-      return { text: 'Running', tone: 'subtle' }
+      // A run of less than a minute says only that it runs: its age would be "now".
+      return { text: since === null || now - since < 60_000 ? 'Running' : `Running${age}`, tone: 'subtle' }
   }
 }
 

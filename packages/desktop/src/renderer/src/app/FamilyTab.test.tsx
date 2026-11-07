@@ -422,6 +422,12 @@ describe('a parent’s tab with children', () => {
       expect(reviewer.querySelector('[data-family-role]')!.textContent).toBe('reviewer')
     })
 
+    it('S25: says how long a command has run on its card, from when it started', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test', startedAt: new Date(NOW - 4 * MINUTE).toISOString() })])
+
+      expect(card(view.container, 'tests').querySelector('[data-family-status]')!.textContent).toBe('Running · 4m')
+    })
+
     it('S25 S27: shrinks to an ended header with the glyph in fg-subtle reading exited 0 and the time, with Close', () => {
       const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
       view.list([LEAD, exited(3, 'tests', 0)])

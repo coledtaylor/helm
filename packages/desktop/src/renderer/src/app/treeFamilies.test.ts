@@ -55,19 +55,29 @@ describe('commandRow', () => {
 
   it('S24: marks a command child with its command and a state of running, ended or failed from its record', () => {
     const command = 'pnpm test'
-    expect(commandRow(record({ command, exitCode: null }))).toEqual({ command: true, state: 'running' })
-    expect(commandRow(record({ command, status: 'exited', exitCode: 0 }))).toEqual({ command: true, state: 'ended' })
-    expect(commandRow(record({ command, status: 'exited', exitCode: 1 }))).toEqual({ command: true, state: 'failed' })
+    expect(commandRow(record({ command, exitCode: null }))).toEqual({ command: true, state: 'running', note: 'running' })
+    expect(commandRow(record({ command, status: 'exited', exitCode: 0 }))).toEqual({
+      command: true,
+      state: 'ended',
+      note: 'exited 0'
+    })
+    expect(commandRow(record({ command, status: 'exited', exitCode: 1 }))).toEqual({
+      command: true,
+      state: 'failed',
+      note: 'exited 1'
+    })
     expect(commandRow(record({ command, status: 'exited', exitCode: 130 }))).toEqual({
       command: true,
-      state: 'failed'
+      state: 'failed',
+      note: 'exited 130'
     })
   })
 
   it('reads a command child that ended with no code observed as ended, as an agent would be', () => {
     expect(commandRow(record({ command: 'make', status: 'lost', exitCode: null }))).toEqual({
       command: true,
-      state: 'ended'
+      state: 'ended',
+      note: 'ended'
     })
   })
 
