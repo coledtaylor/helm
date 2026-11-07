@@ -248,6 +248,23 @@ describe('sessions over the window’s own connection', () => {
     ])
   })
 
+  it('names the command, not a Claude Code session, when Stop on a command child asks', async () => {
+    const { adapters } = world({
+      listed: [row({ id: 7, name: 'lead' }), row({ id: 9, name: 'lint', parentId: 7, command: 'pnpm lint' })]
+    })
+    const questions = hear(adapters, 'session:confirm')
+    await ask(adapters, 'session:list')
+    adapters.show([7, 9])
+    void ask(adapters, 'session:close', { id: 9, keep: true })
+    await settle()
+    expect(questions).toEqual([
+      expect.objectContaining({
+        message: '“lint” is still running on this PC’s host.',
+        detail: 'Ending it stops the command running in /work dir/app. lead, which started it, is told.'
+      })
+    ])
+  })
+
   it('keeps a child running when the user declines the Stop question, leaves its row as it was, and tells the host nothing', async () => {
     const { adapters, connection } = world({
       listed: [row({ id: 7, name: 'lead' }), row({ id: 8, name: 'reviewer', parentId: 7 })]

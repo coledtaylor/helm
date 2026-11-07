@@ -437,7 +437,9 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
             kind: 'close-session',
             message: `“${sessionLabel(entry)}” is still running on ${hostName()}.`,
             detail:
-              `Ending it stops the Claude Code session in ${entry.cwd}.` +
+              (entry.command == null
+                ? `Ending it stops the Claude Code session in ${entry.cwd}.`
+                : `Ending it stops the command running in ${entry.cwd}.`) +
               (parent === undefined ? '' : ` ${sessionLabel(parent)}, which started it, is told.`),
             folder: entry.cwd,
             confirmLabel: 'End session',
