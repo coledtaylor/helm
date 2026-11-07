@@ -67,6 +67,8 @@
 //                permission` (the text is the kind: permission, question or
 //                auth) and `/report error It broke.`. The text is the report's
 //                message, base64 as the protocol has it.
+//   /flood <n>   write n numbered lines (`flood 000000 ...`) at once, then
+//                answer `flood done`
 //   anything else  is a prompt: recorded and answered
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -340,6 +342,13 @@ function run(line) {
     else if (text !== '') fields.push(`msg=${Buffer.from(text, 'utf8').toString('base64')}`)
     reportStatus(fields)
     return answer(`reported ${state ?? ''}`)
+  }
+  if (command === '/flood') {
+    const lines = Number(arg) || 1000
+    const all = []
+    for (let n = 0; n < lines; n += 1) all.push(`flood ${String(n).padStart(6, '0')} ${'.'.repeat(50)}\r\n`)
+    out(all.join(''))
+    return answer('flood done')
   }
   if (line.trim() === '') return drawPrompt()
   log.prompts.push(line)

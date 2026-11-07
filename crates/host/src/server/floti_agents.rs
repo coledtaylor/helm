@@ -1,5 +1,6 @@
-//! floti-agents: start, list, wait on and stop an agent's own children, list
-//! the roles they can be started in, and (for a child) report to its parent,
+//! floti-agents: start, send to, read, list, wait on and stop an agent's own
+//! children, list the roles they can be started in, and (for a child) report
+//! to its parent,
 //! served to the host's sessions on the agent tools listener at `/mcp/agents`
 //! (`floti_agents.json`).
 //!
@@ -42,8 +43,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::hosted::{
-    ChildEntry, ChildStopped, ChildrenListed, Hosted, RoleEntry, RolesListed, RunCommand,
-    SendChild, StartChild, WaitEnd, WaitFor, WaitRequest, Waited,
+    ChildEntry, ChildRead, ChildStopped, ChildrenListed, Hosted, ReadChild, RoleEntry, RolesListed,
+    RunCommand, SendChild, StartChild, WaitEnd, WaitFor, WaitRequest, Waited,
 };
 use crate::agent_tools::{
     CallToolResult, Caller, ContentBlock, Delivery, GrantScope, JsonObject, Tool, ToolFamily,
@@ -79,6 +80,7 @@ pub(crate) const FAMILY: &str = "floti-agents";
 
 const AGENTS_START: &str = "agents_start";
 const AGENTS_SEND: &str = "agents_send";
+const AGENTS_READ: &str = "agents_read";
 const AGENTS_LIST: &str = "agents_list";
 const AGENTS_STOP: &str = "agents_stop";
 const AGENTS_ROLES: &str = "agents_roles";
@@ -272,6 +274,7 @@ impl ToolFamily for FlotiAgents {
             match name {
                 AGENTS_START => start(&from, &arguments).await,
                 AGENTS_SEND => send(&from, &arguments).await,
+                AGENTS_READ => read(Arc::clone(&hosted), me, &arguments).await,
                 AGENTS_RUN if caller.shell => run(&from, &arguments).await,
                 AGENTS_WAIT => wait(&from, &arguments).await,
                 AGENTS_REPORT => report(Arc::clone(&hosted), me, &arguments).await,
@@ -437,6 +440,40 @@ async fn send(from: &Waiter<'_>, arguments: &JsonObject) -> CallToolResult {
         }
         Err(refusal) => problem(&refusal),
     }
+}
+
+/// `agents_read`: the screen of one of `me`'s children, as plain text.
+async fn read(hosted: Arc<Hosted>, me: SessionId, arguments: &JsonObject) -> CallToolResult {
+    let request = match read_request(arguments) {
+        Ok(request) => request,
+        Err(refusal) => return problem(&refusal),
+    };
+    match blocking(move || hosted.read_child(me, &request)).await {
+        Ok(read) => answer(read_text(&read), read_json(&read)),
+        Err(refusal) => problem(&refusal),
+    }
+}
+
+/// What the text block of a read is: the lines as they were, one to a line;
+/// a sentence when there are none, so the block is never empty.
+fn read_text(read: &ChildRead) -> String {
+    if read.lines.is_empty() {
+        return if read.ended {
+            format!("{} printed nothing the host kept.", read.name)
+        } else {
+            format!("{} has nothing on its screen.", read.name)
+        };
+    }
+    read.lines.join("\n")
+}
+
+fn read_json(read: &ChildRead) -> Value {
+    json!({
+        "name": read.name,
+        "command": read.command,
+        "ended": read.ended,
+        "lines": read.lines,
+    })
 }
 
 /// `floti agent run`: a command the caller runs for its user to watch, as a
@@ -608,6 +645,25 @@ fn send_request(arguments: &JsonObject) -> Result<SendChild, String> {
     })
 }
 
+/// What `agents_read` was asked: the child, and how many lines above its
+/// screen at most. More than the host reads is read as the most it does.
+fn read_request(arguments: &JsonObject) -> Result<ReadChild, String> {
+    let child = text_argument(arguments, "child")
+        .ok_or_else(|| "Name the agent to read, as agents_start answered it: child.".to_owned())?;
+    let lines = match arguments.get("lines") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .map(|count| usize::try_from(count).unwrap_or(usize::MAX))
+                .ok_or_else(|| {
+                    "lines is a whole number of lines above the screen, from 0 to 200.".to_owned()
+                })?,
+        ),
+    };
+    Ok(ReadChild { child, lines })
+}
+
 /// What `floti agent run` was asked: the command's words, and a name.
 fn run_request(arguments: &JsonObject) -> Result<RunCommand, String> {
     let words = match arguments.get("command") {
@@ -707,7 +763,7 @@ fn text_argument(arguments: &JsonObject, key: &str) -> Option<String> {
 fn listing_text(listed: &ChildrenListed) -> String {
     let mut out = String::new();
     if listed.children.is_empty() {
-        out.push_str("You have no running agents.\n");
+        out.push_str("You have no running children.\n");
     } else {
         for child in &listed.children {
             out.push_str(&child_text(child));
@@ -716,7 +772,7 @@ fn listing_text(listed: &ChildrenListed) -> String {
     }
     let limits = &listed.limits;
     out.push_str(&format!(
-        "Limits left: {} of {} running at once, {} of {} starts, {} of {} on this host, {} of {} heavy on this host.",
+        "Limits left: {} of {} agents running at once, {} of {} starts, {} of {} on this host, {} of {} heavy on this host, {} of {} command children running at once.",
         limits.children_left,
         limits.children_per_parent,
         limits.starts_left,
@@ -725,6 +781,8 @@ fn listing_text(listed: &ChildrenListed) -> String {
         limits.sessions_per_host,
         limits.heavy_left,
         limits.heavy_per_host,
+        limits.commands_left,
+        limits.commands_per_parent,
     ));
     if let Some(reason) = &limits.cannot_start {
         out.push_str(&format!(" {reason}"));
@@ -734,11 +792,18 @@ fn listing_text(listed: &ChildrenListed) -> String {
 
 fn child_text(child: &ChildEntry) -> String {
     let branch = child.branch.as_deref().unwrap_or("none");
-    let role = child.role.as_deref().unwrap_or("none");
+    // A command child shows its command where an agent shows its role.
+    let kind = match &child.command {
+        Some(command) => format!("command {command}"),
+        None => format!(
+            "role {}  class {}",
+            child.role.as_deref().unwrap_or("none"),
+            child.class.as_str()
+        ),
+    };
     let mut line = format!(
-        "{name}  role {role}  class {class}  {backend}  {state} since {since}  {folder}  branch {branch}",
+        "{name}  {kind}  {backend}  {state} since {since}  {folder}  branch {branch}",
         name = child.name,
-        class = child.class.as_str(),
         backend = child.backend,
         state = child.state,
         since = child.since,
@@ -762,7 +827,8 @@ fn listing_json(listed: &ChildrenListed) -> Value {
         "children": listed.children.iter().map(|child| json!({
             "name": child.name,
             "role": child.role,
-            "class": child.class.as_str(),
+            "command": child.command,
+            "class": child.command.is_none().then(|| child.class.as_str()),
             "worktree": child.worktree,
             "backend": child.backend,
             "state": child.state,
@@ -781,6 +847,8 @@ fn listing_json(listed: &ChildrenListed) -> Value {
             "hostLeft": limits.host_left,
             "heavyPerHost": limits.heavy_per_host,
             "heavyLeft": limits.heavy_left,
+            "commandsPerParent": limits.commands_per_parent,
+            "commandsLeft": limits.commands_left,
             "depth": limits.depth,
             "cannotStart": limits.cannot_start,
         },
@@ -1009,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn the_table_names_the_seven_tools_and_the_route() {
+    fn the_table_names_the_eight_tools_and_the_route() {
         let family = FlotiAgents::new();
         assert_eq!(family.name(), "floti-agents");
         assert_eq!(family.route(), "/mcp/agents");
@@ -1023,6 +1091,7 @@ mod tests {
             [
                 "agents_start",
                 "agents_send",
+                "agents_read",
                 "agents_list",
                 "agents_stop",
                 "agents_roles",
@@ -1054,19 +1123,17 @@ mod tests {
         for word in [
             "agents_start",
             "agents_send",
+            "agents_read",
             "agents_list",
             "agents_stop",
             "agents_roles",
             "agents_wait",
+            "floti agent run --name <name> -- <command>",
             "call it again",
             "You can reach only the sessions you started",
         ] {
             assert!(instructions.contains(word), "{word} in {instructions}");
         }
-        assert!(
-            !instructions.contains("agents_read"),
-            "no tool that does not exist yet"
-        );
     }
 
     #[test]
@@ -1081,6 +1148,7 @@ mod tests {
         for name in [
             "agents_start",
             "agents_send",
+            "agents_read",
             "agents_wait",
             "agents_list",
             "agents_stop",
@@ -1088,6 +1156,61 @@ mod tests {
             assert!(plain.iter().any(|tool| tool == name), "{name}");
             assert!(child.iter().any(|tool| tool == name), "{name}");
         }
+    }
+
+    #[test]
+    fn a_read_needs_a_child_and_takes_a_whole_number_of_lines_above_the_screen() {
+        assert_eq!(
+            read_request(&arguments(json!({ "child": " worker " }))),
+            Ok(ReadChild {
+                child: "worker".to_owned(),
+                lines: None,
+            })
+        );
+        // The host reads no more than 200, whatever is asked: 5000 is read as
+        // 200 where the lines are read.
+        for (given, lines) in [(json!(0), 0), (json!(120), 120), (json!(5000), 5000)] {
+            assert_eq!(
+                read_request(&arguments(json!({ "child": "worker", "lines": given })))
+                    .map(|read| read.lines),
+                Ok(Some(lines))
+            );
+        }
+        assert_eq!(
+            read_request(&arguments(json!({ "child": "worker", "lines": null })))
+                .map(|read| read.lines),
+            Ok(None)
+        );
+        for bad in [
+            json!({}),
+            json!({ "child": " " }),
+            json!({ "child": "worker", "lines": -1 }),
+            json!({ "child": "worker", "lines": 1.5 }),
+            json!({ "child": "worker", "lines": "many" }),
+            json!({ "child": "worker", "lines": true }),
+        ] {
+            assert!(read_request(&arguments(bad.clone())).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_read_answers_with_the_lines_as_they_are_or_a_sentence_when_there_are_none() {
+        let read = |lines: &[&str], ended: bool| ChildRead {
+            name: "tests".to_owned(),
+            command: true,
+            ended,
+            lines: lines.iter().map(|line| (*line).to_owned()).collect(),
+        };
+        assert_eq!(
+            read_text(&read(&["one", "", "  three"], false)),
+            "one\n\n  three"
+        );
+        assert!(read_text(&read(&[], false)).contains("nothing on its screen"));
+        assert!(read_text(&read(&[], true)).contains("printed nothing"));
+        assert_eq!(
+            read_json(&read(&["one"], true)),
+            json!({ "name": "tests", "command": true, "ended": true, "lines": ["one"] })
+        );
     }
 
     #[test]

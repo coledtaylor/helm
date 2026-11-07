@@ -6,7 +6,7 @@
 //! All of it is today's `sessions` table, whose `backend` column names the
 //! agent backend each session ran on ([`recorded_backend`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -73,9 +73,33 @@ pub(crate) struct HostLedger {
     frozen: AtomicBool,
     next_seq: AtomicU64,
     exits: broadcast::Sender<ExitNotice>,
-    /// What each command child last printed, from its screen as it went, until
-    /// its parent has been told its exit ([`HostLedger::take_last_lines`]).
-    last_lines: Mutex<HashMap<SessionId, Vec<String>>>,
+    /// What each command child last printed, taken from its screen as it went
+    /// ([`HostLedger::last_lines_of`]).
+    last_lines: Mutex<KeptLines>,
+}
+
+/// The most command children whose last lines are kept: the oldest are let go
+/// first, so the host holds a bounded amount however many commands it runs.
+const KEPT_COMMANDS: usize = 256;
+
+/// The last lines of the command children that have ended, newest last.
+#[derive(Default)]
+struct KeptLines {
+    lines: HashMap<SessionId, Vec<String>>,
+    order: VecDeque<SessionId>,
+}
+
+impl KeptLines {
+    fn keep(&mut self, id: SessionId, lines: Vec<String>) {
+        if self.lines.insert(id, lines).is_none() {
+            self.order.push_back(id);
+        }
+        while self.order.len() > KEPT_COMMANDS {
+            if let Some(oldest) = self.order.pop_front() {
+                self.lines.remove(&oldest);
+            }
+        }
+    }
 }
 
 impl HostLedger {
@@ -87,17 +111,20 @@ impl HostLedger {
             frozen: AtomicBool::new(false),
             next_seq: AtomicU64::new(1),
             exits,
-            last_lines: Mutex::new(HashMap::new()),
+            last_lines: Mutex::new(KeptLines::default()),
         }
     }
 
     /// The last lines session `id` printed, kept when it ended as a command
-    /// child, and forgotten now they are taken. Empty for any other session.
-    pub fn take_last_lines(&self, id: SessionId) -> Vec<String> {
+    /// child, so that its parent can be told them and read them later. Empty
+    /// for any other session, and for one the host no longer keeps.
+    pub fn last_lines_of(&self, id: SessionId) -> Vec<String> {
         self.last_lines
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remove(&id)
+            .lines
+            .get(&id)
+            .cloned()
             .unwrap_or_default()
     }
 
@@ -184,7 +211,7 @@ impl SessionLedger for HostLedger {
         self.last_lines
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, last_lines);
+            .keep(id, last_lines);
     }
 
     /// The host is ending the session: its row says so before its program

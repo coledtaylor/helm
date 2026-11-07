@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use floti_host::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
 use floti_host::agent::{AgentBackend, PlainCommandBackend};
 use floti_host::agent_cli::{
-    self, Command as Subcommand, Run as RunCommand, SendText as SendCommand, Start as StartCommand,
-    Stop as StopCommand,
+    self, Command as Subcommand, ReadScreen as ReadCommand, Run as RunCommand,
+    SendText as SendCommand, Start as StartCommand, Stop as StopCommand,
 };
 use floti_host::platform::links::{FolderLinks, Native as NativeLinks};
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
@@ -509,15 +509,20 @@ impl World {
 
     /// Types `line` at `agent`'s prompt and waits until it took it.
     async fn type_line(&self, agent: &Agent, line: &str) {
+        // A line typed before is taken again only when it is counted again.
+        let taken = |agent: &Agent| {
+            self.reread(agent)
+                .received
+                .iter()
+                .filter(|got| *got == line)
+                .count()
+        };
+        let before = taken(agent);
         let mut client = self.client().await;
         client.attach(1, agent.id()).await;
         client.type_into(1, format!("{line}\r").as_bytes()).await;
         eventually("the agent to take the line", async || {
-            self.reread(agent)
-                .received
-                .iter()
-                .any(|got| got == line)
-                .then_some(())
+            (taken(agent) > before).then_some(())
         })
         .await;
         drop(client);
@@ -528,13 +533,16 @@ impl World {
     async fn shell(&self, agent: &Agent, command: &str) -> ShellRun {
         let before = self.reread(agent).shell.len();
         self.type_line(agent, &format!("/shell {command}")).await;
-        eventually("the shell command to finish", async || {
-            self.reread(agent)
-                .shell
-                .get(before)
-                .filter(|ran| ran.code.is_some())
-                .cloned()
-        })
+        eventually(
+            &format!("the shell command {command:?} to finish"),
+            async || {
+                self.reread(agent)
+                    .shell
+                    .get(before)
+                    .filter(|ran| ran.code.is_some())
+                    .cloned()
+            },
+        )
         .await
     }
 }
@@ -883,8 +891,16 @@ struct Reply {
 impl Reply {
     fn result(&self) -> Value {
         assert_eq!(self.status, 200, "{self:?}");
-        let answer: Value = serde_json::from_slice(&self.body)
-            .unwrap_or_else(|err| panic!("{err}: {}", String::from_utf8_lossy(&self.body)));
+        // A call that may wait answers as an event stream: one `data:` line
+        // holds the JSON-RPC answer.
+        let text = String::from_utf8_lossy(&self.body);
+        let json = text
+            .lines()
+            .rev()
+            .find_map(|line| line.strip_prefix("data:"))
+            .map_or(text.as_ref(), str::trim);
+        let answer: Value =
+            serde_json::from_str(json).unwrap_or_else(|err| panic!("{err}: {text}"));
         assert!(answer.get("error").is_none(), "{answer}");
         answer["result"].clone()
     }
@@ -1022,7 +1038,7 @@ fn cli_stop(child: &str) -> StopCommand {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s1_a_session_on_either_backend_gets_a_floti_agents_entry_and_lists_its_six_tools() {
+async fn s1_a_session_on_either_backend_gets_a_floti_agents_entry_and_lists_its_seven_tools() {
     let world = World::new();
     let host = world.host().await;
     let folder = world.project("alpha");
@@ -1039,6 +1055,7 @@ async fn s1_a_session_on_either_backend_gets_a_floti_agents_entry_and_lists_its_
             agent.tool_names().await,
             [
                 "agents_list",
+                "agents_read",
                 "agents_roles",
                 "agents_send",
                 "agents_start",
@@ -2115,7 +2132,7 @@ async fn s24_a_rule_the_chosen_backend_cannot_enforce_refuses_the_start_naming_t
 // ---------------------------------------------------------------------------
 
 /// The rules a session is given for the agents family, as each backend spells
-/// them: the six tools every session has and the five commands, and, for a
+/// them: the seven tools every session has and the five commands, and, for a
 /// child, `agents_report` beside them.
 fn family_rules(backend: &str, child: bool) -> Vec<String> {
     let mut rules: Vec<String> = if backend == CLAUDE {
@@ -2126,6 +2143,7 @@ fn family_rules(backend: &str, child: bool) -> Vec<String> {
             "mcp__floti-agents__agents_stop",
             "mcp__floti-agents__agents_roles",
             "mcp__floti-agents__agents_wait",
+            "mcp__floti-agents__agents_read",
             "Bash(floti agent start:*)",
             "Bash(floti agent send:*)",
             "Bash(floti agent wait:*)",
@@ -2140,6 +2158,7 @@ fn family_rules(backend: &str, child: bool) -> Vec<String> {
             "floti-agents.agents_stop",
             "floti-agents.agents_roles",
             "floti-agents.agents_wait",
+            "floti-agents.agents_read",
             "floti agent start",
             "floti agent send",
             "floti agent wait",
@@ -2188,7 +2207,7 @@ fn assert_family_allowed(who: &str, backend: &str, agent: &Agent) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn s26_the_six_tools_and_the_five_commands_are_allowed_up_front_never_run_or_a_wildcard_and_a_deny_stands()
+async fn s26_the_seven_tools_and_the_five_commands_are_allowed_up_front_never_run_or_a_wildcard_and_a_deny_stands()
  {
     let world = World::new();
     let host = world.host().await;
@@ -4308,5 +4327,616 @@ async fn run_is_no_tool_in_the_family_and_a_plain_tool_call_cannot_reach_it() {
         "{empty:?}"
     );
     assert_eq!(world.children_made(), 0, "nothing started");
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// Read: a parent sees its child's screen
+// ---------------------------------------------------------------------------
+
+impl Agent {
+    /// `agents_read` of `child`, with `lines` above the screen when given.
+    async fn read(&self, child: &str, lines: Option<u64>) -> Called {
+        let mut arguments = json!({ "child": child });
+        if let Some(lines) = lines {
+            arguments["lines"] = json!(lines);
+        }
+        self.call("agents_read", arguments).await
+    }
+}
+
+/// The lines an `agents_read` answer holds, from its JSON block.
+fn read_lines(read: &Called) -> Vec<String> {
+    strings(&read.done()["lines"])
+}
+
+/// What a shell printed, with the line breaks of every OS as `\n` and the
+/// last one dropped.
+fn printed(run: &ShellRun) -> String {
+    run.stdout
+        .replace("\r\n", "\n")
+        .trim_end_matches('\n')
+        .to_owned()
+}
+
+/// The numbered lines of `lines`, in the order they were printed.
+fn numbered(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|line| line.starts_with("line "))
+        .cloned()
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_parent_reads_the_screen_and_up_to_200_lines_above_it_of_a_child_as_plain_text_on_either_backend()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    for backend in [CLAUDE, OTHER] {
+        let (parent, child) = world.family(backend, "worker").await;
+        // More than a screen (32 rows) and more than 200 lines of output.
+        parent.send("worker", "/flood 400").await.done();
+        let full = eventually("the flood to reach the child's screen", async || {
+            let read = parent.read("worker", None).await;
+            (!read.failed && read.text().contains("flood done")).then_some(read)
+        })
+        .await;
+        let typed_before = typed_into(&world.reread(&child));
+
+        // The screen and 200 lines above it, as text.
+        let default = read_lines(&full);
+        let screen = read_lines(&parent.read("worker", Some(0)).await);
+        assert!(
+            (1..=32).contains(&screen.len()),
+            "{backend}: the screen is {} lines",
+            screen.len()
+        );
+        assert_eq!(default.len(), screen.len() + 200, "{backend}");
+        assert!(
+            default[0].starts_with("flood "),
+            "{backend}: the first line above the screen: {:?}",
+            default[0]
+        );
+        assert!(
+            default.iter().any(|line| line.contains("flood done")),
+            "{backend}"
+        );
+        assert!(
+            !full.text().contains('\u{1b}') && !default.iter().any(|line| line.contains('\u{1b}')),
+            "{backend}: an escape sequence in the text"
+        );
+        assert_eq!(full.text(), default.join("\n"), "{backend}");
+        assert_eq!(
+            default[200..],
+            screen[..],
+            "{backend}: the screen is the end of the text"
+        );
+
+        // With lines, at most that many above the screen; never more than 200.
+        let five = read_lines(&parent.read("worker", Some(5)).await);
+        assert_eq!(five.len(), screen.len() + 5, "{backend}");
+        assert_eq!(five[5..], screen[..], "{backend}");
+        let many = read_lines(&parent.read("worker", Some(5000)).await);
+        assert_eq!(many, default, "{backend}: never more than 200 above");
+
+        // The same from the parent's shell.
+        let by_command = world
+            .shell(&parent, "floti agent read worker --lines 5")
+            .await;
+        assert_eq!(by_command.code, Some(0), "{by_command:?}");
+        assert_eq!(printed(&by_command), five.join("\n"), "{backend}");
+        let json = world
+            .shell(&parent, "floti agent read worker --lines 0 --json")
+            .await;
+        assert_eq!(json.code, Some(0), "{json:?}");
+        let answer: Value = serde_json::from_str(json.stdout.trim()).expect("JSON");
+        assert_eq!(strings(&answer["lines"]), screen, "{backend}");
+        assert_eq!(answer["name"], "worker");
+        assert_eq!(answer["command"], false);
+
+        // A number that is no number of lines is refused, naming lines.
+        for lines in [json!(-1), json!("many"), json!(1.5)] {
+            let refused = parent
+                .call("agents_read", json!({ "child": "worker", "lines": lines }))
+                .await;
+            assert!(refused.refused().contains("lines is a whole number"));
+        }
+
+        // Reading typed nothing into the child, and it still runs.
+        assert_eq!(typed_into(&world.reread(&child)), typed_before, "{backend}");
+        assert_eq!(world.status(child.id()), "running");
+        parent.stop("worker").await.done();
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_child_that_has_ended_has_no_screen_to_read_and_the_answer_says_so() {
+    let world = World::new();
+    let host = world.host().await;
+    let (parent, child) = world.family(OTHER, "done").await;
+    parent.send("done", "/exit").await.done();
+    world.ended("the child to exit", &[child.id()]).await;
+    let read = parent.read("done", None).await;
+    assert!(read.refused().contains("has ended"), "{read:?}");
+    assert!(read.text().contains("no screen"), "{read:?}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_parent_reads_a_command_childs_recent_output_while_it_runs_and_its_last_lines_once_it_has_exited()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("read commands");
+    let script = command_script(&world);
+    for backend in [CLAUDE, OTHER] {
+        let parent = world
+            .session(backend, &folder, &format!("parent {backend}"))
+            .await;
+
+        // Running: 60 lines printed, the command still alive.
+        let started = world
+            .shell(
+                &parent,
+                &run_script("--name serving", &script, "--count 60 --hold"),
+            )
+            .await;
+        assert_eq!(started.code, Some(0), "{started:?}");
+        let serving = command_child(&world, &parent, "serving").await;
+        let running = eventually("the command's output on its screen", async || {
+            let read = parent.read("serving", None).await;
+            (!read.failed && read.text().contains("line 60")).then_some(read)
+        })
+        .await;
+        let body = running.done();
+        assert_eq!(body["command"], true, "{body}");
+        assert_eq!(body["ended"], false, "{body}");
+        let lines = strings(&body["lines"]);
+        assert!(!running.text().contains('\u{1b}'), "{backend}");
+        assert_eq!(
+            numbered(&lines),
+            (1..=60).map(|n| format!("line {n}")).collect::<Vec<_>>(),
+            "{backend}: {lines:?}"
+        );
+        // Only the screen: the 32 rows of a child's terminal, the last 60
+        // lines' end among them.
+        let screen = read_lines(&parent.read("serving", Some(0)).await);
+        assert!(screen.len() <= 32, "{backend}: {screen:?}");
+        assert_eq!(screen.last().map(String::as_str), Some("line 60"));
+        let by_command = world.shell(&parent, "floti agent read serving").await;
+        assert_eq!(by_command.code, Some(0), "{by_command:?}");
+        assert_eq!(printed(&by_command), running.text(), "{backend}");
+
+        // Exited: 60 lines and exit code 3; the last 40 are what is kept.
+        let ran = world
+            .shell(
+                &parent,
+                &run_script("--name finished", &script, "--count 60 --code 3"),
+            )
+            .await;
+        assert_eq!(ran.code, Some(0), "{ran:?}");
+        let finished = command_child(&world, &parent, "finished").await;
+        assert_eq!(ended_row(&world, finished.id).await.exit_code, Some(3));
+        let after = parent.read("finished", None).await;
+        let body = after.done();
+        assert_eq!(body["command"], true, "{body}");
+        assert_eq!(body["ended"], true, "{body}");
+        let kept = strings(&body["lines"]);
+        assert_eq!(kept.len(), 40, "{backend}: {kept:?}");
+        assert_eq!(kept.first().map(String::as_str), Some("line 21"));
+        assert_eq!(kept.last().map(String::as_str), Some("line 60"));
+        assert!(!after.text().contains('\u{1b}'), "{backend}");
+        // The same lines the parent is told with the exit, and from its shell.
+        let news = exit_news(&world, &parent, "finished").await;
+        assert_eq!(strings(&news["lastLines"]), kept, "{backend}");
+        let by_command = world.shell(&parent, "floti agent read finished").await;
+        assert_eq!(printed(&by_command), kept.join("\n"), "{backend}");
+
+        parent.stop("serving").await.done();
+        ended_row(&world, serving.id).await;
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_names_only_the_callers_own_children_and_nothing_is_typed_into_any_session() {
+    let world = World::new();
+    let host = world.host().await;
+    let a = world
+        .session(CLAUDE, &world.project("alpha read"), "alpha")
+        .await;
+    let b = world
+        .session(OTHER, &world.project("bravo read"), "bravo")
+        .await;
+    let x = world
+        .session(OTHER, &world.project("xray read"), "xray")
+        .await;
+    for (parent, kid, backend) in [
+        (&a, "a-one", OTHER),
+        (&a, "a-two", CLAUDE),
+        (&b, "b-one", CLAUDE),
+    ] {
+        parent
+            .start(json!({ "task": "work", "name": kid, "backend": backend }))
+            .await
+            .done();
+    }
+    let a_one = world.child_of(&a, "a-one").await;
+    let a_two = world.child_of(&a, "a-two").await;
+    let b_one = world.child_of(&b, "b-one").await;
+
+    let everyone: [(&Agent, Option<&str>, Option<u64>); 6] = [
+        (&a, None, None),
+        (&b, None, None),
+        (&x, None, None),
+        (&a_one, Some("a-one"), Some(a.id())),
+        (&a_two, Some("a-two"), Some(a.id())),
+        (&b_one, Some("b-one"), Some(b.id())),
+    ];
+    let before: Vec<_> = everyone
+        .iter()
+        .map(|(agent, _, _)| typed_into(&world.reread(agent)))
+        .collect();
+
+    let mut calls = 0;
+    for (caller, _, _) in everyone {
+        for (other, child_name, owner) in everyone {
+            // The caller's own children are what a read is for.
+            if owner == Some(caller.id()) {
+                continue;
+            }
+            // Its parent, itself, a sibling or a session it did not start: by
+            // name, id, conversation, process and folder.
+            for target in names_of(other, child_name)
+                .into_iter()
+                .filter(|target| !target.trim().is_empty())
+            {
+                let call = format!("{} naming {} as {target:?}", caller.name(), other.name());
+                let read = caller.read(&target, Some(200)).await;
+                assert!(
+                    read.refused().contains("No agent of yours is named"),
+                    "agents_read {call}: {read:?}"
+                );
+                let (url, token) = caller.route();
+                let by_command =
+                    subcommand(Subcommand::Read(cli_read(&target, Some(200))), url, token).await;
+                assert_eq!(
+                    by_command.code, 1,
+                    "floti agent read {call}: {by_command:?}"
+                );
+                assert!(
+                    by_command
+                        .err
+                        .as_deref()
+                        .is_some_and(|err| err.contains("No agent of yours is named")),
+                    "floti agent read {call}: {by_command:?}"
+                );
+                assert!(by_command.out.is_none(), "{call}: {by_command:?}");
+                calls += 1;
+            }
+        }
+    }
+    assert!(calls > 60, "the reach test made {calls} rounds of calls");
+
+    for ((agent, _, _), before) in everyone.iter().zip(&before) {
+        assert_eq!(
+            &typed_into(&world.reread(agent)),
+            before,
+            "something was typed into {}",
+            agent.name()
+        );
+        assert_eq!(world.status(agent.id()), "running");
+    }
+    host.stop(HostStopReason::Stop).await;
+}
+
+fn cli_read(child: &str, lines: Option<u32>) -> ReadCommand {
+    ReadCommand {
+        child: child.to_owned(),
+        lines,
+        json: false,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_command_childs_own_parent_waits_on_reads_or_stops_it() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("reach");
+    let script = command_script(&world);
+    // A grandparent, its child (the command child's parent) and that child's
+    // sibling; another family; and a session nobody started.
+    let grandparent = world.session(CLAUDE, &folder, "grandparent").await;
+    for name in ["mid", "sibling"] {
+        grandparent
+            .start(json!({ "task": "work", "name": name, "can_start": true }))
+            .await
+            .done();
+    }
+    let parent = world.child_of(&grandparent, "mid").await;
+    let sibling = world.child_of(&grandparent, "sibling").await;
+    let other_parent = world.session(OTHER, &folder, "other parent").await;
+    let loner = world.session(CLAUDE, &folder, "loner").await;
+
+    let record = record_file(&world, "reach");
+    let started = world
+        .shell(
+            &parent,
+            &run_script(
+                "--name tests",
+                &script,
+                &format!("--count 3 --hold --record \"{}\"", text(&record)),
+            ),
+        )
+        .await;
+    assert_eq!(started.code, Some(0), "{started:?}");
+    let pid = pid_of(&recorded(&record).await);
+    let tests = command_child(&world, &parent, "tests").await;
+    eventually("the command's lines on its screen", async || {
+        parent
+            .read("tests", None)
+            .await
+            .text()
+            .contains("line 3")
+            .then_some(())
+    })
+    .await;
+
+    // A sibling, another parent, the grandparent and a session nobody started
+    // are all told there is no such child, by every route.
+    for stranger in [&sibling, &other_parent, &grandparent, &loner] {
+        let who = stranger.name();
+        let waited = stranger
+            .call("agents_wait", json!({ "children": ["tests"] }))
+            .await;
+        assert!(
+            waited.refused().contains("tests is not one of your agents"),
+            "{who} waiting: {waited:?}"
+        );
+        let read = stranger.read("tests", None).await;
+        assert!(
+            read.refused().contains("No agent of yours is named tests"),
+            "{who} reading: {read:?}"
+        );
+        let stopped = stranger.stop("tests").await;
+        assert!(
+            stopped
+                .refused()
+                .contains("No agent of yours is named tests"),
+            "{who} stopping: {stopped:?}"
+        );
+        let sent = stranger.send("tests", "hello").await;
+        assert!(
+            sent.refused().contains("No agent of yours is named tests"),
+            "{who} sending: {sent:?}"
+        );
+        for command in [
+            "floti agent wait tests",
+            "floti agent read tests",
+            "floti agent stop tests",
+        ] {
+            let ran = world.shell(stranger, command).await;
+            assert_ne!(ran.code, Some(0), "{who}: {command}: {ran:?}");
+            assert!(ran.stdout.trim().is_empty(), "{who}: {command}: {ran:?}");
+        }
+    }
+    // Nothing of that reached it.
+    assert_eq!(world.status(tests.id), "running");
+    assert!(alive(pid));
+
+    // Its parent reaches it: reads it, then stops it.
+    let own = world.shell(&parent, "floti agent read tests").await;
+    assert_eq!(own.code, Some(0), "{own:?}");
+    assert!(printed(&own).contains("line 3"), "{own:?}");
+    parent.stop("tests").await.done();
+    assert!(ended_row(&world, tests.id).await.stopped);
+    gone_pids("the stopped command's process to end", &[pid]).await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+/// Runs a command child called `name` that stays until it is ended.
+async fn run_held(world: &World, parent: &Agent, script: &Path, name: &str) -> ShellRun {
+    world
+        .shell(
+            parent,
+            &run_script(&format!("--name {name}"), script, "--hold"),
+        )
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fifth_command_child_is_refused_naming_the_limit_and_what_holds_it() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("fifth");
+    let script = command_script(&world);
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+
+    let mut ids = Vec::new();
+    for name in ["one", "two", "three", "four"] {
+        let started = run_held(&world, &parent, &script, name).await;
+        assert_eq!(started.code, Some(0), "{started:?}");
+        ids.push(command_child(&world, &parent, name).await.id);
+    }
+    let fifth = run_held(&world, &parent, &script, "five").await;
+    assert_ne!(fifth.code, Some(0), "{fifth:?}");
+    assert!(
+        fifth
+            .stderr
+            .contains("The command-children limit of 4 per parent holds"),
+        "{fifth:?}"
+    );
+    for holder in ["one", "two", "three", "four"] {
+        assert!(fifth.stderr.contains(holder), "{fifth:?}");
+    }
+    assert!(fifth.stderr.contains("emit lines.mjs"), "{fifth:?}");
+    assert!(fifth.stderr.contains("Wait for news and run again"));
+    assert!(fifth.stdout.trim().is_empty(), "{fifth:?}");
+    assert_eq!(world.newest_child_id(parent.id(), "five"), None);
+
+    // A command that ends makes room for the next.
+    parent.stop("one").await.done();
+    ended_row(&world, ids[0]).await;
+    let again = run_held(&world, &parent, &script, "five").await;
+    assert_eq!(again.code, Some(0), "{again:?}");
+    command_child(&world, &parent, "five").await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn command_children_are_counted_apart_from_every_agent_limit() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("apart");
+    let script = command_script(&world);
+
+    // Every agent slot taken: the parent still runs a command.
+    let full = world.session(CLAUDE, &folder, "full of agents").await;
+    for name in ["a1", "a2", "a3", "a4"] {
+        full.start(json!({ "task": "work", "name": name, "backend": OTHER }))
+            .await
+            .done();
+    }
+    let refused = full.start(json!({ "task": "one more" })).await;
+    assert!(refused.refused().contains("limit of 4 running agents"));
+    let started = run_held(&world, &full, &script, "tests").await;
+    assert_eq!(started.code, Some(0), "{started:?}");
+    command_child(&world, &full, "tests").await;
+    let limits = full.list().await.done()["limits"].clone();
+    assert_eq!(limits["childrenLeft"], 0, "{limits}");
+    assert_eq!(limits["commandsLeft"], 3, "{limits}");
+    assert_eq!(limits["commandsPerParent"], 4, "{limits}");
+
+    // Every command slot taken: the parent still starts an agent, and the
+    // agent limits, the host's eight among them, are as they were.
+    let busy = world.session(OTHER, &folder, "full of commands").await;
+    for name in ["c1", "c2", "c3", "c4"] {
+        let started = run_held(&world, &busy, &script, name).await;
+        assert_eq!(started.code, Some(0), "{started:?}");
+        command_child(&world, &busy, name).await;
+    }
+    let before = busy.list().await.done()["limits"].clone();
+    assert_eq!(before["commandsLeft"], 0, "{before}");
+    assert_eq!(before["childrenLeft"], 4, "{before}");
+    assert_eq!(before["startsLeft"], 16, "{before}");
+    assert_eq!(before["hostLeft"], 4, "{before}");
+    busy.start(json!({ "task": "work", "name": "agent-after" }))
+        .await
+        .done();
+    let after = busy.list().await.done()["limits"].clone();
+    assert_eq!(after["childrenLeft"], 3, "{after}");
+    assert_eq!(after["startsLeft"], 15, "{after}");
+    assert_eq!(after["hostLeft"], 3, "{after}");
+    assert_eq!(after["commandsLeft"], 0, "{after}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_command_children_limit_is_read_afresh_from_the_settings_on_every_run() {
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("settings run");
+    let script = command_script(&world);
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    let limit = |commands: u32| HostSettingsPatch {
+        agent_commands_per_parent: Some(commands),
+        ..HostSettingsPatch::default()
+    };
+
+    world.settings(limit(1)).await;
+    let first = run_held(&world, &parent, &script, "first").await;
+    assert_eq!(first.code, Some(0), "{first:?}");
+    command_child(&world, &parent, "first").await;
+    let refused = run_held(&world, &parent, &script, "second").await;
+    assert!(
+        refused
+            .stderr
+            .contains("The command-children limit of 1 per parent holds"),
+        "{refused:?}"
+    );
+
+    // Raised: the next run goes through.
+    world.settings(limit(2)).await;
+    let second = run_held(&world, &parent, &script, "second").await;
+    assert_eq!(second.code, Some(0), "{second:?}");
+    command_child(&world, &parent, "second").await;
+    let refused = run_held(&world, &parent, &script, "third").await;
+    assert!(
+        refused
+            .stderr
+            .contains("The command-children limit of 2 per parent holds"),
+        "{refused:?}"
+    );
+
+    // Lowered under what runs: nothing ends and the next run is refused.
+    world.settings(limit(1)).await;
+    let refused = run_held(&world, &parent, &script, "third").await;
+    assert!(
+        refused.stderr.contains("limit of 1 per parent"),
+        "{refused:?}"
+    );
+    let listed = parent.list().await.done();
+    assert_eq!(listed["children"].as_array().map(Vec::len), Some(2));
+    assert_eq!(listed["limits"]["commandsPerParent"], 1, "{listed}");
+    assert_eq!(listed["limits"]["commandsLeft"], 0, "{listed}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agents_list_shows_a_command_child_with_its_command_and_how_many_command_children_are_left()
+{
+    let world = World::new();
+    let host = world.host().await;
+    let folder = world.project("listing");
+    let script = command_script(&world);
+    let parent = world.session(CLAUDE, &folder, "parent").await;
+    parent
+        .start(json!({ "task": "work", "name": "reviewer-1", "backend": OTHER }))
+        .await
+        .done();
+    let started = run_held(&world, &parent, &script, "tests").await;
+    assert_eq!(started.code, Some(0), "{started:?}");
+    command_child(&world, &parent, "tests").await;
+
+    let listed = parent.list().await;
+    let body = listed.done();
+    let children = body["children"].as_array().expect("children");
+    assert_eq!(children.len(), 2, "{body}");
+    let agent = children
+        .iter()
+        .find(|child| child["name"] == "reviewer-1")
+        .expect("the agent");
+    let command = children
+        .iter()
+        .find(|child| child["name"] == "tests")
+        .expect("the command child");
+    // The agent has its role and no command; the command child its command
+    // where the role would be.
+    assert_eq!(agent["command"], Value::Null, "{agent}");
+    assert!(agent["role"].is_string(), "{agent}");
+    assert_eq!(command["role"], Value::Null, "{command}");
+    assert_eq!(command["class"], Value::Null, "{command}");
+    assert_eq!(command["backend"], "shell", "{command}");
+    let line = command["command"].as_str().expect("a command");
+    assert!(line.contains("emit lines.mjs") && line.contains("--hold"));
+    assert_eq!(body["limits"]["commandsLeft"], 3, "{body}");
+    assert_eq!(body["limits"]["commandsPerParent"], 4, "{body}");
+    // An agent's slots do not count the command child.
+    assert_eq!(body["limits"]["childrenLeft"], 3, "{body}");
+    assert_eq!(body["limits"]["startsLeft"], 15, "{body}");
+
+    // The text a model reads says it as well.
+    let text = listed.text();
+    assert!(
+        text.contains(&format!("tests  command {line}")),
+        "the command child's line: {text}"
+    );
+    assert!(text.contains("reviewer-1  role "), "{text}");
+    assert!(
+        text.contains("3 of 4 command children running at once"),
+        "{text}"
+    );
     host.stop(HostStopReason::Stop).await;
 }

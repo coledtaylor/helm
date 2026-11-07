@@ -192,7 +192,12 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   prompt. The host reads one thing in a session's output, OSC 7501 status
   reports, kept as the program said them, and draws no conclusion from
   screen text. It passes every byte on untouched and puts nothing between
-  the user and the TUI.
+  the user and the TUI. What a parent sends its child (`agents_send`) arrives
+  as the child's next turn, and a person typing in that terminal comes first;
+  what a parent reads of its child (`agents_read`) is the screen as text,
+  interpreted by nobody. The host keeps the screen, hands a parent its
+  child's screen as text, and a command child's recent output lines and its
+  last 40 at exit (`session/screen.rs`).
   Rendering an archived transcript (read-only, after the fact) is allowed.
   This holds for every agent: no RPC or JSON mode in place of its own TUI.
 - Windows, macOS and Linux: links are junctions (`mklink /J`) on Windows and
@@ -372,13 +377,19 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   none, hands none work, and returns no part of any session's conversation.
 - `floti-agents` acts on sessions, and only on the caller's own children:
   sessions started with `agents_start` by the session whose token made the
-  call. A parent may start its children, wait on them and stop them; a
-  grandchild is reached only through its own parent. A child reaches its
-  parent only with `agents_report`, which the parent receives as its child's
-  report, never as its user's words. No tool reaches a session the caller did
-  not start, nothing is typed into a parent or into a session waiting on a
-  permission prompt, and no tool returns a transcript, argv or conversation
-  id.
+  call. A parent may start its children, type into them (`agents_send`), read
+  their screens (`agents_read`), wait on them and stop them, and may run a
+  command it watches as a command child (`floti agent run`); a grandchild is
+  reached only through its own parent. A child reaches its parent only with
+  `agents_report`, which the parent receives as its child's report, never as
+  its user's words. No tool reaches a session the caller did not start,
+  nothing is typed into a parent or into a session waiting on a permission
+  prompt, and no tool returns a transcript, argv or conversation id. A read
+  returns the screen and up to 200 lines above it as plain text, and for a
+  command child its recent output lines, while it runs and, as the last 40
+  lines, after it has exited. A command child is a child like any other for
+  reach: only its own parent waits on, reads or stops it, and a sibling,
+  another parent and its grandparent get not found.
 - `floti-agents` (`server/floti_agents.rs`, the work in
   `server/hosted/children.rs`) is the host's own family: it works with no
   client attached, a client quitting reaches a child only through its parent,
@@ -398,7 +409,14 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   reach it, naming the limit and each holder by its name and the session that
   started it, and saying to wait for news and start again. Light starts and
   sessions a person starts are not counted, and `agents_list` shows the heavy
-  slots left. A
+  slots left. Command children are counted apart, by their rows' command:
+  none of the agent limits (per parent, per host, starts, depth, heavy) counts
+  one, and an agent counts toward none of theirs (`agentCommandsPerParent`, 1
+  to 32, default 4, is read afresh on every run; a fifth is refused naming the
+  command-children limit and the running command children that hold it, and
+  saying to wait for news and run again). `agents_list` shows a command child
+  with its command where an agent shows its role, and how many command
+  children the parent has left. A
   child ends when its parent ends, however it ends, and its own children with
   it, unless it was started to `outlive`; its row keeps the parent's row and
   conversation, so a restart restores the links and resuming the parent's
@@ -478,8 +496,9 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   no conversation. It is then judged against every limit as a start is, and
   is one more start and one more running child (a resume adds a row under the
   same name; the newest row of a name is the child).
-- `floti agent start`, `send`, `wait` and `stop` run the same
-  tools from a session's own shell: the host puts its `floti` binary's folder
+- `floti agent start`, `send`, `wait`, `read` and `stop` run the same
+  tools from a session's own shell (`floti agent read <name> [--lines N]
+  [--json]` prints the screen as text): the host puts its `floti` binary's folder
   first on the session's `PATH` and the session's token and the family's
   address in its environment (`FLOTI_AGENT_TOKEN`, `FLOTI_AGENT_URL`; any
   `FLOTI_AGENT_*` the host inherited is stripped first). The command acts as
@@ -503,7 +522,10 @@ writes no `--mcp-config`, and never serves `floti-agents`: only the host does.
   last 40 lines of its screen with the exit (`Screen::last_lines`, kept before
   the screen is dropped), in `floti agent wait` and `run --wait`, which exits
   with the command's code. A send to it is refused: a command child takes no
-  turns.
+  turns. Run is never allowed at launch, as start, send, wait, read and stop
+  are: an allowed run would let any command skip the agent's own Bash
+  permission rules, so the user's own rules apply to it as to any command. A
+  parent runs up to `agentCommandsPerParent` at once.
 - A session's row keeps what its launch was granted (`agent_tools`: the
   port, the token's SHA-256 and the families), never the token. A host that
   takes back sessions from the keeper binds that port again and accepts each

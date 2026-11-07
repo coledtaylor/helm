@@ -876,6 +876,21 @@ impl Session {
         Some(TermSize::new(size.cols, size.rows))
     }
 
+    /// The screen's text as plain lines, the screen's own and up to `above`
+    /// lines of scrollback above them, without the empty rows under the last
+    /// line there is. `None` once the session has ended and its screen is
+    /// gone. This is what a parent reads of its child; nothing here reads
+    /// the text for meaning.
+    pub(crate) fn screen_text(&self, above: usize) -> Option<Vec<String>> {
+        let state = lock(&self.state);
+        let screen = state.screen.as_ref()?;
+        let mut lines = screen.text(above);
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        Some(lines)
+    }
+
     /// Runs `f` on the session's screen while it has one.
     #[cfg(test)]
     pub(crate) fn with_screen<R>(&self, f: impl FnOnce(&mut Screen) -> R) -> Option<R> {

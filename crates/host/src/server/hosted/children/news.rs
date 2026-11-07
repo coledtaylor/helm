@@ -481,8 +481,7 @@ impl Hosted {
     pub(crate) fn child_ended(&self, child: SessionId) {
         let ended = rows::ended_of(&self.ledger.store(), child);
         let desk = &self.children.news;
-        // Taken whether or not it is told, so none is left behind.
-        let last_lines = self.ledger.take_last_lines(child);
+        let last_lines = self.ledger.last_lines_of(child);
         match ended {
             Ok(Some(ended)) => {
                 let by = desk.take_stopped(child);

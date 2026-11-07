@@ -13,8 +13,16 @@
 //! opens no tab, and counts toward none of the agent limits
 //! (`rows::ChildRow::is_command`). It is named as an agent child is, `--name`
 //! or its program's file name, made unique among all the caller's children.
-//! Only its parent waits on it, stops it, or hears of its exit, and it ends
-//! with its parent, as every child does.
+//! Only its parent waits on it, reads it, stops it, or hears of its exit, and
+//! it ends with its parent, as every child does.
+//!
+//! **Its own limit.** A parent runs at most `agentCommandsPerParent` command
+//! children at once (4 until changed), read afresh from the host's settings on
+//! every run and counted from the parent's rows that have a command. No agent
+//! limit counts them, and this limit counts no agent, so a parent with every
+//! agent slot full can still run a command and a test run never takes a
+//! reviewer's slot. A run over it is refused naming the limit and the command
+//! children that hold it.
 //!
 //! **It ends when its command exits,** with the command's exit code and the
 //! last lines it printed, which its parent is told with the exit
@@ -26,7 +34,7 @@ use std::sync::Arc;
 
 use floti_protocol::BackendId;
 
-use super::{CHILD_SIZE, lock, rows, unique_child_name};
+use super::{CHILD_SIZE, lock, rows, settings, unique_child_name};
 use crate::agent::{AgentBackend, Composition, PlainCommandBackend};
 use crate::platform::command_shell::{CommandShell, Native};
 use crate::platform::folders::UserEnv;
@@ -79,6 +87,15 @@ impl Hosted {
             let store = self.ledger.store();
             let existing = rows::children_of(&store, parent, facts.conversation_id.as_deref())
                 .map_err(|err| err.to_string())?;
+            let limit = settings::read(store.connection())
+                .map_err(|err| err.to_string())?
+                .agent_commands_per_parent;
+            let running: Vec<&rows::ChildRow> = existing
+                .iter()
+                .filter(|child| child.is_command())
+                .filter(|child| child.running && self.sessions.get(child.id).is_some())
+                .collect();
+            command_limit_refusal(limit, &running)?;
             let wanted = request
                 .name
                 .as_deref()
@@ -157,6 +174,30 @@ impl Hosted {
             shell.args,
         ))
     }
+}
+
+/// Whether `running` command children are as many as a parent may run; the
+/// sentence naming the limit and what holds it when they are.
+fn command_limit_refusal(limit: u32, running: &[&rows::ChildRow]) -> Result<(), String> {
+    if running.len() < limit as usize {
+        return Ok(());
+    }
+    let holders: Vec<String> = running
+        .iter()
+        .map(|child| {
+            format!(
+                "{} ({})",
+                child.name,
+                child.command.as_deref().unwrap_or_default()
+            )
+        })
+        .collect();
+    Err(format!(
+        "The command-children limit of {limit} per parent holds: you have {} running ({}). \
+         Wait for news and run again.",
+        running.len(),
+        holders.join(", ")
+    ))
 }
 
 /// The one line the shell runs for `words`: several words quoted for it as a

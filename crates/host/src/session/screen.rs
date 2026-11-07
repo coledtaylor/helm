@@ -4,11 +4,13 @@
 //! a client that attaches late is sent the screen as it is
 //! ([`Screen::redraw`]) rather than a blank terminal until the next repaint.
 //! The host keeps the screen, hands a parent its child's screen as text
-//! ([`Screen::text`]), and keeps a command child's last lines at its exit
+//! ([`Screen::text`]: the screen and up to 200 lines above it), and a command
+//! child's recent output lines and its last 40 at its exit
 //! ([`Screen::last_lines`]); it answers no query (its event listener drops
-//! every reply) and draws no conclusion from what is on it. A session's
-//! status comes from the output stream instead, from the OSC 7501 reports its
-//! program writes ([`super::report`]).
+//! every reply) and draws no conclusion from what is on it. The text is
+//! handed over as it is, to the parent that started the child and to no one
+//! else. A session's status comes from the output stream instead, from the
+//! OSC 7501 reports its program writes ([`super::report`]).
 
 use std::time::Duration;
 
@@ -343,6 +345,33 @@ mod text_tests {
         );
         assert_eq!(screen.text(usize::MAX).len(), 11);
         assert_eq!(screen.text(usize::MAX)[0], "line 1");
+    }
+
+    #[test]
+    fn more_than_a_screen_of_output_reads_as_the_screen_and_the_lines_asked_for_above_it() {
+        let written: String = (1..=300).map(|n| format!("line {n}\r\n")).collect();
+        let screen = fed(40, 24, &written);
+        // 300 lines and the empty row the cursor is on: 24 rows, the last one
+        // empty, so 23 lines of the 300 are on the screen.
+        let text = screen.text(200);
+        assert_eq!(text.len(), 200 + 24);
+        assert_eq!(text.first().map(String::as_str), Some("line 78"));
+        assert_eq!(
+            text.get(text.len() - 2).map(String::as_str),
+            Some("line 300")
+        );
+        assert_eq!(screen.text(5).len(), 5 + 24);
+    }
+
+    #[test]
+    fn styling_titles_and_cursor_moves_leave_only_the_text_that_is_drawn() {
+        let screen = fed(
+            30,
+            3,
+            "\x1b]0;a title\x07\x1b[1;32mgreen\x1b[0m and \x1b[4mplain\x1b[0m\r\n\x1b[2K\x1b[1Gover\x1b[3Gwritten\r\n",
+        );
+        assert_eq!(screen.text(0), ["green and plain", "ovwritten", ""]);
+        assert!(screen.text(0).iter().all(|line| !line.contains('\x1b')));
     }
 
     #[test]

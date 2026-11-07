@@ -2,9 +2,10 @@
 //!
 //! `floti agent start --task <text>` starts an agent of the session's own and
 //! prints its name; `floti agent send <name> <text>` types a turn into it;
+//! `floti agent read <name>` prints its screen as plain text;
 //! `floti agent stop <name>` ends it; `floti agent wait` prints the news its
 //! agents have for the session. Each is the `agents_start`, `agents_send`,
-//! `agents_stop` or `agents_wait` tool called over the same
+//! `agents_read`, `agents_stop` or `agents_wait` tool called over the same
 //! endpoint a session's agent tools use, so the host answers one way whoever
 //! asks and the same limits, folder rule and own-children rule apply. The session is
 //! known by the bearer token in `FLOTI_AGENT_TOKEN` and the address in
@@ -48,7 +49,7 @@ pub const URL_VAR: &str = "FLOTI_AGENT_URL";
 pub const TOKEN_VAR: &str = "FLOTI_AGENT_TOKEN";
 
 /// What `floti agent` accepts.
-pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent start --resume <name> --task <text> [--wait] [--json]\n       floti agent send [--interrupt] [--wait] [--json] <name> [--] <text>\n       floti agent run [--name <name>] [--wait] [--json] -- <command...>\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
+pub const USAGE: &str = "usage: floti agent start --task <text> [--role <name>] [--backend <id>] [--folder <path>] [--profile <name>] [--name <name>] [--worktree <name>] [--outlive] [--can-start] [--wait] [--json]\n       floti agent start --resume <name> --task <text> [--wait] [--json]\n       floti agent send [--interrupt] [--wait] [--json] <name> [--] <text>\n       floti agent read [--lines <n>] [--json] <name>\n       floti agent run [--name <name>] [--wait] [--json] -- <command...>\n       floti agent wait [--all] [--json] [<name>...]\n       floti agent stop <name> [--json]";
 
 /// How long a connection waits to be made.
 const CONNECT_WAIT: Duration = Duration::from_secs(10);
@@ -63,9 +64,20 @@ const ANSWER_WAIT: Duration = Duration::from_secs(120);
 pub enum Command {
     Start(Start),
     Send(SendText),
+    Read(ReadScreen),
     Run(Run),
     Stop(Stop),
     Wait(Wait),
+}
+
+/// `floti agent read`: a child's screen and the lines above it, as text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReadScreen {
+    pub child: String,
+    /// How many lines above the screen at most (`--lines`); the host's most
+    /// when none.
+    pub lines: Option<u32>,
+    pub json: bool,
 }
 
 /// `floti agent run`: a command the user watches run, as a child of the
@@ -175,11 +187,12 @@ impl Outcome {
 /// A sentence naming what is missing or not understood.
 pub fn parse(args: &[String]) -> Result<Command, String> {
     let Some((subcommand, rest)) = args.split_first() else {
-        return Err("Say what to do: start, send, run, wait or stop.".to_owned());
+        return Err("Say what to do: start, send, read, run, wait or stop.".to_owned());
     };
     match subcommand.as_str() {
         "start" => parse_start(rest).map(Command::Start),
         "send" => parse_send(rest).map(Command::Send),
+        "read" => parse_read(rest).map(Command::Read),
         "run" => parse_run(rest).map(Command::Run),
         "stop" => parse_stop(rest).map(Command::Stop),
         "wait" => parse_wait(rest).map(Command::Wait),
@@ -258,6 +271,39 @@ fn parse_send(args: &[String]) -> Result<SendText, String> {
         .filter(|text| !text.trim().is_empty())
         .ok_or_else(|| "Give the text to send as one argument, in quotes.".to_owned())?;
     Ok(send)
+}
+
+/// The child's name, with `--lines <n>` and `--json` in any order.
+fn parse_read(args: &[String]) -> Result<ReadScreen, String> {
+    let mut read = ReadScreen::default();
+    let mut child = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_owned())),
+            _ => (arg.as_str(), None),
+        };
+        match flag {
+            "--lines" => {
+                let value = inline
+                    .or_else(|| args.next().cloned())
+                    .ok_or_else(|| "--lines needs a number.".to_owned())?;
+                read.lines = Some(value.trim().parse().map_err(|_| {
+                    format!("--lines is a whole number of lines above the screen, not `{value}`.")
+                })?);
+            }
+            "--json" if inline.is_none() => read.json = true,
+            flag if flag.starts_with("--") => {
+                return Err(format!("`{flag}` is not a floti agent read option."));
+            }
+            name if child.is_none() => child = Some(name.to_owned()),
+            _ => return Err("Name one agent to read.".to_owned()),
+        }
+    }
+    read.child = child
+        .filter(|child| !child.trim().is_empty())
+        .ok_or_else(|| "Name the agent to read, as floti agent start printed it.".to_owned())?;
+    Ok(read)
 }
 
 /// Options, then `--`, then the command: everything after `--` is the
@@ -363,6 +409,7 @@ pub fn execute(command: &Command, url: &str, token: &str) -> Outcome {
     let (tool, arguments, json) = match command {
         Command::Start(start) => ("agents_start", start_arguments(start), start.json),
         Command::Send(send) => ("agents_send", send_arguments(send), send.json),
+        Command::Read(read) => ("agents_read", read_arguments(read), read.json),
         Command::Run(run) => ("agents_run", run_arguments(run), run.json),
         Command::Stop(stop) => ("agents_stop", json!({ "child": stop.child }), stop.json),
         Command::Wait(wait) => ("agents_wait", wait_arguments(wait), wait.json),
@@ -408,6 +455,14 @@ fn send_arguments(send: &SendText) -> Value {
     }
     if send.wait {
         arguments["wait"] = json!(true);
+    }
+    arguments
+}
+
+fn read_arguments(read: &ReadScreen) -> Value {
+    let mut arguments = json!({ "child": read.child });
+    if let Some(lines) = read.lines {
+        arguments["lines"] = json!(lines);
     }
     arguments
 }
@@ -513,7 +568,10 @@ fn present(command: &Command, answer: &Answer, json: bool) -> Outcome {
                 (_, name) => Outcome::done(name.unwrap_or(first)),
             }
         }
-        Command::Send(_) | Command::Stop(_) | Command::Wait(_) => Outcome::done(first),
+        // The screen as text, for a script or a model to read as it is.
+        Command::Send(_) | Command::Read(_) | Command::Stop(_) | Command::Wait(_) => {
+            Outcome::done(first)
+        }
     }
 }
 
@@ -932,6 +990,78 @@ mod tests {
         assert_eq!(
             execute(&Command::Send(sent), &host.url, "t"),
             Outcome::done("Sent to worker.".to_owned())
+        );
+    }
+
+    #[test]
+    fn read_takes_a_name_with_lines_and_json_in_any_order() {
+        assert_eq!(
+            parse(&args(&["read", "worker"])),
+            Ok(Command::Read(ReadScreen {
+                child: "worker".to_owned(),
+                lines: None,
+                json: false,
+            }))
+        );
+        assert_eq!(
+            parse(&args(&["read", "--lines", "120", "worker", "--json"])),
+            Ok(Command::Read(ReadScreen {
+                child: "worker".to_owned(),
+                lines: Some(120),
+                json: true,
+            }))
+        );
+        assert_eq!(
+            parse(&args(&["read", "worker", "--lines=0"])),
+            Ok(Command::Read(ReadScreen {
+                child: "worker".to_owned(),
+                lines: Some(0),
+                json: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn read_without_a_name_or_with_a_bad_number_or_a_second_name_is_a_usage_error() {
+        for bad in [
+            vec!["read"],
+            vec!["read", "  "],
+            vec!["read", "a", "b"],
+            vec!["read", "--lines", "worker"],
+            vec!["read", "--lines", "-3", "worker"],
+            vec!["read", "worker", "--lines"],
+            vec!["read", "--json=1", "worker"],
+            vec!["read", "--all", "worker"],
+        ] {
+            assert!(parse(&args(&bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn read_calls_the_read_tool_with_lines_only_when_asked_and_prints_the_screen_as_it_is() {
+        let read = ReadScreen {
+            child: "worker".to_owned(),
+            lines: None,
+            json: false,
+        };
+        assert_eq!(read_arguments(&read), json!({ "child": "worker" }));
+        assert_eq!(
+            read_arguments(&ReadScreen {
+                lines: Some(5),
+                ..read.clone()
+            }),
+            json!({ "child": "worker", "lines": 5 })
+        );
+        let host = host(vec![
+            rpc_result(json!({})),
+            tool_answer(
+                false,
+                &["one\ntwo", r#"{"name":"worker","lines":["one","two"]}"#],
+            ),
+        ]);
+        assert_eq!(
+            execute(&Command::Read(read), &host.url, "t"),
+            Outcome::done("one\ntwo".to_owned())
         );
     }
 
