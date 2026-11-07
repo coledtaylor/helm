@@ -280,6 +280,11 @@ export interface SessionRowProps {
    * name so a parent says who needs you before anyone opens it.
    */
   needs?: number | undefined
+  /**
+   * The child's peek is open, opened from this row: the row keeps the hover
+   * fill and says `aria-expanded` while it is.
+   */
+  peeking?: boolean | undefined
 }
 
 /**
@@ -356,9 +361,13 @@ export function SessionRow({
   onToggle,
   summary,
   command = false,
-  needs = 0
+  needs = 0,
+  peeking = false
 }: SessionRowProps): JSX.Element {
   const waiting = state === 'waiting'
+  // A child with nowhere on screen here opens a peek when pressed: it is not in
+  // front of a pane, and it is a child (drawn under its parent or naming it).
+  const peekable = (guide !== undefined || parentName !== undefined) && shown === null && !outside
   const folds = expanded !== null && onToggle !== undefined
   const guideLeft = indent - GUIDE_OFFSET_PX
   const rule = 'absolute border-l border-border-strong'
@@ -375,6 +384,8 @@ export function SessionRow({
         type="button"
         data-session-row={id}
         aria-current={shown === 'focused' ? 'true' : undefined}
+        aria-haspopup={peekable ? 'dialog' : undefined}
+        aria-expanded={peekable ? peeking : undefined}
         aria-label={`${label}, ${state === null ? 'state unknown' : command && note !== '' ? note : SESSION_STATE_LABEL[state]}${outside ? ', outside Helm' : ''}${parentName === undefined ? '' : `, started by ${parentName}`}${needs === 0 ? '' : `, ${String(needs)} of its sessions waiting for you`}`}
         onClick={() => onOpen(id)}
         style={{ paddingLeft: indent }}
@@ -384,7 +395,9 @@ export function SessionRow({
             ? ROW_SELECTED
             : shown === 'visible'
               ? 'bg-hover hover:bg-active'
-              : 'hover:bg-hover'
+              : peeking
+                ? 'bg-hover'
+                : 'hover:bg-hover'
         )}
       >
         {shown === 'focused' && (

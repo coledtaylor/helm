@@ -92,7 +92,7 @@ function ChildList({ kind, items }: { kind: 'ends'; items: readonly ConfirmChild
   const listed = items.slice(0, LIST_LIMIT)
   const rest = items.length - listed.length
   return (
-    <ul data-confirm-children={kind} className="mt-3 space-y-0.5">
+    <ul data-confirm-children={kind} className="flex flex-col gap-0.5">
       {listed.map(({ id, name, mark, meta }) => (
         <li
           key={id}
@@ -182,27 +182,29 @@ export function ConfirmSessionDialog({
       className="max-w-[440px]"
       onDismiss={onCancel}
     >
-      <div className="px-[22px] pt-[18px]">
+      {/* The design's dialog: one column, 10px between the title, the sentence,
+          the list and the buttons, with no rule above the buttons. */}
+      <div className="flex flex-col gap-[10px] px-[18px] pt-4 pb-[14px]">
         <header className="flex items-start gap-[9px]">
           <TerminalIcon width={13} height={13} className="mt-[3px] shrink-0 text-accent" />
-          <h2 className="text-[15px] leading-[1.35] font-medium tracking-tight text-fg">
+          <h2 className="text-[14px] leading-[1.4] font-medium text-fg">
             {message}
           </h2>
         </header>
 
-        <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">
+        <p className="text-[12.5px] leading-[1.5] text-fg-muted">
           <DetailText detail={detail} folder={folder} />
         </p>
 
         {ends.length > 0 && <ChildList kind="ends" items={ends} />}
         {outlives.length > 0 && (
-          <p data-confirm-outlives className="mt-3 text-[12px] leading-[1.55] text-fg-muted">
+          <p data-confirm-outlives className="text-[12.5px] leading-[1.5] text-fg-muted">
             {outlivesSentence(outlives)}
           </p>
         )}
 
         {list && (
-          <ul className="mt-3 space-y-0.5 rounded-raised border border-border bg-surface-raised px-3 py-2">
+          <ul className="space-y-0.5 rounded-raised border border-border bg-surface-raised px-3 py-2">
             {listed.map((name) => (
               <li key={name} className="truncate font-mono text-[11px] text-fg-muted" title={name}>
                 {name}
@@ -215,59 +217,59 @@ export function ConfirmSessionDialog({
             )}
           </ul>
         )}
-      </div>
 
-      <footer className="mx-[22px] mt-4 flex shrink-0 items-center justify-end gap-2 border-t border-border py-3.5">
-        <button
-          ref={cancelRef}
-          type="button"
-          data-confirm-cancel
-          onClick={onCancel}
-          className={cn(
-            'rounded-well border border-border-strong px-3.5 py-1.5 text-[12px] text-fg',
-            'transition-colors hover:bg-hover',
-            // `:focus`, not the global `:focus-visible`. Focus is placed here
-            // by script when the dialog opens, and Chromium does not count
-            // that as visible focus - so the ring the rest of the app gets
-            // for free never paints, and the one button Enter would press
-            // looks no different from the one it would not. The indication is
-            // the form-field one - border turns accent, no offset ring - and
-            // the global ring is suppressed so tabbing here matches opening.
-            'focus:border-accent focus:outline-none'
+        <footer className="mt-1 flex shrink-0 items-center justify-end gap-[6px]">
+          <button
+            ref={cancelRef}
+            type="button"
+            data-confirm-cancel
+            onClick={onCancel}
+            className={cn(
+              'rounded-well border border-border-strong px-3 py-1 text-[12px] text-fg',
+              'transition-colors hover:bg-hover',
+              // `:focus`, not the global `:focus-visible`. Focus is placed here
+              // by script when the dialog opens, and Chromium does not count
+              // that as visible focus - so the ring the rest of the app gets
+              // for free never paints, and the one button Enter would press
+              // looks no different from the one it would not. The indication is
+              // the form-field one - border turns accent, no offset ring - and
+              // the global ring is suppressed so tabbing here matches opening.
+              'focus:border-accent focus:outline-none'
+            )}
+          >
+            Cancel
+          </button>
+          {keepLabel !== undefined && onKeep !== undefined && (
+            // Not destructive: the sessions go on running. A plain bordered
+            // button beside Cancel, and never the default.
+            <button
+              type="button"
+              data-confirm-keep
+              onClick={onKeep}
+              className="rounded-well border border-border-strong px-3 py-1 text-[12px] text-fg transition-colors hover:bg-hover"
+            >
+              {keepLabel}
+            </button>
           )}
-        >
-          Cancel
-        </button>
-        {keepLabel !== undefined && onKeep !== undefined && (
-          // Not destructive: the sessions go on running. A plain bordered
-          // button beside Cancel, and never the default.
           <button
             type="button"
-            data-confirm-keep
-            onClick={onKeep}
-            className="rounded-well border border-border-strong px-3.5 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+            data-confirm-accept={confirmTone}
+            onClick={onConfirm}
+            className={cn(
+              'rounded-well border px-3 py-1 text-[12px] font-medium transition-colors',
+              // Danger is carried by the text and the hover wash, not by a
+              // solid fill: the accent never solid-fills anything and neither
+              // does this (DESIGN.md). An answer that ends nothing is the
+              // primary button, outlined in the accent.
+              confirmTone === 'danger'
+                ? 'border-danger/50 text-danger hover:bg-danger/10'
+                : 'border-accent text-accent-text hover:bg-accent-soft'
+            )}
           >
-            {keepLabel}
+            {confirmLabel}
           </button>
-        )}
-        <button
-          type="button"
-          data-confirm-accept={confirmTone}
-          onClick={onConfirm}
-          className={cn(
-            'rounded-well border px-3.5 py-1.5 text-[12px] font-medium transition-colors',
-            // Danger is carried by the text and the hover wash, not by a
-            // solid fill: the accent never solid-fills anything and neither
-            // does this (DESIGN.md). An answer that ends nothing is the
-            // primary button, outlined in the accent.
-            confirmTone === 'danger'
-              ? 'border-danger/50 text-danger hover:bg-danger/10'
-              : 'border-accent text-accent-text hover:bg-accent-soft'
-          )}
-        >
-          {confirmLabel}
-        </button>
-      </footer>
+        </footer>
+      </div>
     </Overlay>
   )
 }

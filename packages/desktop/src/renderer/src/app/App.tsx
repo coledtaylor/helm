@@ -5798,6 +5798,11 @@ export function App(): JSX.Element {
             localName={LOCAL_HOST_LABEL}
             localKey={LOCAL_HOST_KEY}
             noticeActions={noticeActions}
+            peekingRow={
+              peek.target === null || peek.target.anchor.kind !== "row"
+                ? null
+                : paneId(sessionRef(peek.target.id, peek.target.host))
+            }
             {...sessionTreeHostProps({
               hosts: treeHosts,
               onAddHost: () => setAddingHost(true),

@@ -248,3 +248,32 @@ describe('ConfirmSessionDialog closing a parent', () => {
     expect(screen.getByText('and 2 more sessions')).toBeTruthy()
   })
 })
+
+describe('ConfirmSessionDialog: the design’s layout', () => {
+  it('is one column with 10px between its parts, padded 16px 18px 14px, and has no rule above the buttons', () => {
+    renderDialog({
+      sessionNames: ['api-refactor', 'tests'],
+      confirmLabel: 'End 2 sessions',
+      ends: [{ id: 4, name: 'tests', mark: { glyph: 'command', state: 'running' }, meta: 'command · pnpm test' }],
+      outlives: [{ id: 5, name: 'watcher', mark: { glyph: 'dot', state: 'idle' }, meta: 'worker · main' }]
+    })
+    const dialog = screen.getByRole('alertdialog')
+    const column = dialog.firstElementChild as HTMLElement
+    for (const cls of ['flex', 'flex-col', 'gap-[10px]', 'px-[18px]', 'pt-4', 'pb-[14px]']) {
+      expect(column.className.split(/\s+/)).toContain(cls)
+    }
+    const title = dialog.querySelector('h2')!
+    expect(title.className).toContain('text-[14px]')
+    expect(title.className).toContain('leading-[1.4]')
+    const sentence = dialog.querySelector('p')!
+    expect(sentence.className).toContain('text-[12.5px]')
+    expect(sentence.className).toContain('leading-[1.5]')
+    // No margin of its own above the sentence, the list or the outlives line: the column's gap is the only space.
+    for (const el of [sentence, dialog.querySelector('[data-confirm-children]')!, dialog.querySelector('[data-confirm-outlives]')!]) {
+      expect(el.className).not.toMatch(/(^|\s)m[tb]-/)
+    }
+    const footer = dialog.querySelector('footer')!
+    expect(footer.className).toContain('mt-1')
+    expect(footer.className).not.toContain('border-t')
+  })
+})

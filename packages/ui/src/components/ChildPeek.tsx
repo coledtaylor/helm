@@ -13,7 +13,8 @@ const TONE: Record<PeekTone, string> = {
   needs: 'border-warn/40 text-warn',
   idle: 'border-success/40 text-success',
   danger: 'border-danger/40 text-danger',
-  neutral: 'border-border-strong text-fg-muted'
+  // An ended child: DESIGN.md's state table gives `ended` fg-subtle.
+  neutral: 'border-border-strong text-fg-subtle'
 }
 
 export interface ChildPeekProps {

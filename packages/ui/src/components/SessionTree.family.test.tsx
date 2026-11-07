@@ -558,3 +558,24 @@ describe('SessionTree: a child that needs you', () => {
     expect(rowOf(1).querySelector('[data-session-needs]')?.textContent).toBe('1')
   })
 })
+
+describe('SessionTree: a child whose peek is open', () => {
+  it('S1: keeps the hover fill and says it has a popup open while its peek is open, and not before', () => {
+    const view = renderTree(family())
+    const child = rowOf(4)
+    expect(child.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(child.getAttribute('aria-expanded')).toBe('false')
+    expect(child.className).not.toMatch(/(^|\s)bg-hover/)
+
+    view.rerender({ peekingRow: 'session:4' })
+    expect(rowOf(4).getAttribute('aria-expanded')).toBe('true')
+    expect(rowOf(4).className).toMatch(/(^|\s)bg-hover/)
+    expect(rowOf(3).getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('S3: a session that is not a child, or has a place on screen, has no popup', () => {
+    renderTree(family())
+    expect(rowOf(1).getAttribute('aria-haspopup')).toBeNull()
+    expect(rowOf(1).getAttribute('aria-expanded')).toBeNull()
+  })
+})

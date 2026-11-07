@@ -133,6 +133,8 @@ export interface SessionTreeProps {
   onAddHostMenu?: (() => void) | undefined
   /** What the limit notice under a parent's children does. Absent, a notice's buttons do nothing. */
   noticeActions?: TreeNoticeActions | undefined
+  /** The id of the row whose child's peek is open, which keeps its open fill. */
+  peekingRow?: string | null | undefined
 }
 
 /**
@@ -315,7 +317,8 @@ export function SessionTree({
   localName = 'This PC',
   localKey = 'local',
   onAddHostMenu,
-  noticeActions
+  noticeActions,
+  peekingRow = null
 }: SessionTreeProps): JSX.Element {
   const [query, setQuery] = useState('')
   const [listMenu, setListMenu] = useState<MenuAnchor | null>(null)
@@ -342,6 +345,7 @@ export function SessionTree({
       onLaunch={onLaunch}
       launchingPath={launchingPath}
       onOpenSession={onOpenSession}
+      peekingRow={peekingRow}
       query={query}
       reveal={reveal !== null && (reveal.kind === 'session' || (reveal.host ?? localKey) === localKey) ? reveal : null}
       empty={
@@ -413,6 +417,7 @@ export function SessionTree({
                     onLaunch={(project) => hostActions.onLaunch(host.id, project)}
                     launchingPath={host.launchingPath}
                     onOpenSession={(id) => hostActions.onOpenSession(host.id, id)}
+                    peekingRow={peekingRow}
                     query={query}
                     reveal={
                       reveal !== null && (reveal.kind === 'session' || reveal.host === host.id) ? reveal : null
@@ -648,6 +653,7 @@ function HostTree({
   onLaunch,
   launchingPath,
   onOpenSession,
+  peekingRow,
   query,
   reveal,
   empty
@@ -663,6 +669,7 @@ function HostTree({
   onLaunch: (project: Project) => void
   launchingPath: string | null
   onOpenSession: (id: string) => void
+  peekingRow: string | null
   query: string
   reveal: TreeReveal | null
   /** What it says when it has nothing to list. */
@@ -796,6 +803,7 @@ function HostTree({
           onToggle={() => toggle(setFoldedFamilies, session.id)}
           summary={mostUrgent(withNested(started))}
           command={session.command}
+          peeking={session.id === peekingRow}
           needs={started.filter((child) => child.state === 'waiting').length}
         />
         {expanded === true &&
