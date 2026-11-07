@@ -215,6 +215,8 @@ export interface ChildHeaderProps {
    * in the tone `state` gives it, and the card's tag reads "command".
    */
   command?: boolean | undefined
+  /** A command's state in words ("running", "exited 1"), which its glyph says on hover; the dot's own words are for an agent. */
+  word?: string | undefined
   /** The state and for how long ("Working · 4m"), or how and when it ended ("Stopped · 14:52"). */
   status: string
   /** The header pressed: a card or last screen shrinks, a header shows as a card, an ended header opens its last screen. */
@@ -246,6 +248,7 @@ export function ChildHeader({
   state,
   role,
   command = false,
+  word,
   status,
   onPress,
   onOpenAsTab,
@@ -272,7 +275,7 @@ export function ChildHeader({
         {command ? (
           <span
             aria-hidden
-            title={SESSION_STATE_LABEL[state]}
+            title={word ?? (state === 'running' ? 'running' : state === 'failed' ? 'exited' : 'ended')}
             data-family-command={state}
             className={cn('grid size-3 shrink-0 place-items-center', commandTone(state))}
           >

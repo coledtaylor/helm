@@ -498,6 +498,15 @@ describe('a parent’s tab with children', () => {
       expect(header.querySelector('[data-family-command="failed"]')!.className).toContain('text-danger')
     })
 
+    it('S33: its glyph says running while it runs and exited <code> once it exited, as the header does', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
+      expect(card(view.container, 'tests').querySelector('[data-family-command]')!.getAttribute('title')).toBe('running')
+      view.list([LEAD, exited(3, 'tests', 137)])
+
+      const header = view.container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+      expect(header.querySelector('[data-family-command]')!.getAttribute('title')).toBe('exited 137')
+    })
+
     it('S25: a command child shrunk to a header keeps its glyph in the dot’s place and has no tag', () => {
       const { container } = mount(SHORT, [
         LEAD,

@@ -474,6 +474,32 @@ describe('SessionTree: a parent’s row and a child’s as the design draws them
     for (const id of [2, 3, 4, 5]) expect(rowOf(id).querySelector('[data-session-dot]')).toBeNull()
   })
 
+  it('S33: says running or exited <code> in a command child’s accessible label, as its row shows, and never ended or exited with an error', () => {
+    renderTree(
+      new Map([
+        [
+          HELM.toLowerCase(),
+          [
+            row(1, 'api-refactor', 'idle', {
+              nested: [
+                row(2, 'tests', 'running', { command: true, note: 'running' }),
+                row(3, 'lint', 'ended', { command: true, note: 'exited 0' }),
+                row(4, 'build', 'failed', { command: true, note: 'exited 1' }),
+                row(5, 'review', 'failed')
+              ]
+            })
+          ]
+        ]
+      ])
+    )
+    const label = (id: number): string | null => rowOf(id).getAttribute('aria-label')
+    expect(label(2)).toBe('tests, running')
+    expect(label(3)).toBe('lint, exited 0')
+    expect(label(4)).toBe('build, exited 1')
+    // An agent session keeps the state's own words.
+    expect(label(5)).toBe('review, exited with an error')
+  })
+
   it('draws the command glyph as its own 12-unit drawing in the 12px box a dot’s column gives it', () => {
     renderTree(
       new Map([

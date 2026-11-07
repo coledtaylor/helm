@@ -462,6 +462,18 @@ describe('ChildHeader of a command child', () => {
     expect(failed.container.querySelector('[data-family-dot]')).toBeNull()
   })
 
+  it('S33: says running or exited <code> on hover of the glyph, never ended or exited with an error', () => {
+    const titleOf = (props: Partial<ChildHeaderProps>): string | null => {
+      const { container, unmount } = render(<ChildHeader {...command(props)} />)
+      const title = container.querySelector('[data-family-command]')!.getAttribute('title')
+      unmount()
+      return title
+    }
+    expect(titleOf({ word: 'running' })).toBe('running')
+    expect(titleOf({ shape: 'ended', state: 'ended', word: 'exited 0', onStop: undefined })).toBe('exited 0')
+    expect(titleOf({ shape: 'ended', state: 'failed', word: 'exited 1', onStop: undefined })).toBe('exited 1')
+  })
+
   it('S26: reads command in the tag on a card where an agent child names its role, in the muted ring and not the accent fill', () => {
     const { container } = render(<ChildHeader {...command({ role: 'worker' })} />)
     const tag = container.querySelector('[data-family-role]')!

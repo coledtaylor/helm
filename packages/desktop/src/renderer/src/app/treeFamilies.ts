@@ -22,10 +22,18 @@ export function commandRow(session: {
   command?: string | null
 }): Pick<TreeSession, 'state' | 'command' | 'note'> | null {
   if (!isCommandChild(session)) return null
-  const state = commandState(session)
+  return { state: commandState(session), command: true, note: commandWord(session) }
+}
+
+/**
+ * The word for a command child's state: `running`, then `exited <code>`, or
+ * `ended` where its code was never seen. The row's note, the row's accessible
+ * label and the glyph's hover text in the family view all say this.
+ */
+export function commandWord(session: { status: string; exitCode?: number | null }): string {
+  if (commandState(session) === 'running') return 'running'
   const code = session.exitCode ?? null
-  const note = state === 'running' ? 'running' : code === null ? 'ended' : `exited ${String(code)}`
-  return { state, command: true, note }
+  return code === null ? 'ended' : `exited ${String(code)}`
 }
 
 /** A session the Sessions tree lists in a folder's own list, and the row it draws. */

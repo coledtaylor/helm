@@ -249,8 +249,8 @@ import { readable } from "./errors";
 import { TerminalPane, type HostLost } from "./TerminalPane";
 import { TerminalTabPane } from "./TerminalTabPane";
 import { terminalFontStack } from "../terminal";
+import { SessionCrumb } from "./SessionCrumb";
 import {
-  crumbStatus,
   indicatorOf,
   sessionNote,
   statusCounts as countSessionStates,
@@ -3636,7 +3636,7 @@ export function App(): JSX.Element {
         ? undefined
         : projectsByPath.get(session.projectPath);
     return (
-      <PaneCrumb
+      <SessionCrumb
         place={project?.name ?? folderName(session.cwd)}
         hint={session.cwd}
         branch={session.branch}
@@ -3645,15 +3645,15 @@ export function App(): JSX.Element {
             ? null
             : (profileNames.get(session.profileId) ?? null)
         }
-        status={crumbStatus(
-          session,
-          stateOf(session),
-          liveByHelmId.get(session.id)?.statusSinceMs ?? null,
-          now,
+        session={session}
+        state={stateOf(session)}
+        since={liveByHelmId.get(session.id)?.statusSinceMs ?? null}
+        now={now}
+        message={
           session.status === "running"
             ? (sessionActivity.get(session.id)?.message ?? null)
-            : null,
-        )}
+            : null
+        }
       />
     );
   };

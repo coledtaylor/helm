@@ -131,6 +131,61 @@ describe('what the tree row and the crumb say', () => {
   it('keeps a child’s reported error to one word in its header, the program’s message being the crumb’s', () => {
     expect(childStatus(session(), 'error', now - 4 * MINUTE, now)).toBe('Error')
   })
+
+  describe('of a command child', () => {
+    const command = (over: Partial<SessionRecord> = {}): SessionRecord =>
+      session({ command: 'pnpm test', startedAt: new Date(now - 4 * MINUTE).toISOString(), ...over })
+    const exited = (exitCode: number | null): SessionRecord =>
+      command({ status: 'exited', exitCode, endedAt: new Date(2026, 9, 29, 14, 52).toISOString() })
+
+    it('S30: counts its run in the success tone from when it started, in seconds until a minute', () => {
+      const started = (ago: number): SessionRecord => command({ startedAt: new Date(now - ago).toISOString() })
+      expect(crumbStatus(started(1000), 'running', null, now)).toEqual({ text: 'Running · 1s', tone: 'success' })
+      expect(crumbStatus(started(2000), 'running', null, now)).toEqual({ text: 'Running · 2s', tone: 'success' })
+      expect(crumbStatus(started(59_999), 'running', null, now).text).toBe('Running · 59s')
+      expect(crumbStatus(started(MINUTE), 'running', null, now)).toEqual({ text: 'Running · 1m', tone: 'success' })
+      expect(crumbStatus(command(), 'running', null, now).text).toBe('Running · 4m')
+    })
+
+    it('S30: takes its state and its start from the command, not from the registry or the indicator', () => {
+      expect(crumbStatus(command(), 'busy', now - 10_000, now)).toEqual({ text: 'Running · 4m', tone: 'success' })
+      expect(crumbStatus(command(), 'waiting', null, now).tone).toBe('success')
+      expect(crumbStatus(command(), 'idle', null, now).text).toBe('Running · 4m')
+    })
+
+    it('S30: says only Running where its start is not a time', () => {
+      expect(crumbStatus(command({ startedAt: 'never' }), 'running', null, now)).toEqual({
+        text: 'Running',
+        tone: 'success'
+      })
+    })
+
+    it('S31: says exited 0 and when in fg-subtle, as its ended header does', () => {
+      expect(crumbStatus(exited(0), 'ended', null, now)).toEqual({ text: 'exited 0 · 14:52', tone: 'subtle' })
+    })
+
+    it('S31: says any other exit code in danger', () => {
+      expect(crumbStatus(exited(1), 'failed', null, now)).toEqual({ text: 'exited 1 · 14:52', tone: 'danger' })
+      expect(crumbStatus(exited(137), 'failed', null, now)).toEqual({ text: 'exited 137 · 14:52', tone: 'danger' })
+    })
+
+    it('S31: keeps the ended header’s wording in fg-subtle for a code that was never seen', () => {
+      expect(crumbStatus(exited(null), 'ended', null, now)).toEqual({ text: 'Done · 14:52', tone: 'subtle' })
+      expect(crumbStatus(command({ status: 'lost' }), 'ended', null, now)).toEqual({ text: 'Lost', tone: 'subtle' })
+    })
+
+    it('leaves an agent’s and a plain session’s crumb as it was', () => {
+      expect(crumbStatus(session(), 'running', now - 4 * MINUTE, now)).toEqual({ text: 'Running · 4m', tone: 'subtle' })
+      expect(crumbStatus(session({ status: 'exited', exitCode: 0, durationMs: 3 * 60 * MINUTE }), 'ended', null, now)).toEqual({
+        text: 'Ended after 3h',
+        tone: 'subtle'
+      })
+    })
+
+    it('keeps its card header’s text', () => {
+      expect(childStatus(command(), 'running', null, now)).toBe('Running · 4m')
+    })
+  })
 })
 
 describe('statusCounts', () => {

@@ -30,7 +30,8 @@ import {
   type TabIndicator
 } from '@helm/ui'
 import { forgetFamilyRoom, reportFamilyRoom } from './familyRooms'
-import { childStatus, useSecondsClock } from './sessionView'
+import { childStatus, startedMs, useSecondsClock } from './sessionView'
+import { commandWord } from './treeFamilies'
 import { TerminalPane, type HostLost } from './TerminalPane'
 import { terminalCell } from './terminals'
 import { useBodySize, useDevicePixelRatio } from './useBodySize'
@@ -88,12 +89,6 @@ function dotOf(child: SessionRecord, state: TabIndicator, command: boolean): Tab
   if (command) return commandState(child)
   if (child.status === 'running') return state
   return state === 'failed' && child.stopped !== true ? 'failed' : 'ended'
-}
-
-/** When a session started, in milliseconds, or null for a time that is not one: how long a command has run. */
-function startedMs(child: SessionRecord): number | null {
-  const started = Date.parse(child.startedAt)
-  return Number.isNaN(started) ? null : started
 }
 
 /**
@@ -198,6 +193,7 @@ export function FamilyTab({
         state={state}
         role={child.role}
         command={command}
+        word={command ? commandWord(child) : undefined}
         status={
           running
             ? childStatus(child, state, kid?.since ?? (command ? startedMs(child) : null), command ? clock : now)

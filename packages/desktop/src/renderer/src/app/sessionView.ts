@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import { isCommandChild, type SessionActivityState, type SessionRecord } from '@helm/core/types'
+import {
+  commandState,
+  endedHeaderText,
+  isCommandChild,
+  type SessionActivityState,
+  type SessionRecord
+} from '@helm/core/types'
 import type { CrumbTone, TabIndicator } from '@helm/ui'
 
 /**
@@ -77,6 +83,7 @@ export function crumbStatus(
   now: number,
   message: string | null = null
 ): { text: string; tone: CrumbTone } {
+  if (isCommandChild(session)) return commandCrumbStatus(session, now)
   const age = since === null ? '' : ` · ${shortAge(now - since)}`
   switch (state) {
     case 'waiting':
@@ -101,6 +108,27 @@ export function crumbStatus(
       // child's card does while its output scrolls.
       return { text: since === null ? 'Running' : `Running · ${runAge(now - since)}`, tone: 'subtle' }
   }
+}
+
+/** When a session started, in milliseconds, or null for a time that is not one: how long a command has run. */
+export function startedMs(session: Pick<SessionRecord, 'startedAt'>): number | null {
+  const started = Date.parse(session.startedAt)
+  return Number.isNaN(started) ? null : started
+}
+
+/**
+ * A command child's crumb. A command has no conversation to be busy or waiting
+ * in, so neither the registry nor the OSC indicator is read for it: it runs,
+ * counted from when it started (never from the registry's moment, which is an
+ * agent's), and once it exited it says what its ended header says -
+ * "exited 0 · 14:52" - in fg-subtle after exit 0 and in danger for any other
+ * code. A code never seen keeps the ended header's agent wording.
+ */
+function commandCrumbStatus(session: SessionRecord, now: number): { text: string; tone: CrumbTone } {
+  const state = commandState(session)
+  if (state !== 'running') return { text: endedHeaderText(session), tone: state === 'failed' ? 'danger' : 'subtle' }
+  const from = startedMs(session)
+  return { text: from === null ? 'Running' : `Running · ${runAge(now - from)}`, tone: 'success' }
 }
 
 /** How long a command has run: seconds under a minute, then as {@link shortAge} says it. */

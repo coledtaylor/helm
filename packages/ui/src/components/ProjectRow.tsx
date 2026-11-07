@@ -375,7 +375,7 @@ export function SessionRow({
         type="button"
         data-session-row={id}
         aria-current={shown === 'focused' ? 'true' : undefined}
-        aria-label={`${label}, ${state === null ? 'state unknown' : SESSION_STATE_LABEL[state]}${outside ? ', outside Helm' : ''}${parentName === undefined ? '' : `, started by ${parentName}`}${needs === 0 ? '' : `, ${String(needs)} of its sessions waiting for you`}`}
+        aria-label={`${label}, ${state === null ? 'state unknown' : command && note !== '' ? note : SESSION_STATE_LABEL[state]}${outside ? ', outside Helm' : ''}${parentName === undefined ? '' : `, started by ${parentName}`}${needs === 0 ? '' : `, ${String(needs)} of its sessions waiting for you`}`}
         onClick={() => onOpen(id)}
         style={{ paddingLeft: indent }}
         className={cn(
