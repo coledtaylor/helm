@@ -149,6 +149,23 @@ describe('the chips a parent’s crumb holds', () => {
     ])
   })
 
+  it('S26: shows an agent’s dot and each command’s glyph in its own tone: one running, one exited 0 and one failed', () => {
+    const family = [
+      session(1),
+      session(2, 1),
+      session(3, 1, { command: 'pnpm dev' }),
+      session(4, 1, { command: 'pnpm lint', status: 'exited', exitCode: 0 }),
+      session(5, 1, { command: 'pnpm test', status: 'exited', exitCode: 1 })
+    ]
+    const chips = crumbChips(layout(), family, LOCAL_HOST_KEY, 1, scope({ roomOf: () => false }), () => 'busy')
+    expect(chips.map((chip) => [chip.child.id, chip.mark])).toEqual([
+      [2, { glyph: 'dot', state: 'busy' }],
+      [3, { glyph: 'command', state: 'running' }],
+      [4, { glyph: 'command', state: 'ended' }],
+      [5, { glyph: 'command', state: 'failed' }]
+    ])
+  })
+
   it('follows the arrangement’s order', () => {
     const shown = layout()
     const arranged = { ...shown, families: { [paneId(sessionRef(1))]: { order: [4, 2], shrunk: [], closed: [], screens: [] } } }
@@ -158,9 +175,21 @@ describe('the chips a parent’s crumb holds', () => {
 })
 
 describe('a child’s mark', () => {
-  it('is a dot for an agent and a terminal glyph for a command, each with the state that tones it', () => {
+  it('is a dot for an agent, in the state it is given', () => {
     expect(childMark(session(2, 1), 'waiting')).toEqual({ glyph: 'dot', state: 'waiting' })
-    expect(childMark(session(3, 1, { command: 'npm test' }), 'failed')).toEqual({ glyph: 'command', state: 'failed' })
+  })
+
+  it('S26: is a terminal glyph for a command, toned by its own state: success running, fg-subtle after exit 0, danger otherwise', () => {
+    const command = (extra: Partial<ChildMember>): ChildMember => session(3, 1, { command: 'npm test', ...extra })
+    // Whatever the registry says of the process is not read for a command.
+    expect(childMark(command({}), 'waiting')).toEqual({ glyph: 'command', state: 'running' })
+    expect(childMark(command({ status: 'exited', exitCode: 0 }), 'busy')).toEqual({ glyph: 'command', state: 'ended' })
+    expect(childMark(command({ status: 'exited', exitCode: null }), 'busy')).toEqual({ glyph: 'command', state: 'ended' })
+    expect(childMark(command({ status: 'exited', exitCode: 2 }), 'ended')).toEqual({ glyph: 'command', state: 'failed' })
+    expect(childMark(command({ status: 'exited', exitCode: 137, stopped: true }), null)).toEqual({
+      glyph: 'command',
+      state: 'ended'
+    })
   })
 })
 

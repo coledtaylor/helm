@@ -471,6 +471,96 @@ fn a_database_missing_the_latest_migrations_gets_only_those() {
     assert_eq!(schema(store.connection()), schema(fresh.connection()));
 }
 
+fn column_names(conn: &Connection, table: &str) -> Vec<String> {
+    let mut statement = conn
+        .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+        .unwrap();
+    statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+#[test]
+fn a_database_holding_every_earlier_migration_is_migrated_forward_keeping_its_rows_and_commands() {
+    const LAST_EARLIER: &str = "0022_concerned_gwen_stacy";
+    let dirs = TestDirs::new();
+    let upto = MIGRATIONS
+        .iter()
+        .position(|migration| migration.tag == LAST_EARLIER)
+        .expect("the host carries the migration before the notices")
+        + 1;
+    Store::open_with(&dirs.data, &MIGRATIONS[..upto])
+        .unwrap()
+        .close()
+        .unwrap();
+    {
+        let conn = Connection::open(dirs.data.join(DB_FILE)).unwrap();
+        assert!(!column_names(&conn, "sessions").contains(&"extra_starts".to_owned()));
+        conn.execute_batch(
+            "INSERT INTO sessions (name, cwd, status, exit_code, command)
+               VALUES ('tests', 'C:/work', 'exited', 2, 'pnpm test');
+             INSERT INTO profiles (name, root) VALUES ('work', 'C:/work');",
+        )
+        .unwrap();
+    }
+
+    let store = Store::open(&dirs.data).unwrap();
+
+    assert_eq!(store.migrations().applied, carried()[upto..]);
+    assert_eq!(store.migrations().already_applied, carried()[..upto]);
+    let conn = store.connection();
+    let notices = column_names(conn, "notices");
+    for column in [
+        "kind",
+        "parent_session_id",
+        "child_session_id",
+        "text",
+        "limit_kind",
+        "allow_more",
+        "since",
+    ] {
+        assert!(notices.contains(&column.to_owned()), "notices.{column}");
+    }
+    assert!(column_names(conn, "profiles").contains(&"remote_control".to_owned()));
+    let sessions = column_names(conn, "sessions");
+    assert!(sessions.contains(&"remote_control_name".to_owned()));
+    assert!(sessions.contains(&"extra_starts".to_owned()));
+
+    let row: (String, Option<String>, Option<i64>, Option<String>, i64) = conn
+        .query_row(
+            "SELECT name, command, exit_code, remote_control_name, extra_starts FROM sessions",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            "tests".to_owned(),
+            Some("pnpm test".to_owned()),
+            Some(2),
+            None,
+            0
+        )
+    );
+    let profile: (String, Option<i64>) = conn
+        .query_row("SELECT name, remote_control FROM profiles", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(profile, ("work".to_owned(), None));
+}
+
 #[test]
 fn opening_again_applies_nothing() {
     let dirs = TestDirs::new();

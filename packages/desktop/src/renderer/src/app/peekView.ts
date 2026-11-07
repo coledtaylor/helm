@@ -1,6 +1,15 @@
-import { LOCAL_HOST_KEY, sessionLabel, type ChildMark, type PermissionMode, type SessionRecord } from '@helm/core/types'
+import {
+  LOCAL_HOST_KEY,
+  commandState,
+  isCommandChild,
+  sessionLabel,
+  type ChildMark,
+  type PermissionMode,
+  type SessionRecord
+} from '@helm/core/types'
 import { SESSION_STATE_LABEL, type ChildPeekProps, type PeekTone, type PopupAnchor, type TabIndicator } from '@helm/ui'
 import type { PeekAnchor as PeekOpenedFrom, PeekTarget } from './peek'
+import { commandWord } from './treeFamilies'
 
 /**
  * What the peek says of a child, from its row and its state. The wording lives
@@ -36,6 +45,24 @@ export function peekState(
         tone: 'neutral'
       }
   }
+}
+
+/**
+ * What a command child's state chip says and how it is toned: the word its row
+ * says (`running`, `exited <code>`, `stopped` where the host ended it, `ended`
+ * where its code was never seen), toned as its glyph is.
+ */
+export function commandPeekState(session: {
+  status: string
+  exitCode?: number | null | undefined
+  stopped?: boolean | undefined
+}): { label: string; tone: PeekTone } {
+  const tone: Record<ReturnType<typeof commandState>, PeekTone> = {
+    running: 'idle',
+    ended: 'neutral',
+    failed: 'danger'
+  }
+  return { label: commandWord(session), tone: tone[commandState(session)] }
 }
 
 /** A permission mode as the peek's Mode row says it, in lower case, as the frame sets it in mono. */
@@ -77,18 +104,55 @@ export function peekFacts(
   return {
     name: sessionLabel(child),
     mark,
-    state: peekState(indicator, { stopped: child.stopped, exitCode: command?.exitCode }),
-    role: child.role ?? null,
+    state:
+      command === undefined
+        ? peekState(indicator, { stopped: child.stopped })
+        : commandPeekState({
+            status: child.status,
+            exitCode: command.exitCode ?? child.exitCode,
+            ...(child.stopped === undefined ? {} : { stopped: child.stopped })
+          }),
+    role: command === undefined ? (child.role ?? null) : null,
     command: command?.line,
     folder: folderOf(child.cwd),
     folderPath: child.cwd,
     branch: child.branch,
-    mode: child.permissionMode === undefined ? null : MODE_WORDS[child.permissionMode],
+    mode: command !== undefined || child.permissionMode === undefined ? null : MODE_WORDS[child.permissionMode],
     runsIn: command?.runsIn,
     report:
       command !== undefined || report === undefined || report.text.trim() === ''
         ? null
         : { state: report.state, text: report.text }
+  }
+}
+
+/**
+ * The program a command child's line ran through, as the peek's Runs in row
+ * says it: `your shell, ` and the file name of the record's first argument
+ * without its extension (`pwsh` for `C:\Program Files\PowerShell\7\pwsh.exe`).
+ * Absent where the record holds no argv.
+ */
+export function shellRunsIn(argv: readonly string[]): string | undefined {
+  const program = argv[0]
+  if (program === undefined || program === '') return undefined
+  const file = program.slice(Math.max(program.lastIndexOf('/'), program.lastIndexOf('\\')) + 1)
+  const name = file.replace(/\.[^.]*$/, '')
+  return name === '' ? undefined : `your shell, ${name}`
+}
+
+/**
+ * What the peek of a command child shows of it - its command line, the shell
+ * it ran in and its exit code - or undefined for a session that is not one.
+ */
+export function commandFacts(
+  child: Pick<SessionRecord, 'command' | 'argv' | 'exitCode'>
+): { line: string; runsIn?: string; exitCode?: number } | undefined {
+  if (!isCommandChild(child)) return undefined
+  const runsIn = shellRunsIn(child.argv)
+  return {
+    line: child.command as string,
+    ...(runsIn === undefined ? {} : { runsIn }),
+    ...(child.exitCode === null || child.exitCode === undefined ? {} : { exitCode: child.exitCode })
   }
 }
 
@@ -158,7 +222,19 @@ export function peekAnchorFor(
   return chip ? { kind: 'chip', parentId: child.parentId } : { kind: 'row' }
 }
 
-/** The mark's state in words, for a chip's label. */
-export function markLabel(mark: ChildMark): string {
+/**
+ * The mark's state in words, for a chip's label. A command child's chip says
+ * what its row says (`running`, `exited <code>`): pass the child it belongs to.
+ */
+export function markLabel(
+  mark: ChildMark,
+  child?: {
+    command?: string | null
+    status: string
+    exitCode?: number | null | undefined
+    stopped?: boolean | undefined
+  }
+): string {
+  if (child !== undefined && isCommandChild(child)) return commandWord(child)
   return mark.state === null ? 'state unknown' : SESSION_STATE_LABEL[mark.state]
 }

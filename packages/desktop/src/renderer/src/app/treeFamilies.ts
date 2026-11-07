@@ -34,7 +34,11 @@ export function commandRow(session: {
  * The row's note, the row's accessible label and the glyph's hover text in the
  * family view all say this.
  */
-export function commandWord(session: { status: string; exitCode?: number | null; stopped?: boolean }): string {
+export function commandWord(session: {
+  status: string
+  exitCode?: number | null | undefined
+  stopped?: boolean | undefined
+}): string {
   if (commandState(session) === 'running') return 'running'
   if (session.stopped === true) return 'stopped'
   const code = session.exitCode ?? null

@@ -1,4 +1,4 @@
-import { isChild, isCommandChild, type FamilyMember, type UrgentState } from './family'
+import { commandState, isChild, isCommandChild, type FamilyMember, type UrgentState } from './family'
 import { familyChildren, familyEntries } from './familyState'
 import { familyOf } from './familyView'
 import { familiesHere, paneId, sessionRef, sessionTabIds, type FamilyRoomOf, type PaneLayout } from './panes'
@@ -17,6 +17,8 @@ import { familiesHere, paneId, sessionRef, sessionTabIds, type FamilyRoomOf, typ
 export interface ChildMember extends FamilyMember {
   /** Whether it was started to keep running when its parent ends. Absent reads as false. */
   outlive?: boolean | undefined
+  /** Whether the host ended it, which a command child's state reads (its exit code then says how it was killed). */
+  stopped?: boolean | undefined
 }
 
 /**
@@ -125,8 +127,21 @@ export interface ChildMark {
   state: UrgentState | null
 }
 
+/**
+ * A command's glyph is toned by `commandState` (success while it runs, fg-subtle
+ * after exit 0, danger for any other code) and by nothing the registry says of
+ * it, so `state` is read for an agent's dot only.
+ */
 export function childMark(child: ChildMember, state: UrgentState | null): ChildMark {
-  return { glyph: isCommandChild(child) ? 'command' : 'dot', state }
+  if (!isCommandChild(child)) return { glyph: 'dot', state }
+  return {
+    glyph: 'command',
+    state: commandState({
+      status: child.status,
+      ...(child.exitCode === undefined ? {} : { exitCode: child.exitCode }),
+      ...(child.stopped === undefined ? {} : { stopped: child.stopped })
+    })
+  }
 }
 
 /** One chip in a parent's crumb: the child, and its dot or glyph. */

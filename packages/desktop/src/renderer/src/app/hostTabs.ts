@@ -216,7 +216,8 @@ export function confirmChildren<T extends ChildMember>(
 
 /**
  * A child as the close question lists it: its dot or glyph, its name and, at
- * the right, its role and branch, or `command` for one that runs a command.
+ * the right, its role and branch, or `command · <its command line>` for one
+ * that runs a command.
  */
 export function confirmRows(
   plan: CloseParentPlan<SessionRecord & ChildMember>
@@ -225,7 +226,10 @@ export function confirmRows(
     id: child.id,
     name: sessionLabel(child),
     mark,
-    meta: mark.glyph === 'command' ? 'command' : [child.role, child.branch].filter((part) => part != null && part !== '').join(' · ')
+    meta:
+      mark.glyph === 'command'
+        ? `command · ${child.command ?? ''}`
+        : [child.role, child.branch].filter((part) => part != null && part !== '').join(' · ')
   })
   return { ends: plan.ends.map(row), outlives: plan.outlives.map(row) }
 }

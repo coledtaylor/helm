@@ -24,6 +24,8 @@ import { commandWord } from './treeFamilies'
  * behaviour rather than to a guess.
  */
 export function indicatorOf(session: SessionRecord, activity: SessionActivityState | undefined): TabIndicator {
+  // A command has no conversation to be busy or waiting in: it runs, then it ended or failed.
+  if (isCommandChild(session)) return commandState(session)
   if (session.status !== 'running') return session.exitCode ? 'failed' : 'ended'
   return activity?.activity ?? 'running'
 }

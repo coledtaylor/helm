@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { LOCAL_HOST_KEY, type SessionRecord } from '@helm/core/types'
+import { LOCAL_HOST_KEY, childMark, type SessionRecord } from '@helm/core/types'
 import { afterEach, describe, expect, it } from 'vitest'
-import { chipKey, markLabel, peekAnchorFor, peekFacts, peekPlace, peekState } from './peekView'
+import { chipKey, commandFacts, markLabel, peekAnchorFor, peekFacts, peekPlace, peekState, shellRunsIn } from './peekView'
 
 const child = (overrides: Record<string, unknown> = {}): SessionRecord =>
   ({
@@ -70,13 +70,85 @@ describe('what the peek says of a child', () => {
 })
 
 describe('how an ended child says it ended', () => {
-  it('S1: stopped when the host ended it, ended when its agent exited, and a command exit code', () => {
-    const ended = (overrides: Record<string, unknown>, command?: { line: string; exitCode?: number }) =>
-      peekFacts(child({ status: 'ended', ...overrides }), 'ended', { glyph: 'dot', state: 'ended' }, command).state.label
-    expect(ended({ stopped: true })).toBe('stopped')
-    expect(ended({})).toBe('ended')
-    expect(ended({}, { line: 'pnpm test', exitCode: 0 })).toBe('exited 0')
-    expect(ended({ stopped: true }, { line: 'pnpm test', exitCode: 2 })).toBe('exited 2')
+  it('S25: stopped when the host ended an agent, ended when it exited by itself', () => {
+    const ended = (overrides: Record<string, unknown>) =>
+      peekFacts(child({ status: 'ended', ...overrides }), 'ended', { glyph: 'dot', state: 'ended' }).state
+    expect(ended({ stopped: true })).toEqual({ label: 'stopped', tone: 'neutral' })
+    expect(ended({})).toEqual({ label: 'ended', tone: 'neutral' })
+  })
+
+  it('S25: exited <code> for a command, stopped where the host ended it, ended where its code was never seen', () => {
+    const ended = (overrides: Record<string, unknown>) => {
+      const record = child({ command: 'pnpm test', argv: [], role: undefined, permissionMode: undefined, status: 'exited', ...overrides })
+      return peekFacts(record, 'ended', childMark(record, null), commandFacts(record)).state
+    }
+    expect(ended({ exitCode: 0 })).toEqual({ label: 'exited 0', tone: 'neutral' })
+    expect(ended({ exitCode: 2 })).toEqual({ label: 'exited 2', tone: 'danger' })
+    expect(ended({ exitCode: 2147483647, stopped: true })).toEqual({ label: 'stopped', tone: 'neutral' })
+    expect(ended({ exitCode: null })).toEqual({ label: 'ended', tone: 'neutral' })
+    expect(ended({ status: 'running', exitCode: null })).toEqual({ label: 'running', tone: 'idle' })
+  })
+})
+
+describe('what the peek says of a command child', () => {
+  const command = (overrides: Record<string, unknown> = {}): SessionRecord =>
+    child({
+      command: 'pnpm test',
+      argv: ['C:\\Program Files\\PowerShell\\7\\pwsh.exe', '-NoLogo', '-Command', 'pnpm test'],
+      role: undefined,
+      permissionMode: undefined,
+      lastReport: { state: 'done', text: 'should not show', at: 'y' },
+      ...overrides
+    })
+
+  it('S24: names its command, folder, branch and the user’s shell, with no role, mode or report', () => {
+    const record = command()
+    const facts = peekFacts(record, 'running', childMark(record, 'busy'), commandFacts(record))
+    expect(facts).toMatchObject({
+      mark: { glyph: 'command', state: 'running' },
+      command: 'pnpm test',
+      runsIn: 'your shell, pwsh',
+      folder: 'helm',
+      branch: 'main',
+      role: null,
+      mode: null,
+      report: null,
+      state: { label: 'running', tone: 'idle' }
+    })
+  })
+
+  it('S24: reads its exit code from the record, so an ended command says how it ended', () => {
+    const record = command({ status: 'exited', exitCode: 1 })
+    expect(commandFacts(record)).toEqual({
+      line: 'pnpm test',
+      runsIn: 'your shell, pwsh',
+      exitCode: 1
+    })
+    expect(peekFacts(record, 'failed', childMark(record, 'failed'), commandFacts(record)).state.label).toBe('exited 1')
+  })
+
+  it('S24: is nothing for an agent, and has no Runs in where the record holds no argv', () => {
+    expect(commandFacts(child())).toBeUndefined()
+    expect(commandFacts(command({ argv: [] }))).toEqual({ line: 'pnpm test' })
+  })
+
+  it('S24: names the shell by the file name of its program, whichever separator and extension it has', () => {
+    expect(shellRunsIn(['/bin/zsh', '-c', 'x'])).toBe('your shell, zsh')
+    expect(shellRunsIn(['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'])).toBe('your shell, powershell')
+    expect(shellRunsIn(['sh'])).toBe('your shell, sh')
+    expect(shellRunsIn([])).toBeUndefined()
+  })
+
+  it('S26: a chip says what the row says: running, exited <code>, stopped or ended', () => {
+    const word = (overrides: Record<string, unknown>) => {
+      const record = command(overrides)
+      return markLabel(childMark(record, 'waiting'), record)
+    }
+    expect(word({})).toBe('running')
+    expect(word({ status: 'exited', exitCode: 0 })).toBe('exited 0')
+    expect(word({ status: 'exited', exitCode: 3 })).toBe('exited 3')
+    expect(word({ status: 'exited', exitCode: null })).toBe('ended')
+    expect(markLabel({ glyph: 'dot', state: 'waiting' }, child())).toBe('waiting for you')
   })
 })
 

@@ -327,6 +327,26 @@ describe('pressing a child’s row when its parent’s tab is here', () => {
     expect(parentless).toEqual({ to: 'open', id: 8 })
   })
 
+  it('S24: peeks at a running command child as at an agent child, where its parent’s pane has no room or its tab is not here', () => {
+    const withCommand = [
+      ...family,
+      session(9, 'tests', 'C:\\work', { parentId: 1, parentName: 'lead', command: 'pnpm test' }),
+      session(10, 'orphan', 'C:\\work', { parentId: 7, parentName: 'lead', command: 'pnpm test' })
+    ]
+    const pressed = (id: number, roomOf?: () => boolean): { to: string; id: number } =>
+      pressTreeSession(LOCAL_HOST_KEY, [...withCommand, session(7, 'lead', 'C:\\work')], id, {
+        layout: panes().layout,
+        enabled: true,
+        capacityOf: () => 2,
+        ...(roomOf === undefined ? {} : { roomOf }),
+        commit: () => {
+          throw new Error('the panes are not changed for a press that peeks')
+        }
+      })
+    expect(pressed(9, () => false)).toEqual({ to: 'peek', id: 9 })
+    expect(pressed(10)).toEqual({ to: 'peek', id: 10 })
+  })
+
   it('S1: peeks at a running child whose parent is running but has no tab in this window', () => {
     const peeked = pressTreeSession(
       LOCAL_HOST_KEY,

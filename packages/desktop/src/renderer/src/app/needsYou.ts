@@ -1,5 +1,6 @@
 import {
   childPlace,
+  isCommandChild,
   needsYouToast,
   type ChildMember,
   type NeedsYouToast,
@@ -49,7 +50,8 @@ function needsYouOf<T extends ChildMember>(attention: HostAttention<T>): Array<{
   for (const notice of attention.notices.notices) {
     if (notice.kind !== 'needs-you' || notice.childId === null) continue
     const child = attention.sessions.find((session) => session.id === notice.childId)
-    if (child === undefined || child.status !== 'running') continue
+    // A command has no conversation to wait in: whatever a notice says, it never needs a person.
+    if (child === undefined || child.status !== 'running' || isCommandChild(child)) continue
     out.push({ notice, child })
   }
   return out

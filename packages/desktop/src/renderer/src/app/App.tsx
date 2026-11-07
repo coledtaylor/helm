@@ -226,7 +226,14 @@ import { sidebarFor, type SidebarView } from "./sidebarFor";
 import { commandRow, pressTreeSession, treeEntries } from "./treeFamilies";
 import { openChildTab, usePeek } from "./peek";
 import { PeekTerminal } from "./PeekTerminal";
-import { chipKey, markLabel, peekAnchorFor, peekFacts, peekPlace } from "./peekView";
+import {
+  chipKey,
+  commandFacts,
+  markLabel,
+  peekAnchorFor,
+  peekFacts,
+  peekPlace,
+} from "./peekView";
 import { useNeedsYou, type HostAttention } from "./needsYou";
 import { hostNoticesSource } from "./noticesSource";
 import {
@@ -3879,7 +3886,7 @@ export function App(): JSX.Element {
       chipKey: chipKey(host, child.id),
       name: sessionLabel(child),
       mark,
-      stateLabel: markLabel(mark),
+      stateLabel: markLabel(mark, child),
       needsYou: mark.state === "waiting",
       open:
         peek.target?.host === host &&
@@ -4010,6 +4017,7 @@ export function App(): JSX.Element {
           peekedChild,
           peekedState.indicator,
           childMark(peekedChild, peekedState.indicator),
+          commandFacts(peekedChild),
         )}
         ended={peekedChild.status !== "running"}
         screenSeen={peek.target.screenSeen}

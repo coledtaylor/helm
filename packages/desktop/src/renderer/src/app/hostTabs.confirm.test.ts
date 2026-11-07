@@ -42,7 +42,7 @@ describe('the close question as the window draws it', () => {
     expect(hostQuestionMessage('Quitting ends 3 sessions.', 'build box')).toBe('Quitting ends 3 sessions.')
   })
 
-  it('S18: rows each child with its mark, name and what it is, a command as command', () => {
+  it('S18: rows each child with its mark, name and what it is, a command as command · its command line', () => {
     const records = [
       { ...child(8), role: 'reviewer', branch: 'main', cwd: '/r', name: 'rev', label: null },
       { ...child(10, { command: 'npm test' }), role: null, branch: 'main', cwd: '/r', name: 'tests', label: null }
@@ -51,7 +51,7 @@ describe('the close question as the window draws it', () => {
     const rows = confirmRows(plan)
     expect(rows.ends.map(({ id, mark, meta }) => [id, mark.glyph, meta])).toEqual([
       [8, 'dot', 'reviewer · main'],
-      [10, 'command', 'command']
+      [10, 'command', 'command · npm test']
     ])
     expect(rows.outlives).toEqual([])
   })

@@ -117,6 +117,13 @@ describe('the toasts for children that need a person', () => {
     expect(toasts.map((toast) => toast.childId)).toEqual([2, 5])
   })
 
+  it('is none for a command child, which has no conversation to wait in, whatever a notice says', () => {
+    const elsewhere = fromSaved({ root: { panes: [sessionRef(9)], activeId: null }, focused: 0 })
+    const family = [...FAMILY.slice(0, 2), { ...session(3, 1), command: 'pnpm test' }]
+    const sessions = [waiting(2), waiting(3)]
+    expect(needsYouToasts([hostOf(sessions, [], family)], elsewhere, scope(), new Set()).map((toast) => toast.childId)).toEqual([2])
+  })
+
   it('is closed for this window by its close button, and a child that waits again is a new toast', () => {
     const elsewhere = fromSaved({ root: { panes: [sessionRef(9)], activeId: null }, focused: 0 })
     const first = waiting(2)

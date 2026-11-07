@@ -117,6 +117,13 @@ describe('indicatorOf', () => {
     expect(indicatorOf(session({ status: 'exited', exitCode: null }), undefined)).toBe('ended')
     expect(indicatorOf(session({ status: 'lost' }), said('busy'))).toBe('ended')
   })
+
+  it('never says a command child is waiting or busy: it runs, then it ended or failed', () => {
+    const command = (over: Partial<SessionRecord> = {}): SessionRecord => session({ command: 'pnpm test', ...over })
+    expect(indicatorOf(command(), said('waiting', 'permission prompt'))).toBe('running')
+    expect(indicatorOf(command({ status: 'exited', exitCode: 0 }), said('waiting'))).toBe('ended')
+    expect(indicatorOf(command({ status: 'exited', exitCode: 2 }), undefined)).toBe('failed')
+  })
 })
 
 describe('what the tree row and the crumb say', () => {

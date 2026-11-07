@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_SETTINGS,
@@ -14,7 +15,8 @@ import {
   type AppSettings
 } from '../types'
 import { openStore, type Store } from './db'
-import { knownMigrations } from './migrate'
+import { knownMigrations, migrate } from './migrate'
+import { MIGRATIONS } from './migrations.generated'
 import { sessions } from './schema'
 import { reconcileRunningSessions } from './sessions'
 import {
@@ -111,6 +113,45 @@ describe('openStore', () => {
         reopened.close()
       }
     })
+  })
+
+  it('S30: migrates a database that holds every earlier migration forward, adding the notices table and Remote Control columns and keeping its rows, commands and exit codes', () => {
+    const last = '0022_concerned_gwen_stacy'
+    const raw = new Database(':memory:')
+    try {
+      raw.exec('CREATE TABLE __helm_migrations (tag TEXT PRIMARY KEY, applied_at TEXT NOT NULL)')
+      const upTo = MIGRATIONS.findIndex((migration) => migration.tag === last)
+      expect(upTo).toBeGreaterThan(0)
+      const earlier = MIGRATIONS.slice(0, upTo + 1)
+      for (const migration of earlier) {
+        for (const statement of migration.statements) raw.exec(statement)
+        raw.prepare('INSERT INTO __helm_migrations (tag, applied_at) VALUES (?, ?)').run(migration.tag, '2026-11-01T00:00:00.000Z')
+      }
+      raw.exec(`
+        INSERT INTO sessions (name, cwd, status, exit_code, command) VALUES ('tests', 'C:/work', 'exited', 2, 'pnpm test');
+        INSERT INTO profiles (name, root) VALUES ('work', 'C:/work');
+      `)
+      const columns = (table: string): string[] =>
+        (raw.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name)
+      expect(columns('sessions')).not.toContain('extra_starts')
+
+      const outcome = migrate(raw)
+
+      expect(outcome.alreadyApplied).toEqual(earlier.map((migration) => migration.tag))
+      expect(outcome.applied).toEqual(MIGRATIONS.slice(upTo + 1).map((migration) => migration.tag))
+      expect(outcome.applied.length).toBeGreaterThan(0)
+      expect(columns('notices')).toEqual(
+        expect.arrayContaining(['kind', 'parent_session_id', 'child_session_id', 'text', 'limit_kind', 'allow_more', 'since'])
+      )
+      expect(columns('profiles')).toContain('remote_control')
+      expect(columns('sessions')).toEqual(expect.arrayContaining(['remote_control_name', 'extra_starts']))
+      expect(raw.prepare('SELECT name, command, exit_code, remote_control_name, extra_starts FROM sessions').all()).toEqual([
+        { name: 'tests', command: 'pnpm test', exit_code: 2, remote_control_name: null, extra_starts: 0 }
+      ])
+      expect(raw.prepare('SELECT name, remote_control FROM profiles').all()).toEqual([{ name: 'work', remote_control: null }])
+    } finally {
+      raw.close()
+    }
   })
 })
 

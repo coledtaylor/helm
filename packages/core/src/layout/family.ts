@@ -61,8 +61,8 @@ export type CommandState = 'running' | 'ended' | 'failed'
  */
 export function commandState(session: {
   status: string
-  exitCode?: number | null
-  stopped?: boolean
+  exitCode?: number | null | undefined
+  stopped?: boolean | undefined
 }): CommandState {
   if (session.status === 'running') return 'running'
   if (session.stopped === true) return 'ended'
