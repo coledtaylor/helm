@@ -268,8 +268,9 @@ describe('sessions over the window’s own connection', () => {
           outlivingIds: [9]
         })
       ])
-      expect((questions[0] as SessionConfirmRequest).detail).toContain('The 2 sessions it started end with it.')
-      expect((questions[0] as SessionConfirmRequest).detail).toContain('One was started to keep running and will.')
+      expect((questions[0] as SessionConfirmRequest).detail).toBe(
+        'Ending it stops the Claude Code session in /work dir/app, and the 2 sessions it started, which end with it:'
+      )
       expect(connection.payloads('session:close')).toEqual([])
 
       // S19: the host is told to end the parent, which ends what the question named and leaves the rest.
@@ -320,6 +321,7 @@ describe('sessions over the window’s own connection', () => {
       const heard: string[] = []
       const ended: Array<string | null> = []
       adapters.peek(8, { data: (text) => heard.push(text), closed: (reason) => ended.push(reason) })
+      await settle()
       const [stream] = connection.streamsFor('session:data', 8)
       expect(stream?.params).toEqual({ id: 8, watch: true })
       stream?.send('\x1b[H\x1b[2Jscreen as it is')
@@ -333,6 +335,7 @@ describe('sessions over the window’s own connection', () => {
       const { adapters, connection } = world({ listed: [row({ id: 8, name: 'worker', parentId: 7 })] })
       await ask(adapters, 'session:list')
       const stop = adapters.peek(8, { data: () => undefined, closed: () => undefined })
+      await settle()
       expect(connection.streamsFor('session:data', 8)).toHaveLength(1)
       expect(connection.streamsFor('session:data', 8)[0]?.written).toEqual([])
       expect(connection.payloads('session:resize')).toEqual([])
@@ -346,14 +349,44 @@ describe('sessions over the window’s own connection', () => {
       await ask(adapters, 'session:list')
       const ended: Array<string | null> = []
       const stop = adapters.peek(8, { data: () => undefined, closed: (reason) => ended.push(reason) })
+      await settle()
       stop()
       expect(connection.streamsFor('session:data', 8)[0]?.closed).toBe(true)
       expect(ended).toEqual([])
 
       adapters.peek(8, { data: () => undefined, closed: (reason) => ended.push(reason) })
+      await settle()
       connection.streamsFor('session:data', 8)[1]?.end(null)
       connection.streamsFor('session:data', 8)[1]?.end(null)
       expect(ended).toEqual([null])
+    })
+
+    it('S1: asks the child’s grid first and tells it before any data, and opens the stream telling no grid when the host cannot say', async () => {
+      const { adapters, connection } = world({ listed: [row({ id: 8, name: 'worker', parentId: 7 })] })
+      connection.answer('session:size', () => ({ cols: 100, rows: 30 }))
+      await ask(adapters, 'session:list')
+      const heard: string[] = []
+      adapters.peek(8, {
+        size: (grid) => heard.push(`${grid?.cols}x${grid?.rows}`),
+        data: (text) => heard.push(text),
+        closed: () => undefined
+      })
+      await settle()
+      expect(connection.payloads('session:size')).toEqual([{ id: 8 }])
+      connection.streamsFor('session:data', 8)[0]?.send('screen')
+      expect(heard).toEqual(['100x30', 'screen'])
+
+      // A host with no such channel: the stream opens, and the grid told is none.
+      const { adapters: older, connection: old } = world({ listed: [row({ id: 8, name: 'worker', parentId: 7 })] })
+      old.answer('session:size', () => {
+        throw new Error('The host has no such channel.')
+      })
+      await ask(older, 'session:list')
+      const sizes: string[] = []
+      older.peek(8, { size: (grid) => sizes.push(String(grid?.cols ?? null)), data: () => undefined, closed: () => undefined })
+      await settle()
+      expect(old.streamsFor('session:data', 8)).toHaveLength(1)
+      expect(sizes).toEqual(['null'])
     })
 
     it('says so when there is no connection to watch on, and opens no stream', async () => {

@@ -48,7 +48,7 @@ export interface ConfirmSessionDialogProps {
    * dot or glyph in place of `sessionNames`, which names the same sessions.
    */
   ends?: readonly ConfirmChild[] | undefined
-  /** Closing a parent: the running children started to outlive it, listed apart. They keep running. */
+  /** Closing a parent: the running children started to outlive it, named in a sentence. They keep running. */
   outlives?: readonly ConfirmChild[] | undefined
   onConfirm: () => void
   onKeep?: (() => void) | undefined
@@ -74,11 +74,21 @@ function DetailText({ detail, folder }: { detail: string; folder: string | undef
   )
 }
 
+/** The children started to outlive the parent, in one sentence: they go on after it ends. */
+function outlivesSentence(items: readonly ConfirmChild[]): string {
+  const names = items.map(({ name }) => name)
+  const last = names.pop()
+  const who = names.length === 0 ? (last ?? '') : `${names.join(', ')} and ${last ?? ''}`
+  return items.length === 1
+    ? `${who} was started to outlive it and keeps running.`
+    : `${who} were started to outlive it and keep running.`
+}
+
 /**
  * The children a parent's close names, one row each: the mark, the name and,
  * in mono at the right, what it is. Past the limit the rest are counted.
  */
-function ChildList({ kind, items }: { kind: 'ends' | 'outlives'; items: readonly ConfirmChild[] }): JSX.Element {
+function ChildList({ kind, items }: { kind: 'ends'; items: readonly ConfirmChild[] }): JSX.Element {
   const listed = items.slice(0, LIST_LIMIT)
   const rest = items.length - listed.length
   return (
@@ -177,10 +187,9 @@ export function ConfirmSessionDialog({
 
         {ends.length > 0 && <ChildList kind="ends" items={ends} />}
         {outlives.length > 0 && (
-          <>
-            <p className="mt-3 text-[11px] text-fg-subtle">Keep running</p>
-            <ChildList kind="outlives" items={outlives} />
-          </>
+          <p data-confirm-outlives className="mt-3 text-[12px] leading-[1.55] text-fg-muted">
+            {outlivesSentence(outlives)}
+          </p>
         )}
 
         {list && (

@@ -109,6 +109,23 @@ describe('the limit notice under a parent children', () => {
     expect(actions.onDismiss).toHaveBeenCalledWith('n1')
   })
 
+  it('S16: keeps the host’s full sentence as the notice’s hover text', () => {
+    renderTree(
+      row(1, 'api-refactor', {
+        nested: [row(2, 'reviewer')],
+        notice: {
+          key: 'n1',
+          text: 'api-refactor asked for a fifth agent at 14:41; a session may run 4 at once.',
+          detail: SENTENCE,
+          allowMore: null
+        }
+      })
+    )
+    const notice = document.querySelector<HTMLElement>('[data-limit-notice]')!
+    expect(notice.textContent).toContain('api-refactor asked for a fifth agent at 14:41; a session may run 4 at once.')
+    expect(notice.getAttribute('title')).toBe(SENTENCE)
+  })
+
   it('S16: a parent with no refused start shows no notice', () => {
     renderTree(row(1, 'api-refactor', { nested: [row(2, 'reviewer')] }))
     expect(document.querySelector('[data-limit-notice]')).toBeNull()

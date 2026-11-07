@@ -194,12 +194,15 @@ pub(crate) struct LostRow {
     /// The role an agent started it in, when one did: the role file as it is
     /// when the session reopens is what composes it again.
     pub role: Option<String>,
+    /// The name it ran Remote Control under, when it did: the line a child
+    /// inherited from its parent, which it runs under again.
+    pub remote_control_name: Option<String>,
 }
 
 /// What an update to `lost` returns, in [`lost_row`]'s order.
 const LOST_COLUMNS: &str = "id, name, label, cwd, branch, profile_id, \
      coalesce(last_claude_session_id, claude_session_id), backend, project_path, permission_mode, \
-     role";
+     role, remote_control_name";
 
 fn lost_row(row: &Row<'_>) -> rusqlite::Result<LostRow> {
     let name: String = row.get(1)?;
@@ -219,6 +222,9 @@ fn lost_row(row: &Row<'_>) -> rusqlite::Result<LostRow> {
         role: row
             .get::<_, Option<String>>(10)?
             .filter(|role| !role.trim().is_empty()),
+        remote_control_name: row
+            .get::<_, Option<String>>(11)?
+            .filter(|name| !name.trim().is_empty()),
     })
 }
 

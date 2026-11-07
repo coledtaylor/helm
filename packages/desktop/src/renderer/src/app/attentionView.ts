@@ -59,7 +59,7 @@ export function awayDetail(notice: StandingNotice): string {
   const phrase = waitsOnPhrase(notice.text)
   const what = phrase === null ? notice.text.replace(/\.$/, '') : `waiting on ${phrase}`
   const said = `${what.charAt(0).toUpperCase()}${what.slice(1)} since ${clockTime(notice.since)}`
-  return `${said}. Started by ${notice.parentName}, which was told.`
+  return `${said}. Started by ${notice.parentName}, which was told and carried on.`
 }
 
 export interface AwayActions {
@@ -90,6 +90,37 @@ export function awayRows(away: readonly StandingNotice[], actions: AwayActions):
   })
 }
 
+const ORDINALS = ['second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth']
+
+/**
+ * The one short sentence a refused start leaves under its parent: who asked,
+ * when, and the limit that held. The number is the one in the host's own
+ * sentence ("The limit of 4 ..."); a sentence without one is shown as it is.
+ */
+export function limitSentence(notice: StandingNotice): string {
+  const limit = /limit of (\d+)/.exec(notice.text)?.[1]
+  if (limit === undefined) return notice.text
+  const n = Number(limit)
+  const asked = `${notice.parentName} asked for`
+  const at = clockTime(notice.since)
+  switch (notice.limit) {
+    case 'children': {
+      const ordinal = ORDINALS[n - 1]
+      return `${asked} ${ordinal === undefined ? 'another' : `a ${ordinal}`} agent at ${at}; a session may run ${limit} at once.`
+    }
+    case 'sessions':
+      return `${asked} another agent at ${at}; this host may run ${limit} agent sessions at once.`
+    case 'heavy':
+      return `${asked} another heavy agent at ${at}; ${limit} heavy ${n === 1 ? 'agent' : 'agents'} may run at once.`
+    case 'starts':
+      return `${asked} another agent at ${at}; a session may start ${limit} in all.`
+    case 'depth':
+      return `${asked} an agent at ${at}; agents nest ${limit} deep at most.`
+    case null:
+      return notice.text
+  }
+}
+
 /**
  * The limit notice each parent shows under its children: the newest refusal
  * standing for that parent, by the parent's row id. `keyOf` names a notice to
@@ -108,7 +139,12 @@ export function limitNoticesByParent(
   return new Map(
     [...newest].map(([parent, notice]) => [
       parent,
-      { key: keyOf(notice), text: notice.text, allowMore: notice.limit === 'starts' ? notice.allowMore : null }
+      {
+        key: keyOf(notice),
+        text: limitSentence(notice),
+        detail: notice.text,
+        allowMore: notice.limit === 'starts' ? notice.allowMore : null
+      }
     ])
   )
 }

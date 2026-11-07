@@ -78,11 +78,11 @@ describe('where a child is on screen here', () => {
     }
   })
 
-  it('is nowhere for a child whose parent’s tab is not open here, and for an ended child with no family view', () => {
+  it('is nowhere for a child whose parent’s tab is not open here, and a chip for an ended child with no family view', () => {
     const away = windowOf({ kind: 'settings' })
     expect(childPlace(away, FAMILY, LOCAL_HOST_KEY, 3, scope())).toBe('nowhere')
     const done = [session(1), { ...session(2, 1), status: 'exited' }]
-    expect(childPlace(layout(), done, LOCAL_HOST_KEY, 2, scope({ roomOf: () => false }))).toBe('nowhere')
+    expect(childPlace(layout(), done, LOCAL_HOST_KEY, 2, scope({ roomOf: () => false }))).toBe('chip')
   })
 
   it('reads another host’s tabs only', () => {
@@ -134,7 +134,7 @@ describe('the chips a parent’s crumb holds', () => {
     expect(crumbChips(layout(), FAMILY, LOCAL_HOST_KEY, 9, scope({ roomOf: () => false }), stateOf)).toEqual([])
   })
 
-  it('draws a command child as a terminal glyph, and leaves out a child with a tab of its own and an ended child', () => {
+  it('draws a command child as a terminal glyph, holds an ended child, and leaves out a child with a tab of its own', () => {
     const family = [
       session(1),
       session(2, 1, { command: true }),
@@ -143,7 +143,10 @@ describe('the chips a parent’s crumb holds', () => {
     ]
     const own = openTab(layout(), sessionRef(3))
     const chips = crumbChips(own, family, LOCAL_HOST_KEY, 1, scope({ roomOf: () => false }), () => 'running')
-    expect(chips.map((chip) => [chip.child.id, chip.mark.glyph])).toEqual([[2, 'command']])
+    expect(chips.map((chip) => [chip.child.id, chip.mark.glyph])).toEqual([
+      [2, 'command'],
+      [4, 'dot']
+    ])
   })
 
   it('follows the arrangement’s order', () => {

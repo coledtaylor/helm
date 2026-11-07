@@ -961,8 +961,11 @@ overrides the gate; keep it.
   session**, and lists the children that end with it: a 26px row each on
   `surface-raised`, `rounded-raised`, 12.5px `fg`, with the child's dot or
   terminal glyph, its name, and at the end in 11px mono `fg-subtle` its role
-  and branch (`command` for a command). A child started to outlive its parent
-  is listed apart under "Keep running" in 11px `fg-subtle`. The button counts
+  and branch (`command` for a command). The sentence above the list reads
+  "Ending it stops the Claude Code session in <folder>, and the 3 sessions it
+  started, which end with it:". A child started to outlive its parent is not
+  listed: one 12px `fg-muted` sentence under the list says it keeps running.
+  The button counts
   what ends, parent included ("End 4 sessions", "End session" when nothing
   else ends), and Cancel has the focus. A host's own question, asked of this
   window for a tab another client closed, is drawn the same and names the host
@@ -971,7 +974,7 @@ overrides the gate; keep it.
 
   **A parent shown alone has its children in its crumb.** A pane that fails
   the room rule, or a device with the setting off, draws the parent's terminal
-  alone, and the crumb holds each running child as a chip at the end of the
+  alone, and the crumb holds each child, running or ended, as a chip at the end of the
   row, before the status: an 18px pill on `surface-raised`, `fg-muted` Inter
   11px, with the child's 6px state dot or, for a command, its terminal glyph,
   and its name. Hover or an open peek takes `active` and `fg`; a child that
@@ -981,30 +984,37 @@ overrides the gate; keep it.
 
   **The peek is a popover for a child with nowhere on screen here**, opened
   from its row in the Sessions tree (beside the row) or from a chip (under it),
-  560px wide on `surface-raised` with a `border-strong` hairline, `rounded-well`
-  and no shadow. It is an overlay (`overlayMounted`), so a browser view stands
+  470px wide on `surface-raised` with a `border-strong` hairline, `rounded-well`
+  and no shadow. Beside a row it sits level with the row's top; under a chip its
+  right edge is the chip's right edge, 6px below it. It is an overlay (`overlayMounted`), so a browser view stands
   down for it; Escape, the close button and a press outside close it, and
   focus goes back to the row or chip. Top to bottom: the child's mark, name and
   a state chip in the dot's tone, with the close button at the end; the facts as
   mono `fg-muted` 11px rows (an agent's Role, Folder, Branch and Mode; a
   command's Command in `fg`, Folder, Branch and Runs in); its screen, live and
-  read-only through the host's watch-only attach, 190px high on the terminal's
-  ground, drawn at the child's own grid scaled to the width of the box (and no
-  smaller than its content needs) and held to the last row that has anything
-  on it, with no cursor; it is wider and taller than a line of text because it
-  is a whole terminal screen, which would not read at the frame's 470px; its last report as the `accent-soft` note with the 2px
-  accent edge, under a "Last report · done" label in the small caps label type;
-  and the foot: "Watching only. Open it to type." in `fg-subtle`, Stop in
-  `danger` (it asks first, as stopping any session does, and the peek stays up
-  for the question) and Open in the accent outline.
+  read-only through the host's watch-only attach, 150px high on the terminal's
+  ground, set in 11px mono at a line height of 1.5 and drawn at the child's own
+  grid (the host says it with `session:size`; 120 by 32 when it cannot), cut at
+  the right and the top rather than scaled and held to the last row that has
+  anything on it, with no cursor; its last report as the `accent-soft` note
+  with the 2px accent edge, under a "Last report · done" label in 10px small
+  caps at weight 600 (the one text weight past 500, which the frame sets and no
+  other text takes); and the foot: "Watching only. Open it to type." in
+  `fg-subtle`, Stop in `danger` (it asks first, as stopping any session does,
+  and the peek stays up for the question) and Open in the accent outline. A
+  child that has ended gets a peek too: its chip reads "ended", its screen is
+  the last one this window received, the foot reads "Ended. Open shows its last
+  screen." and there is no Stop.
 
   **A child that needs a person has a toast, and a window that connects to a
   host with notices standing has While you were away.** Both are cards on
   `surface-raised` with a `border-strong` hairline, `rounded-well` and no
-  shadow, 296px wide, drawn in one stack at the window's left edge, 8px in and
+  shadow, the toast 330px wide and the list 372px, drawn in one stack at the window's left edge, 8px in and
   just above the status bar, over the rail and the sidebar. That is where no
   browser view reaches, so they are not overlays and do not stand the page down;
   with the sidebar hidden the stack is over the panes and does stand it down.
+  The stack is not drawn while a peek or a question is up, and comes back when
+  it closes.
   The toast has a 6px `warn` dot, "worker-2 needs you" in 12.5px Inter 500, a
   close button at the end, a `fg-muted` 12px sentence (what it waits on and
   who started it), and Show (a child in a shrunk header) or Peek (a child with
@@ -1014,14 +1024,17 @@ overrides the gate; keep it.
   each notice: a `warn` dot (`danger` for an error), what it is about in 12.5px
   `fg`, the sentence in 11.5px `fg-muted`, and Peek and Open for a child that
   needs you or Dismiss for a refused start or an error. Its close button closes
-  it in this window only. The frames draw the stack at the right edge and the
-  list 372px wide; here both are 296px at the left so that neither can sit
-  under a browser view.
+  it in this window only. The frames draw the stack at the right edge; here it is
+  at the left so that it cannot sit under a browser view. Each away row reads
+  "Waiting on a permission prompt since 03:12. Started by api-refactor, which
+  was told and carried on."
 
   **A refused start leaves a one-line notice under the parent's children in the
   Sessions tree.** It sits at the children's indent on `surface-sunken` with a
   `border` hairline and `rounded-well`, 11.5px `fg-muted` with "Limit reached."
-  in `fg`, then the host's sentence naming the limit and what holds it, and
+  in `fg`, then one short sentence naming the parent that asked, the time
+  and the limit that held ("api-refactor asked for a fifth agent at 14:41; a
+  session may run 4 at once."), the host's own longer sentence on hover, and
   below it the buttons: Allow 16 more (the starts limit only, in the accent
   outline, for that parent alone), Settings › Agents and a quiet Dismiss.
   Pressing Allow removes the notice and lets the parent start again.

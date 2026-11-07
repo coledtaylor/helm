@@ -9,7 +9,7 @@ import {
   type SavedPane
 } from '@helm/core/types'
 import { describe, expect, it } from 'vitest'
-import { REPLAY_LIMIT, createPeek, openChildTab, type PeekDeps } from './peek'
+import { CHILD_GRID, REPLAY_LIMIT, createPeek, openChildTab, type PeekDeps } from './peek'
 
 /** A host's watch-only streams as the store opens them: what was opened, and the way to push bytes or end one. */
 function world(options: { stop?: (host: string, id: number) => Promise<boolean> } = {}) {
@@ -17,6 +17,7 @@ function world(options: { stop?: (host: string, id: number) => Promise<boolean> 
     host: string
     id: number
     closedHere: boolean
+    size: (grid: { cols: number; rows: number } | null) => void
     data: (text: string) => void
     closed: (reason: string | null) => void
   }> = []
@@ -45,7 +46,7 @@ describe('the peek', () => {
   it('S1: opens on a child from its row and watches only that child, on a stream of its own', () => {
     const { store, opened } = world()
     store.open(LOCAL_HOST_KEY, 8, { kind: 'row' })
-    expect(store.get()).toEqual({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'row' } })
+    expect(store.get()).toEqual({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'row' }, grid: null })
     expect(opened.map(({ host, id }) => ({ host, id }))).toEqual([{ host: LOCAL_HOST_KEY, id: 8 }])
   })
 
@@ -90,14 +91,36 @@ describe('the peek', () => {
     expect(drawn.join('').length).toBeGreaterThan(0)
   })
 
-  it('closes when the host ends its stream: the child ended, or the connection went', () => {
+  it('S1: holds the grid the host says the child has, for the terminal that draws its screen', () => {
     const { store, opened } = world()
     store.open(LOCAL_HOST_KEY, 8, { kind: 'row' })
+    expect(store.get()?.grid).toBeNull()
     let told = 0
     store.subscribe(() => told++)
-    opened[0]?.closed(null)
-    expect(store.get()).toBeNull()
+    opened[0]?.size({ cols: 100, rows: 30 })
+    expect(store.get()?.grid).toEqual({ cols: 100, rows: 30 })
     expect(told).toBe(1)
+    // The same child pressed from a chip keeps the grid it was told.
+    store.open(LOCAL_HOST_KEY, 8, { kind: 'chip', parentId: 3 })
+    expect(store.get()?.grid).toEqual({ cols: 100, rows: 30 })
+  })
+
+  it('S1: draws a child of a host that cannot say its grid at the grid children start at', () => {
+    const { store, opened } = world()
+    store.open(LOCAL_HOST_KEY, 8, { kind: 'row' })
+    opened[0]?.size(null)
+    expect(store.get()?.grid).toEqual(CHILD_GRID)
+  })
+
+  it('keeps its last screen when the host ends its stream, because the child ended', () => {
+    const { store, opened } = world()
+    store.open(LOCAL_HOST_KEY, 8, { kind: 'row' })
+    opened[0]?.data('last screen')
+    opened[0]?.closed(null)
+    expect(store.get()).not.toBeNull()
+    const drawn: string[] = []
+    store.attach((text) => drawn.push(text))
+    expect(drawn).toEqual(['last screen'])
   })
 
   it('S3: closes when its child is shown here, as a tab, a card or a header, and stays for a chip or nowhere', () => {
@@ -112,10 +135,12 @@ describe('the peek', () => {
     }
   })
 
-  it('closes when its child ends or is no longer listed', () => {
+  it('stays when its child ends, and closes when it is no longer listed', () => {
     const ended = world()
     ended.store.open(LOCAL_HOST_KEY, 8, { kind: 'row' })
-    ended.store.reconcile({ place: 'nowhere', running: false })
+    ended.store.reconcile({ place: 'chip', running: false })
+    expect(ended.store.get()).not.toBeNull()
+    ended.store.reconcile({ place: 'card', running: false })
     expect(ended.store.get()).toBeNull()
     const gone = world()
     gone.store.open(LOCAL_HOST_KEY, 8, { kind: 'row' })

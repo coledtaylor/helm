@@ -142,7 +142,10 @@ export interface SessionTreeProps {
  */
 export interface TreeNotice {
   key: string
+  /** The short sentence: who asked, when, and the limit that held. */
   text: string
+  /** The host's full sentence, kept as the notice's hover text. */
+  detail?: string | undefined
   allowMore: number | null
 }
 
@@ -802,6 +805,7 @@ function HostTree({
         {session.notice !== undefined && expanded !== false && (
           <LimitNotice
             text={session.notice.text}
+            detail={session.notice.detail}
             allowMore={session.notice.allowMore}
             indent={indent + FAMILY_STEP_PX}
             onAllowMore={() => noticeActions.onAllowMore(session.notice!.key)}

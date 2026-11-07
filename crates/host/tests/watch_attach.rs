@@ -12,7 +12,8 @@ use floti_host::server::HostConfig;
 use floti_host::testkit::{RunningHost, TestClient, TestDirs};
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
-    SessionList, SessionResize, SessionResizeRequest, SessionStart, StartSessionRequest,
+    SessionList, SessionResize, SessionResizeRequest, SessionSize, SessionSizeRequest,
+    SessionStart, StartSessionRequest,
 };
 
 const TERMINAL: &[&str] = &["terminal"];
@@ -100,6 +101,64 @@ async fn a_watching_client_gets_the_screen_and_live_output_but_types_nothing_and
         "the watcher's keys reached the session: {}",
         text(&seen)
     );
+
+    drop(watcher);
+    drop(typist);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_watches_is_told_the_grid_the_session_has_and_not_one_that_is_not_running() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(HostConfig {
+        run: Default::default(),
+        folders: dirs.folders(),
+        endpoint: endpoint.clone(),
+        backends: vec![Arc::new(agent.backend(Vec::<&str>::new())) as Arc<dyn AgentBackend>],
+        inherited_env: std::env::vars_os().collect(),
+    });
+    let mut typist = TestClient::connect(&endpoint, TERMINAL).await;
+    let mut watcher = TestClient::connect(&endpoint, TERMINAL).await;
+    let session = typist
+        .request::<SessionStart>(&StartSessionRequest {
+            cwd: dirs.folder("a project").to_string_lossy().into_owned(),
+            cols: 100,
+            rows: 30,
+            ..StartSessionRequest::default()
+        })
+        .await
+        .unwrap();
+
+    let size = watcher
+        .request::<SessionSize>(&SessionSizeRequest { id: session.id })
+        .await
+        .expect("a running session has a grid");
+    assert_eq!((size.cols, size.rows), (100, 30));
+
+    // The typist resizes its terminal: the grid the watcher is told follows.
+    typist.attach(1, session.id).await;
+    typist
+        .request::<SessionResize>(&SessionResizeRequest {
+            id: session.id,
+            cols: 90,
+            rows: 20,
+        })
+        .await
+        .unwrap();
+    let size = watcher
+        .request::<SessionSize>(&SessionSizeRequest { id: session.id })
+        .await
+        .unwrap();
+    assert_eq!((size.cols, size.rows), (90, 20));
+
+    let unknown = watcher
+        .request::<SessionSize>(&SessionSizeRequest {
+            id: session.id + 1000,
+        })
+        .await;
+    assert!(unknown.is_err(), "{unknown:?}");
 
     drop(watcher);
     drop(typist);

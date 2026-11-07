@@ -9165,6 +9165,40 @@
       ],
       "type": "object"
     },
+    "SessionSizeRequest": {
+      "properties": {
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SessionSizeResult": {
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
     "SessionStatus": {
       "description": "How a hosted session ended, or that it has not.\n\n`lost` is a row that was still `running` when the process that owned it\nwent away: a crash, a kill, a power cut. Stamping an end time later would\ninvent a duration nobody measured.",
       "enum": [
@@ -12317,6 +12351,17 @@
       },
       "response": {
         "$ref": "#/$defs/RestoreSessionsResult"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "session:size",
+      "request": {
+        "$ref": "#/$defs/SessionSizeRequest"
+      },
+      "response": {
+        "$ref": "#/$defs/SessionSizeResult"
       }
     },
     {

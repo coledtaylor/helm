@@ -104,6 +104,9 @@ export type SessionsAdapters = HostAdapter[] & {
    * host sends its screen as it is and then its live output, and takes no keys
    * and no size from it, so the child is neither typed into nor resized. For a
    * running session this window carries no terminal of, which a peek shows.
+   * The host is asked the child's grid first (`session:size`) and `size` is
+   * told it before any data, so the screen is drawn at the size it was made
+   * at; a host that cannot say (protocol 2.0) is told null and the stream opens.
    * `closed` is called once when the host or the connection ends the stream;
    * the returned function closes it from here and then says nothing.
    */
@@ -112,11 +115,26 @@ export type SessionsAdapters = HostAdapter[] & {
 
 /** What a watch-only stream tells the window. */
 export interface PeekHandlers {
+  /** The grid the child's terminal has, before the first data; null when the host cannot say. */
+  size?(grid: { cols: number; rows: number } | null): void
   data(text: string): void
   closed(reason: string | null): void
 }
 
 const isRunning = (record: SessionRecord): boolean => record.status === 'running'
+
+/**
+ * What closing a running session's tab says it does: it stops the session in
+ * its folder and, when it has running children that end with it, how many,
+ * leading to the list the question draws under it. A child's own question says
+ * its parent is told.
+ */
+function closeDetail(cwd: string, ending: number, parent: string | null): string {
+  const stops = `Ending it stops the Claude Code session in ${cwd}`
+  if (ending === 1) return `${stops}, and the session it started, which ends with it:`
+  if (ending > 1) return `${stops}, and the ${String(ending)} sessions it started, which end with it:`
+  return `${stops}.${parent === null ? '' : ` ${parent}, which started it, is told.`}`
+}
 
 /** How the window names this PC's own host in a question; a host on another computer goes by its name. */
 export const LOCAL_HOST_NAME = 'this PC’s host'
@@ -457,15 +475,7 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
           const agreed = await asking({
             kind: 'close-session',
             message: `“${sessionLabel(entry)}” is still running on ${hostName()}.`,
-            detail:
-              `Ending it stops the Claude Code session in ${entry.cwd}.` +
-              (parent === undefined ? '' : ` ${sessionLabel(parent)}, which started it, is told.`) +
-              (plan.ends.length === 0
-                ? ''
-                : ` ${plan.ends.length === 1 ? 'The session it started ends' : `The ${plan.ends.length} sessions it started end`} with it.`) +
-              (plan.outlives.length === 0
-                ? ''
-                : ` ${plan.outlives.length === 1 ? 'One was' : `${plan.outlives.length} were`} started to keep running and will.`),
+            detail: closeDetail(entry.cwd, plan.ends.length, parent === undefined ? null : sessionLabel(parent)),
             folder: entry.cwd,
             confirmLabel: closeParentButton(plan.ends.length),
             sessionNames: [sessionLabel(entry), ...plan.ends.map(({ child }) => sessionLabel(child))],
@@ -618,28 +628,45 @@ export function createSessionsAdapters(deps: SessionsAdapterDeps): SessionsAdapt
       }
       const decoder = new TextDecoder('utf-8')
       let open = true
-      const stream = connection.openStream(
-        'session:data',
-        { id, watch: true },
-        {
-          data: (bytes) => {
-            if (!open) return
-            const text = decoder.decode(bytes, { stream: true })
-            if (text !== '') handlers.data(text)
-          },
-          close: (reason) => {
-            if (!open) return
-            open = false
-            const rest = decoder.decode()
-            if (rest !== '') handlers.data(rest)
-            handlers.closed(reason)
+      let stream: { close(): void } | null = null
+      const begin = (): void => {
+        if (!open) return
+        stream = connection.openStream(
+          'session:data',
+          { id, watch: true },
+          {
+            data: (bytes) => {
+              if (!open) return
+              const text = decoder.decode(bytes, { stream: true })
+              if (text !== '') handlers.data(text)
+            },
+            close: (reason) => {
+              if (!open) return
+              open = false
+              const rest = decoder.decode()
+              if (rest !== '') handlers.data(rest)
+              handlers.closed(reason)
+            }
           }
+        )
+      }
+      // The grid first, so the screen the stream starts with is drawn at its
+      // own size. A host that cannot say, or a session that has gone, opens the
+      // stream all the same: it answers for the session itself.
+      void connection.request('session:size', { id }).then(
+        (grid) => {
+          if (open) handlers.size?.({ cols: grid.cols, rows: grid.rows })
+          begin()
+        },
+        () => {
+          if (open) handlers.size?.(null)
+          begin()
         }
       )
       return () => {
         if (!open) return
         open = false
-        stream.close()
+        stream?.close()
       }
     }
   })

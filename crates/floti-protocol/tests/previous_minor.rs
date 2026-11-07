@@ -469,7 +469,12 @@ fn the_standing_notice_channels_are_in_2_1_and_not_in_2_0_and_every_2_0_channel_
     };
     let (before, after) = (channels(&v20), channels(&v21));
     assert!(before.is_subset(&after), "a channel left 2.1");
-    for added in ["notices:changed", "notices:dismiss", "notices:allowMore"] {
+    for added in [
+        "notices:changed",
+        "notices:dismiss",
+        "notices:allowMore",
+        "session:size",
+    ] {
         assert!(!before.contains(added), "{added} was in 2.0");
         assert!(after.contains(added), "{added} is not in 2.1");
     }

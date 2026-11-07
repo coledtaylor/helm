@@ -183,11 +183,12 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   opened as tabs is this device's `paneLayout` (`families`) and never reaches
   the host. Every other running session is in the sessions pane
   as not open here, with Open (a tab whose screen comes through the host's
-  attach, never a second restore path) and End. A running child with nowhere
-  on screen here has a peek instead (from its row, or its chip in the parent's
-  crumb): its screen comes through the host's watch-only attach
-  (`session:data` opened with `watch`), which takes no keys and no size, so a
-  peek never types into the child or resizes it; its Open is the attach above
+  attach, never a second restore path) and End. A child with nowhere
+  on screen here, running or ended, has a peek instead (from its row, or its
+  chip in the parent's crumb): its screen comes through the host's watch-only
+  attach (`session:data` opened with `watch`), which takes no keys and no
+  size, so a peek never types into the child or resizes it; it is drawn at the
+  grid the host reports (`session:size`); its Open is the attach above
   and closes the peek. Closing a running session's tab asks first, naming its
   host, which the window names, and the children that end with it and any
   started to outlive it; its button counts what it ends (End 4 sessions).

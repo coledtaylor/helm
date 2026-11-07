@@ -3455,10 +3455,17 @@ export function App(): JSX.Element {
     };
   })();
 
+  // Each host asks on its own bridge, and is answered on it: one on another
+  // computer names itself in what it asks (`hostTabs.ts`).
+  const { ask: confirmAsk, answer: answerConfirm } =
+    useSessionConfirm(HOST_BRIDGES);
+
   /**
    * The needs-you toasts and While you were away, in one stack at the window's
    * left edge over the rail and the sidebar, where no browser view reaches. With
    * the sidebar hidden the stack is over the panes, so it stands the page down.
+   * It is not drawn while a peek or a question is up: those are the thing the
+   * person is looking at, and a notice about another child waits behind it.
    */
   const awayLists = [...noticeViews]
     .filter(([, view]) => view.away.length > 0)
@@ -3476,7 +3483,10 @@ export function App(): JSX.Element {
         },
       }),
     }));
-  const attentionShowing = needsYou.toasts.length > 0 || awayLists.length > 0;
+  const attentionShowing =
+    (needsYou.toasts.length > 0 || awayLists.length > 0) &&
+    peek.target === null &&
+    confirmAsk === null;
   useEffect(
     () => (attentionShowing && !sidebarShown ? overlayMounted() : undefined),
     [attentionShowing, sidebarShown],
@@ -3946,7 +3956,7 @@ export function App(): JSX.Element {
   };
 
   /**
-   * The peek of a running child with nowhere on screen here: beside its row or
+   * The peek of a child with nowhere on screen here: beside its row or
    * under its chip, its screen through the host's watch-only attach. Open and
    * Stop are the store's (a tab in the parent's pane strip or the focused
    * pane; the question stopping any running session asks).
@@ -3965,7 +3975,6 @@ export function App(): JSX.Element {
     peek.target !== null &&
     peekAt !== null &&
     peekedChild !== null &&
-    peekedChild.status === "running" &&
     peekedState !== null ? (
       <ChildPeek
         key={chipKey(peek.target.host, peek.target.id)}
@@ -3974,11 +3983,16 @@ export function App(): JSX.Element {
           peekedState.indicator,
           childMark(peekedChild, peekedState.indicator),
         )}
+        ended={peekedChild.status !== "running"}
         screen={
-          <PeekTerminal
-            attach={peek.store.attach}
-            windowsBuild={info?.windowsBuild ?? null}
-          />
+          peek.target.grid === null ? null : (
+            <PeekTerminal
+              key={`${String(peek.target.grid.cols)}x${String(peek.target.grid.rows)}`}
+              attach={peek.store.attach}
+              grid={peek.target.grid}
+              windowsBuild={info?.windowsBuild ?? null}
+            />
+          )
         }
         at={peekAt.at}
         anchorRef={peekAnchorRef}
@@ -3999,10 +4013,6 @@ export function App(): JSX.Element {
    * while a request is pending: a second reply to an id main has resolved is a
    * reply for a decision that has been taken.
    */
-  // Each host asks on its own bridge, and is answered on it: one on another
-  // computer names itself in what it asks (`hostTabs.ts`).
-  const { ask: confirmAsk, answer: answerConfirm } =
-    useSessionConfirm(HOST_BRIDGES);
   const confirmRequest = confirmAsk?.request ?? null;
   // The children the question names, drawn with their dot or glyph: the same
   // list for this window's own question and a host's, from the ids each carries.

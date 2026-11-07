@@ -22,10 +22,26 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
  * is, and the bytes are kept (the most recent of them, up to `REPLAY_LIMIT`)
  * for the terminal that draws them, which mounts after the peek opens.
  *
+ * The host says the grid the child's terminal has before the stream starts, and
+ * the screen is drawn at that grid. A child that has ended keeps its peek, with
+ * the last screen the window was sent; the stream ending is not the peek's end.
  * It closes by itself when its child is shown here (it has a tab, or its
- * parent's family view holds it as a card or a header), when it is no longer
- * running, and when its stream ends.
+ * parent's family view holds it as a card or a header), and when its child is
+ * gone.
  */
+
+/** The grid of a child's terminal. */
+export interface PeekGrid {
+  cols: number
+  rows: number
+}
+
+/**
+ * The grid a child's terminal starts at on the host (`CHILD_SIZE` in
+ * `server/hosted/children.rs`): drawn for a child whose host cannot say its grid
+ * (protocol 2.0), which is at this grid unless another device has sized it.
+ */
+export const CHILD_GRID: PeekGrid = { cols: 120, rows: 32 }
 
 /** What a peek was opened from, which is where its popover goes. */
 export type PeekAnchor = { kind: 'row' } | { kind: 'chip'; parentId: number }
@@ -34,6 +50,8 @@ export interface PeekTarget {
   host: string
   id: number
   anchor: PeekAnchor
+  /** The grid the child's terminal has, once the host has said it (or could not, which is `CHILD_GRID`); null until then. */
+  grid: PeekGrid | null
 }
 
 /** What the store needs of the window. */
@@ -42,7 +60,11 @@ export interface PeekDeps {
   watch: (
     host: string,
     id: number,
-    handlers: { data: (text: string) => void; closed: (reason: string | null) => void }
+    handlers: {
+      size: (grid: PeekGrid | null) => void
+      data: (text: string) => void
+      closed: (reason: string | null) => void
+    }
   ) => () => void
   /**
    * Asks whether to end the session, as stopping any running session asks,
@@ -77,7 +99,7 @@ export interface PeekStore {
   setDeps(next: PeekDeps): void
   /**
    * Says where the peeked child is on screen now. Closes the peek when it is
-   * shown here, or has ended, or is gone.
+   * shown here or is gone. One that has ended stays, with its last screen.
    */
   reconcile(state: { place: ChildPlace; running: boolean } | null): void
 }
@@ -123,22 +145,27 @@ export function createPeek(initial: PeekDeps): PeekStore {
     open(host, id, anchor) {
       if (target !== null && target.host === host && target.id === id) {
         if (!sameAnchor(target.anchor, anchor)) {
-          target = { host, id, anchor }
+          target = { ...target, anchor }
           changed()
         }
         return
       }
       end()
-      const mine: PeekTarget = { host, id, anchor }
+      const mine: PeekTarget = { host, id, anchor, grid: null }
       target = mine
       const close = deps.watch(host, id, {
+        size: (grid) => {
+          if (target === null || target.host !== host || target.id !== id) return
+          target = { ...target, grid: grid ?? CHILD_GRID }
+          changed()
+        },
         data: take,
         closed: () => {
           // The stream ended by itself: the child ended, or the connection went.
-          if (target !== mine) return
+          // The peek stays with the last screen it was sent; the child's record
+          // says whether it ended, and its going closes the peek.
+          if (target === null || target.host !== host || target.id !== id) return
           stopWatching = null
-          end()
-          changed()
         }
       })
       // The stream may have ended before it returned.
@@ -176,7 +203,7 @@ export function createPeek(initial: PeekDeps): PeekStore {
     },
     reconcile(state) {
       if (target === null) return
-      if (state === null || !state.running || (state.place !== 'nowhere' && state.place !== 'chip')) store.close()
+      if (state === null || (state.place !== 'nowhere' && state.place !== 'chip')) store.close()
     }
   }
   return store

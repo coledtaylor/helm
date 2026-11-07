@@ -69,6 +69,23 @@ describe('the peek', () => {
     expect(within(dialog).queryByText('Mode')).toBeNull()
   })
 
+  it('S1: is 470px wide with a 150px screen, and its last report label is semibold', () => {
+    render(<ChildPeek {...peek({ report: { state: 'done', text: 'Reviewed.' } })} />)
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.className).toContain('w-[470px]')
+    expect(dialog.querySelector('[data-peek-screen]')?.className).toContain('h-[150px]')
+    expect(dialog.querySelector('[data-peek-report] span')?.className).toContain('font-semibold')
+  })
+
+  it('S1: an ended child says so, keeps Open and has no Stop', () => {
+    render(<ChildPeek {...peek({ ended: true, state: { label: 'ended', tone: 'neutral' } })} />)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('ended').getAttribute('data-peek-state')).toBe('neutral')
+    expect(within(dialog).getByText('Ended. Open shows its last screen.')).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: 'Stop' })).toBeNull()
+    expect(within(dialog).getByRole('button', { name: 'Open' })).toBeTruthy()
+  })
+
   it('S2: is an overlay while it is mounted, so a browser view stands down for it', () => {
     expect(overlayOpen()).toBe(false)
     const view = render(<ChildPeek {...peek()} />)

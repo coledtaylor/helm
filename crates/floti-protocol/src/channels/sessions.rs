@@ -73,6 +73,7 @@ pub fn declare(catalogue: &mut Catalogue) {
         .request::<SessionList>()
         .request::<SessionRename>()
         .request::<SessionResize>()
+        .request::<SessionSize>()
         .request::<SessionFocus>()
         .request::<SessionsWatch>()
         .request::<SessionConfirmed>()
@@ -140,6 +141,14 @@ request_channel! {
 request_channel! {
     /// A session's terminal grid changed.
     SessionResize = "session:resize", SessionResizeRequest => (), needs Terminal
+}
+
+request_channel! {
+    /// The grid a running session's terminal has now. A client that watches a
+    /// session without typing into it asks first, to draw the screen the watch
+    /// stream carries at the size it was drawn at. Fails with a sentence when
+    /// the session is not running. Added in 2.1.
+    SessionSize = "session:size", SessionSizeRequest => SessionSizeResult
 }
 
 request_channel! {
@@ -430,6 +439,20 @@ pub struct RenameSessionRequest {
 pub struct SessionResizeRequest {
     #[ts(type = "number")]
     pub id: u64,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSizeRequest {
+    #[ts(type = "number")]
+    pub id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSizeResult {
     pub cols: u16,
     pub rows: u16,
 }

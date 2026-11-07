@@ -35,6 +35,7 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("session:list", REQUEST, None),
     ("session:rename", REQUEST, None),
     ("session:resize", REQUEST, Some(Capability::Terminal)),
+    ("session:size", REQUEST, None),
     ("session:focus", REQUEST, None),
     ("sessions:watch", REQUEST, None),
     ("session:confirmed", REQUEST, None),

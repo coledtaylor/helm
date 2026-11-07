@@ -3,8 +3,10 @@ import { cn } from '../lib/cn'
 import { NOTICE_BUTTON, NOTICE_PLAIN, NOTICE_PRIMARY, NOTICE_QUIET } from './NeedsYouToast'
 
 export interface LimitNoticeProps {
-  /** The limit and what holds it, in the host's sentence. */
+  /** One short sentence: who asked, when, and the limit that held. */
   text: string
+  /** The host's full sentence, shown on hover. */
+  detail?: string | undefined
   /** The starts limit: how many more starts Allow adds for this parent; null for every other limit. */
   allowMore: number | null
   /** Where the notice sits: the left edge of the parent's children. */
@@ -16,11 +18,12 @@ export interface LimitNoticeProps {
 
 /**
  * What a parent's refused start leaves under its children in the Sessions
- * tree: the limit that refused and what holds it, with Allow <n> more (the
+ * tree: one short sentence naming who asked, when, and the limit that held, with Allow <n> more (the
  * starts limit only, for this parent alone), Settings › Agents and Dismiss.
  */
 export function LimitNotice({
   text,
+  detail,
   allowMore,
   indent,
   onAllowMore,
@@ -31,6 +34,7 @@ export function LimitNotice({
     <div
       role="status"
       data-limit-notice
+      title={detail}
       style={{ marginLeft: indent }}
       className="mt-0.5 mr-1.5 mb-1 rounded-well border border-border bg-surface-sunken px-[9px] py-[7px] text-[11.5px] leading-[1.45] text-fg-muted"
     >

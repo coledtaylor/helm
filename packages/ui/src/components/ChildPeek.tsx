@@ -37,6 +37,8 @@ export interface ChildPeekProps {
   runsIn?: string | undefined
   /** What it last told its parent: its state ("done") and its words; null when it has told nothing. */
   report: { state: string; text: string } | null
+  /** It has ended: the peek says so, and has no Stop. Its screen is the last one the window kept. */
+  ended?: boolean | undefined
   /** The child's screen, live and read-only. */
   screen: ReactNode
   /** Where the popover goes: beside a row (a point), or under a chip. */
@@ -53,9 +55,10 @@ const BUTTON = 'rounded-well border px-[9px] py-[3px] text-[11.5px] font-medium 
 
 /**
  * The peek: a popover beside the row, or under the crumb chip, it was opened
- * from, for a running child that has nowhere on screen here. It shows the
+ * from, for a child that has nowhere on screen here. It shows the
  * child's screen live and read-only, who it is (its role, or its command), its
- * folder, branch and mode, what it last reported, and Stop and Open.
+ * folder, branch and mode, what it last reported, and Stop and Open. A child
+ * that has ended gets one too, which says so and has no Stop.
  *
  * It is an overlay (`usePopup`), so a browser tab's native view stands down for
  * it; Escape and its close button close it, and so does a press outside it. The
@@ -78,6 +81,7 @@ export function ChildPeek({
   mode,
   runsIn,
   report,
+  ended = false,
   screen,
   at,
   anchorRef,
@@ -149,7 +153,7 @@ export function ChildPeek({
         top: place?.top ?? 0,
         visibility: place === null ? 'hidden' : 'visible'
       }}
-      className="z-50 flex w-[560px] max-w-[calc(100vw-16px)] flex-col rounded-well border border-border-strong bg-surface-raised"
+      className="z-50 flex w-[470px] max-w-[calc(100vw-16px)] flex-col rounded-well border border-border-strong bg-surface-raised"
     >
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
         <ChildMarkIcon mark={mark} />
@@ -192,7 +196,7 @@ export function ChildPeek({
 
       <div
         data-peek-screen
-        className="relative mx-3 h-[190px] overflow-hidden rounded-raised border border-border bg-terminal"
+        className="relative mx-3 h-[150px] overflow-hidden rounded-raised border border-border bg-terminal"
       >
         {screen}
       </div>
@@ -202,7 +206,7 @@ export function ChildPeek({
           data-peek-report
           className="mx-3 mt-2 rounded-r-raised bg-accent-soft px-2.5 py-2 text-[11.5px] leading-[1.45] text-fg shadow-[inset_2px_0_0_var(--color-accent)]"
         >
-          <span className="mb-0.5 block text-[10px] leading-[1.4] font-medium tracking-[0.07em] text-fg-subtle uppercase">
+          <span className="mb-0.5 block text-[10px] leading-[1.4] font-semibold tracking-[0.07em] text-fg-subtle uppercase">
             Last report · {report.state}
           </span>
           <span>{report.text}</span>
@@ -210,15 +214,19 @@ export function ChildPeek({
       )}
 
       <div className="flex items-center gap-1.5 px-3 py-2.5">
-        <span className="mr-auto text-[11px] text-fg-subtle">Watching only. Open it to type.</span>
-        <button
-          type="button"
-          data-peek-stop
-          onClick={stop}
-          className={cn(BUTTON, 'border-danger/45 text-danger hover:bg-danger/10')}
-        >
-          Stop
-        </button>
+        <span className="mr-auto text-[11px] text-fg-subtle">
+          {ended ? 'Ended. Open shows its last screen.' : 'Watching only. Open it to type.'}
+        </span>
+        {!ended && (
+          <button
+            type="button"
+            data-peek-stop
+            onClick={stop}
+            className={cn(BUTTON, 'border-danger/45 text-danger hover:bg-danger/10')}
+          >
+            Stop
+          </button>
+        )}
         <button
           type="button"
           data-peek-open

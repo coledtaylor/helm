@@ -986,6 +986,12 @@ impl Hosted {
             .map_err(|err| err.to_string())
     }
 
+    /// The grid session `id`'s terminal has now, which a client that only
+    /// watches it draws its screen at.
+    pub fn size(&self, id: u64) -> std::result::Result<TermSize, String> {
+        Ok(self.running(id)?.size())
+    }
+
     /// Each running session as an activity pass joins it.
     pub fn views(&self) -> Vec<HostedView> {
         let store = self.ledger.store();
@@ -1188,6 +1194,9 @@ impl Hosted {
                     project_path: row.project_path.clone(),
                     profile_id: row.profile_id,
                     permission_mode: row.permission_mode.map(records::permission_mode_name),
+                    // The line it ran Remote Control under, so a child of a
+                    // Remote Control parent comes back on it as well.
+                    remote_control_name: row.remote_control_name.clone(),
                     ..SessionOrigin::default()
                 },
             },

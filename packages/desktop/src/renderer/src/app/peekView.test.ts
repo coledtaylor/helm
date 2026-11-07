@@ -101,13 +101,13 @@ describe('where the peek goes', () => {
     expect(peekPlace({ host: 'home', id: 8, anchor: { kind: 'row' } }).element).toBeNull()
   })
 
-  it('S7: under the chip it opened from', () => {
+  it('S7: under the chip it opened from, its right edge on the chip’s right edge', () => {
     document.body.innerHTML = `<button data-crumb-chip="${chipKey(LOCAL_HOST_KEY, 8)}"></button>`
     const chip = document.querySelector<HTMLElement>('[data-crumb-chip]')!
     chip.getBoundingClientRect = rect(700, 40, 80, 18)
     const place = peekPlace({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'chip', parentId: 3 } })
     expect(place.element).toBe(chip)
-    expect(place.at).toMatchObject({ below: { left: 692, top: 40, width: 80, height: 18 } })
+    expect(place.at).toEqual({ x: 700 + 80 - 470, y: 40 + 18 + 6 })
   })
 
   it('opens near the top of the window when what it opened from is not on screen', () => {

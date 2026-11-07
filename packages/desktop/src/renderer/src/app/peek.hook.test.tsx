@@ -23,7 +23,7 @@ describe('the peek in the window', () => {
   it('S1: stays open while its child has nowhere on screen or is a chip', () => {
     const { result, rerenderWith } = mount({ place: 'nowhere', running: true })
     act(() => result.current.store.open(LOCAL_HOST_KEY, 8, { kind: 'row' }))
-    expect(result.current.target).toEqual({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'row' } })
+    expect(result.current.target).toEqual({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'row' }, grid: null })
     rerenderWith({ place: 'chip', running: true })
     expect(result.current.target).not.toBeNull()
   })
@@ -36,11 +36,11 @@ describe('the peek in the window', () => {
     expect(closedHere).toEqual([8])
   })
 
-  it('closes when its child ends', () => {
+  it('stays open when its child ends, with the Stop it had gone', () => {
     const { result, rerenderWith } = mount({ place: 'nowhere', running: true })
     act(() => result.current.store.open(LOCAL_HOST_KEY, 8, { kind: 'row' }))
     rerenderWith({ place: 'nowhere', running: false })
-    expect(result.current.target).toBeNull()
+    expect(result.current.target).not.toBeNull()
   })
 
   it('S2: closes on its close button, and when the window goes', () => {

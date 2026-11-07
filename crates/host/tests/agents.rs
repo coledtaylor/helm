@@ -31,11 +31,14 @@ use floti_host::testkit::{
 };
 use floti_protocol::channel::EventChannel;
 use floti_protocol::channels::common::{PermissionMode, SessionRecord};
-use floti_protocol::channels::host::{HostQuit, HostQuitRequest, HostStopReason};
+use floti_protocol::channels::host::{
+    HostQuit, HostQuitRequest, HostStop, HostStopReason, HostStopRequest,
+};
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, HistoryRefresh, HistoryResume, ResumeSessionRequest, SessionClose,
-    SessionConfirmAnswer, SessionConfirmRequest, SessionConfirmed, SessionExit, SessionList,
-    SessionStart, StartSessionRequest,
+    CloseSessionRequest, HistoryRefresh, HistoryResume, RestoreSessionsRequest,
+    ResumeSessionRequest, SessionClose, SessionConfirmAnswer, SessionConfirmRequest,
+    SessionConfirmed, SessionExit, SessionList, SessionRestore, SessionStart, SessionToRestore,
+    StartSessionRequest,
 };
 use floti_protocol::channels::workspace::{HostSettingsPatch, WriteSettings};
 use floti_protocol::{BackendId, Knowable};
@@ -3473,6 +3476,90 @@ async fn s21_a_session_from_a_profile_with_remote_control_runs_it_and_its_childr
             .row_text(grandchild.id(), "remote_control_name")
             .as_deref(),
         Some(helper_line.as_str())
+    );
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s21_a_child_and_its_parent_reopened_through_the_restore_offer_run_remote_control_under_their_lines()
+ {
+    let world = World::new();
+    let host = world.host().await;
+    let profile = world.remote_control_profile("remote", &world.outside("remote profile root"));
+    let parent = from_profile(&world, CLAUDE, "api-refactor", profile).await;
+    parent
+        .start(json!({ "task": "lead", "backend": CLAUDE, "can_start": true, "name": "worker" }))
+        .await
+        .done();
+    let child = world.child_of(&parent, "worker").await;
+    // Each has been worked with, so there is a conversation to reopen.
+    world.type_line(&parent, "carry on").await;
+    world.type_line(&child, "carry on").await;
+    let worker_line = line(&["api-refactor", "worker"]);
+
+    // The host stops for an update: every row is left for the next start.
+    let mut client = world.client().await;
+    client
+        .request::<HostStop>(&HostStopRequest {
+            reason: HostStopReason::Update,
+        })
+        .await
+        .expect("the stop is taken");
+    drop(client);
+    assert_eq!(host.stopped().await, HostStopReason::Update);
+
+    let host = world.host().await;
+    let mut client = world.client().await;
+    let result = client
+        .request::<SessionRestore>(&RestoreSessionsRequest {
+            sessions: [parent.id(), child.id()]
+                .into_iter()
+                .map(|id| SessionToRestore {
+                    id,
+                    cols: 80,
+                    rows: 24,
+                })
+                .collect(),
+        })
+        .await
+        .expect("the restore is taken");
+    drop(client);
+    assert!(result.failed.is_empty(), "{result:?}");
+
+    let reopened = |from: u64| {
+        result
+            .restored
+            .iter()
+            .find(|restored| restored.from == from)
+            .unwrap_or_else(|| panic!("session {from} came back"))
+            .launched
+            .session
+            .clone()
+    };
+    let parent_again = world
+        .agent_after(reopened(parent.id()), &[parent.run.pid])
+        .await;
+    assert_eq!(
+        value_of(&parent_again.run.argv, "--remote-control"),
+        Some("api-refactor"),
+        "{:?}",
+        parent_again.run.argv
+    );
+    let child_again = world
+        .agent_after(reopened(child.id()), &[child.run.pid])
+        .await;
+    assert_eq!(
+        value_of(&child_again.run.argv, "--remote-control"),
+        Some(worker_line.as_str()),
+        "{:?}",
+        child_again.run.argv
+    );
+    assert_eq!(
+        world
+            .row_text(child_again.id(), "remote_control_name")
+            .as_deref(),
+        Some(worker_line.as_str()),
+        "the reopened row keeps the line"
     );
     host.stop(HostStopReason::Stop).await;
 }

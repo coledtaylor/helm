@@ -1478,6 +1478,16 @@
         "$ref": "#/$defs/RestoreSessionsResult"
       }
     },
+    "session:size": {
+      "capability": null,
+      "kind": "request",
+      "request": {
+        "$ref": "#/$defs/SessionSizeRequest"
+      },
+      "response": {
+        "$ref": "#/$defs/SessionSizeResult"
+      }
+    },
     "session:start": {
       "capability": null,
       "kind": "request",
@@ -10227,6 +10237,40 @@
         "rootSeen",
         "opaque",
         "atMs"
+      ],
+      "type": "object"
+    },
+    "SessionSizeRequest": {
+      "properties": {
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SessionSizeResult": {
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
       ],
       "type": "object"
     },

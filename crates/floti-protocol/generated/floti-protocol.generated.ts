@@ -3105,6 +3105,10 @@ opaque: number,
  */
 atMs: number, };
 
+export type SessionSizeRequest = { id: number, };
+
+export type SessionSizeResult = { cols: number, rows: number, };
+
 /**
  * How a hosted session ended, or that it has not.
  *
@@ -3847,6 +3851,7 @@ export interface RequestChannels {
   "session:resize": { request: SessionResizeRequest; response: null; capability: "terminal" };
   "session:restorable": { request: null; response: RestoreOffer | null; capability: null };
   "session:restore": { request: RestoreSessionsRequest; response: RestoreSessionsResult; capability: null };
+  "session:size": { request: SessionSizeRequest; response: SessionSizeResult; capability: null };
   "session:start": { request: StartSessionRequest; response: SessionRecord; capability: null };
   "sessions:watch": { request: SessionsWatchRequest; response: null; capability: null };
   "settings:read": { request: null; response: HostSettings; capability: null };
@@ -4045,6 +4050,7 @@ export const CHANNELS = [
   { name: "session:resize", kind: "request", capability: "terminal" },
   { name: "session:restorable", kind: "request", capability: null },
   { name: "session:restore", kind: "request", capability: null },
+  { name: "session:size", kind: "request", capability: null },
   { name: "session:start", kind: "request", capability: null },
   { name: "sessions:overview", kind: "event", capability: null },
   { name: "sessions:port", kind: "stream", capability: null },

@@ -137,12 +137,10 @@ export interface FamilyPressScope {
  * card in it, the last card shrinking in its place when it was a header; no
  * tab is added.
  *
- * A running child that is on screen nowhere here is `peek`, the layout
- * unchanged: its parent's tab is not open here, or that tab's pane has no room
- * for the family view, or this device does not show children in their parent's
- * tab. An ended child in such a place keeps what it had: its parent's tab
- * comes forward when there is one here, and otherwise it is `open`. Anything
- * else is `open`, which is the one press that gives a session a tab, and the
+ * A child of a running parent that is on screen nowhere here is `peek`, the
+ * layout unchanged, whether it is running or ended: its parent's tab is not open
+ * here, or that tab's pane has no room for the family view, or this device does
+ * not show children in their parent's tab. Anything else is `open`, which is the one press that gives a session a tab, and the
  * caller opens it as any running session not open here is.
  */
 export function pressSessionRow<T extends FamilyMember>(
@@ -156,15 +154,14 @@ export function pressSessionRow<T extends FamilyMember>(
   if (tabbed.has(id)) return { layout, press: { to: 'own-tab', id } }
   const byId = new Map(sessions.map((session) => [session.id, session]))
   const holder = tabHolder(byId, id, tabbed)
-  const running = byId.get(id)?.status === 'running'
   if (holder === null) {
-    return { layout, press: { to: running && hasRunningParent(byId, id) ? 'peek' : 'open', id } }
+    return { layout, press: { to: hasRunningParent(byId, id) ? 'peek' : 'open', id } }
   }
 
   const tab = paneId(sessionRef(holder, host))
   const press: FamilyPress = { to: 'parent-tab', id: holder }
   if (!scope.enabled || !(scope.roomOf?.(tab) ?? true)) {
-    return running ? { layout, press: { to: 'peek', id } } : { layout: activateTab(layout, tab), press }
+    return { layout, press: { to: 'peek', id } }
   }
   const family = familiesHere(layout, sessions, host).get(holder) ?? []
   const shown = showFamilyChild(layout, tab, family, scope.capacityOf(tab), id)

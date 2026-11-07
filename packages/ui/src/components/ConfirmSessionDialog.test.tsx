@@ -169,7 +169,7 @@ describe('ConfirmSessionDialog closing a parent', () => {
   ]
   const outlives = [{ id: 5, name: 'watcher', mark: { glyph: 'dot' as const, state: 'idle' as const }, meta: 'worker · main' }]
 
-  it('S18: names each child that ends with its dot or glyph and what it is, then the one that outlives it, counts what it ends on its button and has Cancel in focus', () => {
+  it('S18: names each child that ends with its dot or glyph and what it is, then says the one that outlives it keeps running in a sentence, counts what it ends on its button and has Cancel in focus', () => {
     renderDialog({
       message: '“api-refactor” is still running on this PC’s host.',
       sessionNames: ['api-refactor', 'reviewer', 'worker', 'tests'],
@@ -189,20 +189,30 @@ describe('ConfirmSessionDialog closing a parent', () => {
     expect(ending.querySelector('[data-confirm-child="3"] [data-child-dot="busy"]')).not.toBeNull()
     expect(ending.querySelector('[data-confirm-child="4"] [data-child-command="running"]')).not.toBeNull()
 
-    const keeping = dialog.querySelector('[data-confirm-children="outlives"]')!
-    expect(keeping.textContent).toBe('watcherworker · main')
-    expect(dialog.textContent).toContain('Keep running')
+    expect(dialog.querySelector('[data-confirm-outlives]')?.textContent).toBe(
+      'watcher was started to outlive it and keeps running.'
+    )
+    expect(dialog.querySelector('[data-confirm-children="outlives"]')).toBeNull()
+    expect(dialog.textContent).not.toContain('Keep running')
 
     expect(within(dialog).getByRole('button', { name: 'End 4 sessions' })).toBeTruthy()
     expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
     // The sessions are listed once, as children, not again as names.
-    expect(dialog.querySelectorAll('li')).toHaveLength(4)
+    expect(dialog.querySelectorAll('li')).toHaveLength(3)
   })
 
-  it('lists only the children that outlive it when none ends', () => {
+  it('names only the children that outlive it, in a sentence, when none ends', () => {
     renderDialog({ sessionNames: ['api-refactor'], outlives })
     expect(document.querySelector('[data-confirm-children="ends"]')).toBeNull()
-    expect(document.querySelector('[data-confirm-children="outlives"]')).not.toBeNull()
+    expect(document.querySelector('[data-confirm-outlives]')).not.toBeNull()
+  })
+
+  it('names several that outlive it together', () => {
+    const two = [...outlives, { ...outlives[0]!, id: 6, name: 'logger' }]
+    renderDialog({ sessionNames: ['api-refactor'], outlives: two })
+    expect(document.querySelector('[data-confirm-outlives]')?.textContent).toBe(
+      'watcher and logger were started to outlive it and keep running.'
+    )
   })
 
   it('says nothing of keeping running when no child does', () => {

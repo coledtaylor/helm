@@ -47,8 +47,9 @@ use floti_protocol::channels::sessions::{
     PtermTerminal, SessionActivate, SessionActivityChanged, SessionActivityState, SessionClose,
     SessionConfirm, SessionConfirmAnswer, SessionConfirmKind, SessionConfirmRequest,
     SessionConfirmed, SessionExit, SessionFocus, SessionLaunch, SessionList, SessionNotify,
-    SessionRename, SessionResize, SessionRestorable, SessionRestore, SessionStart,
-    SessionStreamOpen, SessionTerminal, SessionsOverview, SessionsOverviewChanged,
+    SessionRename, SessionResize, SessionRestorable, SessionRestore, SessionSize,
+    SessionSizeResult, SessionStart, SessionStreamOpen, SessionTerminal, SessionsOverview,
+    SessionsOverviewChanged,
 };
 use tokio::sync::broadcast::{self, error::RecvError};
 
@@ -372,6 +373,12 @@ impl Feature for Sessions {
             .handle::<SessionClose>(|request| self.close(request))
             .handle::<SessionConfirmed>(|answer| self.confirmed(answer))
             .handle::<SessionResize>(move |request| hosted.resize(client, request))
+            .handle::<SessionSize>(|request| {
+                hosted.size(request.id).map(|size| SessionSizeResult {
+                    cols: size.cols,
+                    rows: size.rows,
+                })
+            })
             .handle::<SessionFocus>(move |request| {
                 lock(&self.focus).set(client, request.ids);
                 Ok(())
@@ -620,26 +627,20 @@ fn close_button(ending: usize) -> String {
     }
 }
 
-/// What the close question says of a session: its agent and folder, the
-/// agents that end with it and the ones that keep running.
+/// What the close question says of a session: its agent and folder, and the
+/// sessions that end with it, which the client lists. The ones that keep
+/// running are named by the client from the ids the question carries.
 fn close_detail(agent: &str, cwd: &str, closing: &Closing) -> String {
-    let mut detail = format!("Closing the tab ends the {agent} session in {cwd}.");
-    let names = |list: &mut dyn Iterator<Item = &str>| list.collect::<Vec<_>>().join(", ");
-    if !closing.ending.is_empty() {
-        let ending = names(&mut closing.ending.iter().map(|(_, name)| name.as_str()));
-        let count = closing.ending.len();
-        let noun = if count == 1 { "agent" } else { "agents" };
-        detail.push_str(&format!(
-            " It ends the {count} {noun} it started: {ending}."
-        ));
+    match closing.ending.len() {
+        0 => format!("Closing the tab ends the {agent} session in {cwd}."),
+        // The sessions follow as a list, which the client draws from the ids.
+        1 => format!(
+            "Ending it stops the {agent} session in {cwd}, and the session it started, which ends with it:"
+        ),
+        count => format!(
+            "Ending it stops the {agent} session in {cwd}, and the {count} sessions it started, which end with it:"
+        ),
     }
-    if !closing.outliving.is_empty() {
-        let outliving = names(&mut closing.outliving.iter().map(|(_, name)| name.as_str()));
-        detail.push_str(&format!(
-            " Started to outlive it, these keep running: {outliving}."
-        ));
-    }
-    detail
 }
 
 #[cfg(test)]
@@ -663,12 +664,10 @@ mod tests {
             ending: vec![(2, "worker".into()), (3, "helper".into())],
             outliving: vec![(4, "watcher".into())],
         };
-        let detail = close_detail("Claude Code", "C:/work", &family);
-        assert!(
-            detail.contains("2 agents it started: worker, helper."),
-            "{detail}"
+        assert_eq!(
+            close_detail("Claude Code", "C:/work", &family),
+            "Ending it stops the Claude Code session in C:/work, and the 2 sessions it started, which end with it:"
         );
-        assert!(detail.contains("these keep running: watcher."), "{detail}");
     }
 
     #[test]

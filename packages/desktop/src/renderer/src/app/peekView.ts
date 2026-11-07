@@ -1,11 +1,5 @@
 import { LOCAL_HOST_KEY, sessionLabel, type ChildMark, type PermissionMode, type SessionRecord } from '@helm/core/types'
-import {
-  SESSION_STATE_LABEL,
-  type ChildPeekProps,
-  type PeekTone,
-  type PopupAnchor,
-  type TabIndicator
-} from '@helm/ui'
+import { SESSION_STATE_LABEL, type ChildPeekProps, type PeekTone, type PopupAnchor, type TabIndicator } from '@helm/ui'
 import type { PeekTarget } from './peek'
 
 /**
@@ -92,7 +86,7 @@ export function peekFacts(
 export const chipKey = (host: string, id: number): string => `${host}:${String(id)}`
 
 /** The peek's width, which a centred fallback needs to know. */
-const PEEK_WIDTH = 560
+const PEEK_WIDTH = 470
 
 /** The element the peek of `target` opened from, or null when it is not on screen (a closed sidebar). */
 function anchorElement(target: Pick<PeekTarget, 'host' | 'id' | 'anchor'>, doc: Document): HTMLElement | null {
@@ -131,8 +125,8 @@ export function peekPlace(
   }
   const rect = element.getBoundingClientRect()
   if (target.anchor.kind === 'chip') {
-    // Under the chip, a little to its left, as the design sets it.
-    return { at: { below: new DOMRect(rect.left - 8, rect.top, rect.width, rect.height) }, element }
+    // Under the chip, its right edge on the chip's, as the design sets it.
+    return { at: { x: rect.right - PEEK_WIDTH, y: rect.bottom + 6 }, element }
   }
   return { at: { x: rect.right + 10, y: rect.top - 16 }, element }
 }

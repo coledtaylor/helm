@@ -52,8 +52,9 @@ function drawsFamily(scope: PlaceScope, tab: string): boolean {
  * A child in a parent's tab whose pane draws the family view is a card or a
  * header as the arrangement and the pane's room make it (`familyEntries`; a pane
  * not measured yet holds every card that is wanted), and an ended child the
- * user closed is in neither. In a pane that draws no family view, a running
- * child is a chip; an ended one is not on screen.
+ * user closed is in neither. In a pane that draws no family view, every child
+ * the family holds is a chip, an ended one with its ended dot; one the user
+ * closed is on screen nowhere.
  */
 export function childPlaces<T extends ChildMember>(
   layout: PaneLayout,
@@ -67,7 +68,7 @@ export function childPlaces<T extends ChildMember>(
     const tab = parentTab(layout, parent, host)
     if (tab === null) continue
     if (!drawsFamily(scope, tab)) {
-      for (const child of family) if (child.status === 'running') places.set(child.id, 'chip')
+      for (const child of familyChildren(family, familyOf(layout, tab))) places.set(child.id, 'chip')
       continue
     }
     const capacity = scope.capacityOf(tab) ?? Number.POSITIVE_INFINITY
@@ -134,10 +135,10 @@ export interface CrumbChip<T> {
 }
 
 /**
- * The chips the crumb of parent `parent`'s tab holds: its running children that
- * are on screen as chips (`childPlaces`), in the order the family view runs
- * them, each with its state's dot or, for a command, its glyph. None while the
- * pane draws the family view, or when the parent's tab is not here.
+ * The chips the crumb of parent `parent`'s tab holds: its children that are on
+ * screen as chips (`childPlaces`), ended ones included, in the order the family
+ * view runs them, each with its state's dot or, for a command, its glyph. None
+ * while the pane draws the family view, or when the parent's tab is not here.
  */
 export function crumbChips<T extends ChildMember>(
   layout: PaneLayout,
@@ -150,9 +151,7 @@ export function crumbChips<T extends ChildMember>(
   const tab = parentTab(layout, parent, host)
   const family = familiesHere(layout, sessions, host).get(parent)
   if (tab === null || family === undefined || drawsFamily(scope, tab)) return []
-  return familyChildren(family, familyOf(layout, tab))
-    .filter((child) => child.status === 'running')
-    .map((child) => ({ child, mark: childMark(child, stateOf(child)) }))
+  return familyChildren(family, familyOf(layout, tab)).map((child) => ({ child, mark: childMark(child, stateOf(child)) }))
 }
 
 /**

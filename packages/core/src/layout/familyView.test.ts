@@ -427,12 +427,11 @@ describe('pressing a child’s row in the Sessions tree', () => {
     })
   })
 
-  it('still brings the parent forward for an ended child with the setting off', () => {
+  it('peeks an ended child with the setting off, the layout as it was', () => {
     const done = [...FAMILY.slice(0, 3), ended(4, 1)]
     const pressed = pressSessionRow(behind, done, 4, LOCAL_HOST_KEY, scope(2, false))
-    expect(pressed.press).toEqual({ to: 'parent-tab', id: 1 })
-    expect(pressed.layout.families).toEqual({})
-    expect(activeRef(pressed.layout.groups[0]!)).toEqual(session(1))
+    expect(pressed.press).toEqual({ to: 'peek', id: 4 })
+    expect(pressed.layout).toBe(behind)
   })
 
   it('works the same through another host’s tabs', () => {

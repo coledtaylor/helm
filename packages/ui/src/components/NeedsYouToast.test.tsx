@@ -44,6 +44,16 @@ describe('the needs-you toast', () => {
     expect(screen.getByRole('button', { name: 'Open as tab' })).toBeTruthy()
   })
 
+  it('S10: is 330px wide', () => {
+    render(<NeedsYouToast {...toast()} />)
+    expect(screen.getByRole('status').className).toContain('w-[330px]')
+  })
+
+  it('S15: the away list is 372px wide', () => {
+    render(<AwayList host='this PC' rows={[]} onClose={vi.fn()} />)
+    expect(document.querySelector('[data-away-list]')?.className).toContain('w-[372px]')
+  })
+
   it('has a close button, and is not an overlay: a browser view is not stood down for it', async () => {
     const props = toast()
     render(<NeedsYouToast {...props} />)
