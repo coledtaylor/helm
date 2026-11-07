@@ -68,6 +68,12 @@ describe('childTab', () => {
     })
   })
 
+  it('says stopped, in the ended glyph, for a command child the host ended', () => {
+    expect(
+      childTab(session({ ...command, status: 'exited', exitCode: 2147483647, stopped: true }), 'failed')
+    ).toMatchObject({ indicator: 'ended', stateWord: 'stopped' })
+  })
+
   it('keeps an agent child’s own dot and gives it the parent’s name as its badge', () => {
     expect(childTab(session({ role: 'reviewer', parentName: 'api-refactor' }), 'busy')).toEqual({
       indicator: 'busy',
@@ -217,6 +223,16 @@ describe('what the tree row and the crumb say', () => {
     it('S31: says any other exit code in danger', () => {
       expect(crumbStatus(exited(1), 'failed', null, now)).toEqual({ text: 'exited 1 · 14:52', tone: 'danger' })
       expect(crumbStatus(exited(137), 'failed', null, now)).toEqual({ text: 'exited 137 · 14:52', tone: 'danger' })
+    })
+
+    it('says Stopped in fg-subtle for a command the host ended, never the number the system gave it', () => {
+      const stopped = command({
+        status: 'exited',
+        exitCode: 2147483647,
+        stopped: true,
+        endedAt: new Date(2026, 9, 29, 14, 52).toISOString()
+      })
+      expect(crumbStatus(stopped, 'failed', null, now)).toEqual({ text: 'Stopped · 14:52', tone: 'subtle' })
     })
 
     it('S31: keeps the ended header’s wording in fg-subtle for a code that was never seen', () => {

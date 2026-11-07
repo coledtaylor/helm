@@ -250,8 +250,10 @@ export function pruneFamilyState(
  * An ended child's header: how it ended and when, "Stopped · 14:52" when its
  * parent, the user or the host ended it and "Done · 14:52" when its agent
  * exited by itself, in the time of day where this window is. A command child
- * says "exited 0 · 14:52": the command's own exit code, whoever ended it; one
- * whose code was never observed is told as an agent would be. A child this
+ * that exited on its own says "exited 0 · 14:52", with the command's own exit
+ * code; one that was stopped says "Stopped", because the number a system gives
+ * a process it killed is not an exit code, and one whose code was never
+ * observed is told as an agent would be. A child this
  * window's user stopped with Stop (`byYou`) says "Stopped by you". A session
  * whose host lost it says "Lost". With no time (it never saw one end) the time
  * is left off rather than guessed.
@@ -268,7 +270,7 @@ export function endedHeaderText(
 ): string {
   const stopped = byYou && child.stopped === true ? 'Stopped by you' : 'Stopped'
   const exited =
-    isCommandChild(child) && child.exitCode !== undefined && child.exitCode !== null
+    isCommandChild(child) && child.stopped !== true && child.exitCode !== undefined && child.exitCode !== null
       ? `exited ${String(child.exitCode)}`
       : null
   const how = exited ?? (child.status === 'lost' ? 'Lost' : child.stopped === true ? stopped : 'Done')

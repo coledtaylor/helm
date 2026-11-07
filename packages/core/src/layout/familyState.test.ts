@@ -207,13 +207,23 @@ describe('endedHeaderText', () => {
     expect(endedHeaderText({ status: 'lost', endedAt: at(23, 0) })).toBe('Lost · 23:00')
   })
 
-  it('says exited and the code for a command child, with the time of day, whoever ended it', () => {
+  it('says exited and the code for a command child that exited on its own, with the time of day', () => {
     const command = 'pnpm test'
     expect(endedHeaderText({ status: 'exited', command, exitCode: 0, endedAt: at(14, 52) })).toBe('exited 0 · 14:52')
     expect(endedHeaderText({ status: 'exited', command, exitCode: 1, endedAt: at(9, 5) })).toBe('exited 1 · 09:05')
-    expect(endedHeaderText({ status: 'exited', command, exitCode: 137, stopped: true, endedAt: at(9, 5) }, true)).toBe(
-      'exited 137 · 09:05'
+    expect(endedHeaderText({ status: 'exited', command, exitCode: 3, stopped: false, endedAt: at(9, 5) })).toBe(
+      'exited 3 · 09:05'
     )
+  })
+
+  it('says Stopped, not a number, for a command child the host ended', () => {
+    const command = 'pnpm test'
+    // The system's number for a process it killed (a Windows termination code,
+    // clamped by the host) is not the command's exit code.
+    const killed = { status: 'exited', command, exitCode: 2147483647, stopped: true, endedAt: at(9, 5) }
+    expect(endedHeaderText(killed)).toBe('Stopped · 09:05')
+    expect(endedHeaderText(killed, true)).toBe('Stopped by you · 09:05')
+    expect(endedHeaderText({ ...killed, exitCode: 137 })).toBe('Stopped · 09:05')
   })
 
   it('says exited and the code without a time when it never saw the command end', () => {

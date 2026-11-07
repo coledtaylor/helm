@@ -55,10 +55,17 @@ export type CommandState = 'running' | 'ended' | 'failed'
  * The state a command child's glyph is drawn in. A command has no conversation
  * to be busy or waiting in, so whatever the host's records say of an agent's
  * activity is not read for it: it runs until it ends, and then its exit code is
- * all there is. A code never observed reads as an agent's would, as ended.
+ * all there is. A code never observed reads as an agent's would, as ended. A
+ * command the host ended (`stopped`) is ended whatever number the system gave
+ * its termination: that number says how it was killed, not how it exited.
  */
-export function commandState(session: { status: string; exitCode?: number | null }): CommandState {
+export function commandState(session: {
+  status: string
+  exitCode?: number | null
+  stopped?: boolean
+}): CommandState {
   if (session.status === 'running') return 'running'
+  if (session.stopped === true) return 'ended'
   return session.exitCode !== undefined && session.exitCode !== null && session.exitCode !== 0 ? 'failed' : 'ended'
 }
 

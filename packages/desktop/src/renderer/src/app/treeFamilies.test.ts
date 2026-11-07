@@ -28,6 +28,7 @@ import { commandRow, pressTreeSession, treeEntries } from './treeFamilies'
 interface Listed extends FamilyMember {
   name: string
   cwd: string
+  stopped?: boolean
 }
 
 const session = (
@@ -70,6 +71,14 @@ describe('commandRow', () => {
       command: true,
       state: 'failed',
       note: 'exited 130'
+    })
+  })
+
+  it('reads a command child the host stopped as stopped, not as the number the system gave it', () => {
+    expect(commandRow(record({ command: 'pnpm test', status: 'exited', exitCode: 2147483647, stopped: true }))).toEqual({
+      command: true,
+      state: 'ended',
+      note: 'stopped'
     })
   })
 

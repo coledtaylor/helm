@@ -19,6 +19,7 @@ import type { TreeSession } from '@helm/ui'
 export function commandRow(session: {
   status: string
   exitCode?: number | null
+  stopped?: boolean
   command?: string | null
 }): Pick<TreeSession, 'state' | 'command' | 'note'> | null {
   if (!isCommandChild(session)) return null
@@ -26,12 +27,14 @@ export function commandRow(session: {
 }
 
 /**
- * The word for a command child's state: `running`, then `exited <code>`, or
- * `ended` where its code was never seen. The row's note, the row's accessible
- * label and the glyph's hover text in the family view all say this.
+ * The word for a command child's state: `running`, then `exited <code>`,
+ * `stopped` where the host ended it, or `ended` where its code was never seen.
+ * The row's note, the row's accessible label and the glyph's hover text in the
+ * family view all say this.
  */
-export function commandWord(session: { status: string; exitCode?: number | null }): string {
+export function commandWord(session: { status: string; exitCode?: number | null; stopped?: boolean }): string {
   if (commandState(session) === 'running') return 'running'
+  if (session.stopped === true) return 'stopped'
   const code = session.exitCode ?? null
   return code === null ? 'ended' : `exited ${String(code)}`
 }

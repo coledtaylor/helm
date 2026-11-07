@@ -485,7 +485,7 @@ overrides the gate; keep it.
   ends the tab's accessible name ("reviewer, working, started by
   api-refactor"), because the badge is drawn and not read. A command
   child's tab has the 12px terminal glyph in place of the dot, in the family
-  header's tones (`commandTone`), and says "running" or "exited <code>" to a
+  header's tones (`commandTone`), and says "running", "exited <code>" or "stopped" to a
   screen reader. A strip with no tabs and no actions is **not drawn**.
 - **The crumb row**: under a session's tab, 26px of mono `fg-subtle` naming
   where it is - project `›` branch `·` profile - and, at the right in Inter,
@@ -935,7 +935,9 @@ overrides the gate; keep it.
   1px `border-strong` ring with no fill, where an agent's names its role, its
   running header counts its seconds ("Running · 5s", then "Running · 1m" from
   a minute on), and its ended header reads "exited 0 · 14:52" ("exited <code> · <time>") with
-  **Close**. Pressing the words shrinks the card; Stop asks first, in the
+  **Close**; a command the host ended (Stop, its parent, the host) reads
+  "Stopped · 14:52" ("Stopped by you" after this window's Stop) in `fg-subtle`,
+  because the number a system gives a process it killed is not an exit code. Pressing the words shrinks the card; Stop asks first, in the
   window's one question for ending a running session ("*name* is still running
   on *host*. Ending it stops the Claude Code session in *folder*. *Parent*,
   which started it, is told.", End session / Cancel, Cancel focused; the

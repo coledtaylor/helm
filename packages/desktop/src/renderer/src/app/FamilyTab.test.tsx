@@ -498,6 +498,25 @@ describe('a parent’s tab with children', () => {
       expect(header.querySelector('[data-family-command="failed"]')!.className).toContain('text-danger')
     })
 
+    it('S25 S27: a command the host ended reads Stopped with the glyph in fg-subtle, not the number the system gave it', () => {
+      const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
+      view.list([
+        LEAD,
+        child(3, 'tests', {
+          command: 'pnpm test',
+          status: 'exited',
+          exitCode: 2147483647,
+          stopped: true,
+          endedAt: new Date(2026, 9, 29, 14, 52).toISOString()
+        })
+      ])
+
+      const header = view.container.querySelector<HTMLElement>('[data-family-header="ended"]')!
+      expect(header.querySelector('[data-family-status]')!.textContent).toBe('Stopped · 14:52')
+      expect(header.querySelector('[data-family-command="ended"]')!.className).toContain('text-fg-subtle')
+      expect(header.querySelector('[data-family-command]')!.getAttribute('title')).toBe('stopped')
+    })
+
     it('S33: its glyph says running while it runs and exited <code> once it exited, as the header does', () => {
       const view = mount(WIDE, [LEAD, child(3, 'tests', { command: 'pnpm test' })])
       expect(card(view.container, 'tests').querySelector('[data-family-command]')!.getAttribute('title')).toBe('running')

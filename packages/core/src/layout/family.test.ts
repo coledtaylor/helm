@@ -125,6 +125,12 @@ describe('commandState', () => {
     expect(commandState({ status: 'exited', exitCode: 137 })).toBe('failed')
     expect(commandState({ status: 'exited', exitCode: -1 })).toBe('failed')
   })
+
+  it('has ended, not failed, when the host stopped it, whatever number the system gave its termination', () => {
+    expect(commandState({ status: 'exited', exitCode: 2147483647, stopped: true })).toBe('ended')
+    expect(commandState({ status: 'exited', exitCode: 143, stopped: true })).toBe('ended')
+    expect(commandState({ status: 'exited', exitCode: 1, stopped: false })).toBe('failed')
+  })
 })
 
 describe('mostPressingState', () => {
