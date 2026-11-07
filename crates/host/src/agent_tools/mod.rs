@@ -231,23 +231,43 @@ pub trait ToolFamily: Send + Sync + 'static {
 /// reply has been given to the connection, and never when the connection
 /// went first or the call was abandoned.
 #[derive(Clone, Default)]
-pub struct Delivery(Arc<Mutex<Option<Hook>>>);
+pub struct Delivery {
+    hook: Arc<Mutex<Option<Hook>>>,
+    /// The call runs as an MCP task, answered by `tasks/get` once it
+    /// completes: nobody waits on it with a connection.
+    task: bool,
+}
 
 /// What runs once a reply is delivered.
 type Hook = Box<dyn FnOnce() + Send + Sync>;
 
 impl Delivery {
+    /// The delivery of a call the listener runs as an MCP task.
+    fn for_task() -> Self {
+        Self {
+            task: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the call runs as an MCP task. A call that does has no
+    /// connection to keep alive, so it may hold for as long as it takes.
+    #[must_use]
+    pub fn is_task(&self) -> bool {
+        self.task
+    }
+
     /// What to run once the reply is delivered. The last one set wins.
     pub fn on_delivered(&self, then: impl FnOnce() + Send + Sync + 'static) {
         *self
-            .0
+            .hook
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Box::new(then));
     }
 
     /// What was set, taken out: the listener's.
     fn take(&self) -> Option<Hook> {
-        self.0
+        self.hook
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()

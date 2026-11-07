@@ -4,7 +4,9 @@
 //
 // - `--version` and `--help` answer the way the version guard and the
 //   `--session-id` capability probe expect. `FAKE_AGENT_VERSION` changes the
-//   version it reports (the default is 2.1.999).
+//   version it reports (the default is 2.1.999); so does a `fake-version` file
+//   in `CLAUDE_CONFIG_DIR`, for a test that cannot set the environment of the
+//   process that probes the version, when the variable is unset.
 // - Its arguments are read as the real CLI's parser reads them: a variadic
 //   option (`--add-dir`, `--mcp-config`, `--plugin-dir`) takes every argument
 //   up to the next that starts with a dash or `--`, and whatever follows `--`
@@ -71,6 +73,20 @@
 //                session is idle. Each call is logged in `mcpCalls`, with
 //                whether it was moved and how many progress notifications it
 //                was sent.
+//                From version 2.1.304, when the real CLI offers MCP tasks, the
+//                call is made at MCP revision 2026-07-28 with request metadata
+//                declaring the `io.modelcontextprotocol/tasks` extension, as
+//                the CLI declares it to every server; a family that answers a
+//                plain result is taken as before. A CreateTaskResult makes the
+//                session idle at once, as a call moved to the background does.
+//                The fake then polls `tasks/get` at the task's
+//                `pollIntervalMs`, and once it is completed takes its result as
+//                the next turn (`mcp`, `<tool> finished: <text>`) when the
+//                session is idle. A task that failed or was cancelled, or that
+//                the server does not know, is taken as a failed call
+//                (`<tool> failed: <message>`). The call's task id, last
+//                status and polls are in `mcpCalls` (`taskId`, `taskStatus`,
+//                `polls`). Below 2.1.304 every call is made as before.
 //   /report <done|stuck|note> <text>  report to the parent that started it, as a
 //                child does with `agents_report`: a tools/call POSTed to the
 //                address in `FLOTI_AGENT_URL` with the token in
@@ -122,7 +138,37 @@ import {
 } from './common.mjs'
 
 const BACKEND = 'claude-code'
-const VERSION = fakeVersion('2.1.999')
+
+/**
+ * The version a test gave through the config folder (`<config>/fake-version`),
+ * for a test that runs the fake in a process whose environment it cannot set:
+ * the version probe and the session both read the folder they are given.
+ */
+function configuredVersion() {
+  const folder = (process.env.CLAUDE_CONFIG_DIR ?? '').trim()
+  if (folder === '') return undefined
+  try {
+    return readFileSync(join(folder, 'fake-version'), 'utf8').trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+const VERSION = fakeVersion(configuredVersion() ?? '2.1.999')
+
+/** Whether a version is at or after `from`, both as `major.minor.patch`. */
+function versionAtLeast(version, from) {
+  const have = version.split('.').map(Number)
+  const need = from.split('.').map(Number)
+  for (let part = 0; part < need.length; part += 1) {
+    const [a, b] = [have[part] ?? 0, need[part]]
+    if (a !== b) return a > b
+  }
+  return true
+}
+
+/** The CLI offers MCP tasks (a public beta) from this version. */
+const OFFERS_TASKS = versionAtLeast(VERSION, '2.1.304')
 const argv = process.argv.slice(2)
 const out = (text) => process.stdout.write(text)
 
@@ -673,25 +719,45 @@ function drainTurns() {
 /** What an MCP call is moved to the background after. */
 const AUTO_BACKGROUND_MS = Number(process.env.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS) || 120000
 
+/** The MCP revision that carries tasks, and the extension that names them. */
+const TASKS_REVISION = '2026-07-28'
+const TASKS_EXTENSION = 'io.modelcontextprotocol/tasks'
+
+/** The request metadata of a call at 2026-07-28, declaring the tasks extension. */
+function tasksMeta() {
+  return {
+    'io.modelcontextprotocol/protocolVersion': TASKS_REVISION,
+    'io.modelcontextprotocol/clientCapabilities': { extensions: { [TASKS_EXTENSION]: {} } },
+    'io.modelcontextprotocol/clientInfo': { name: 'claude-code', version: VERSION }
+  }
+}
+
+/** The headers a request of `method` about `name` carries at 2026-07-28. */
+function tasksHeaders(method, name) {
+  return { 'mcp-protocol-version': TASKS_REVISION, 'mcp-method': method, 'mcp-name': name }
+}
+
 /**
  * Calls tool `tool` of the MCP server `server` it loaded, with `args`, over
- * streamable HTTP, and resolves to `{ text, isError }`. Progress notifications
- * the server sends on the call's token are counted in `entry.progress`.
+ * streamable HTTP, and resolves to `{ text, isError }`, or `{ task }` when the
+ * server answered with a task. Progress notifications the server sends on the
+ * call's token are counted in `entry.progress`.
  */
 async function callMcpTool(server, tool, args, entry) {
   const config = log.mcpServers[server]
   if (config === undefined || typeof config.url !== 'string') {
     return { text: `No MCP server named ${server}.`, isError: true }
   }
-  return callTool(config.url, config.headers ?? {}, tool, args, entry)
+  return callTool(config.url, config.headers ?? {}, tool, args, entry, { tasks: OFFERS_TASKS })
 }
 
 /**
- * Calls `tool` at `url` with a JSON-RPC tools/call and `headers`, reads the
- * reply whether it is JSON or a stream, and resolves to `{ text, isError }`.
+ * POSTs the JSON-RPC request `body` to `url` with `headers`, reads the reply
+ * whether it is JSON or a stream, and resolves to its messages, or to
+ * `{ failed }` saying why there are none. Progress notifications are counted
+ * in `entry.progress` as they arrive.
  */
-async function callTool(url, headers, tool, args, entry) {
-  const token = `fake-${String(process.pid)}-${String(log.mcpCalls.length + log.reports.length)}`
+async function post(url, headers, body, entry) {
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -699,12 +765,7 @@ async function callTool(url, headers, tool, args, entry) {
       accept: 'application/json, text/event-stream',
       ...headers
     },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: { name: tool, arguments: args, _meta: { progressToken: token } }
-    })
+    body: JSON.stringify(body)
   })
   const messages = []
   const take = (text) => {
@@ -742,18 +803,90 @@ async function callTool(url, headers, tool, args, entry) {
     }
     take(pending)
   } else {
-    const body = await response.text()
+    const text = await response.text()
     try {
-      messages.push(JSON.parse(body))
+      messages.push(JSON.parse(text))
     } catch {
-      return { text: `The server answered ${String(response.status)}.`, isError: true }
+      return { failed: `The server answered ${String(response.status)}.` }
     }
   }
-  const answered = messages.find((message) => message.id === 1)
+  return { messages }
+}
+
+/**
+ * Calls `tool` at `url` with a JSON-RPC tools/call and `headers`, and resolves
+ * to `{ text, isError }`. With `tasks` the call is made at 2026-07-28 declaring
+ * the tasks extension, as the CLI does from 2.1.304, and a server that answers
+ * with a task gives `{ task }` instead: its CreateTaskResult.
+ */
+async function callTool(url, headers, tool, args, entry, { tasks = false } = {}) {
+  const token = `fake-${String(process.pid)}-${String(log.mcpCalls.length + log.reports.length)}`
+  const sent = await post(
+    url,
+    tasks ? { ...headers, ...tasksHeaders('tools/call', tool) } : headers,
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: tool,
+        arguments: args,
+        _meta: tasks ? { progressToken: token, ...tasksMeta() } : { progressToken: token }
+      }
+    },
+    entry
+  )
+  if (sent.failed !== undefined) return { text: sent.failed, isError: true }
+  const answered = sent.messages.find((message) => message.id === 1)
   if (answered === undefined) return { text: 'The server answered nothing.', isError: true }
   if (answered.error !== undefined) return { text: String(answered.error.message), isError: true }
+  if (tasks && answered.result?.resultType === 'task') return { task: answered.result }
   const blocks = answered.result?.content ?? []
   return { text: blocks.map((block) => block.text ?? '').join('\n'), isError: answered.result?.isError === true }
+}
+
+/**
+ * Polls task `created` of `server` with tasks/get, at the interval the server
+ * asked for, until it ends, and resolves to `{ text, isError }` as a call that
+ * ended does: the completed result, or a failed call's report. The task's id,
+ * last status and the polls made are kept in `entry`.
+ */
+async function pollTask(server, created, entry) {
+  const config = log.mcpServers[server]
+  const id = created.taskId
+  entry.taskId = id
+  entry.taskStatus = created.status
+  saveLog()
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, Number(created.pollIntervalMs) || 1000))
+    entry.polls += 1
+    const sent = await post(
+      config.url,
+      { ...(config.headers ?? {}), ...tasksHeaders('tasks/get', id) },
+      { jsonrpc: '2.0', id: 1, method: 'tasks/get', params: { taskId: id, _meta: tasksMeta() } },
+      entry
+    )
+    const answered = sent.failed === undefined ? sent.messages.find((message) => message.id === 1) : undefined
+    if (answered === undefined || answered.error !== undefined) {
+      // A task the server does not know is a call that failed.
+      entry.taskStatus = 'not found'
+      saveLog()
+      return { text: answered?.error?.message ?? sent.failed ?? 'The server answered nothing.', isError: true }
+    }
+    const task = answered.result
+    entry.taskStatus = task.status
+    saveLog()
+    if (task.status === 'completed') {
+      const blocks = task.result?.content ?? []
+      return {
+        text: blocks.map((block) => block.text ?? '').join('\n'),
+        isError: task.result?.isError === true
+      }
+    }
+    if (task.status === 'failed' || task.status === 'cancelled') {
+      return { text: task.statusMessage ?? `The task ${task.status}.`, isError: true }
+    }
+  }
 }
 
 /** `/mcp`: a call that holds the session busy until it answers or is moved. */
@@ -766,24 +899,49 @@ async function mcpCommand(server, tool, argumentsText) {
       return answer(`mcp: the arguments are not JSON: ${argumentsText}`)
     }
   }
-  const entry = { server, tool, arguments: args, backgrounded: false, progress: 0, isError: null, text: null }
+  const entry = {
+    server,
+    tool,
+    arguments: args,
+    backgrounded: false,
+    progress: 0,
+    taskId: null,
+    taskStatus: null,
+    polls: 0,
+    isError: null,
+    text: null
+  }
   log.mcpCalls.push(entry)
   working += 1
   setStatus('busy')
   saveLog()
   let moved = false
-  const timer = setTimeout(() => {
+  const background = () => {
     moved = true
     entry.backgrounded = true
     working -= 1
     setStatus('idle')
     saveLog()
+  }
+  const timer = setTimeout(() => {
+    background()
     answer(`${tool} is running in the background`)
     drainTurns()
   }, AUTO_BACKGROUND_MS)
   let result
   try {
     result = await callMcpTool(server, tool, args, entry)
+    if (result.task !== undefined) {
+      // A task is a call moved to the background at once: the session is idle
+      // while the fake polls it, and its result is a turn once it completes.
+      clearTimeout(timer)
+      if (!moved) {
+        background()
+        answer(`${tool} is running as a task`)
+        drainTurns()
+      }
+      result = await pollTask(server, result.task, entry)
+    }
   } catch (error) {
     result = { text: `The call failed: ${String(error.message)}`, isError: true }
   }
@@ -791,7 +949,9 @@ async function mcpCommand(server, tool, argumentsText) {
   entry.text = result.text
   entry.isError = result.isError
   saveLog()
-  if (moved) return takeAsTurn('mcp', `${tool} finished: ${result.text}`)
+  if (moved) {
+    return takeAsTurn('mcp', `${tool} ${result.isError && entry.taskId !== null ? 'failed' : 'finished'}: ${result.text}`)
+  }
   working -= 1
   setStatus('idle')
   answer(`${result.isError ? 'error' : 'ok'} ${result.text}`)

@@ -20,6 +20,19 @@
 //! what it holds, and [`Waited::confirm`] marks them heard once the answer has
 //! reached its caller in full. A wait dropped before that, because it was
 //! cancelled or its connection went or the host restarted, leaves it unseen.
+//!
+//! **A wait can be an MCP task** (`Hosted::waits_as_task`): where the caller's
+//! backend declares MCP tasks and the call carries the tasks extension, the
+//! listener answers it at once with a working task and runs the wait inside
+//! it. Inside a task the wait always holds, whatever the backend says about
+//! moving long calls to the background, since the task is the background and
+//! nothing keeps a connection open for it. It ends as a held wait ends: the
+//! child's next news, every child it is about idle, a person typing into the
+//! caller, or the caller ending. The task
+//! then completes with the same answer a held wait gives, and the news counts
+//! as heard (`Waited::confirm`, through the call's delivery) once that result
+//! has been fetched in full. A task cancelled, dropped with its session or
+//! cut off by a host restart leaves the news unseen.
 
 use std::sync::Arc;
 
@@ -250,19 +263,37 @@ impl Hosted {
     /// tool call) or that a finished background command wakes it (for a
     /// command in its shell). Any other backend's wait answers at once.
     pub(crate) fn waits_hold(&self, caller: SessionId, from_shell: bool) -> bool {
+        self.tool_support_of(caller).is_some_and(|support| {
+            if from_shell {
+                support.background_command_wakes
+            } else {
+                support.backgrounds_long_calls
+            }
+        })
+    }
+
+    /// Whether a wait by session `caller` is answered as an MCP task when the
+    /// call asks for one: the caller's backend declares MCP tasks, and the
+    /// call is the agent's own tool call, not a command in its shell (which
+    /// reads one reply and has no tasks to poll). A backend that declares none
+    /// is answered as `waits_hold` says, never as a task.
+    pub(crate) fn waits_as_task(&self, caller: SessionId, from_shell: bool) -> bool {
+        !from_shell
+            && self
+                .tool_support_of(caller)
+                .is_some_and(|support| support.mcp_tasks)
+    }
+
+    /// What the backend session `caller` runs declares of its tool calls, or
+    /// none when its row or its backend is not known.
+    fn tool_support_of(&self, caller: SessionId) -> Option<crate::agent::ToolSupport> {
         let backend = {
             let store = self.ledger.store();
             records_backend(&store, caller)
         };
-        let Some(backend) = backend.and_then(|id| self.find_backend(&id)) else {
-            return false;
-        };
-        let support = backend.tool_support();
-        if from_shell {
-            support.background_command_wakes
-        } else {
-            support.backgrounds_long_calls
-        }
+        backend
+            .and_then(|id| self.find_backend(&id))
+            .map(|backend| backend.tool_support())
     }
 }
 

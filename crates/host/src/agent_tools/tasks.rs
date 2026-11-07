@@ -102,7 +102,7 @@ impl Tasks {
         let held = Arc::new(Held {
             created_at: now_iso(),
             state: Mutex::new(State::Working),
-            delivery: Delivery::default(),
+            delivery: Delivery::for_task(),
             abort: OnceLock::new(),
         });
         let seed = task_of(&id, &held.created_at, &held.created_at, TaskStatus::Working);
