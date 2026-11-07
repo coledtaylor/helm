@@ -35,7 +35,7 @@ export function LimitNotice({
       className="mt-0.5 mr-1.5 mb-1 rounded-well border border-border bg-surface-sunken px-[9px] py-[7px] text-[11.5px] leading-[1.45] text-fg-muted"
     >
       <b className="font-medium text-fg">Limit reached.</b> {text}
-      <div className="mt-1.5 flex gap-1.5">
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
         {allowMore !== null && (
           <button
             type="button"

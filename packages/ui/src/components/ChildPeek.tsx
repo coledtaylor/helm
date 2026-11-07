@@ -149,7 +149,7 @@ export function ChildPeek({
         top: place?.top ?? 0,
         visibility: place === null ? 'hidden' : 'visible'
       }}
-      className="z-50 flex w-[470px] max-w-[calc(100vw-16px)] flex-col rounded-well border border-border-strong bg-surface-raised"
+      className="z-50 flex w-[560px] max-w-[calc(100vw-16px)] flex-col rounded-well border border-border-strong bg-surface-raised"
     >
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
         <ChildMarkIcon mark={mark} />
@@ -192,7 +192,7 @@ export function ChildPeek({
 
       <div
         data-peek-screen
-        className="relative mx-3 h-[150px] overflow-hidden rounded-raised border border-border bg-terminal"
+        className="relative mx-3 h-[190px] overflow-hidden rounded-raised border border-border bg-terminal"
       >
         {screen}
       </div>

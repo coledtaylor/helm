@@ -981,16 +981,18 @@ overrides the gate; keep it.
 
   **The peek is a popover for a child with nowhere on screen here**, opened
   from its row in the Sessions tree (beside the row) or from a chip (under it),
-  470px wide on `surface-raised` with a `border-strong` hairline, `rounded-well`
+  560px wide on `surface-raised` with a `border-strong` hairline, `rounded-well`
   and no shadow. It is an overlay (`overlayMounted`), so a browser view stands
   down for it; Escape, the close button and a press outside close it, and
   focus goes back to the row or chip. Top to bottom: the child's mark, name and
   a state chip in the dot's tone, with the close button at the end; the facts as
   mono `fg-muted` 11px rows (an agent's Role, Folder, Branch and Mode; a
   command's Command in `fg`, Folder, Branch and Runs in); its screen, live and
-  read-only through the host's watch-only attach, 150px high on the terminal's
-  ground, drawn at the child's own grid scaled to the width of the box and held
-  to its bottom edge; its last report as the `accent-soft` note with the 2px
+  read-only through the host's watch-only attach, 190px high on the terminal's
+  ground, drawn at the child's own grid scaled to the width of the box (and no
+  smaller than its content needs) and held to the last row that has anything
+  on it, with no cursor; it is wider and taller than a line of text because it
+  is a whole terminal screen, which would not read at the frame's 470px; its last report as the `accent-soft` note with the 2px
   accent edge, under a "Last report · done" label in the small caps label type;
   and the foot: "Watching only. Open it to type." in `fg-subtle`, Stop in
   `danger` (it asks first, as stopping any session does, and the peek stays up

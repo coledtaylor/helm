@@ -90,6 +90,17 @@ describe('where the peek goes', () => {
     expect(peekPlace({ host: 'home', id: 8, anchor: { kind: 'row' } }).at).toEqual({ x: 260, y: 484 })
   })
 
+  it('S1: beside the row in a tree that is not grouped by host, which holds only this PC', () => {
+    document.body.innerHTML = '<button data-session-row="session:8"></button>'
+    const row = document.querySelector<HTMLElement>('[data-session-row]')!
+    row.getBoundingClientRect = rect(10, 200, 240, 24)
+    expect(peekPlace({ host: LOCAL_HOST_KEY, id: 8, anchor: { kind: 'row' } })).toEqual({
+      at: { x: 260, y: 184 },
+      element: row
+    })
+    expect(peekPlace({ host: 'home', id: 8, anchor: { kind: 'row' } }).element).toBeNull()
+  })
+
   it('S7: under the chip it opened from', () => {
     document.body.innerHTML = `<button data-crumb-chip="${chipKey(LOCAL_HOST_KEY, 8)}"></button>`
     const chip = document.querySelector<HTMLElement>('[data-crumb-chip]')!

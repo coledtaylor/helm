@@ -1,4 +1,4 @@
-import { sessionLabel, type ChildMark, type PermissionMode, type SessionRecord } from '@helm/core/types'
+import { LOCAL_HOST_KEY, sessionLabel, type ChildMark, type PermissionMode, type SessionRecord } from '@helm/core/types'
 import {
   SESSION_STATE_LABEL,
   type ChildPeekProps,
@@ -92,7 +92,7 @@ export function peekFacts(
 export const chipKey = (host: string, id: number): string => `${host}:${String(id)}`
 
 /** The peek's width, which a centred fallback needs to know. */
-const PEEK_WIDTH = 470
+const PEEK_WIDTH = 560
 
 /** The element the peek of `target` opened from, or null when it is not on screen (a closed sidebar). */
 function anchorElement(target: Pick<PeekTarget, 'host' | 'id' | 'anchor'>, doc: Document): HTMLElement | null {
@@ -104,7 +104,16 @@ function anchorElement(target: Pick<PeekTarget, 'host' | 'id' | 'anchor'>, doc: 
     (each) => each.dataset.hostGroup === target.host
   )
   const row = `session:${String(target.id)}`
-  return [...(group?.querySelectorAll<HTMLElement>('[data-session-row]') ?? [])].find((each) => each.dataset.sessionRow === row) ?? null
+  // With only this PC's host the tree is not grouped by host: its rows sit under no group at all.
+  const rows =
+    group !== undefined
+      ? [...group.querySelectorAll<HTMLElement>('[data-session-row]')]
+      : target.host === LOCAL_HOST_KEY
+        ? [...doc.querySelectorAll<HTMLElement>('[data-session-row]')].filter(
+            (each) => each.closest('[data-host-group]') === null
+          )
+        : []
+  return rows.find((each) => each.dataset.sessionRow === row) ?? null
 }
 
 /**

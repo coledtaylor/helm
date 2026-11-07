@@ -26,7 +26,7 @@ vi.mock('../terminal', () => ({
 }))
 vi.mock('./bridge', () => ({ helm: { invoke: vi.fn() } }))
 
-import { PEEK_GRID, PeekTerminal } from './PeekTerminal'
+import { PEEK_GRID, PeekTerminal, peekCut } from './PeekTerminal'
 
 afterEach(() => {
   made.options.length = 0
@@ -62,11 +62,42 @@ describe('the peek terminal', () => {
       />
     )
     const host = made.terminals[0]
-    expect(host?.term.write).toHaveBeenCalledWith('screen so far')
+    expect(host?.term.write).toHaveBeenCalledWith('screen so far', expect.any(Function))
     sink('more')
-    expect(host?.term.write).toHaveBeenLastCalledWith('more')
+    expect(host?.term.write).toHaveBeenLastCalledWith('more', expect.any(Function))
     view.unmount()
     expect(detach).toHaveBeenCalledTimes(1)
     expect(host?.dispose).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('where the peek cuts the screen of a child', () => {
+  const blank = (rows: number): string[] => Array.from({ length: rows }, () => '')
+
+  it('leaves out the empty rows under what a program drew from the top of its grid', () => {
+    const lines = blank(32)
+    lines[0] = 'Claude Code v2'
+    lines[3] = '> hello'
+    expect(peekCut(lines, 3, 120)).toEqual({ hiddenRows: 28, cols: 60 })
+  })
+
+  it('keeps the rows down to the cursor even when it sits on an empty row', () => {
+    const lines = blank(32)
+    lines[0] = 'ready'
+    expect(peekCut(lines, 5, 120).hiddenRows).toBe(26)
+  })
+
+  it('leaves nothing out of a screen drawn to its last row, and fits it to the widest line shown', () => {
+    const lines = blank(32)
+    lines[31] = 'x'.repeat(100)
+    lines[30] = 'short'
+    expect(peekCut(lines, 31, 120)).toEqual({ hiddenRows: 0, cols: 101 })
+  })
+
+  it('never fits to more columns than the grid has or fewer than a short screen needs', () => {
+    const lines = blank(32)
+    lines[2] = 'y'.repeat(200)
+    expect(peekCut(lines, 2, 120).cols).toBe(120)
+    expect(peekCut(blank(32), 0, 120).cols).toBe(60)
   })
 })
